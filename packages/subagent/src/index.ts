@@ -206,6 +206,15 @@ function summarizeRuns(runs: SubagentRun[]) {
     .join("\n\n");
 }
 
+function renderRuns(runs: SubagentRun[]) {
+  return runs
+    .map((run) => {
+      const output = run.output.trim() || run.error?.trim() || "(no output)";
+      return `## ${run.agent} — ${run.status}\n\n${output}`;
+    })
+    .join("\n\n");
+}
+
 export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerCommand("subagents", {
     description: "List available subagents",
@@ -270,7 +279,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
       const failed = runs.some((run) => run.status === "failed");
       return {
-        content: [{ type: "text", text: summarizeRuns(runs) }],
+        content: [{ type: "text", text: renderRuns(runs) }],
         details: { mode, runs } satisfies SubagentDetails,
         isError: failed || undefined,
       };
