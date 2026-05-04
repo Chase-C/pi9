@@ -1,0 +1,29 @@
+{
+  "name": "@pi9/subagent",
+  "version": "0.1.0",
+  "description": "Pi extension that adds a subagent delegation tool.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "agents", "README.md"],
+  "keywords": ["pi-package", "pi", "subagent"],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean"
+  },
+  "pi": {
+    "extensions": ["./dist/index.js"],
+    "skills": [],
+    "prompts": []
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

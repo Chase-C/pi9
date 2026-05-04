@@ -1,0 +1,30 @@
+{
+  "name": "@pi9/whisper",
+  "version": "0.1.0",
+  "description": "Pi extension that adds agent-to-agent communication.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "keywords": ["pi-package", "pi", "whisper"],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean"
+  },
+  "pi": {
+    "extensions": ["./dist/index.js"],
+    "skills": [],
+    "prompts": []
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@types/node": "*",
+    "typebox": "*"
+  }
+}
