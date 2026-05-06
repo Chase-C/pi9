@@ -26,14 +26,69 @@ export interface SubagentSessionDto {
   startedAt?: number;
   completedAt?: number;
   model?: string;
+  inputIndex?: number;
   finalOutcome?: SubagentFinalOutcomeDto;
+}
+
+export interface SubagentGroupDto {
+  id: string;
+  createdAt: number;
+  statusCounts: Record<string, number>;
+  sessions: SubagentSessionDto[];
+  isError: boolean;
 }
 
 export interface SubagentGroupUpdateDto {
   groupId: string;
+  group: SubagentGroupDto;
   sessions: SubagentSessionDto[];
   active: boolean;
   updatedAt: number;
+}
+
+export function createSubagentGroupDto(
+  id: string,
+  createdAt: number,
+  sessions: SubagentSessionDto[],
+): SubagentGroupDto {
+  const statusCounts: Record<string, number> = {};
+  for (const session of sessions) {
+    statusCounts[session.status] = (statusCounts[session.status] ?? 0) + 1;
+  }
+
+  return {
+    id,
+    createdAt,
+    statusCounts,
+    sessions,
+    isError: sessions.some(session => !isActiveStatus(session.status) && session.status !== "completed"),
+  };
+}
+
+export function createSubagentErrorSessionDto(
+  id: string,
+  groupId: string,
+  task: { agent: string; prompt: string; model?: string },
+  error: string,
+  createdAt: number,
+  inputIndex?: number,
+): SubagentSessionDto {
+  return {
+    id,
+    sessionId: id,
+    groupId,
+    agent: task.agent,
+    status: "error",
+    resumable: false,
+    promptPreview: compact(task.prompt, PROMPT_PREVIEW_LENGTH),
+    turns: 0,
+    toolUses: 0,
+    createdAt,
+    completedAt: createdAt,
+    model: task.model,
+    inputIndex,
+    finalOutcome: { status: "error", message: error },
+  };
 }
 
 export function agentToSessionDto(agent: Agent): SubagentSessionDto {
@@ -75,17 +130,34 @@ export function formatSubagentToolLines(
   expanded = false,
   now = Date.now(),
 ): string[] {
+  const group = extractGroup(details);
+  if (group) {
+    if (!expanded) return [formatSubagentGroupLine(group)];
+    return group.sessions.map(session => formatSubagentSessionLine(session, now));
+  }
+
   const sessions = extractSessions(details);
   if (sessions.length === 0) return ["No subagent sessions."];
 
   if (!expanded && sessions.length > 1) {
-    const running = sessions.filter(session => isActiveStatus(session.status)).length;
-    const completed = sessions.filter(session => session.status === "completed").length;
-    const failed = sessions.filter(session => session.status === "error" || session.status === "aborted").length;
-    return [`${sessions.length} subagents · ${running} active · ${completed} completed · ${failed} failed`];
+    const group = createSubagentGroupDto("subagent", Date.now(), sessions);
+    return [formatSubagentGroupLine(group)];
   }
 
   return sessions.map(session => formatSubagentSessionLine(session, now));
+}
+
+export function formatSubagentGroupLine(group: SubagentGroupDto): string {
+  const counts = ["queued", "running", "completed", "error", "aborted", "skipped"]
+    .filter(status => group.statusCounts[status])
+    .map(status => `${group.statusCounts[status]} ${status}`);
+  const extraCounts = Object.keys(group.statusCounts)
+    .filter(status => !["queued", "running", "completed", "error", "aborted", "skipped"].includes(status))
+    .sort()
+    .map(status => `${group.statusCounts[status]} ${status}`);
+  const active = group.sessions.some(session => isActiveStatus(session.status));
+  const outcome = group.isError ? "error" : active ? "running" : "completed";
+  return [`${group.sessions.length} subagents`, ...counts, ...extraCounts, `outcome:${outcome}`].join(" · ");
 }
 
 export function formatSubagentSessionLine(session: SubagentSessionDto, now = Date.now()): string {
@@ -132,6 +204,16 @@ export function formatWidgetLines(sessions: SubagentSessionDto[], now = Date.now
   const active = visible.filter(session => isActiveStatus(session.status)).length;
   const retained = visible.length - active;
   return [`Subagents: ${active} active · ${retained} retained`];
+}
+
+function extractGroup(details: unknown): SubagentGroupDto | undefined {
+  if (!details || typeof details !== "object") return undefined;
+  const record = details as { group?: unknown; groups?: unknown };
+  if (record.group && typeof record.group === "object") return record.group as SubagentGroupDto;
+  if (Array.isArray(record.groups) && record.groups[0] && typeof record.groups[0] === "object") {
+    return record.groups[0] as SubagentGroupDto;
+  }
+  return undefined;
 }
 
 function extractSessions(details: unknown): SubagentSessionDto[] {

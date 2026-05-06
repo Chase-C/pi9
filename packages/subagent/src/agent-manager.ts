@@ -9,6 +9,9 @@ import { ResumeAgent, RunAgent, type RunResult } from "./run-agent.js";
 import {
   agentToSessionDto,
   activeOrRetainedSessions,
+  createSubagentErrorSessionDto,
+  createSubagentGroupDto,
+  type SubagentGroupDto,
   type SubagentGroupUpdateDto,
   type SubagentSessionDto,
 } from "./subagent-ui.js";
@@ -46,12 +49,23 @@ export type AgentManagerUpdateListener = (update: SubagentGroupUpdateDto) => voi
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<RunResult>;
 export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<RunResult>;
 
+type SubagentGroupEntry =
+  | { kind: "agent"; agent: Agent; inputIndex: number }
+  | { kind: "session"; session: SubagentSessionDto };
+
+interface SubagentGroupState {
+  id: string;
+  createdAt: number;
+  entries: SubagentGroupEntry[];
+}
+
 export class AgentManager {
 
   private _agents = new Array<Agent>();
   private _queue = new Array<() => void>();
   private _listeners = new Map<string, Set<AgentManagerUpdateListener>>();
   private _messageTimers = new Map<string, NodeJS.Timeout>();
+  private _groups = new Map<string, SubagentGroupState>();
 
   constructor(
     readonly registry: AgentRegistry,
@@ -124,30 +138,39 @@ export class AgentManager {
     (pi)
 
     const groupId = randomUUID();
+    const groupCreatedAt = Date.now();
     const unsubscribe = onUpdate ? this.subscribe(groupId, onUpdate) : undefined;
     const available = () => Array
       .from(this.registry.agents.values())
       .map((agent) => `${agent.name} (${agent.source})`)
       .join("\n");
 
-    const resultPromises = options.map(opts => {
+    const entries: SubagentGroupEntry[] = [];
+    const resultPromises = options.map((opts, inputIndex) => {
       const config = this.registry.agents.get(opts.agent);
       if (!config) {
+        const error = `Unknown agent: ${opts.agent}. Available agents:\n${available()}`;
+        entries.push({
+          kind: "session",
+          session: createSubagentErrorSessionDto(`${groupId}:task-${inputIndex}`, groupId, opts, error, groupCreatedAt, inputIndex),
+        });
         return Promise.resolve({
           agent: opts.agent,
           prompt: opts.prompt,
           status: "error" as const,
-          error: `Unknown agent: ${opts.agent}. Available agents:\n${available()}`,
+          error,
           model: opts.model,
         });
       }
 
       const agent = new Agent(randomUUID(), groupId, config, opts, this._agentUpdate.bind(this));
+      entries.push({ kind: "agent", agent, inputIndex });
       this._agents.push(agent);
-      this._emitGroupUpdate(groupId);
       return this._enqueue(ctx, signal, agent);
     });
 
+    this._groups.set(groupId, { id: groupId, createdAt: groupCreatedAt, entries });
+    this._emitGroupUpdate(groupId);
     this._flushQueue();
     try {
       const results = await Promise.all(resultPromises);
@@ -156,6 +179,7 @@ export class AgentManager {
     } finally {
       this._flushPendingMessageUpdate(groupId);
       unsubscribe?.();
+      this._groups.delete(groupId);
     }
   }
 
@@ -314,16 +338,32 @@ export class AgentManager {
     const listeners = this._listeners.get(groupId);
     if (!listeners || listeners.size === 0) return;
 
-    const sessions = this._agents
-      .filter(agent => agent.groupId === groupId)
-      .map(agentToSessionDto);
+    const group = this._groupDto(groupId);
+    const sessions = group.sessions;
     const update: SubagentGroupUpdateDto = {
       groupId,
+      group,
       sessions,
       active: sessions.some(session => session.status === "queued" || session.status === "running"),
       updatedAt: Date.now(),
     };
 
     for (const listener of listeners) listener(update);
+  }
+
+  private _groupDto(groupId: string): SubagentGroupDto {
+    const group = this._groups.get(groupId);
+    if (!group) {
+      const sessions = this._agents
+        .filter(agent => agent.groupId === groupId)
+        .map(agentToSessionDto);
+      return createSubagentGroupDto(groupId, Date.now(), sessions);
+    }
+
+    const sessions = group.entries.map(entry => {
+      if (entry.kind === "session") return entry.session;
+      return { ...agentToSessionDto(entry.agent), inputIndex: entry.inputIndex };
+    });
+    return createSubagentGroupDto(group.id, group.createdAt, sessions);
   }
 }

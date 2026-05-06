@@ -253,6 +253,39 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
   assert.deepEqual(manager.listSessions(), []);
 });
 
+test('manager emits grouped progress DTO rows in input order including unknown agents', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent) => {
+    agent.start(session);
+    agent.complete(`done:${agent.options.prompt}`);
+    return { response: `done:${agent.options.prompt}`, session };
+  };
+  const registry = { agents: new Map([
+    ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
+  ]) };
+  const manager = new AgentManager(registry, 2, runner);
+  const updates = [];
+
+  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { agent: 'helper', prompt: 'one' },
+    { agent: 'missing', prompt: 'two' },
+    { agent: 'helper', prompt: 'three' },
+  ], update => updates.push(update));
+
+  assert.deepEqual(results.map(result => result.agent), ['helper', 'missing', 'helper']);
+  assert.deepEqual(results.map(result => result.status), ['completed', 'error', 'completed']);
+
+  const initial = updates[0].group;
+  assert.equal(initial.sessions.length, 3);
+  assert.deepEqual(initial.sessions.map(session => session.agent), ['helper', 'missing', 'helper']);
+  assert.deepEqual(initial.sessions.map(session => session.status), ['queued', 'error', 'queued']);
+  assert.equal(initial.statusCounts.queued, 2);
+  assert.equal(initial.statusCounts.error, 1);
+  assert.equal(initial.isError, true);
+  assert.match(initial.sessions[1].finalOutcome.message, /Unknown agent: missing/);
+});
+
 test('manager emits serialized one-child progress DTOs without exposing Agent instances', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const registry = { agents: new Map([
@@ -291,6 +324,48 @@ test('manager emits serialized one-child progress DTOs without exposing Agent in
   const final = updates.at(-1).sessions[0];
   assert.equal(final.status, 'completed');
   assert.equal(final.finalOutcome.status, 'completed');
+});
+
+test('subagent tool returns one ordered final group for mixed success, unknown, and failed children', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent) => {
+    agent.start(session);
+    if (agent.options.agent === 'flaky') throw new Error('flaky failed');
+    agent.complete(`done:${agent.options.prompt}`);
+    return { response: `done:${agent.options.prompt}`, session };
+  };
+  const fakeRegistry = {
+    agents: new Map([
+      ['helper', { name: 'helper', description: 'Helps', systemPrompt: 's', source: 'project' }],
+      ['flaky', { name: 'flaky', description: 'Fails', systemPrompt: 's', source: 'project' }],
+    ]),
+    async reload() {},
+    summarizeAgent() { return 'helper (project)\nflaky (project)'; },
+  };
+  const manager = new AgentManager(fakeRegistry, 2, runner);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: manager });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'start',
+    tasks: [
+      { agent: 'helper', prompt: 'first' },
+      { agent: 'missing', prompt: 'second' },
+      { agent: 'flaky', prompt: 'third' },
+    ],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details.results.map(run => run.agent), ['helper', 'missing', 'flaky']);
+  assert.equal(result.details.results[0].output, 'done:first');
+  assert.deepEqual(result.details.results.map(run => run.status), ['completed', 'error', 'error']);
+  assert.deepEqual(result.details.group.sessions.map(session => session.agent), ['helper', 'missing', 'flaky']);
+  assert.deepEqual(result.details.group.sessions.map(session => session.status), ['completed', 'error', 'error']);
+  assert.equal(result.details.group.statusCounts.completed, 1);
+  assert.equal(result.details.group.statusCounts.error, 2);
+  assert.equal(result.details.group.isError, true);
 });
 
 test('subagent tool forwards live manager DTOs to onUpdate and widget UI', async () => {
@@ -379,6 +454,43 @@ test('manager throttles live message snippets while lifecycle updates are immedi
 
   finish();
   await pending;
+});
+
+test('subagent DTO render helpers collapse groups and expand every child row', async () => {
+  const { formatSubagentToolLines } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const group = {
+    id: 'g1',
+    createdAt: 1_000,
+    statusCounts: { completed: 1, running: 1, error: 1 },
+    isError: true,
+    sessions: [
+      {
+        id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: false,
+        promptPreview: 'first', turns: 1, toolUses: 0, createdAt: 1_000, startedAt: 1_000, completedAt: 2_000,
+        finalOutcome: { status: 'completed' },
+      },
+      {
+        id: 's2', sessionId: 's2', groupId: 'g1', agent: 'worker', status: 'running', resumable: false,
+        promptPreview: 'second', activeTool: 'bash', messageSnippet: 'checking logs', turns: 2, toolUses: 1, createdAt: 1_000, startedAt: 2_000,
+      },
+      {
+        id: 'g1:task-2', sessionId: 'g1:task-2', groupId: 'g1', agent: 'missing', status: 'error', resumable: false,
+        promptPreview: 'third', turns: 0, toolUses: 0, createdAt: 1_000, completedAt: 1_000,
+        finalOutcome: { status: 'error', message: 'Unknown agent: missing.' },
+      },
+    ],
+  };
+
+  const collapsed = formatSubagentToolLines({ group }, false, 4_000);
+  assert.deepEqual(collapsed, ['3 subagents · 1 running · 1 completed · 1 error · outcome:error']);
+
+  const expanded = formatSubagentToolLines({ group }, true, 4_000);
+  assert.equal(expanded.length, 3);
+  assert.match(expanded[0], /helper/);
+  assert.match(expanded[1], /worker/);
+  assert.match(expanded[1], /tool:bash/);
+  assert.match(expanded[2], /missing/);
+  assert.match(expanded[2], /Unknown agent: missing/);
 });
 
 test('subagent DTO render helpers show compact operational progress and auto-hide empty widgets', async () => {

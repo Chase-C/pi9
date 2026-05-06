@@ -5,9 +5,11 @@ import { AgentManager, AgentOptions } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { SubagentParams } from "./schema.js";
 import {
+  createSubagentGroupDto,
   createSubagentTextComponent,
   formatSubagentToolLines,
   formatWidgetLines,
+  type SubagentGroupDto,
   type SubagentSessionDto,
 } from "./subagent-ui.js";
 
@@ -58,8 +60,8 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
   };
 }
 
-function partialToolResult(sessions: SubagentSessionDto[], active: boolean) {
-  const details = { sessions, active };
+function partialToolResult(group: SubagentGroupDto, active: boolean) {
+  const details = { group, sessions: group.sessions, active };
   return {
     content: [{ type: "text" as const, text: formatSubagentToolLines(details, true).join("\n") }],
     details,
@@ -152,15 +154,17 @@ Execution notes:
         }
 
         const options = params.tasks as Array<AgentOptions>;
-        let lastSessions: SubagentSessionDto[] = [];
+        let lastGroup: SubagentGroupDto | undefined;
         const results = await agentManager.spawn(pi, ctx, signal, options, update => {
-          lastSessions = update.sessions;
-          onUpdate?.(partialToolResult(update.sessions, update.active));
+          const group = update.group ?? createSubagentGroupDto(update.groupId ?? "subagent", Date.now(), update.sessions);
+          lastGroup = group;
+          onUpdate?.(partialToolResult(group, update.active));
           updateSubagentWidget(ctx, update.sessions);
         });
         updateSubagentWidget(ctx, agentManager.sessions);
         const isError = results.some(result => result.status !== "completed");
-        return toolResult({ results, sessions: lastSessions.length > 0 ? lastSessions : agentManager.sessions }, isError);
+        const sessions = lastGroup?.sessions ?? agentManager.sessions;
+        return toolResult({ results, group: lastGroup, sessions }, isError);
       }
 
       if (params.action === "resume") {
