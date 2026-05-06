@@ -252,8 +252,11 @@ export class AgentManager {
             resolve(this._resultFromAgent(agent, agent.options.prompt, output));
           },
           error => {
+            const message = error instanceof Error ? error.message : String(error);
             if (agent.status.kind === "running") {
-              agent.error(error instanceof Error ? error.message : String(error));
+              agent.error(message);
+            } else if (agent.status.kind === "queued") {
+              agent.failQueued(message);
             }
             resolve(this._resultFromAgent(agent, agent.options.prompt, undefined, error));
           },

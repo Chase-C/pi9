@@ -152,6 +152,33 @@ test('manager returns ordered per-run output and reports unknown agents and chil
   assert.match(results[2].error, /child failed/);
 });
 
+test('manager marks runner rejections before start as terminal error in grouped progress', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const runner = async () => {
+    throw new Error('setup failed before start');
+  };
+  const registry = { agents: new Map([
+    ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+  const updates = [];
+
+  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { agent: 'helper', prompt: 'work' },
+  ], update => updates.push(update));
+
+  assert.equal(results[0].status, 'error');
+  assert.match(results[0].error, /setup failed before start/);
+  const final = updates.at(-1);
+  assert.equal(final.active, false);
+  assert.equal(final.group.isError, true);
+  assert.deepEqual(final.group.statusCounts, { error: 1 });
+  assert.equal(final.sessions[0].status, 'error');
+  assert.equal(final.sessions[0].finalOutcome.status, 'error');
+  assert.match(final.sessions[0].finalOutcome.message, /setup failed before start/);
+  assert.deepEqual(manager.listSessions(), []);
+});
+
 test('manager returns aborted result for queued task whose signal aborted before it can start', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const calls = [];

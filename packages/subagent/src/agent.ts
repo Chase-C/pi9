@@ -14,7 +14,7 @@ export type AgentStatus =
   | { kind: "running", session: AgentSession, startedAt: number }
   | { kind: "completed", session: AgentSession, startedAt: number, completedAt: number, response: string }
   | { kind: "aborted", session?: AgentSession, startedAt?: number, abortedAt: number }
-  | { kind: "error", session: AgentSession, startedAt: number, errorAt: number, error: string };
+  | { kind: "error", session?: AgentSession, startedAt?: number, errorAt: number, error: string };
 
 export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
 
@@ -106,6 +106,15 @@ export class Agent {
     }
 
     this._status = { kind: "error", session: this._status.session, startedAt: this._status.startedAt, errorAt: Date.now(), error };
+    this.onUpdate(this, "status");
+  }
+
+  failQueued(error: string) {
+    if (this._status.kind !== "queued") {
+      throw new Error(`Cannot fail a queued agent that is ${this._status.kind}.`);
+    }
+
+    this._status = { kind: "error", errorAt: Date.now(), error };
     this.onUpdate(this, "status");
   }
 
