@@ -150,7 +150,9 @@ export class AgentManager {
 
     this._flushQueue();
     try {
-      return await Promise.all(resultPromises);
+      const results = await Promise.all(resultPromises);
+      this._releaseNonResumableCompleted(groupId);
+      return results;
     } finally {
       this._flushPendingMessageUpdate(groupId);
       unsubscribe?.();
@@ -163,7 +165,7 @@ export class AgentManager {
     sessionId: string,
     prompt: string,
   ): Promise<AgentRunResult> {
-    const agent = this._agents.find(a => a.id === sessionId);
+    const agent = this._agents.find(a => a.id === sessionId && a.config.resumable);
     if (!agent) {
       throw new Error(`Unknown resumable subagent session: ${sessionId}`);
     }
@@ -198,7 +200,23 @@ export class AgentManager {
     agent: Agent,
   ): Promise<AgentRunResult> {
     return new Promise(resolve => {
+      const abortQueued = () => {
+        if (agent.status.kind === "queued") agent.cancelQueued();
+        resolve(this._resultFromAgent(agent, agent.options.prompt));
+      };
+
+      if (signal?.aborted) {
+        abortQueued();
+        return;
+      }
+
       this._queue.push(() => {
+        if (signal?.aborted) {
+          abortQueued();
+          this._flushQueue();
+          return;
+        }
+
         const run = this._runAgent(ctx, agent, signal)
           .then(({ response }) => response);
 
@@ -230,8 +248,8 @@ export class AgentManager {
       agent: agent.options.agent,
       prompt,
       model: agent.options.model ?? agent.config.model,
-      sessionId: agent.id,
       resumable: Boolean(agent.config.resumable),
+      ...(agent.config.resumable ? { sessionId: agent.id } : {}),
     };
 
     if (agent.status.kind === "completed") {
@@ -251,6 +269,14 @@ export class AgentManager {
       status: "error",
       error: error instanceof Error ? error.message : String(error ?? "Agent failed."),
     };
+  }
+
+  private _releaseNonResumableCompleted(groupId: string) {
+    this._agents = this._agents.filter(agent => {
+      if (agent.groupId !== groupId) return true;
+      if (agent.config.resumable) return true;
+      return agent.status.kind === "queued" || agent.status.kind === "running";
+    });
   }
 
   private _flushQueue() {

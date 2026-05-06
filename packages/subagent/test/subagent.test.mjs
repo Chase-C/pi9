@@ -152,6 +152,66 @@ test('manager returns ordered per-run output and reports unknown agents and chil
   assert.match(results[2].error, /child failed/);
 });
 
+test('manager returns aborted result for queued task whose signal aborted before it can start', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const calls = [];
+  let finishFirst;
+  const firstCanFinish = new Promise(resolve => { finishFirst = resolve; });
+  const runner = async (_ctx, agent) => {
+    calls.push(agent.options.prompt);
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.start(session);
+    if (agent.options.prompt === 'one') await firstCanFinish;
+    agent.complete(`done:${agent.options.prompt}`);
+    return { response: `done:${agent.options.prompt}`, session };
+  };
+  const registry = { agents: new Map([
+    ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+  const controller = new AbortController();
+
+  const pending = manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+    { agent: 'helper', prompt: 'one' },
+    { agent: 'helper', prompt: 'two' },
+  ]);
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+  controller.abort();
+  finishFirst();
+  const results = await pending;
+
+  assert.deepEqual(calls, ['one']);
+  assert.equal(results[0].status, 'completed');
+  assert.equal(results[1].status, 'aborted');
+});
+
+test('manager does not expose or resume non-resumable completed sessions', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const runner = async (_ctx, agent) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.start(session);
+    agent.complete('done');
+    return { response: 'done', session };
+  };
+  const registry = { agents: new Map([
+    ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+
+  const results = await manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { agent: 'oneshot', prompt: 'work' },
+  ]);
+
+  assert.equal(results[0].status, 'completed');
+  assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
+  assert.deepEqual(manager.listSessions(), []);
+  await assert.rejects(
+    manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, 'anything', 'follow up'),
+    /Unknown resumable subagent session/,
+  );
+});
+
 test('manager retains, resumes, lists, and clears completed resumable sessions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const runner = async (_ctx, agent) => {
@@ -353,6 +413,97 @@ test('subagent DTO render helpers show compact operational progress and auto-hid
   assert.deepEqual(formatWidgetLines([{ ...completed, resumable: true }], 6_000).length, 1);
 });
 
+test('run-agent aborts before prompting when signal aborts during setup', async () => {
+  const controller = new AbortController();
+  let createCalled = false;
+  let promptCalled = false;
+  const session = {
+    messages: [{ role: 'assistant', content: [{ type: 'text', text: 'should not prompt' }] }],
+    subscribe() { return () => {}; },
+    async prompt() { promptCalled = true; },
+    abort() {},
+  };
+  const dependencies = {
+    ResourceLoader: class { async reload() { controller.abort(); } },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async () => { createCalled = true; return { session }; },
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+  };
+  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
+  }, { agent: 'helper', prompt: 'work' }, () => {});
+
+  await assert.rejects(
+    RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, controller.signal, dependencies),
+    /Agent aborted/,
+  );
+
+  assert.equal(createCalled, false);
+  assert.equal(promptCalled, false);
+  assert.equal(agent.status.kind, 'aborted');
+});
+
+test('run-agent resolves relative task cwd against context cwd', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-cwd-'));
+  let loaderOptions;
+  let createOptions;
+  const session = {
+    messages: [{ role: 'assistant', content: [{ type: 'text', text: 'final' }] }],
+    subscribe() { return () => {}; },
+    async prompt() {},
+    abort() {},
+  };
+  const dependencies = {
+    ResourceLoader: class { constructor(options) { loaderOptions = options; } async reload() {} },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async (options) => { createOptions = options; return { session }; },
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+  };
+  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
+  }, { agent: 'helper', prompt: 'work', cwd: 'nested/project' }, () => {});
+
+  await RunAgent({ cwd: root, modelRegistry: { getAll: () => [] } }, agent, undefined, dependencies);
+
+  const expectedCwd = join(root, 'nested/project');
+  assert.equal(loaderOptions.cwd, expectedCwd);
+  assert.equal(createOptions.cwd, expectedCwd);
+  assert.equal(createOptions.sessionManager.cwd, expectedCwd);
+  assert.equal(createOptions.settingsManager.cwd, expectedCwd);
+});
+
+test('run-agent uses frontmatter thinking when task does not override it', async () => {
+  let createOptions;
+  const session = {
+    messages: [{ role: 'assistant', content: [{ type: 'text', text: 'final' }] }],
+    subscribe() { return () => {}; },
+    async prompt() {},
+    abort() {},
+  };
+  const dependencies = {
+    ResourceLoader: class { async reload() {} },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async (options) => { createOptions = options; return { session }; },
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+  };
+  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'thinker', description: 'd', systemPrompt: 's', source: 'project', thinking: 'high'
+  }, { agent: 'thinker', prompt: 'work' }, () => {});
+
+  await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, undefined, dependencies);
+
+  assert.equal(createOptions.thinkingLevel, 'high');
+});
+
 test('run-agent forwards configured tools allowlist to createAgentSession', async () => {
   let createOptions;
   const session = {
@@ -378,4 +529,32 @@ test('run-agent forwards configured tools allowlist to createAgentSession', asyn
 
   assert.equal(result.response, 'final');
   assert.deepEqual(createOptions.tools, ['read', 'grep']);
+});
+
+test('run-agent treats final assistant error stop reason as failed child run', async () => {
+  const session = {
+    messages: [{ role: 'assistant', stopReason: 'error', errorMessage: 'model overloaded', content: [{ type: 'text', text: 'partial output' }] }],
+    subscribe() { return () => {}; },
+    async prompt() {},
+    abort() {},
+  };
+  const dependencies = {
+    ResourceLoader: class { async reload() {} },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async () => ({ session }),
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+  };
+  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
+  }, { agent: 'helper', prompt: 'work' }, () => {});
+
+  await assert.rejects(
+    RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, undefined, dependencies),
+    /model overloaded/,
+  );
+  assert.equal(agent.status.kind, 'error');
+  assert.equal(agent.status.error, 'model overloaded');
 });

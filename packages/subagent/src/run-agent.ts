@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { Model } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -40,7 +42,9 @@ export async function RunAgent(
   signal?: AbortSignal,
   dependencies: RunAgentDependencies = DefaultRunAgentDependencies,
 ): Promise<RunResult> {
-  const cwd = agent.options.cwd ?? ctx.cwd;
+  ThrowIfAbortedBeforeStart(agent, signal);
+
+  const cwd = ResolveTaskCwd(ctx.cwd, agent.options.cwd);
   const agentDir = dependencies.getAgentDir();
 
   const resourceLoader = new dependencies.ResourceLoader({
@@ -56,18 +60,25 @@ export async function RunAgent(
   });
 
   await resourceLoader.reload();
+  ThrowIfAbortedBeforeStart(agent, signal);
 
   const { session } = await dependencies.createAgentSession({
     cwd,
     agentDir,
     resourceLoader,
     model: SelectModel(agent.options.model ?? agent.config.model, ctx.model, ctx.modelRegistry),
-    thinkingLevel: agent.options.thinking,
+    thinkingLevel: agent.options.thinking ?? agent.config.thinking,
     modelRegistry: ctx.modelRegistry,
     tools: agent.config.tools,
     sessionManager: dependencies.sessionManager(cwd),
     settingsManager: dependencies.settingsManager(cwd, agentDir),
   });
+
+  if (signal?.aborted) {
+    await AbortSession(session);
+    agent.cancelQueued();
+    throw new Error("Agent aborted.");
+  }
 
   agent.start(session);
   return PromptAgent(session, agent, agent.options.prompt, signal);
@@ -95,8 +106,14 @@ async function PromptAgent(
   signal?: AbortSignal,
 ): Promise<RunResult> {
   const onAbort = () => {
-    session.abort();
+    void AbortSession(session);
     agent.abort();
+  }
+
+  if (signal?.aborted) {
+    await AbortSession(session);
+    agent.abort();
+    throw new Error("Agent aborted.");
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -104,7 +121,17 @@ async function PromptAgent(
 
   try {
     await session.prompt(prompt);
-    const response = getMessage() || GetFinalAssistantMessage(session);
+    const finalMessage = GetFinalAssistantMessage(session);
+    if (finalMessage.stopReason === "aborted") {
+      agent.abort();
+      throw new Error(finalMessage.errorMessage || "Agent aborted.");
+    }
+    if (finalMessage.stopReason === "error") {
+      agent.error(finalMessage.errorMessage || finalMessage.response || "Agent failed.");
+      throw new Error(finalMessage.errorMessage || "Agent failed.");
+    }
+
+    const response = getMessage() || finalMessage.response;
 
     agent.complete(response);
     return { response, session };
@@ -117,6 +144,21 @@ async function PromptAgent(
     unsubscribe();
     signal?.removeEventListener("abort", onAbort);
   }
+}
+
+function ThrowIfAbortedBeforeStart(agent: Agent, signal: AbortSignal | undefined) {
+  if (!signal?.aborted) return;
+  agent.cancelQueued();
+  throw new Error("Agent aborted.");
+}
+
+async function AbortSession(session: AgentSession) {
+  await Promise.resolve(session.abort()).catch(() => undefined);
+}
+
+function ResolveTaskCwd(ctxCwd: string, taskCwd: string | undefined) {
+  if (!taskCwd) return ctxCwd;
+  return path.isAbsolute(taskCwd) ? taskCwd : path.resolve(ctxCwd, taskCwd);
 }
 
 function SelectModel(
@@ -192,16 +234,20 @@ function SubscribeToSession(
 
 function GetFinalAssistantMessage(
   session: AgentSession,
-): string {
+): { response: string; stopReason?: string; errorMessage?: string } {
   for (let i = session.messages.length - 1; i >= 0; i--) {
     const msg = session.messages[i];
     if (msg.role == "assistant") {
-      return msg.content
-        .filter(part => part.type === "text")
-        .map(part => part.text)
-        .join("\n")
-        .trim() ?? ""
+      return {
+        response: msg.content
+          .filter(part => part.type === "text")
+          .map(part => part.text)
+          .join("\n")
+          .trim() ?? "",
+        stopReason: msg.stopReason,
+        errorMessage: msg.errorMessage,
+      };
     }
   }
-  return "";
+  return { response: "" };
 }

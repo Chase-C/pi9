@@ -107,7 +107,7 @@ Execution notes:
 - start returns sessionId only for agents whose definition has resumable: true and whose initial prompt completed successfully.
 - Resumable sessions live for the current Pi process lifetime or until cleared.
 - Unknown agents and failed subagents are reported as failed runs and do not prevent other scheduled start tasks from completing.
-`, 
+`,
     promptSnippet: "Delegate focused tasks to specialized subagents with separate context windows",
     promptGuidelines: [
       "Use subagent for independent research, planning, review, or implementation tasks that would benefit from isolated context.",
