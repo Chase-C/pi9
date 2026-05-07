@@ -104,6 +104,38 @@ test('tool list action returns agent definitions or resumable sessions by type',
   assert.deepEqual(sessions.details.sessions, []);
 });
 
+test('tool resume action returns full output only once in JSON details', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const fullOutput = `resume output ${'q'.repeat(1500)} tail`;
+  let registeredTool;
+  const fakeManager = {
+    sessions: [],
+    resume(_ctx, _signal, sessionId, prompt) {
+      return Promise.resolve({ agent: 'helper', prompt, status: 'completed', output: fullOutput, sessionId, resumable: true });
+    },
+  };
+
+  subagentExtension({
+    registerCommand() {},
+    registerMessageRenderer() {},
+    registerTool: tool => { registeredTool = tool; },
+  }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: fakeManager,
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'resume',
+    sessionId: 's1',
+    prompt: 'follow up',
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.result.output, fullOutput);
+  assert.equal((result.content[0].text.match(new RegExp(fullOutput, 'g')) ?? []).length, 1);
+  assert.equal(result.details.message?.details?.result?.output, undefined);
+});
+
 test('subagents command opens a sessions view from serialized DTOs', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeRegistry = {
@@ -160,7 +192,7 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
   assert.doesNotMatch(text, /"config"/);
 });
 
-test('subagents command resumes completed retained session with editor loader and concise message', async () => {
+test('subagents command resumes completed retained session with editor loader and visible concise message', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const retainedSession = {
     id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
@@ -184,7 +216,7 @@ test('subagents command resumes completed retained session with editor loader an
     registerTool() {},
     registerCommand: (name, command) => commands.set(name, command),
     registerMessageRenderer() {},
-    sendMessage: message => sentMessages.push(message),
+    sendMessage: (message, options) => sentMessages.push({ message, options }),
   }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager });
 
   let customCalls = 0;
@@ -225,10 +257,12 @@ test('subagents command resumes completed retained session with editor loader an
   assert.deepEqual(resumeCalls.map(call => [call.sessionId, call.prompt]), [['s1', 'follow\nup']]);
   assert.ok(resumeCalls[0].signal instanceof AbortSignal);
   assert.equal(sentMessages.length, 1);
-  assert.equal(sentMessages[0].customType, 'subagent-resume');
-  assert.match(sentMessages[0].content, /Subagent resume completed/);
-  assert.equal(sentMessages[0].content.includes('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'), false);
-  assert.equal(sentMessages[0].details.result.output.startsWith('Result z'), true);
+  assert.notEqual(sentMessages[0].options?.deliverAs, 'nextTurn');
+  assert.equal(sentMessages[0].message.customType, 'subagent-resume');
+  assert.equal(sentMessages[0].message.display, true);
+  assert.match(sentMessages[0].message.content, /Subagent resume completed/);
+  assert.equal(sentMessages[0].message.content.includes('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'), false);
+  assert.equal(sentMessages[0].message.details.result.output.startsWith('Result z'), true);
 });
 
 test('subagents command resume cancellation aborts the child and reports interruption', async () => {

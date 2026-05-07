@@ -212,7 +212,7 @@ async function resumeSessionFromCommand(
 
   const result = normalizeResumeOutcome(action, prompt, outcome);
   updateSubagentCommandWidget(ctx, listManagedSessions(agentManager));
-  pi.sendMessage?.(createSubagentResumeMessage(result), { deliverAs: "nextTurn" });
+  pi.sendMessage?.(createSubagentResumeMessage(result));
   ctx.ui.notify(result.status === "completed"
     ? `Subagent session ${action.sessionId} resumed.`
     : `Subagent session ${action.sessionId} resume ${result.status}.`,

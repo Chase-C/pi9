@@ -7,7 +7,6 @@ import { SubagentParams } from "./schema.js";
 import { registerSubagentsCommand } from "./subagents-command.js";
 import {
   createSubagentGroupDto,
-  createSubagentResumeMessage,
   createSubagentTextComponent,
   formatSubagentResumeMessageContent,
   formatSubagentToolLines,
@@ -193,8 +192,7 @@ Execution notes:
             updateSubagentWidget(ctx, update.sessions);
           });
           updateSubagentWidget(ctx, agentManager.sessions);
-          const message = createSubagentResumeMessage(result);
-          return toolResult({ result, group: lastGroup, sessions: lastGroup?.sessions ?? agentManager.sessions, message }, result.status !== "completed");
+          return toolResult({ result, group: lastGroup, sessions: lastGroup?.sessions ?? agentManager.sessions }, result.status !== "completed");
         } catch (error) {
           return errorResult(error instanceof Error ? error.message : String(error), { sessionId: params.sessionId });
         }
