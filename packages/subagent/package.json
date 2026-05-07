@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "agents", "README.md"],
+  "files": ["dist", "src", "agents", "README.md"],
   "keywords": ["pi-package", "pi", "pi9", "subagent"],
   "scripts": {
     "build": "tsc --build",
