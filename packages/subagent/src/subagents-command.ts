@@ -344,19 +344,22 @@ async function openSubagentSettings(
     return;
   }
 
+  let saveQueue = Promise.resolve();
   await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => new SubagentSettingsComponent(
     settings,
     theme,
     placement => {
       settings = { widgetPlacement: placement };
       updateSubagentWidget(ctx, listManagedSessions(agentManager), settings);
-      void settingsStore.save(settings).then(
+      const settingsToSave = settings;
+      saveQueue = saveQueue.then(() => settingsStore.save(settingsToSave).then(
         () => ctx.ui.notify(`Subagent widget placement set to ${placement}.`, "info"),
         error => ctx.ui.notify(`Failed to save subagent settings: ${error instanceof Error ? error.message : String(error)}`, "warning"),
-      );
+      ));
     },
     () => done(undefined),
   ));
+  await saveQueue;
 }
 
 export function registerSubagentsCommand(

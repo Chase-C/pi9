@@ -221,6 +221,67 @@ test('/subagents settings exposes placement values, saves changes, and updates a
   assert.deepEqual(widgets.at(-1)[2], { placement: 'aboveEditor' });
 });
 
+test('/subagents settings persists the latest rapid placement change before command completion', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const runningSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
+    promptPreview: 'Fix issue', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
+  };
+  const fakeManager = {
+    sessions: [runningSession],
+    listSessions() { return this.sessions; },
+  };
+  let persisted = 'belowEditor';
+  let releaseFirstSave;
+  const fakeSettingsStore = {
+    async load() { return { settings: { widgetPlacement: persisted } }; },
+    save(settings) {
+      if (settings.widgetPlacement === 'aboveEditor') {
+        return new Promise(resolve => {
+          releaseFirstSave = () => {
+            persisted = settings.widgetPlacement;
+            resolve();
+          };
+        });
+      }
+      persisted = settings.widgetPlacement;
+      return Promise.resolve();
+    },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager, settingsStore: fakeSettingsStore });
+
+  const widgets = [];
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const handlerPromise = commands.get('subagents').handler('settings', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget: (...args) => widgets.push(args),
+      custom(factory) {
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        component.handleInput('\r');
+        component.handleInput('\r');
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(widgets.at(-1)[0], 'subagent');
+  assert.equal(widgets.at(-1)[1], undefined);
+
+  assert.equal(typeof releaseFirstSave, 'function');
+  releaseFirstSave();
+  await handlerPromise;
+
+  assert.equal(persisted, 'off');
+});
+
 test('subagents command opens a sessions view from serialized DTOs', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeRegistry = {
