@@ -6,14 +6,14 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": ["dist", "agents", "README.md"],
-  "keywords": ["pi-package", "pi", "subagent"],
+  "keywords": ["pi-package", "pi", "pi9", "subagent"],
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean",
     "test": "npm run build && node --test test/*.mjs"
   },
   "pi": {
-    "extensions": ["./dist/index.js"],
+    "extensions": ["./src/index.ts"],
     "skills": [],
     "prompts": []
   },
