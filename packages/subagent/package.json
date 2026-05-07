@@ -1,7 +1,7 @@
 {
   "name": "@pi9/subagent",
   "version": "0.1.0",
-  "description": "Pi extension that adds a subagent delegation tool.",
+  "description": "Pi extension that adds subagent delegation, progress UI, and session management.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

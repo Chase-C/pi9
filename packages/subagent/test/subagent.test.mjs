@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { visibleWidth } from '@mariozechner/pi-tui';
 
 const unique = () => `${Date.now()}-${Math.random()}`;
 
@@ -500,6 +501,117 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
   assert.doesNotMatch(text, /"config"/);
 });
 
+test('/subagents agents view constrains long rendered rows to the TUI width', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const width = 80;
+  const fakeRegistry = {
+    agents: new Map([
+      ['researcher-with-a-long-name', {
+        name: 'researcher-with-a-long-name',
+        description: `Investigates broad design context with a very long description ${'y'.repeat(140)}`,
+        source: 'project',
+        resumable: true,
+        model: 'test/model-with-a-long-name',
+        tools: ['read', 'bash', 'grep'],
+      }],
+    ]),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const fakeManager = {
+    sessions: [],
+    listSessions() { return this.sessions; },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
+
+  let rendered = [];
+  const theme = {
+    fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+    bold: text => `\x1b[1m${text}\x1b[22m`,
+  };
+  await commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory) {
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        rendered = component.render(width);
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.ok(rendered.length > 0);
+  for (const line of rendered) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
+});
+
+test('/subagents sessions view constrains long rendered rows to the TUI width', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const width = 155;
+  const fakeRegistry = {
+    agents: new Map(),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const fakeManager = {
+    sessions: [
+      {
+        id: 's1',
+        sessionId: '123e4567-e89b-12d3-a456-426614174000',
+        groupId: 'g1',
+        agent: 'explorer',
+        status: 'running',
+        resumable: false,
+        promptPreview: `Investigate the rendering crash caused by an extremely long prompt preview ${'x'.repeat(180)}`,
+        outputSnippet: `Detailed output with long diagnostic context ${'o'.repeat(180)}`,
+        turns: 12,
+        toolUses: 4,
+        compactions: 0,
+        createdAt: 1_000,
+        startedAt: 2_000,
+        availableActions: ['inspect'],
+      },
+    ],
+    listSessions() { return this.sessions; },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
+
+  let rendered = [];
+  let inspectRendered = [];
+  const theme = {
+    fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+    bold: text => `\x1b[1m${text}\x1b[22m`,
+  };
+  await commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory) {
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        rendered = component.render(width);
+        component.handleInput('\r');
+        inspectRendered = component.render(width);
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.ok(rendered.length > 0);
+  for (const line of rendered) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
+  assert.ok(inspectRendered.length > 0);
+  for (const line of inspectRendered) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
+});
+
 test('/subagents command handles resume when editor UI is unavailable', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const retainedSession = {
@@ -579,6 +691,69 @@ test('/subagents command handles resume when editor UI throws', async () => {
   assert.match(notifications.at(-1)[0], /editor|UI/i);
   assert.match(notifications.at(-1)[0], /editor unavailable/);
   assert.equal(notifications.at(-1)[1], 'warning');
+});
+
+test('subagents command resume loader constrains long rendered lines to the TUI width', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const width = 50;
+  const longAgent = `helper-${'z'.repeat(120)}`;
+  const retainedSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: longAgent, status: 'completed', resumable: true,
+    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
+    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
+    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
+    finalOutcome: { status: 'completed' },
+  };
+  const fakeManager = {
+    sessions: [retainedSession],
+    listSessions() { return this.sessions; },
+    resume(_ctx, _signal, sessionId, prompt) {
+      return Promise.resolve({ agent: longAgent, prompt, status: 'completed', output: 'done', sessionId, resumable: true });
+    },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+    registerMessageRenderer() {},
+    sendMessage() {},
+  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager });
+
+  let customCalls = 0;
+  let loaderLines = [];
+  const theme = {
+    fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+    bold: text => `\x1b[1m${text}\x1b[22m`,
+  };
+  await commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      editor() { return Promise.resolve('follow up'); },
+      custom(factory) {
+        customCalls += 1;
+        return new Promise(resolve => {
+          let component;
+          const done = value => {
+            component?.dispose?.();
+            resolve(value);
+          };
+          component = factory({ requestRender() {} }, theme, {}, done);
+          if (customCalls === 1) {
+            component.handleInput('r');
+          } else {
+            loaderLines = component.render(width);
+          }
+        });
+      },
+    },
+  });
+
+  assert.equal(customCalls, 2);
+  assert.ok(loaderLines.length > 0);
+  for (const line of loaderLines) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
 });
 
 test('subagents command resumes completed retained session with editor loader and visible concise message', async () => {

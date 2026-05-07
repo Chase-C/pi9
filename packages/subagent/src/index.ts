@@ -104,10 +104,10 @@ Use this tool when a task benefits from separation from the main conversation: c
 
 Inputs:
 - action: one of "list", "start", "resume", or "clear".
-- action="list": list configured agent definitions by default. Pass type="sessions" to list retained resumable subagent sessions instead of definitions.
+- action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions.
 - action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project.
 - action="resume": send a follow-up prompt to a completed resumable subagent session by sessionId.
-- action="clear": release one retained resumable session by sessionId, or all retained sessions when sessionId is omitted.
+- action="clear": clear one known session by sessionId, aborting it if still running, or clear all non-running retained sessions when sessionId is omitted.
 
 Prompt guidance:
 - Name the exact objective, relevant files/directories, constraints, and expected output format.
@@ -117,7 +117,7 @@ Prompt guidance:
 Execution notes:
 - Up to four start tasks run concurrently; final results preserve input order.
 - start and resume are blocking and return structured results when the child prompt completes.
-- start returns sessionId only for agents whose definition has resumable: true and whose initial prompt completed successfully.
+- Results include a resumable flag and include sessionId when a resumable child has or had a child AgentSession; only completed resumable sessions can be resumed.
 - Resumable sessions live for the current Pi process lifetime or until cleared.
 - Unknown agents and failed subagents are reported as failed runs and do not prevent other scheduled start tasks from completing.
 `,

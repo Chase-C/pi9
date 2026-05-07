@@ -1,5 +1,5 @@
 import { getSettingsListTheme, type ExtensionAPI, type ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { SettingsList, type Component, type SettingItem, type TUI } from "@mariozechner/pi-tui";
+import { SettingsList, truncateToWidth, visibleWidth, type Component, type SettingItem, type TUI } from "@mariozechner/pi-tui";
 
 import { AgentManager } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
@@ -82,7 +82,7 @@ class SubagentSettingsComponent implements Component {
   invalidate(): void { this.settingsList.invalidate(); }
 
   render(width: number): string[] {
-    return [this.accent("Subagent Settings"), "", ...this.settingsList.render(width)];
+    return fitLinesToWidth([this.accent("Subagent Settings"), "", ...this.settingsList.render(width)], width);
   }
 
   handleInput(data: string): void { this.settingsList.handleInput(data); }
@@ -119,20 +119,20 @@ class SubagentAgentsComponent implements Component {
 
   invalidate(): void { }
 
-  render(_width: number): string[] {
-    if (this.agents.length === 0) return [this.accent("Subagent Agents"), "No configured subagent agents.", this.dim(agentListHelp())];
+  render(width: number): string[] {
+    if (this.agents.length === 0) return fitLinesToWidth([this.accent("Subagent Agents"), "No configured subagent agents.", this.dim(agentListHelp())], width);
 
     this.selected = clamp(this.selected, 0, this.agents.length - 1);
     if (this.mode === "inspect") {
       const agent = this.agents[this.selected];
-      return [
+      return fitLinesToWidth([
         this.accent("Agent Definition"),
         ...formatSubagentDefinitionInspect(agent).map(line => `  ${line}`),
         this.dim(agentInspectHelp()),
-      ];
+      ], width);
     }
 
-    return [
+    return fitLinesToWidth([
       this.accent("Subagent Agents"),
       ...this.agents.map((agent, index) => {
         const prefix = index === this.selected ? "> " : "  ";
@@ -140,7 +140,7 @@ class SubagentAgentsComponent implements Component {
         return index === this.selected ? this.accent(line) : line;
       }),
       this.dim(agentListHelp()),
-    ];
+    ], width);
   }
 
   handleInput(data: string): void {
@@ -196,21 +196,21 @@ class SubagentSessionsComponent implements Component {
 
   invalidate(): void { }
 
-  render(_width: number): string[] {
+  render(width: number): string[] {
     const sessions = this.sessions;
-    if (sessions.length === 0) return [this.accent("Subagent Sessions"), "No active or retained subagent sessions."];
+    if (sessions.length === 0) return fitLinesToWidth([this.accent("Subagent Sessions"), "No active or retained subagent sessions."], width);
 
     this.selected = clamp(this.selected, 0, sessions.length - 1);
     if (this.mode === "inspect") {
       const session = sessions[this.selected];
-      return [
+      return fitLinesToWidth([
         this.accent("Subagent Session"),
         ...formatSubagentSessionInspect(session).map(line => `  ${line}`),
         this.dim(inspectHelp(session)),
-      ];
+      ], width);
     }
 
-    return [
+    return fitLinesToWidth([
       this.accent("Subagent Sessions"),
       ...sessions.map((session, index) => {
         const prefix = index === this.selected ? "> " : "  ";
@@ -218,7 +218,7 @@ class SubagentSessionsComponent implements Component {
         return index === this.selected ? this.accent(line) : line;
       }),
       this.dim(listHelp(sessions[this.selected])),
-    ];
+    ], width);
   }
 
   handleInput(data: string): void {
@@ -299,6 +299,10 @@ class SubagentSessionsComponent implements Component {
   private dim(text: string) {
     return this.theme.fg?.("dim", text) ?? text;
   }
+}
+
+function fitLinesToWidth(lines: string[], width: number) {
+  return lines.map(line => visibleWidth(line) > width ? truncateToWidth(line, width) : line);
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -416,7 +420,7 @@ class SubagentResumeLoader implements Component {
 
   invalidate(): void { }
 
-  render() { return [this.accent(this.message), this.dim("esc cancel")]; }
+  render(width: number) { return fitLinesToWidth([this.accent(this.message), this.dim("esc cancel")], width); }
 
   handleInput(data: string) {
     if (isCancelKey(data)) this.controller.abort();
