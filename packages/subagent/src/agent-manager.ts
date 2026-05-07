@@ -5,11 +5,11 @@ import { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { Agent, type AgentUpdateKind } from "./agent.js";
 import { AgentRegistry } from "./agent-registry.js";
-import { ResumeAgent, RunAgent, type RunResult } from "./run-agent.js";
 import {
   activeOrRetainedAgents,
   serializeUnknownAgentError,
 } from "./subagent-ui.js";
+import { ResumeAgent, RunAgent, type RunResult } from "./run-agent.js";
 
 export type ErrorEntry = {
   serialized: ReturnType<typeof serializeUnknownAgentError>;
