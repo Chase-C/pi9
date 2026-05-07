@@ -29,7 +29,7 @@ export interface AgentOptions {
 export interface AgentRunResult {
   agent: string;
   prompt: string;
-  status: "completed" | "error" | "aborted";
+  status: "completed" | "error" | "aborted" | "skipped" | "interrupted";
   output?: string;
   error?: string;
   model?: string;
@@ -254,9 +254,11 @@ export class AgentManager {
           error => {
             const message = error instanceof Error ? error.message : String(error);
             if (agent.status.kind === "running") {
-              agent.error(message);
+              if (signal?.aborted) agent.interrupt(message);
+              else agent.error(message);
             } else if (agent.status.kind === "queued") {
-              agent.failQueued(message);
+              if (signal?.aborted) agent.cancelQueued();
+              else agent.failQueued(message);
             }
             resolve(this._resultFromAgent(agent, agent.options.prompt, undefined, error));
           },
@@ -271,12 +273,13 @@ export class AgentManager {
     output?: string,
     error?: unknown,
   ): AgentRunResult {
+    const resumable = Boolean(agent.config.resumable && "session" in agent.status && agent.status.session);
     const base = {
       agent: agent.options.agent,
       prompt,
       model: agent.options.model ?? agent.config.model,
-      resumable: Boolean(agent.config.resumable),
-      ...(agent.config.resumable ? { sessionId: agent.id } : {}),
+      resumable,
+      ...(resumable ? { sessionId: agent.id } : {}),
     };
 
     if (agent.status.kind === "completed") {
@@ -284,6 +287,12 @@ export class AgentManager {
     }
     if (output !== undefined) {
       return { ...base, status: "completed", output };
+    }
+    if (agent.status.kind === "skipped") {
+      return { ...base, status: "skipped", error: "Agent skipped." };
+    }
+    if (agent.status.kind === "interrupted") {
+      return { ...base, status: "interrupted", error: agent.status.error ?? "Agent interrupted." };
     }
     if (agent.status.kind === "aborted") {
       return { ...base, status: "aborted", error: "Agent aborted." };

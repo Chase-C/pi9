@@ -77,7 +77,7 @@ export async function RunAgent(
   if (signal?.aborted) {
     await AbortSession(session);
     agent.cancelQueued();
-    throw new Error("Agent aborted.");
+    throw new Error("Agent skipped.");
   }
 
   agent.start(session);
@@ -107,13 +107,13 @@ async function PromptAgent(
 ): Promise<RunResult> {
   const onAbort = () => {
     void AbortSession(session);
-    agent.abort();
+    if (agent.status.kind === "running") agent.interrupt("Agent interrupted.");
   }
 
   if (signal?.aborted) {
     await AbortSession(session);
-    agent.abort();
-    throw new Error("Agent aborted.");
+    agent.interrupt("Agent interrupted.");
+    throw new Error("Agent interrupted.");
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -123,8 +123,9 @@ async function PromptAgent(
     await session.prompt(prompt);
     const finalMessage = GetFinalAssistantMessage(session);
     if (finalMessage.stopReason === "aborted") {
-      agent.abort();
-      throw new Error(finalMessage.errorMessage || "Agent aborted.");
+      const message = finalMessage.errorMessage || "Agent interrupted.";
+      if (agent.status.kind === "running") agent.interrupt(message);
+      throw new Error(message);
     }
     if (finalMessage.stopReason === "error") {
       agent.error(finalMessage.errorMessage || finalMessage.response || "Agent failed.");
@@ -137,7 +138,9 @@ async function PromptAgent(
     return { response, session };
   } catch (error) {
     if (agent.status.kind === "running") {
-      agent.error(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      if (signal?.aborted) agent.interrupt(message);
+      else agent.error(message);
     }
     throw error;
   } finally {
@@ -149,7 +152,7 @@ async function PromptAgent(
 function ThrowIfAbortedBeforeStart(agent: Agent, signal: AbortSignal | undefined) {
   if (!signal?.aborted) return;
   agent.cancelQueued();
-  throw new Error("Agent aborted.");
+  throw new Error("Agent skipped.");
 }
 
 async function AbortSession(session: AgentSession) {

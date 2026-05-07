@@ -6,7 +6,7 @@ const PROMPT_PREVIEW_LENGTH = 120;
 const MESSAGE_SNIPPET_LENGTH = 200;
 
 export interface SubagentFinalOutcomeDto {
-  status: "completed" | "error" | "aborted";
+  status: "completed" | "error" | "aborted" | "skipped" | "interrupted";
   message?: string;
 }
 
@@ -99,7 +99,7 @@ export function agentToSessionDto(agent: Agent): SubagentSessionDto {
     groupId: agent.groupId,
     agent: agent.options.agent,
     status: status.kind,
-    resumable: Boolean(agent.config.resumable),
+    resumable: Boolean(agent.config.resumable && (status.kind === "queued" || ("session" in status && status.session))),
     promptPreview: compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH),
     messageSnippet: agent.message ? compact(agent.message, MESSAGE_SNIPPET_LENGTH) : undefined,
     activeTool: agent.tool,
@@ -117,6 +117,12 @@ export function agentToSessionDto(agent: Agent): SubagentSessionDto {
   } else if (status.kind === "error") {
     dto.completedAt = status.errorAt;
     dto.finalOutcome = { status: "error", message: status.error };
+  } else if (status.kind === "skipped") {
+    dto.completedAt = status.skippedAt;
+    dto.finalOutcome = { status: "skipped", message: "Agent skipped." };
+  } else if (status.kind === "interrupted") {
+    dto.completedAt = status.interruptedAt;
+    dto.finalOutcome = { status: "interrupted", message: status.error ?? "Agent interrupted." };
   } else if (status.kind === "aborted") {
     dto.completedAt = status.abortedAt;
     dto.finalOutcome = { status: "aborted", message: "Agent aborted." };
@@ -148,11 +154,12 @@ export function formatSubagentToolLines(
 }
 
 export function formatSubagentGroupLine(group: SubagentGroupDto): string {
-  const counts = ["queued", "running", "completed", "error", "aborted", "skipped"]
+  const knownStatuses = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
+  const counts = knownStatuses
     .filter(status => group.statusCounts[status])
     .map(status => `${group.statusCounts[status]} ${status}`);
   const extraCounts = Object.keys(group.statusCounts)
-    .filter(status => !["queued", "running", "completed", "error", "aborted", "skipped"].includes(status))
+    .filter(status => !knownStatuses.includes(status))
     .sort()
     .map(status => `${group.statusCounts[status]} ${status}`);
   const active = group.sessions.some(session => isActiveStatus(session.status));
@@ -246,6 +253,8 @@ function colorLine(line: string, theme: any) {
   if (!theme?.fg) return line;
   if (line.includes("status:error") || line.includes("outcome:error")) return theme.fg("error", line);
   if (line.includes("status:aborted") || line.includes("outcome:aborted")) return theme.fg("warning", line);
+  if (line.includes("status:interrupted") || line.includes("outcome:interrupted")) return theme.fg("warning", line);
+  if (line.includes("status:skipped") || line.includes("outcome:skipped")) return theme.fg("warning", line);
   if (line.includes("completed") || line.includes("outcome:completed")) return theme.fg("success", line);
   if (line.includes("running")) return theme.fg("accent", line);
   return theme.fg("muted", line);

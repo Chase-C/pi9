@@ -179,7 +179,7 @@ test('manager marks runner rejections before start as terminal error in grouped 
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test('manager returns aborted result for queued task whose signal aborted before it can start', async () => {
+test('manager returns skipped result and final group row for queued task whose signal aborted before it can start', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const calls = [];
   let finishFirst;
@@ -197,11 +197,12 @@ test('manager returns aborted result for queued task whose signal aborted before
   ]) };
   const manager = new AgentManager(registry, 1, runner);
   const controller = new AbortController();
+  const updates = [];
 
   const pending = manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
     { agent: 'helper', prompt: 'one' },
     { agent: 'helper', prompt: 'two' },
-  ]);
+  ], update => updates.push(update));
 
   await new Promise(resolve => setTimeout(resolve, 20));
   controller.abort();
@@ -210,7 +211,47 @@ test('manager returns aborted result for queued task whose signal aborted before
 
   assert.deepEqual(calls, ['one']);
   assert.equal(results[0].status, 'completed');
-  assert.equal(results[1].status, 'aborted');
+  assert.equal(results[1].status, 'skipped');
+  assert.equal(results[1].resumable, false);
+  const final = updates.at(-1).group;
+  assert.deepEqual(final.statusCounts, { completed: 1, skipped: 1 });
+  assert.equal(final.isError, true);
+  assert.deepEqual(final.sessions.map(session => session.status), ['completed', 'skipped']);
+  assert.equal(final.sessions[1].finalOutcome.status, 'skipped');
+  assert.deepEqual(manager.listSessions(), []);
+});
+
+test('manager does not expose skipped resumable tasks as sessions', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  let finishFirst;
+  const firstCanFinish = new Promise(resolve => { finishFirst = resolve; });
+  const runner = async (_ctx, agent) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.start(session);
+    await firstCanFinish;
+    agent.complete('done');
+    return { response: 'done', session };
+  };
+  const registry = { agents: new Map([
+    ['blocker', { name: 'blocker', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+  const controller = new AbortController();
+
+  const pending = manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+    { agent: 'blocker', prompt: 'one' },
+    { agent: 'chatty', prompt: 'two' },
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  controller.abort();
+  finishFirst();
+  const results = await pending;
+
+  assert.equal(results[1].status, 'skipped');
+  assert.equal(results[1].resumable, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(results[1], 'sessionId'), false);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('manager does not expose or resume non-resumable completed sessions', async () => {
@@ -237,6 +278,47 @@ test('manager does not expose or resume non-resumable completed sessions', async
     manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, 'anything', 'follow up'),
     /Unknown resumable subagent session/,
   );
+});
+
+test('manager retains only resumable interrupted sessions inspect-clear only after parent cancellation settles', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const runner = async (_ctx, agent, signal) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.start(session);
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    agent.interrupt('cancelled by parent');
+    throw new Error('cancelled by parent');
+  };
+  const registry = { agents: new Map([
+    ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 2, runner);
+  const controller = new AbortController();
+
+  const pending = manager.spawn({}, { cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+    { agent: 'oneshot', prompt: 'one' },
+    { agent: 'chatty', prompt: 'two' },
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  controller.abort();
+  const results = await pending;
+
+  assert.deepEqual(results.map(result => result.status), ['interrupted', 'interrupted']);
+  assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
+  assert.ok(results[1].sessionId);
+
+  const sessions = manager.listSessions();
+  assert.deepEqual(sessions.map(session => session.agent), ['chatty']);
+  assert.equal(sessions[0].status, 'interrupted');
+  assert.equal(sessions[0].finalOutcome.status, 'interrupted');
+
+  await assert.rejects(
+    manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, results[1].sessionId, 'follow up'),
+    /while it is interrupted/,
+  );
+  assert.deepEqual(manager.clear(results[1].sessionId), { cleared: 1, sessionId: results[1].sessionId });
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('manager retains, resumes, lists, and clears completed resumable sessions', async () => {
@@ -552,7 +634,7 @@ test('subagent DTO render helpers show compact operational progress and auto-hid
   assert.deepEqual(formatWidgetLines([{ ...completed, resumable: true }], 6_000).length, 1);
 });
 
-test('run-agent aborts before prompting when signal aborts during setup', async () => {
+test('run-agent skips before prompting when signal aborts during setup', async () => {
   const controller = new AbortController();
   let createCalled = false;
   let promptCalled = false;
@@ -577,12 +659,12 @@ test('run-agent aborts before prompting when signal aborts during setup', async 
 
   await assert.rejects(
     RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, controller.signal, dependencies),
-    /Agent aborted/,
+    /Agent skipped/,
   );
 
   assert.equal(createCalled, false);
   assert.equal(promptCalled, false);
-  assert.equal(agent.status.kind, 'aborted');
+  assert.equal(agent.status.kind, 'skipped');
 });
 
 test('run-agent resolves relative task cwd against context cwd', async () => {
@@ -668,6 +750,45 @@ test('run-agent forwards configured tools allowlist to createAgentSession', asyn
 
   assert.equal(result.response, 'final');
   assert.deepEqual(createOptions.tools, ['read', 'grep']);
+});
+
+test('run-agent marks running parent cancellation as interrupted', async () => {
+  const controller = new AbortController();
+  let abortCalls = 0;
+  let resolvePrompt;
+  const session = {
+    messages: [],
+    subscribe() { return () => {}; },
+    async prompt() { await new Promise(resolve => { resolvePrompt = resolve; }); },
+    abort() {
+      abortCalls += 1;
+      session.messages = [{ role: 'assistant', stopReason: 'aborted', errorMessage: 'user cancelled', content: [{ type: 'text', text: 'partial' }] }];
+      resolvePrompt?.();
+    },
+  };
+  const dependencies = {
+    ResourceLoader: class { async reload() {} },
+    getAgentDir: () => '/tmp/pi-agent',
+    createAgentSession: async () => ({ session }),
+    sessionManager: cwd => ({ cwd }),
+    settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
+  };
+  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const agent = new Agent('id', 'group', {
+    name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
+  }, { agent: 'helper', prompt: 'work' }, () => {});
+
+  const pending = RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, controller.signal, dependencies);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(agent.status.kind, 'running');
+
+  controller.abort();
+
+  await assert.rejects(pending, /user cancelled/);
+  assert.equal(abortCalls, 1);
+  assert.equal(agent.status.kind, 'interrupted');
+  assert.ok(agent.status.session);
 });
 
 test('run-agent treats final assistant error stop reason as failed child run', async () => {

@@ -13,6 +13,8 @@ export type AgentStatus =
   | { kind: "queued" }
   | { kind: "running", session: AgentSession, startedAt: number }
   | { kind: "completed", session: AgentSession, startedAt: number, completedAt: number, response: string }
+  | { kind: "skipped", skippedAt: number }
+  | { kind: "interrupted", session: AgentSession, startedAt: number, interruptedAt: number, error?: string }
   | { kind: "aborted", session?: AgentSession, startedAt?: number, abortedAt: number }
   | { kind: "error", session?: AgentSession, startedAt?: number, errorAt: number, error: string };
 
@@ -82,12 +84,21 @@ export class Agent {
     this.onUpdate(this, "status");
   }
 
+  interrupt(error?: string) {
+    if (this._status.kind !== "running") {
+      throw new Error(`Cannot interrupt an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
+    }
+
+    this._status = { kind: "interrupted", session: this._status.session, startedAt: this._status.startedAt, interruptedAt: Date.now(), error };
+    this.onUpdate(this, "status");
+  }
+
   cancelQueued() {
     if (this._status.kind !== "queued") {
       throw new Error(`Cannot cancel an agent that is ${this._status.kind}.`);
     }
 
-    this._status = { kind: "aborted", abortedAt: Date.now() };
+    this._status = { kind: "skipped", skippedAt: Date.now() };
     this.onUpdate(this, "status");
   }
 
