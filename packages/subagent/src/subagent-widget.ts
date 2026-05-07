@@ -1,4 +1,4 @@
-import type { SubagentUiSettingsStore, SubagentUiSettings, SubagentUiSettingsLoadResult } from "./subagent-settings.js";
+import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentUiSettingsStore, type SubagentUiSettings, type SubagentUiSettingsLoadResult } from "./subagent-settings.js";
 import { formatWidgetLines, type SubagentSessionDto } from "./subagent-ui.js";
 
 type SubagentWidgetContext = {
@@ -13,9 +13,15 @@ export async function loadSubagentUiSettings(
   ctx: SubagentWidgetContext,
   settingsStore: Pick<SubagentUiSettingsStore, "load">,
 ) {
-  const result = await settingsStore.load();
-  notifySettingsWarning(ctx, result);
-  return result.settings;
+  try {
+    const result = await settingsStore.load();
+    notifySettingsWarning(ctx, result);
+    return result.settings;
+  } catch (error) {
+    const message = `Failed to load subagent UI settings; using defaults. ${error instanceof Error ? error.message : String(error)}`;
+    notifySettingsWarning(ctx, { settings: DEFAULT_SUBAGENT_UI_SETTINGS, warning: message });
+    return { ...DEFAULT_SUBAGENT_UI_SETTINGS };
+  }
 }
 
 function notifySettingsWarning(ctx: SubagentWidgetContext, result: SubagentUiSettingsLoadResult) {

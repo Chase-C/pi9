@@ -79,6 +79,19 @@ test('agent transitions from queued to terminal states and rejects invalid trans
   }
 });
 
+test('subagent extension still registers the tool when custom resume renderer registration fails', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+
+  assert.doesNotThrow(() => subagentExtension({
+    registerCommand() {},
+    registerMessageRenderer() { throw new Error('renderer unsupported'); },
+    registerTool: tool => { registeredTool = tool; },
+  }));
+
+  assert.equal(registeredTool.name, 'subagent');
+});
+
 test('tool execution requires action', async () => {
   const root = await mkdtemp(join(tmpdir(), 'subagent-action-'));
   let registeredTool;
@@ -284,6 +297,56 @@ test('/subagents settings persists the latest rapid placement change before comm
   assert.equal(persisted, 'off');
 });
 
+test('/subagents command no-ops without UI or notify instead of throwing', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const fakeRegistry = {
+    agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project', resumable: false }]]),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const fakeManager = {
+    sessions: [],
+    listSessions() { return this.sessions; },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
+
+  await assert.doesNotReject(() => commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: false,
+  }));
+});
+
+test('/subagents command does not notify through UI when hasUI is false', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const fakeRegistry = {
+    agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project', resumable: false }]]),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const fakeManager = {
+    sessions: [],
+    listSessions() { return this.sessions; },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
+
+  let notifyCalls = 0;
+  await commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: false,
+    ui: { notify() { notifyCalls += 1; } },
+  });
+
+  assert.equal(notifyCalls, 0);
+});
+
 test('subagents command opens agents browser by default when sessions are empty', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const reloadCalls = [];
@@ -345,6 +408,42 @@ test('subagents command opens agents browser by default when sessions are empty'
   assert.doesNotMatch(inspectText, /launch|start/i);
 });
 
+test('/subagents command reports custom UI failure without throwing', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const fakeRegistry = {
+    agents: new Map(),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const fakeManager = {
+    sessions: [{
+      id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
+      promptPreview: 'Fix issue', turns: 1, toolUses: 0, compactions: 0,
+      createdAt: 1, startedAt: 1, completedAt: 2,
+      availableActions: ['inspect', 'clear'], finalOutcome: { status: 'completed' },
+    }],
+    listSessions() { return this.sessions; },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
+
+  const notifications = [];
+  await assert.doesNotReject(() => commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify: (...args) => notifications.push(args),
+      custom() { throw new Error('custom unavailable'); },
+    },
+  }));
+
+  assert.match(notifications.at(-1)[0], /Subagents UI failed: custom unavailable/);
+  assert.equal(notifications.at(-1)[1], 'warning');
+});
+
 test('subagents command opens a sessions view from serialized DTOs', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeRegistry = {
@@ -399,6 +498,44 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
   assert.match(text, /session:s1/);
   assert.match(text, /Fix issue by updating the API/);
   assert.doesNotMatch(text, /"config"/);
+});
+
+test('/subagents command handles resume when editor UI is unavailable', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const retainedSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: true,
+    promptPreview: 'Initial prompt', turns: 1, toolUses: 0, compactions: 0,
+    createdAt: 1_000, startedAt: 2_000, completedAt: 3_000,
+    outputSnippet: 'Initial output', availableActions: ['inspect', 'resume', 'clear'],
+    finalOutcome: { status: 'completed' },
+  };
+  const fakeManager = {
+    sessions: [retainedSession],
+    listSessions() { return this.sessions; },
+    resume() { throw new Error('resume should not start'); },
+  };
+  const commands = new Map();
+  subagentExtension({
+    registerTool() {},
+    registerCommand: (name, command) => commands.set(name, command),
+  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager });
+
+  const notifications = [];
+  await assert.doesNotReject(() => commands.get('subagents').handler('', {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify: (...args) => notifications.push(args),
+      custom(factory) {
+        const theme = { fg: (_color, text) => text, bold: text => text };
+        const component = factory({ requestRender() {} }, theme, {}, () => {});
+        component.handleInput('r');
+        return Promise.resolve({ action: 'resume', sessionId: 's1', agent: 'helper' });
+      },
+    },
+  }));
+
+  assert.match(notifications.at(-1)[0], /Resume UI is unavailable/);
 });
 
 test('subagents command resumes completed retained session with editor loader and visible concise message', async () => {
@@ -632,6 +769,40 @@ test('subagent tool lists retained sessions as serialized DTOs with clear action
   assert.deepEqual(retained.availableActions, ['inspect', 'resume', 'clear']);
   assert.equal(Object.prototype.hasOwnProperty.call(retained, 'config'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(retained, 'run'), false);
+});
+
+test('subagent tool call renderer falls back to simple text when themed rendering fails', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  let component;
+  assert.doesNotThrow(() => {
+    component = registeredTool.renderCall({ action: 'start', tasks: [{ agent: 'helper', prompt: 'work' }] }, { fg() { throw new Error('theme failed'); } });
+  });
+  assert.match(component.render(80).join('\n'), /subagent start · 1 task/);
+});
+
+test('subagent tool result renderer falls back to simple text when themed rendering fails', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  let component;
+  assert.doesNotThrow(() => {
+    component = registeredTool.renderResult({
+      content: [{ type: 'text', text: 'plain fallback helper output' }],
+      details: {
+        sessions: [{
+          id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'completed', resumable: false,
+          promptPreview: 'work', turns: 1, toolUses: 0, compactions: 0, createdAt: 1, completedAt: 2,
+          availableActions: ['inspect'], finalOutcome: { status: 'completed' },
+        }],
+      },
+    }, { expanded: true }, { fg() { throw new Error('theme failed'); } });
+  });
+
+  assert.match(component.render(120).join('\n'), /plain fallback helper output/);
 });
 
 test('tool execution returns structured failed run for unknown agents', async () => {
@@ -1047,6 +1218,49 @@ test('subagent tool notifies invalid settings fallback without breaking executio
   assert.equal(result.isError, false);
   assert.equal(result.details.results[0].output, 'done');
   assert.match(notifications[0][0], /Invalid subagent UI settings/);
+  assert.equal(notifications[0][1], 'warning');
+  assert.deepEqual(widgets[0][2], { placement: 'belowEditor' });
+});
+
+test('subagent tool falls back to default UI settings when settings load rejects', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const runningSession = {
+    id: 's1', sessionId: 's1', groupId: 'g1', agent: 'helper', status: 'running', resumable: false,
+    promptPreview: 'work', turns: 1, toolUses: 0, createdAt: 1, startedAt: 1,
+  };
+  const fakeRegistry = {
+    agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
+    async reload() {},
+    summarizeAgent() { return 'helper (project)'; },
+  };
+  const fakeManager = {
+    sessions: [],
+    async spawn(_pi, _ctx, _signal, _options, onUpdate) {
+      onUpdate({ groupId: 'g1', sessions: [runningSession], active: true, updatedAt: 1 });
+      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
+    },
+  };
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: fakeRegistry,
+    agentManager: fakeManager,
+    settingsStore: { async load() { throw new Error('disk unreadable'); } },
+  });
+
+  const notifications = [];
+  const widgets = [];
+  const result = await registeredTool.execute('tool-call', {
+    action: 'start',
+    tasks: [{ agent: 'helper', prompt: 'work' }],
+  }, undefined, undefined, {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: { setWidget: (...args) => widgets.push(args), notify: (...args) => notifications.push(args) },
+  });
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.results[0].output, 'done');
+  assert.match(notifications[0][0], /Failed to load subagent UI settings/);
   assert.equal(notifications[0][1], 'warning');
   assert.deepEqual(widgets[0][2], { placement: 'belowEditor' });
 });

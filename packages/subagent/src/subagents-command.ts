@@ -32,6 +32,17 @@ function listAgentDefinitions(agentRegistry: AgentRegistry): SubagentDefinitionD
   return Array.from(agentRegistry.agents.values()).map(agentConfigToDefinitionDto);
 }
 
+function notify(ctx: ExtensionCommandContext, message: string, level: "info" | "warning" | "error" | "success" = "info") {
+  if (!ctx.hasUI) return;
+  try {
+    ctx.ui?.notify?.(message, level as any);
+  } catch { }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 type SubagentResumeCommandResult = { action: "resume"; sessionId: string; agent: string };
 type SubagentsCommandResult = SubagentResumeCommandResult | { action: "settings" };
 
@@ -340,36 +351,47 @@ async function resumeSessionFromCommand(
   ctx: ExtensionCommandContext,
   settingsStore: Pick<SubagentUiSettingsStore, "load">,
 ) {
-  const prompt = await ctx.ui.editor(`Resume subagent ${action.agent}`, "");
+  if (!ctx.hasUI || !ctx.ui?.custom || typeof (ctx.ui as any).editor !== "function") {
+    notify(ctx, "Resume UI is unavailable for subagent sessions.", "warning");
+    return;
+  }
+
+  const prompt = await (ctx.ui as any).editor(`Resume subagent ${action.agent}`, "");
   if (typeof prompt !== "string" || prompt.trim() === "") {
-    ctx.ui.notify("Subagent resume cancelled: no follow-up prompt provided.", "info");
+    notify(ctx, "Subagent resume cancelled: no follow-up prompt provided.", "info");
     return;
   }
 
   const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
-  const outcome = await ctx.ui.custom<{ result?: unknown; error?: unknown }>((tui, theme, _keybindings, done) => {
-    const loader = createResumeLoader(tui, theme, `Resuming subagent ${action.agent}...`);
-    let settled = false;
-    const finish = (value: { result?: unknown; error?: unknown }) => {
-      if (settled) return;
-      settled = true;
-      done(value);
-    };
+  let outcome: { result?: unknown; error?: unknown };
+  try {
+    outcome = await ctx.ui.custom<{ result?: unknown; error?: unknown }>((tui, theme, _keybindings, done) => {
+      const loader = createResumeLoader(tui, theme, `Resuming subagent ${action.agent}...`);
+      let settled = false;
+      const finish = (value: { result?: unknown; error?: unknown }) => {
+        if (settled) return;
+        settled = true;
+        done(value);
+      };
 
-    agentManager.resume(ctx, loader.signal, action.sessionId, prompt, update => {
-      updateSubagentWidget(ctx, update.sessions, uiSettings);
-    }).then(
-      result => finish({ result }),
-      error => finish({ error }),
-    );
+      agentManager.resume(ctx, loader.signal, action.sessionId, prompt, update => {
+        updateSubagentWidget(ctx, update.sessions, uiSettings);
+      }).then(
+        result => finish({ result }),
+        error => finish({ error }),
+      );
 
-    return loader;
-  });
+      return loader;
+    });
+  } catch (error) {
+    notify(ctx, `Subagents UI failed: ${errorMessage(error)}`, "warning");
+    return;
+  }
 
   const result = normalizeResumeOutcome(action, prompt, outcome);
   updateSubagentWidget(ctx, listManagedSessions(agentManager), uiSettings);
   pi.sendMessage?.(createSubagentResumeMessage(result));
-  ctx.ui.notify(result.status === "completed"
+  notify(ctx, result.status === "completed"
     ? `Subagent session ${action.sessionId} resumed.`
     : `Subagent session ${action.sessionId} resume ${result.status}.`,
     result.status === "completed" ? "info" : "warning");
@@ -416,7 +438,7 @@ function normalizeResumeOutcome(action: SubagentResumeCommandResult, prompt: str
     resumable?: boolean;
   };
 
-  const error = outcome?.error instanceof Error ? outcome.error.message : String(outcome?.error ?? "Subagent resume failed.");
+  const error = outcome?.error ? errorMessage(outcome.error) : "Subagent resume failed.";
   return {
     agent: action.agent,
     prompt,
@@ -434,25 +456,29 @@ async function openSubagentSettings(
 ) {
   let settings = await loadSubagentUiSettings(ctx, settingsStore);
   if (!ctx.hasUI || !ctx.ui?.custom) {
-    ctx.ui.notify(`Subagent widget placement: ${settings.widgetPlacement}`, "info");
+    notify(ctx, `Subagent widget placement: ${settings.widgetPlacement}`, "info");
     return;
   }
 
   let saveQueue = Promise.resolve();
-  await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => new SubagentSettingsComponent(
-    settings,
-    theme,
-    placement => {
-      settings = { widgetPlacement: placement };
-      updateSubagentWidget(ctx, listManagedSessions(agentManager), settings);
-      const settingsToSave = settings;
-      saveQueue = saveQueue.then(() => settingsStore.save(settingsToSave).then(
-        () => ctx.ui.notify(`Subagent widget placement set to ${placement}.`, "info"),
-        error => ctx.ui.notify(`Failed to save subagent settings: ${error instanceof Error ? error.message : String(error)}`, "warning"),
-      ));
-    },
-    () => done(undefined),
-  ));
+  try {
+    await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => new SubagentSettingsComponent(
+      settings,
+      theme,
+      placement => {
+        settings = { widgetPlacement: placement };
+        updateSubagentWidget(ctx, listManagedSessions(agentManager), settings);
+        const settingsToSave = settings;
+        saveQueue = saveQueue.then(() => settingsStore.save(settingsToSave).then(
+          () => notify(ctx, `Subagent widget placement set to ${placement}.`, "info"),
+          error => notify(ctx, `Failed to save subagent settings: ${errorMessage(error)}`, "warning"),
+        ));
+      },
+      () => done(undefined),
+    ));
+  } catch (error) {
+    notify(ctx, `Subagents UI failed: ${errorMessage(error)}`, "warning");
+  }
   await saveQueue;
 }
 
@@ -473,40 +499,52 @@ export function registerSubagentsCommand(
       const sessions = listManagedSessions(agentManager);
       if (sessions.length === 0) {
         if (!agentRegistry) {
-          ctx.ui.notify("No active or retained subagent sessions.", "info");
+          notify(ctx, "No active or retained subagent sessions.", "info");
           return;
         }
 
         await agentRegistry.reload(ctx.cwd);
         const agents = listAgentDefinitions(agentRegistry);
         if (!ctx.hasUI || !ctx.ui?.custom) {
-          ctx.ui.notify(agents.length
+          notify(ctx, agents.length
             ? agents.map(formatSubagentDefinitionSummary).join("\n")
             : "No configured subagent agents.", "info");
           return;
         }
 
-        const action = await ctx.ui.custom<SubagentsCommandResult | undefined>((tui, theme, _keybindings, done) => {
-          return new SubagentAgentsComponent(agents, tui, theme, result => done(result));
-        });
+        let action: SubagentsCommandResult | undefined;
+        try {
+          action = await ctx.ui.custom<SubagentsCommandResult | undefined>((tui, theme, _keybindings, done) => {
+            return new SubagentAgentsComponent(agents, tui, theme, result => done(result));
+          });
+        } catch (error) {
+          notify(ctx, `Subagents UI failed: ${errorMessage(error)}`, "warning");
+          return;
+        }
         if (action?.action === "settings") await openSubagentSettings(ctx, agentManager, settingsStore);
         return;
       }
 
       if (!ctx.hasUI || !ctx.ui?.custom) {
-        ctx.ui.notify(formatSubagentToolLines({ sessions }, true).join("\n"), "info");
+        notify(ctx, formatSubagentToolLines({ sessions }, true).join("\n"), "info");
         return;
       }
 
-      const action = await ctx.ui.custom<SubagentsCommandResult | undefined>((tui, theme, _keybindings, done) => {
-        return new SubagentSessionsComponent(
-          agentManager,
-          tui,
-          theme,
-          (message, level) => ctx.ui.notify(message, level as any),
-          result => done(result),
-        );
-      });
+      let action: SubagentsCommandResult | undefined;
+      try {
+        action = await ctx.ui.custom<SubagentsCommandResult | undefined>((tui, theme, _keybindings, done) => {
+          return new SubagentSessionsComponent(
+            agentManager,
+            tui,
+            theme,
+            (message, level) => notify(ctx, message, level as any),
+            result => done(result),
+          );
+        });
+      } catch (error) {
+        notify(ctx, `Subagents UI failed: ${errorMessage(error)}`, "warning");
+        return;
+      }
 
       if (action?.action === "resume") await resumeSessionFromCommand(pi, agentManager, action, ctx, settingsStore);
     },

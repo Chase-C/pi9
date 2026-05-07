@@ -64,18 +64,36 @@ function partialToolResult(group: SubagentGroupDto, active: boolean) {
   };
 }
 
+function simpleTextFromToolResult(result: any) {
+  const textContent = Array.isArray(result?.content)
+    ? result.content.find((part: any) => part?.type === "text" && typeof part.text === "string")?.text
+    : undefined;
+  if (textContent) return textContent;
+  try {
+    return JSON.stringify(result?.details ?? result ?? {}, null, 2);
+  } catch {
+    return String(result ?? "");
+  }
+}
+
 export default function subagentExtension(pi: ExtensionAPI, dependencies: SubagentExtensionDependencies = {}) {
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
   const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
 
   registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry);
-  (pi as ExtensionAPI & { registerMessageRenderer?: ExtensionAPI["registerMessageRenderer"] }).registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
-    const content = typeof message.content === "string"
-      ? message.content
-      : formatSubagentResumeMessageContent(message.details as any);
-    return new Text(theme?.fg ? theme.fg("customMessageText", content) : content, 0, 0);
-  });
+  try {
+    (pi as ExtensionAPI & { registerMessageRenderer?: ExtensionAPI["registerMessageRenderer"] }).registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
+      const content = typeof message.content === "string"
+        ? message.content
+        : formatSubagentResumeMessageContent(message.details as any);
+      try {
+        return new Text(theme?.fg ? theme.fg("customMessageText", content) : content, 0, 0);
+      } catch {
+        return new Text(content, 0, 0);
+      }
+    });
+  } catch { }
 
   pi.registerTool(defineTool({
     name: "subagent",
@@ -113,10 +131,18 @@ Execution notes:
       const count = Array.isArray(args?.tasks) ? args.tasks.length : undefined;
       const suffix = count ? ` · ${count} task${count === 1 ? "" : "s"}` : "";
       const line = `subagent ${action}${suffix}`;
-      return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
+      try {
+        return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
+      } catch {
+        return new Text(line, 0, 0);
+      }
     },
     renderResult(result: any, options: any, theme: any) {
-      return createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme);
+      try {
+        return createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme);
+      } catch {
+        return new Text(simpleTextFromToolResult(result), 0, 0);
+      }
     },
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
