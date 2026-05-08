@@ -66,7 +66,7 @@ export function serializeAgent(agent: Agent, inputIndex?: number): AgentRow {
     id: agent.id,
     groupId: agent.groupId,
     agent: agent.options.agent,
-    status: status.kind,
+    status: effectiveStatus(status),
     resumable: isResumable(agent),
     promptPreview: compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH),
     messageSnippet: agent.message ? compact(agent.message, MESSAGE_SNIPPET_LENGTH) : undefined,
@@ -152,7 +152,7 @@ export function activeOrRetainedAgents(agents: Agent[]): Agent[] {
 }
 
 export function canResumeSubagentSession(agent: Agent): boolean {
-  return isResumable(agent) && agent.status.kind === "completed";
+  return isResumable(agent) && agent.status.kind === "done" && agent.status.result.status === "completed";
 }
 
 export function canClearSubagentSession(agent: Agent): boolean {
@@ -183,7 +183,7 @@ export function formatSubagentSessionSummary(agent: Agent): string {
     isResumable(agent) ? "resumable" : undefined,
     `session:${agent.id}`,
   ].filter(Boolean);
-  return [agent.options.agent, agent.status.kind, ...badges, `"${compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH)}"`].join(" · ");
+  return [agent.options.agent, effectiveStatus(agent.status), ...badges, `"${compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH)}"`].join(" · ");
 }
 
 export function formatSubagentSessionInspect(agent: Agent, now = Date.now()): string[] {
@@ -197,7 +197,7 @@ export function formatSubagentSessionInspect(agent: Agent, now = Date.now()): st
 
   const lines = [
     `Session ${agent.id}`,
-    `Status: ${status.kind}${resumable ? " · resumable" : ""}`,
+    `Status: ${effectiveStatus(status)}${resumable ? " · resumable" : ""}`,
     `Agent: ${agent.options.agent} (${agent.config.source})`,
   ];
 
@@ -229,9 +229,10 @@ export function formatSubagentSessionLine(agent: Agent, now = Date.now()): strin
   const startedAt = getStartedAt(status);
   const completedAt = getCompletedAt(status);
   const elapsed = formatElapsed(startedAt ?? agent.createdAt, completedAt ?? now);
+  const effective = effectiveStatus(status);
   const parts = [
     agent.options.agent,
-    status.kind,
+    effective,
     `${agent.turns} turn${agent.turns === 1 ? "" : "s"}`,
     elapsed,
   ];
@@ -239,12 +240,12 @@ export function formatSubagentSessionLine(agent: Agent, now = Date.now()): strin
   if (agent.tool) parts.push(`tool:${agent.tool}`);
   if (agent.message) parts.push(`"${compact(agent.message, MESSAGE_SNIPPET_LENGTH)}"`);
 
-  if (!isActiveStatusKind(status.kind)) {
-    if (status.kind === "completed") {
+  if (!isActiveStatusKind(effective)) {
+    if (effective === "completed") {
       parts.push(`outcome:completed`);
     } else {
       const errorSnippet = getErrorSnippet(status);
-      parts.push(`outcome:${status.kind}:${errorSnippet ?? status.kind}`);
+      parts.push(`outcome:${effective}:${errorSnippet ?? effective}`);
     }
   }
 
@@ -379,33 +380,36 @@ export function listAgentDefinitions(agentRegistry: AgentRegistry) {
 
 function isResumable(agent: Agent): boolean {
   const status = agent.status;
-  return Boolean(agent.config.resumable && (status.kind === "queued" || ("session" in status && status.session)));
+  if (!agent.config.resumable) return false;
+  if (status.kind === "queued" || status.kind === "running") return true;
+  return Boolean(status.session);
+}
+
+function effectiveStatus(status: AgentStatus): string {
+  return status.kind === "done" ? status.result.status : status.kind;
 }
 
 function getStartedAt(status: AgentStatus): number | undefined {
-  return "startedAt" in status ? status.startedAt : undefined;
-}
-
-function getCompletedAt(status: AgentStatus): number | undefined {
-  if (status.kind === "completed") return status.completedAt;
-  if (status.kind === "error") return status.errorAt;
-  if (status.kind === "skipped") return status.skippedAt;
-  if (status.kind === "interrupted") return status.interruptedAt;
-  if (status.kind === "aborted") return status.abortedAt;
+  if (status.kind === "running") return status.startedAt;
+  if (status.kind === "done") return status.startedAt;
   return undefined;
 }
 
+function getCompletedAt(status: AgentStatus): number | undefined {
+  return status.kind === "done" ? status.completedAt : undefined;
+}
+
 function getOutputSnippet(status: AgentStatus): string | undefined {
-  if (status.kind === "completed") return compact(status.response, OUTPUT_SNIPPET_LENGTH);
+  if (status.kind === "done" && status.result.status === "completed" && status.result.output) {
+    return compact(status.result.output, OUTPUT_SNIPPET_LENGTH);
+  }
   return undefined;
 }
 
 function getErrorSnippet(status: AgentStatus): string | undefined {
-  if (status.kind === "error") return compact(status.error, OUTPUT_SNIPPET_LENGTH);
-  if (status.kind === "skipped") return "Agent skipped.";
-  if (status.kind === "interrupted") return compact(status.error ?? "Agent interrupted.", OUTPUT_SNIPPET_LENGTH);
-  if (status.kind === "aborted") return "Agent aborted.";
-  return undefined;
+  if (status.kind !== "done") return undefined;
+  if (status.result.status === "completed") return undefined;
+  return compact(status.result.error ?? status.result.status, OUTPUT_SNIPPET_LENGTH);
 }
 
 function extractGroup(details: unknown): AgentRowGroup | undefined {

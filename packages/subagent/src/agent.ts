@@ -3,6 +3,7 @@ import { AgentSession } from "@mariozechner/pi-coding-agent";
 
 import { AgentConfig } from "./agent-config.js";
 import { AgentOptions } from "./agent-manager.js";
+import { AgentRunResult } from "./run-agent.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -11,12 +12,8 @@ const DefaultUsage: Usage = {
 
 export type AgentStatus =
   | { kind: "queued" }
-  | { kind: "running", session: AgentSession, startedAt: number }
-  | { kind: "completed", session: AgentSession, startedAt: number, completedAt: number, response: string }
-  | { kind: "skipped", skippedAt: number }
-  | { kind: "interrupted", session: AgentSession, startedAt: number, interruptedAt: number, error?: string }
-  | { kind: "aborted", session?: AgentSession, startedAt?: number, abortedAt: number }
-  | { kind: "error", session?: AgentSession, startedAt?: number, errorAt: number, error: string };
+  | { kind: "running"; session: AgentSession; startedAt: number }
+  | { kind: "done"; result: AgentRunResult; session?: AgentSession; startedAt?: number; completedAt: number };
 
 export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
 
@@ -60,91 +57,43 @@ export class Agent {
 
   get createdAt() { return this._createdAt }
 
+  start(session: AgentSession) {
+    if (this._status.kind !== "queued") {
+      throw new Error(`Cannot start an agent that is already ${this._status.kind}.`);
+    }
+    this._subscribe(session);
+    this._status = { kind: "running", session, startedAt: Date.now() };
+    this.onUpdate(this, "status");
+  }
+
+  resume(session: AgentSession) {
+    if (this._status.kind !== "done" || this._status.result.status !== "completed") {
+      throw new Error(`Cannot resume an agent that is ${this._describe()}.`);
+    }
+    this._subscribe(session);
+    this._status = { kind: "running", session, startedAt: Date.now() };
+    this.onUpdate(this, "status");
+  }
+
+  finalize(result: AgentRunResult) {
+    if (this._status.kind === "done") return;
+    this._finishSubscription();
+    const session = this._status.kind === "running" ? this._status.session : undefined;
+    const startedAt = this._status.kind === "running" ? this._status.startedAt : undefined;
+    this._status = { kind: "done", result, session, startedAt, completedAt: Date.now() };
+    this.onUpdate(this, "status");
+  }
+
+  private _describe(): string {
+    if (this._status.kind === "done") return `done (${this._status.result.status})`;
+    return this._status.kind;
+  }
+
   private _finishSubscription() {
     if (this._unsubscribe) {
       this._unsubscribe();
       this._unsubscribe = undefined;
     }
-  }
-
-  abort() {
-    if (this._status.kind !== "running") {
-      throw new Error(`Cannot abort an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
-    }
-
-    this._finishSubscription();
-    this._status = { kind: "aborted", session: this._status.session, startedAt: this._status.startedAt, abortedAt: Date.now() };
-    this.onUpdate(this, "status");
-  }
-
-  interrupt(error?: string) {
-    if (this._status.kind !== "running") {
-      throw new Error(`Cannot interrupt an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
-    }
-
-    this._finishSubscription();
-    this._status = { kind: "interrupted", session: this._status.session, startedAt: this._status.startedAt, interruptedAt: Date.now(), error };
-    this.onUpdate(this, "status");
-  }
-
-  cancelQueued() {
-    if (this._status.kind !== "queued") {
-      throw new Error(`Cannot cancel an agent that is ${this._status.kind}.`);
-    }
-
-    this._finishSubscription();
-    this._status = { kind: "skipped", skippedAt: Date.now() };
-    this.onUpdate(this, "status");
-  }
-
-  complete(response: string) {
-    if (this._status.kind !== "running") {
-      throw new Error(`Cannot complete an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
-    }
-
-    this._finishSubscription();
-    this._status = { kind: "completed", session: this._status.session, startedAt: this._status.startedAt, completedAt: Date.now(), response: response };
-    this.onUpdate(this, "status");
-  }
-
-  error(error: string) {
-    if (this._status.kind !== "running") {
-      throw new Error(`Cannot error an agent that ${this._status.kind === "queued" ? "has not started" : "is not running"}.`);
-    }
-
-    this._finishSubscription();
-    this._status = { kind: "error", session: this._status.session, startedAt: this._status.startedAt, errorAt: Date.now(), error };
-    this.onUpdate(this, "status");
-  }
-
-  failQueued(error: string) {
-    if (this._status.kind !== "queued") {
-      throw new Error(`Cannot fail a queued agent that is ${this._status.kind}.`);
-    }
-
-    this._finishSubscription();
-    this._status = { kind: "error", errorAt: Date.now(), error };
-    this.onUpdate(this, "status");
-  }
-
-  start(session: AgentSession) {
-    if (this._status.kind !== "queued") {
-      throw new Error(`Cannot start an agent that is already ${this._status.kind}.`);
-    }
-
-    this._subscribe(session);
-    this._status = { kind: "running", session: session, startedAt: Date.now() };
-    this.onUpdate(this, "status");
-  }
-
-  resume(session: AgentSession) {
-    if (this._status.kind !== "completed") {
-      throw new Error(`Cannot resume an agent that is ${this._status.kind}.`);
-    }
-
-    this._subscribe(session);
-    this._status = { kind: "running", session: session, startedAt: Date.now() };
-    this.onUpdate(this, "status");
   }
 
   private _subscribe(session: AgentSession) {

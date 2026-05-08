@@ -262,7 +262,8 @@ class SubagentSessionsComponent implements Component {
     const session = this.sessions[this.selected];
     if (!session) return;
     if (!canResumeSubagentSession(session)) {
-      this.notify(`Subagent session ${session.id} is ${session.status.kind} and cannot be resumed.`, "warning");
+      const detail = session.status.kind === "done" ? session.status.result.status : session.status.kind;
+      this.notify(`Subagent session ${session.id} is ${detail} and cannot be resumed.`, "warning");
       return;
     }
     this.done({ action: "resume", sessionId: session.id, agent: session.options.agent });
@@ -272,7 +273,8 @@ class SubagentSessionsComponent implements Component {
     const session = this.sessions[this.selected];
     if (!session) return;
     if (!canClearSubagentSession(session)) {
-      this.notify(`Subagent session ${session.id} is ${session.status.kind} and cannot be cleared.`, "warning");
+      const detail = session.status.kind === "done" ? session.status.result.status : session.status.kind;
+      this.notify(`Subagent session ${session.id} is ${detail} and cannot be cleared.`, "warning");
       return;
     }
 

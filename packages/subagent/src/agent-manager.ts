@@ -9,7 +9,15 @@ import {
   activeOrRetainedAgents,
   serializeUnknownAgentError,
 } from "./subagent-ui.js";
-import { ResumeAgent, RunAgent, buildAgentResult, type AgentRunResult } from "./run-agent.js";
+import {
+  ResumeAgent,
+  RunAgent,
+  abortedRun,
+  errorRun,
+  interruptedRun,
+  skippedRun,
+  type AgentRunResult,
+} from "./run-agent.js";
 
 export { type AgentRunResult } from "./run-agent.js";
 
@@ -96,7 +104,7 @@ export class AgentManager {
         cleared = 1;
         this._agents = this._agents.filter(a => a.id !== sessionId);
         if (agent.status.kind === "running") {
-          agent.abort();
+          abortedRun(agent);
         } else {
           this._emitGroupUpdate(agent.groupId);
         }
@@ -181,8 +189,9 @@ export class AgentManager {
     if (!agent) {
       throw new Error(`Unknown resumable subagent session: ${sessionId}`);
     }
-    if (agent.status.kind !== "completed") {
-      throw new Error(`Cannot resume subagent session ${sessionId} while it is ${agent.status.kind}.`);
+    if (agent.status.kind !== "done" || agent.status.result.status !== "completed") {
+      const detail = agent.status.kind === "done" ? agent.status.result.status : agent.status.kind;
+      throw new Error(`Cannot resume subagent session ${sessionId} while it is ${detail}.`);
     }
 
     const unsubscribe = onUpdate ? this.subscribe(agent.groupId, onUpdate) : undefined;
@@ -190,8 +199,7 @@ export class AgentManager {
       return await this._resumeAgent(ctx, agent, prompt, signal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      try { agent.error(message); } catch { }
-      return buildAgentResult(agent, prompt, message);
+      return errorRun(agent, message, prompt);
     } finally {
       this._flushPendingMessageUpdate(agent.groupId);
       unsubscribe?.();
@@ -213,19 +221,14 @@ export class AgentManager {
     agent: Agent,
   ): Promise<AgentRunResult> {
     return new Promise(resolve => {
-      const abortQueued = () => {
-        if (agent.status.kind === "queued") agent.cancelQueued();
-        resolve(buildAgentResult(agent, agent.options.prompt));
-      };
-
       if (signal?.aborted) {
-        abortQueued();
+        resolve(skippedRun(agent));
         return;
       }
 
       this._queue.push(() => {
         if (signal?.aborted) {
-          abortQueued();
+          resolve(skippedRun(agent));
           this._flushQueue();
           return;
         }
@@ -233,15 +236,18 @@ export class AgentManager {
         this._runAgent(ctx, agent, signal).then(
           result => resolve(result),
           error => {
-            const message = error instanceof Error ? error.message : String(error);
-            if (agent.status.kind === "running") {
-              if (signal?.aborted) agent.interrupt(message);
-              else agent.error(message);
-            } else if (agent.status.kind === "queued") {
-              if (signal?.aborted) agent.cancelQueued();
-              else agent.failQueued(message);
+            if (agent.status.kind === "done") {
+              resolve(agent.status.result);
+              return;
             }
-            resolve(buildAgentResult(agent, agent.options.prompt, message));
+            const message = error instanceof Error ? error.message : String(error);
+            if (signal?.aborted) {
+              resolve(agent.status.kind === "queued"
+                ? skippedRun(agent)
+                : interruptedRun(agent, message));
+            } else {
+              resolve(errorRun(agent, message));
+            }
           },
         ).finally(() => this._flushQueue());
       });
@@ -251,8 +257,8 @@ export class AgentManager {
   private _releaseNonResumableCompleted(groupId: string) {
     this._agents = this._agents.filter(agent => {
       if (agent.groupId !== groupId) return true;
-      if (agent.status.kind === "queued" || agent.status.kind === "running") return true;
-      return Boolean(agent.config.resumable && "session" in agent.status && agent.status.session);
+      if (agent.status.kind !== "done") return true;
+      return Boolean(agent.config.resumable && agent.status.session);
     });
   }
 
