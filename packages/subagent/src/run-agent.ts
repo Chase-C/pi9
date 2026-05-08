@@ -29,39 +29,35 @@ export interface FinalizeRunArgs {
   status: AgentRunResult["status"];
   output?: string;
   error?: string;
-  prompt?: string;
 }
 
 export function finalizeRun(agent: Agent, args: FinalizeRunArgs): AgentRunResult {
-  const prompt = args.prompt ?? agent.options.prompt;
-  const hasSession = args.status === "completed"
-    ? true
-    : args.status === "skipped"
-      ? false
-      : hasSessionAttached(agent);
-  const resumable = Boolean(agent.config.resumable && hasSession);
+  if (agent.status.kind === "done" && !agent.hasPendingPrompt) return agent.status.result;
+
+  const resumable = Boolean(agent.config.resumable && hasSessionAttached(agent));
   const result: AgentRunResult = {
-    agent: agent.options.agent,
-    prompt,
-    model: agent.options.model ?? agent.config.model,
+    agent: agent.agentName,
+    prompt: agent.prompt,
+    model: agent.modelOverride ?? agent.config.model,
     resumable,
     status: args.status,
     ...(resumable ? { sessionId: agent.id } : {}),
     ...(args.output !== undefined ? { output: args.output } : {}),
     ...(args.error !== undefined ? { error: args.error } : {}),
   };
+  agent.finishPrompt(args.status);
   agent.finalize(result);
   return result;
 }
 
-export const completedRun = (agent: Agent, output: string, prompt?: string): AgentRunResult =>
-  finalizeRun(agent, { status: "completed", output, prompt });
+export const completedRun = (agent: Agent, output: string): AgentRunResult =>
+  finalizeRun(agent, { status: "completed", output });
 
-export const errorRun = (agent: Agent, error: string, prompt?: string): AgentRunResult =>
-  finalizeRun(agent, { status: "error", error, prompt });
+export const errorRun = (agent: Agent, error: string): AgentRunResult =>
+  finalizeRun(agent, { status: "error", error });
 
-export const interruptedRun = (agent: Agent, error: string, prompt?: string): AgentRunResult =>
-  finalizeRun(agent, { status: "interrupted", error, prompt });
+export const interruptedRun = (agent: Agent, error: string): AgentRunResult =>
+  finalizeRun(agent, { status: "interrupted", error });
 
 function hasSessionAttached(agent: Agent): boolean {
   if (agent.status.kind === "running") return true;
@@ -93,7 +89,7 @@ export async function RunAgent(
 ): Promise<AgentRunResult> {
   if (signal?.aborted) return finalizeRun(agent, { status: "skipped", error: "Agent skipped." });
 
-  const cwd = ResolveTaskCwd(ctx.cwd, agent.options.cwd);
+  const cwd = ResolveTaskCwd(ctx.cwd, agent.cwd);
   const agentDir = dependencies.getAgentDir();
 
   const resourceLoader = new dependencies.ResourceLoader({
@@ -115,8 +111,8 @@ export async function RunAgent(
     cwd,
     agentDir,
     resourceLoader,
-    model: SelectModel(agent.options.model ?? agent.config.model, ctx.model, ctx.modelRegistry),
-    thinkingLevel: agent.options.thinking ?? agent.config.thinking,
+    model: SelectModel(agent.modelOverride ?? agent.config.model, ctx.model, ctx.modelRegistry),
+    thinkingLevel: agent.thinkingOverride ?? agent.config.thinking,
     modelRegistry: ctx.modelRegistry,
     tools: agent.config.tools,
     sessionManager: dependencies.sessionManager(cwd),
@@ -129,7 +125,7 @@ export async function RunAgent(
   }
 
   agent.attach(session);
-  return PromptAgent(session, agent, agent.options.prompt, signal);
+  return PromptAgent(session, agent, signal);
 }
 
 export async function ResumeAgent(
@@ -143,42 +139,42 @@ export async function ResumeAgent(
     throw new Error(`Cannot resume an agent without a retained session.`);
   }
 
+  agent.preparePrompt(prompt);
   agent.attach(session);
-  return PromptAgent(session, agent, prompt, signal);
+  return PromptAgent(session, agent, signal);
 }
 
 async function PromptAgent(
   session: AgentSession,
   agent: Agent,
-  prompt: string,
   signal?: AbortSignal,
 ): Promise<AgentRunResult> {
   const onAbort = () => { void AbortSession(session); }
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return interruptedRun(agent, "Agent interrupted.", prompt);
+    return interruptedRun(agent, "Agent interrupted.");
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    await session.prompt(prompt);
+    await session.prompt(agent.prompt);
     const finalMessage = GetFinalAssistantMessage(session);
     if (finalMessage.stopReason === "aborted") {
-      return interruptedRun(agent, finalMessage.errorMessage || "Agent interrupted.", prompt);
+      return interruptedRun(agent, finalMessage.errorMessage || "Agent interrupted.");
     }
     if (finalMessage.stopReason === "error") {
-      return errorRun(agent, finalMessage.errorMessage || finalMessage.response || "Agent failed.", prompt);
+      return errorRun(agent, finalMessage.errorMessage || finalMessage.response || "Agent failed.");
     }
 
     const response = agent.message || finalMessage.response;
-    return completedRun(agent, response, prompt);
+    return completedRun(agent, response);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return signal?.aborted
-      ? interruptedRun(agent, message, prompt)
-      : errorRun(agent, message, prompt);
+      ? interruptedRun(agent, message)
+      : errorRun(agent, message);
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }

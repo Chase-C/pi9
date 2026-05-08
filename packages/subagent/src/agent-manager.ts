@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import { ModelThinkingLevel } from "@mariozechner/pi-ai";
 import { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { Agent, type AgentUpdateKind, type AgentView } from "./agent.js";
+import type { AgentOptions } from "./agent-options.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { activeOrRetainedAgents } from "./serialize.js";
 import {
@@ -27,13 +27,7 @@ export interface AgentManagerGroupUpdate {
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
 
-export interface AgentOptions {
-  agent: string;
-  prompt: string;
-  model?: string;
-  thinking?: ModelThinkingLevel;
-  cwd?: string;
-}
+export type { AgentOptions } from "./agent-options.js";
 
 export type AgentManagerUpdateListener = (update: AgentManagerGroupUpdate) => void;
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<AgentRunResult>;
@@ -63,7 +57,8 @@ function unknownEntry(
   return {
     id: `${groupId}:task-${inputIndex}`,
     groupId,
-    options: opts,
+    agentName: opts.agent,
+    prompt: opts.prompt,
     status: { kind: "done", result, completedAt: createdAt },
     source: undefined,
     resolvedModel: opts.model,
@@ -71,7 +66,6 @@ function unknownEntry(
     tools: undefined,
     resumable: false,
     message: "",
-    tool: undefined,
     turns: 0,
     toolUses: 0,
     compactions: 0,
@@ -208,11 +202,25 @@ export class AgentManager {
     }
 
     const unsubscribe = onUpdate ? this.subscribe(agent.groupId, onUpdate) : undefined;
+    agent.preparePrompt(prompt);
     try {
       return await this._resumeAgent(ctx, agent, prompt, signal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return errorRun(agent, message, prompt);
+      if (agent.status.kind === "done" && agent.status.result.status === "completed" && agent.hasPendingPrompt) {
+        const result: AgentRunResult = {
+          agent: agent.agentName,
+          prompt: agent.prompt,
+          status: "error",
+          error: message,
+          model: agent.modelOverride ?? agent.config.model,
+          resumable: agent.resumable,
+          sessionId: agent.id,
+        };
+        agent.discardPendingPrompt();
+        return result;
+      }
+      return errorRun(agent, message);
     } finally {
       this._flushPendingMessageUpdate(agent.groupId);
       unsubscribe?.();
@@ -247,9 +255,8 @@ export class AgentManager {
           return;
         }
 
-        this._runAgent(ctx, agent, signal).then(
-          result => resolve(result),
-          error => {
+        this._runAgent(ctx, agent, signal)
+          .catch(error => {
             if (agent.status.kind === "done") {
               resolve(agent.status.result);
               return;
@@ -262,8 +269,8 @@ export class AgentManager {
             } else {
               resolve(errorRun(agent, message));
             }
-          },
-        ).finally(() => this._flushQueue());
+          })
+          .finally(() => this._flushQueue());
       });
     });
   }

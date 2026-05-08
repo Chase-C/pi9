@@ -1,6 +1,6 @@
 import type { Usage } from "@mariozechner/pi-ai";
 
-import type { AgentStatus, AgentView } from "./agent.js";
+import type { AgentPromptRun, AgentStatus, AgentToolUse, AgentView } from "./agent.js";
 import type { AgentConfig } from "./agent-config.js";
 import type { AgentRegistry } from "./agent-registry.js";
 
@@ -15,12 +15,15 @@ export interface AgentRow {
   status: string;
   resumable: boolean;
   promptPreview: string;
+  prompts?: AgentPromptRun[];
   messageSnippet?: string;
   outputSnippet?: string;
   errorSnippet?: string;
   activeTool?: string;
+  activeTools?: string[];
   turns: number;
   toolUses: number;
+  toolHistory?: AgentToolUse[];
   compactions: number;
   createdAt: number;
   startedAt?: number;
@@ -43,17 +46,21 @@ export interface AgentRowGroup {
 
 export function serializeAgent(entry: AgentView, inputIndex?: number): AgentRow {
   const status = entry.status;
+  const activeTools = cloneActiveTools(entry);
   return {
     id: entry.id,
     groupId: entry.groupId,
-    agent: entry.options.agent,
+    agent: entry.agentName,
     status: effectiveStatus(status),
     resumable: entry.resumable,
-    promptPreview: compact(entry.options.prompt, PROMPT_PREVIEW_LENGTH),
+    promptPreview: compact(entry.prompt, PROMPT_PREVIEW_LENGTH),
+    prompts: clonePrompts(entry),
     messageSnippet: entry.message ? compact(entry.message, MESSAGE_SNIPPET_LENGTH) : undefined,
-    activeTool: entry.tool,
+    activeTool: activeTools?.at(-1),
+    activeTools,
     turns: entry.turns,
     toolUses: entry.toolUses,
+    toolHistory: cloneToolHistory(entry),
     compactions: entry.compactions,
     createdAt: entry.createdAt,
     startedAt: getStartedAt(status),
@@ -67,6 +74,18 @@ export function serializeAgent(entry: AgentView, inputIndex?: number): AgentRow 
     usage: entry.totalUsage,
     inputIndex,
   };
+}
+
+function clonePrompts(entry: AgentView): AgentPromptRun[] | undefined {
+  return entry.prompts?.map(run => ({ ...run }));
+}
+
+function cloneActiveTools(entry: AgentView): string[] | undefined {
+  return entry.activeTools?.slice();
+}
+
+function cloneToolHistory(entry: AgentView): AgentToolUse[] | undefined {
+  return entry.toolHistory?.map(tool => ({ ...tool }));
 }
 
 export function serializeGroup(

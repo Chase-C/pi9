@@ -2,8 +2,8 @@ import { ModelThinkingLevel, Usage } from "@mariozechner/pi-ai";
 import { AgentSession } from "@mariozechner/pi-coding-agent";
 
 import { AgentConfig, AgentSource } from "./agent-config.js";
-import { AgentOptions } from "./agent-manager.js";
-import { AgentRunResult } from "./run-agent.js";
+import type { AgentOptions } from "./agent-options.js";
+import type { AgentRunResult } from "./run-agent.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -17,10 +17,27 @@ export type AgentStatus =
 
 export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
 
+export interface AgentPromptRun {
+  readonly prompt: string;
+  readonly startedAt: number;
+  readonly completedAt?: number;
+  readonly status?: AgentRunResult["status"];
+}
+
+export interface AgentToolUse {
+  readonly id: string;
+  readonly name: string;
+  readonly startedAt: number;
+  readonly completedAt?: number;
+  readonly isError?: boolean;
+}
+
 export interface AgentView {
   readonly id: string;
   readonly groupId: string;
-  readonly options: AgentOptions;
+  readonly agentName: string;
+  readonly prompt: string;
+  readonly prompts?: readonly AgentPromptRun[];
   readonly status: AgentStatus;
   readonly source: AgentSource | undefined;
   readonly resolvedModel: string | undefined;
@@ -28,9 +45,10 @@ export interface AgentView {
   readonly tools: string[] | undefined;
   readonly resumable: boolean;
   readonly message: string;
-  readonly tool: string | undefined;
+  readonly activeTools?: readonly string[];
   readonly turns: number;
   readonly toolUses: number;
+  readonly toolHistory?: readonly AgentToolUse[];
   readonly compactions: number;
   readonly createdAt: number;
   readonly totalUsage: Usage | undefined;
@@ -41,10 +59,13 @@ export class Agent implements AgentView {
   private _status: AgentStatus = { kind: "queued" };
 
   private _message: string = "";
-  private _tool: string | undefined;
+
+  private _pendingPrompt: string | undefined;
+  private _promptRuns = new Array<AgentPromptRun>();
 
   private _turns: number = 0;
-  private _toolUses: number = 0;
+  private _toolHistory = new Array<AgentToolUse>();
+  private _nextSyntheticToolId = 0;
   private _compactions: number = 0;
 
   private _usage: Usage = DefaultUsage;
@@ -58,17 +79,32 @@ export class Agent implements AgentView {
     readonly id: string,
     readonly groupId: string,
     readonly config: AgentConfig,
-    readonly options: AgentOptions,
+    options: AgentOptions,
     readonly onUpdate: (agent: Agent, kind: AgentUpdateKind) => void,
-  ) { }
+  ) {
+    this.agentName = options.agent;
+    this.modelOverride = options.model;
+    this.thinkingOverride = options.thinking;
+    this.cwd = options.cwd;
+    this._pendingPrompt = options.prompt;
+  }
+
+  readonly agentName: string;
+  readonly modelOverride: string | undefined;
+  readonly thinkingOverride: ModelThinkingLevel | undefined;
+  readonly cwd: string | undefined;
 
   get status() { return this._status }
+  get hasPendingPrompt() { return this._pendingPrompt !== undefined }
 
   get message() { return this._message }
-  get tool() { return this._tool }
+  get prompts(): readonly AgentPromptRun[] { return this._promptRuns }
+  get prompt() { return this._pendingPrompt ?? this._promptRuns.at(-1)?.prompt ?? "" }
+  get activeTools() { return this._toolHistory.filter(tool => tool.completedAt === undefined).map(tool => tool.name) }
+  get toolHistory(): readonly AgentToolUse[] { return this._toolHistory }
 
   get turns() { return this._turns }
-  get toolUses() { return this._toolUses }
+  get toolUses() { return this._toolHistory.length }
   get compactions() { return this._compactions }
 
   get usage() { return this._usage }
@@ -77,14 +113,28 @@ export class Agent implements AgentView {
   get createdAt() { return this._createdAt }
 
   get source() { return this.config.source }
-  get resolvedModel() { return this.options.model ?? this.config.model }
-  get resolvedThinking() { return this.options.thinking ?? this.config.thinking }
+  get resolvedModel() { return this.modelOverride ?? this.config.model }
+  get resolvedThinking() { return this.thinkingOverride ?? this.config.thinking }
   get tools() { return this.config.tools }
 
   get resumable(): boolean {
     if (!this.config.resumable) return false;
     if (this._status.kind !== "done") return true;
     return Boolean(this._status.ran);
+  }
+
+  preparePrompt(prompt: string) {
+    this._pendingPrompt = prompt;
+  }
+
+  discardPendingPrompt() {
+    this._pendingPrompt = undefined;
+  }
+
+  finishPrompt(status: AgentRunResult["status"]) {
+    const i = this._activeRunIndex();
+    if (i < 0) return;
+    this._promptRuns[i] = { ...this._promptRuns[i], completedAt: Date.now(), status };
   }
 
   attach(session: AgentSession) {
@@ -94,17 +144,29 @@ export class Agent implements AgentView {
     if (!canAttach) {
       throw new Error(`Cannot attach a session to an agent that is ${this._describe()}.`);
     }
+    if (this._pendingPrompt !== undefined) {
+      this._promptRuns.push({ prompt: this._pendingPrompt, startedAt: Date.now() });
+      this._pendingPrompt = undefined;
+    }
     this._subscribe(session);
     this._status = { kind: "running", session, startedAt: Date.now() };
     this.onUpdate(this, "status");
   }
 
   finalize(result: AgentRunResult) {
-    if (this._status.kind === "done") return;
+    if (this._status.kind === "done" && !this.hasPendingPrompt) return;
     this._finishSubscription();
-    const ran = this._status.kind === "running"
-      ? { session: this._status.session, startedAt: this._status.startedAt }
-      : undefined;
+    const previousStatus = this._status;
+    const ran = previousStatus.kind === "running"
+      ? { session: previousStatus.session, startedAt: previousStatus.startedAt }
+      : previousStatus.kind === "done"
+        ? previousStatus.ran
+        : undefined;
+    if (previousStatus.kind === "done" && this._pendingPrompt !== undefined) {
+      const now = Date.now();
+      this._promptRuns.push({ prompt: this._pendingPrompt, startedAt: now, completedAt: now, status: result.status });
+      this._pendingPrompt = undefined;
+    }
     this._status = { kind: "done", result, ran, completedAt: Date.now() };
     this.onUpdate(this, "status");
   }
@@ -119,6 +181,40 @@ export class Agent implements AgentView {
       this._unsubscribe();
       this._unsubscribe = undefined;
     }
+  }
+
+  private _activeRunIndex() {
+    for (let i = this._promptRuns.length - 1; i >= 0; i--) {
+      if (this._promptRuns[i].completedAt === undefined) return i;
+    }
+    return -1;
+  }
+
+  private _startToolUse(event: { toolCallId?: string; toolName: string }) {
+    this._toolHistory.push({
+      id: event.toolCallId ?? `tool-${++this._nextSyntheticToolId}`,
+      name: event.toolName,
+      startedAt: Date.now(),
+    });
+  }
+
+  private _finishToolUse(event: { toolCallId?: string; toolName?: string; isError?: boolean }) {
+    const completedAt = Date.now();
+    const index = this._findActiveToolUseIndex(event);
+    if (index < 0) return;
+    const toolUse = this._toolHistory[index];
+    this._toolHistory[index] = { ...toolUse, completedAt, isError: Boolean(event.isError) };
+  }
+
+  private _findActiveToolUseIndex(event: { toolCallId?: string; toolName?: string }) {
+    for (let i = this._toolHistory.length - 1; i >= 0; i--) {
+      const toolUse = this._toolHistory[i];
+      if (toolUse.completedAt !== undefined) continue;
+      if (event.toolCallId && toolUse.id !== event.toolCallId) continue;
+      if (!event.toolCallId && event.toolName && toolUse.name !== event.toolName) continue;
+      return i;
+    }
+    return -1;
   }
 
   private _subscribe(session: AgentSession) {
@@ -140,12 +236,11 @@ export class Agent implements AgentView {
         this.onUpdate(this, "message");
       }
       else if (event.type === "tool_execution_start") {
-        this._tool = event.toolName;
-        this._toolUses += 1;
+        this._startToolUse(event);
         this.onUpdate(this, "tool");
       }
       else if (event.type === "tool_execution_end") {
-        this._tool = undefined;
+        this._finishToolUse(event);
         this.onUpdate(this, "tool");
       }
       else if (event.type === "turn_end") {

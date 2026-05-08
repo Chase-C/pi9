@@ -268,7 +268,7 @@ class SubagentSessionsComponent implements Component {
       this.notify(`Subagent session ${session.id} is ${detail} and cannot be resumed.`, "warning");
       return;
     }
-    this.done({ action: "resume", sessionId: session.id, agent: session.options.agent });
+    this.done({ action: "resume", sessionId: session.id, agent: session.agentName });
   }
 
   private clearSelected() {

@@ -65,7 +65,7 @@ export function formatSubagentSessionSummary(agent: AgentView): string {
     agent.resumable ? "resumable" : undefined,
     `session:${agent.id}`,
   ].filter(Boolean);
-  return [agent.options.agent, effectiveStatus(agent.status), ...badges, `"${compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH)}"`].join(" · ");
+  return [agent.agentName, effectiveStatus(agent.status), ...badges, `"${compact(agent.prompt, PROMPT_PREVIEW_LENGTH)}"`].join(" · ");
 }
 
 export function formatSubagentSessionInspect(agent: AgentView, now = Date.now()): string[] {
@@ -80,15 +80,19 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
   const lines = [
     `Session ${agent.id}`,
     `Status: ${effectiveStatus(status)}${resumable ? " · resumable" : ""}`,
-    `Agent: ${agent.options.agent}${agent.source ? ` (${agent.source})` : ""}`,
+    `Agent: ${agent.agentName}${agent.source ? ` (${agent.source})` : ""}`,
   ];
 
   if (model || thinking) {
     lines.push(`Model: ${model ?? "default"}${thinking ? ` · thinking:${thinking}` : ""}`);
   }
   lines.push(`Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`);
-  lines.push(`Prompt: ${compact(agent.options.prompt, PROMPT_PREVIEW_LENGTH)}`);
-  if (agent.tool) lines.push(`Active tool: ${agent.tool}`);
+  lines.push(`Prompt: ${compact(agent.prompt, PROMPT_PREVIEW_LENGTH)}`);
+  const prompts = agent.prompts;
+  if (prompts && prompts.length > 1) lines.push(`Prompts: ${prompts.length} sent · latest ${compact(prompts.at(-1)?.prompt ?? "", PROMPT_PREVIEW_LENGTH)}`);
+  if (agent.activeTools?.length) {
+    lines.push(`Active tool${agent.activeTools.length === 1 ? "" : "s"}: ${agent.activeTools.join(", ")}`);
+  }
   lines.push(`Progress: ${agent.turns} turn${agent.turns === 1 ? "" : "s"} · ${agent.toolUses} tool use${agent.toolUses === 1 ? "" : "s"} · ${agent.compactions} compaction${agent.compactions === 1 ? "" : "s"}`);
   if (agent.totalUsage) lines.push(`Usage: ${formatUsage(agent.totalUsage)}`);
   lines.push(`Timestamps: created ${formatTimestamp(agent.createdAt)}${startedAt ? ` · started ${formatTimestamp(startedAt)}` : ""}${completedAt ? ` · completed ${formatTimestamp(completedAt)}` : ""} · elapsed ${elapsed}`);
@@ -218,7 +222,8 @@ function formatRowSessionLine(row: AgentRow, now: number): string {
     elapsed,
   ];
 
-  if (row.activeTool) parts.push(`tool:${row.activeTool}`);
+  const activeTool = row.activeTools?.at(-1) ?? row.activeTool;
+  if (activeTool) parts.push(`tool:${activeTool}`);
   if (row.messageSnippet) parts.push(`"${row.messageSnippet}"`);
 
   if (!isActiveStatusKind(row.status)) {

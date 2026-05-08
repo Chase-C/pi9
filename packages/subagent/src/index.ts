@@ -2,7 +2,7 @@ import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
 import type { AgentView } from "./agent.js";
-import { AgentManager, AgentOptions, type AgentManagerGroupUpdate } from "./agent-manager.js";
+import { AgentManager, type AgentOptions, type AgentManagerGroupUpdate } from "./agent-manager.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { SubagentParams } from "./schema.js";
 import { SubagentUiSettingsStore } from "./subagent-settings.js";

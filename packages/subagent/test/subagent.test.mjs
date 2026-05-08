@@ -43,8 +43,11 @@ function fakeAgent({ config: configOverrides, options: optionsOverrides, status:
   const resumable = config.resumable && (status.kind !== 'done' || Boolean(status.ran));
   return {
     id: 's1', groupId: 'g1',
-    message: '', tool: undefined,
-    turns: 0, toolUses: 0, compactions: 0,
+    agentName: options.agent,
+    prompt: options.prompt,
+    message: '',
+    turns: 0, toolUses: 0,
+    compactions: 0,
     totalUsage: ZERO_USAGE, createdAt: 1,
     source: config.source,
     resolvedModel: options.model ?? config.model,
@@ -52,7 +55,7 @@ function fakeAgent({ config: configOverrides, options: optionsOverrides, status:
     tools: config.tools,
     resumable,
     ...rest,
-    config, options, status,
+    config, status,
   };
 }
 
@@ -1113,11 +1116,11 @@ test('manager returns ordered per-run output and reports unknown agents and chil
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
   const runner = async (_ctx, agent) => {
-    calls.push(agent.options.prompt);
-    if (agent.options.prompt === 'three') throw new Error('child failed');
+    calls.push(agent.prompt);
+    if (agent.prompt === 'three') throw new Error('child failed');
     const session = { messages: [], subscribe: () => () => {}, async prompt() {}, abort() {} };
     agent.attach(session);
-    return completedRun(agent, `response:${agent.options.prompt}`);
+    return completedRun(agent, `response:${agent.prompt}`);
   };
 
   const registry = { agents: new Map([
@@ -1175,11 +1178,11 @@ test('manager returns skipped result and final group row for queued task whose s
   let finishFirst;
   const firstCanFinish = new Promise(resolve => { finishFirst = resolve; });
   const runner = async (_ctx, agent) => {
-    calls.push(agent.options.prompt);
+    calls.push(agent.prompt);
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
     agent.attach(session);
-    if (agent.options.prompt === 'one') await firstCanFinish;
-    return completedRun(agent, `done:${agent.options.prompt}`);
+    if (agent.prompt === 'one') await firstCanFinish;
+    return completedRun(agent, `done:${agent.prompt}`);
   };
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
@@ -1296,7 +1299,7 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   assert.ok(results[1].sessionId);
 
   const sessions = manager.sessions;
-  assert.deepEqual(sessions.map(session => session.options.agent), ['chatty']);
+  assert.deepEqual(sessions.map(session => session.agentName), ['chatty']);
   assert.equal(sessions[0].status.kind, 'done');
   assert.equal(sessions[0].status.result.status, 'interrupted');
 
@@ -1311,6 +1314,7 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
 test('manager retains, resumes, lists, and clears completed resumable sessions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { serializeAgent } = await import(`../dist/serialize.js?t=${unique()}`);
   let runEmit;
   let resumeEmit;
   const runner = async (_ctx, agent) => {
@@ -1322,7 +1326,7 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
     };
     agent.attach(session);
     runEmit({ type: 'turn_end' });
-    return completedRun(agent, `response:${agent.options.prompt}`);
+    return completedRun(agent, `response:${agent.prompt}`);
   };
   const resumeRunner = async (_ctx, agent, prompt) => {
     agent.attach(agent.status.ran.session);
@@ -1351,8 +1355,86 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
   assert.equal(resumed.prompt, 'two');
   assert.equal(resumed.sessionId, results[0].sessionId);
 
+  const retained = manager.sessions[0];
+  assert.equal(retained.prompt, 'two');
+  assert.deepEqual(retained.prompts.map(run => [run.prompt, run.status]), [['one', 'completed'], ['two', 'completed']]);
+  const serialized = serializeAgent(retained);
+  assert.equal(serialized.promptPreview, 'two');
+  assert.deepEqual(serialized.prompts.map(run => [run.prompt, run.status]), [['one', 'completed'], ['two', 'completed']]);
+
   assert.deepEqual(manager.clear(results[0].sessionId), { cleared: 1, sessionId: results[0].sessionId });
   assert.deepEqual(manager.sessions, []);
+});
+
+test('manager reports resume setup failure as the follow-up prompt error without returning prior completion', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent) => {
+    agent.attach(session);
+    return completedRun(agent, `old:${agent.prompt}`);
+  };
+  const resumeRunner = async () => {
+    throw new Error('resume setup exploded');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner, resumeRunner);
+  const [first] = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { agent: 'chatty', prompt: 'initial prompt' },
+  ]);
+
+  const resumed = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, first.sessionId, 'follow-up prompt');
+
+  assert.equal(resumed.status, 'error');
+  assert.equal(resumed.prompt, 'follow-up prompt');
+  assert.match(resumed.error, /resume setup exploded/);
+  assert.equal(resumed.sessionId, first.sessionId);
+  assert.equal(resumed.resumable, true);
+  assert.equal(resumed.output, undefined);
+  assert.notEqual(resumed.status, first.status);
+  assert.notEqual(resumed.output, first.output);
+});
+
+test('manager keeps a retained completed session retryable after resume setup failure', async () => {
+  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent) => {
+    agent.attach(session);
+    return completedRun(agent, `old:${agent.prompt}`);
+  };
+  let resumeAttempts = 0;
+  const resumeRunner = async (_ctx, agent, prompt) => {
+    resumeAttempts += 1;
+    if (resumeAttempts === 1) throw new Error('resume setup exploded');
+    agent.attach(agent.status.ran.session);
+    return completedRun(agent, `new:${prompt}`);
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner, resumeRunner);
+  const [first] = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { agent: 'chatty', prompt: 'initial prompt' },
+  ]);
+
+  const failed = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, first.sessionId, 'failed follow-up');
+  assert.equal(failed.status, 'error');
+
+  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.sessions[0].id, first.sessionId);
+  assert.equal(manager.sessions[0].status.kind, 'done');
+  assert.equal(manager.sessions[0].status.result.status, 'completed');
+  assert.equal(manager.sessions[0].status.result.output, 'old:initial prompt');
+  assert.equal(manager.sessions[0].prompt, 'initial prompt');
+
+  const retried = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, first.sessionId, 'successful follow-up');
+  assert.equal(retried.status, 'completed');
+  assert.equal(retried.output, 'new:successful follow-up');
+  assert.equal(retried.prompt, 'successful follow-up');
+  assert.equal(retried.sessionId, first.sessionId);
 });
 
 test('agent re-subscribes on resume so events during a resumed cycle update its state', async () => {
@@ -1383,6 +1465,30 @@ test('agent re-subscribes on resume so events during a resumed cycle update its 
   assert.equal(emit, undefined, 'subscription should be torn down on complete after resume');
 });
 
+test('agent stores tool-use history and keeps active tool correct for overlapping executions', async () => {
+  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const session = {
+    messages: [],
+    subscribe(handler) { this.emit = handler; return () => { this.emit = undefined; }; },
+    async prompt() {},
+    abort() {},
+  };
+  const agent = new Agent('id', 'gid', { name: 'a', description: 'd', systemPrompt: '', source: 'project' }, { agent: 'a', prompt: 'p' }, () => {});
+
+  agent.attach(session);
+  session.emit({ type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read' });
+  session.emit({ type: 'tool_execution_start', toolCallId: 'bash-1', toolName: 'bash' });
+  assert.deepEqual(agent.activeTools, ['read', 'bash']);
+
+  session.emit({ type: 'tool_execution_end', toolCallId: 'read-1', toolName: 'read', isError: false });
+  assert.deepEqual(agent.activeTools, ['bash']);
+  assert.equal(agent.toolUses, 2);
+  assert.deepEqual(agent.toolHistory.map(tool => [tool.id, tool.name, Boolean(tool.completedAt), tool.isError]), [
+    ['read-1', 'read', true, false],
+    ['bash-1', 'bash', false, undefined],
+  ]);
+});
+
 test('manager emits grouped progress rows in input order including unknown agents', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
@@ -1390,7 +1496,7 @@ test('manager emits grouped progress rows in input order including unknown agent
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.attach(session);
-    return completedRun(agent, `done:${agent.options.prompt}`);
+    return completedRun(agent, `done:${agent.prompt}`);
   };
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
@@ -1451,6 +1557,7 @@ test('manager emits live agent progress with the right transitions', async () =>
   assert.equal(snapshots[0].promptPreview, 'Summarize the project status for the parent agent.');
 
   assert.ok(snapshots.some(s => s.status === 'running'));
+  assert.ok(snapshots.some(s => s.activeTools?.at(-1) === 'read'));
   assert.ok(snapshots.some(s => s.activeTool === 'read'));
   assert.ok(snapshots.some(s => s.turns === 1));
   assert.ok(snapshots.some(s => s.messageSnippet === 'working through the delegated task'));
@@ -1464,8 +1571,8 @@ test('subagent tool returns one ordered final group for mixed success, unknown, 
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.attach(session);
-    if (agent.options.agent === 'flaky') throw new Error('flaky failed');
-    return completedRun(agent, `done:${agent.options.prompt}`);
+    if (agent.agentName === 'flaky') throw new Error('flaky failed');
+    return completedRun(agent, `done:${agent.prompt}`);
   };
   const fakeRegistry = {
     agents: new Map([
@@ -1626,7 +1733,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
   const runningAgent = fakeAgent({
     status: { kind: 'running', startedAt: 1 },
     message: 'working',
-    tool: 'read',
+    activeTools: ['read'],
     turns: 1,
     toolUses: 1,
   });
@@ -1662,8 +1769,8 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
 
   assert.equal(result.isError, false);
   assert.equal(result.details.results[0].output, 'done');
-  assert.equal(result.details.group.sessions[0].activeTool, 'read');
-  assert.equal(partials[0].details.group.sessions[0].activeTool, 'read');
+  assert.equal(result.details.group.sessions[0].activeTools?.at(-1), 'read');
+  assert.equal(partials[0].details.group.sessions[0].activeTools?.at(-1), 'read');
   assert.match(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], 'subagent');
   assert.match(widgets[0][1][0], /helper/);
@@ -1716,7 +1823,7 @@ test('subagent DTO render helpers collapse groups and expand every child row', a
   const group = {
     id: 'g1',
     createdAt: 1_000,
-    statusCounts: { completed: 1, running: 1, error: 1 },
+    statusCounts: { completed: 1, running: 2, error: 1 },
     isError: true,
     sessions: [
       {
@@ -1725,26 +1832,32 @@ test('subagent DTO render helpers collapse groups and expand every child row', a
       },
       {
         id: 's2', groupId: 'g1', agent: 'worker', status: 'running', resumable: false,
-        promptPreview: 'second', activeTool: 'bash', messageSnippet: 'checking logs', turns: 2, toolUses: 1, createdAt: 1_000, startedAt: 2_000,
+        promptPreview: 'second', activeTools: ['bash'], messageSnippet: 'checking logs', turns: 2, toolUses: 1, createdAt: 1_000, startedAt: 2_000,
       },
       {
         id: 'g1:task-2', groupId: 'g1', agent: 'missing', status: 'error', resumable: false,
         promptPreview: 'third', turns: 0, toolUses: 0, createdAt: 1_000, completedAt: 1_000,
         errorSnippet: 'Unknown agent: missing.',
       },
+      {
+        id: 's4', groupId: 'g1', agent: 'legacy', status: 'running', resumable: false,
+        promptPreview: 'fourth', activeTool: 'grep', messageSnippet: 'searching', turns: 1, toolUses: 1, createdAt: 1_000, startedAt: 2_000,
+      },
     ],
   };
 
   const collapsed = formatSubagentToolLines({ group }, false, 4_000);
-  assert.deepEqual(collapsed, ['3 subagents · 1 running · 1 completed · 1 error · outcome:error']);
+  assert.deepEqual(collapsed, ['4 subagents · 2 running · 1 completed · 1 error · outcome:error']);
 
   const expanded = formatSubagentToolLines({ group }, true, 4_000);
-  assert.equal(expanded.length, 3);
+  assert.equal(expanded.length, 4);
   assert.match(expanded[0], /helper/);
   assert.match(expanded[1], /worker/);
   assert.match(expanded[1], /tool:bash/);
   assert.match(expanded[2], /missing/);
   assert.match(expanded[2], /Unknown agent: missing/);
+  assert.match(expanded[3], /legacy/);
+  assert.match(expanded[3], /tool:grep/);
 });
 
 test('subagent resume message keeps context concise while preserving structured result details', async () => {
@@ -1798,7 +1911,7 @@ test('format helpers render compact operational progress and auto-hide empty wid
   const running = fakeAgent({
     status: { kind: 'running', startedAt: 1_000 },
     message: 'reading source files',
-    tool: 'read',
+    activeTools: ['read'],
     turns: 2,
     createdAt: 1_000,
   });
