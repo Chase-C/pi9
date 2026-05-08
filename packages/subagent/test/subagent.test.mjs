@@ -32,14 +32,15 @@ function fakeAgent({ config: configOverrides, options: optionsOverrides, status:
     let session;
     if ('session' in baseStatus) session = baseStatus.session;
     else if (resultStatus === 'completed' || resultStatus === 'interrupted') session = {};
-    status = { kind: 'done', result, session, startedAt: baseStatus.startedAt, completedAt };
+    const ran = session ? { session, startedAt: baseStatus.startedAt ?? 0 } : undefined;
+    status = { kind: 'done', result, ran, completedAt };
   } else if (baseStatus.kind === 'running' && !('session' in baseStatus)) {
     status = { ...baseStatus, session: {} };
   } else {
     status = baseStatus;
   }
 
-  const resumable = config.resumable && (status.kind !== 'done' || Boolean(status.session));
+  const resumable = config.resumable && (status.kind !== 'done' || Boolean(status.ran));
   return {
     id: 's1', groupId: 'g1',
     message: '', tool: undefined,
@@ -1324,7 +1325,7 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
     return completedRun(agent, `response:${agent.options.prompt}`);
   };
   const resumeRunner = async (_ctx, agent, prompt) => {
-    agent.attach(agent.status.session);
+    agent.attach(agent.status.ran.session);
     resumeEmit = runEmit;
     resumeEmit({ type: 'turn_end' });
     return completedRun(agent, `follow:${prompt}`, prompt);
@@ -1975,7 +1976,7 @@ test('run-agent marks running parent cancellation as interrupted', async () => {
   assert.equal(abortCalls, 1);
   assert.equal(agent.status.kind, 'done');
   assert.equal(agent.status.result.status, 'interrupted');
-  assert.ok(agent.status.session);
+  assert.ok(agent.status.ran?.session);
 });
 
 test('run-agent treats final assistant error stop reason as failed child run', async () => {

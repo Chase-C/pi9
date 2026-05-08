@@ -18,6 +18,7 @@ import {
   getOutputSnippet,
   getStartedAt,
   isActiveStatusKind,
+  serializeAgent,
   serializeGroup,
 } from "./serialize.js";
 
@@ -106,31 +107,7 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
 }
 
 export function formatSubagentSessionLine(agent: AgentView, now = Date.now()): string {
-  const status = agent.status;
-  const startedAt = getStartedAt(status);
-  const completedAt = getCompletedAt(status);
-  const elapsed = formatElapsed(startedAt ?? agent.createdAt, completedAt ?? now);
-  const effective = effectiveStatus(status);
-  const parts = [
-    agent.options.agent,
-    effective,
-    `${agent.turns} turn${agent.turns === 1 ? "" : "s"}`,
-    elapsed,
-  ];
-
-  if (agent.tool) parts.push(`tool:${agent.tool}`);
-  if (agent.message) parts.push(`"${compact(agent.message, MESSAGE_SNIPPET_LENGTH)}"`);
-
-  if (!isActiveStatusKind(effective)) {
-    if (effective === "completed") {
-      parts.push(`outcome:completed`);
-    } else {
-      const errorSnippet = getErrorSnippet(status);
-      parts.push(`outcome:${effective}:${errorSnippet ?? effective}`);
-    }
-  }
-
-  return parts.join(" · ");
+  return formatRowSessionLine(serializeAgent(agent), now);
 }
 
 export function formatWidgetLines(agents: AgentView[], now = Date.now()): string[] {

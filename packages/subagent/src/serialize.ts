@@ -123,7 +123,7 @@ export function effectiveStatus(status: AgentStatus): string {
 
 export function getStartedAt(status: AgentStatus): number | undefined {
   if (status.kind === "running") return status.startedAt;
-  if (status.kind === "done") return status.startedAt;
+  if (status.kind === "done") return status.ran?.startedAt;
   return undefined;
 }
 

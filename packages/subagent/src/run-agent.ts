@@ -65,7 +65,7 @@ export const interruptedRun = (agent: Agent, error: string, prompt?: string): Ag
 
 function hasSessionAttached(agent: Agent): boolean {
   if (agent.status.kind === "running") return true;
-  if (agent.status.kind === "done") return Boolean(agent.status.session);
+  if (agent.status.kind === "done") return Boolean(agent.status.ran);
   return false;
 }
 
@@ -138,7 +138,7 @@ export async function ResumeAgent(
   prompt: string,
   signal?: AbortSignal,
 ): Promise<AgentRunResult> {
-  const session = agent.status.kind === "done" ? agent.status.session : undefined;
+  const session = agent.status.kind === "done" ? agent.status.ran?.session : undefined;
   if (!session) {
     throw new Error(`Cannot resume an agent without a retained session.`);
   }

@@ -13,7 +13,7 @@ const DefaultUsage: Usage = {
 export type AgentStatus =
   | { kind: "queued" }
   | { kind: "running"; session: AgentSession; startedAt: number }
-  | { kind: "done"; result: AgentRunResult; session?: AgentSession; startedAt?: number; completedAt: number };
+  | { kind: "done"; result: AgentRunResult; ran?: { session: AgentSession; startedAt: number }; completedAt: number };
 
 export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
 
@@ -84,7 +84,7 @@ export class Agent implements AgentView {
   get resumable(): boolean {
     if (!this.config.resumable) return false;
     if (this._status.kind !== "done") return true;
-    return Boolean(this._status.session);
+    return Boolean(this._status.ran);
   }
 
   attach(session: AgentSession) {
@@ -102,9 +102,10 @@ export class Agent implements AgentView {
   finalize(result: AgentRunResult) {
     if (this._status.kind === "done") return;
     this._finishSubscription();
-    const session = this._status.kind === "running" ? this._status.session : undefined;
-    const startedAt = this._status.kind === "running" ? this._status.startedAt : undefined;
-    this._status = { kind: "done", result, session, startedAt, completedAt: Date.now() };
+    const ran = this._status.kind === "running"
+      ? { session: this._status.session, startedAt: this._status.startedAt }
+      : undefined;
+    this._status = { kind: "done", result, ran, completedAt: Date.now() };
     this.onUpdate(this, "status");
   }
 

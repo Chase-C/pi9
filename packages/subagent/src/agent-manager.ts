@@ -272,7 +272,7 @@ export class AgentManager {
     this._agents = this._agents.filter(agent => {
       if (agent.groupId !== groupId) return true;
       if (agent.status.kind !== "done") return true;
-      return Boolean(agent.config.resumable && agent.status.session);
+      return Boolean(agent.config.resumable && agent.status.kind === "done" && agent.status.ran);
     });
   }
 
