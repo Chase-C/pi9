@@ -1,21 +1,19 @@
 import { defineTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
-import { AgentManager, type AgentOptions, type SubagentBatchUpdate } from "./agent-manager.js";
-import { AgentRegistry } from "./agent-registry.js";
-import { SubagentParams } from "./schema.js";
-import { SubagentUiSettingsStore } from "./subagent-settings.js";
-import { registerSubagentsCommand } from "./subagents-command.js";
-import { loadSubagentUiSettings, updateSubagentWidget } from "./subagent-widget.js";
+import { AgentRegistry } from "./domain/agent-registry.js";
+import type { SubagentBatchUpdate } from "./domain/agent-view.js";
+import { AgentManager } from "./runtime/agent-manager.js";
+import { AgentOptions, SubagentParams } from "./schema.js";
+import { SubagentUiSettingsStore } from "./ui/settings.js";
+import { loadSubagentUiSettings, updateSubagentWidget } from "./ui/widget.js";
+import { registerSubagentsCommand } from "./command/register.js";
 import {
   createSubagentTextComponent,
-  formatSubagentResumeMessageContent,
   formatSubagentToolLines,
-} from "./format.js";
-import {
-  listAgentDefinitions,
-  serializeGroup,
-} from "./serialize.js";
+} from "./view/format.js";
+import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
+import { listAgentDefinitions, serializeGroup } from "./view/serialize.js";
 
 const MAX_TASKS = 8;
 

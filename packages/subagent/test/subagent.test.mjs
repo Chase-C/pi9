@@ -87,7 +87,7 @@ function fakeAgent({ config: configOverrides, options: optionsOverrides, status:
 
 test('subagent UI settings default to below editor when file is missing', async () => {
   const root = await mkdtemp(join(tmpdir(), 'subagent-settings-default-'));
-  const { SubagentUiSettingsStore } = await import(`../dist/subagent-settings.js?t=${unique()}`);
+  const { SubagentUiSettingsStore } = await import(`../dist/ui/settings.js?t=${unique()}`);
   const store = new SubagentUiSettingsStore(join(root, 'subagent', 'settings.json'));
 
   const result = await store.load();
@@ -99,7 +99,7 @@ test('subagent UI settings default to below editor when file is missing', async 
 test('subagent UI settings save and reload widget placement globally', async () => {
   const root = await mkdtemp(join(tmpdir(), 'subagent-settings-save-'));
   const settingsPath = join(root, 'subagent', 'settings.json');
-  const { SubagentUiSettingsStore } = await import(`../dist/subagent-settings.js?t=${unique()}`);
+  const { SubagentUiSettingsStore } = await import(`../dist/ui/settings.js?t=${unique()}`);
 
   await new SubagentUiSettingsStore(settingsPath).save({ widgetPlacement: 'aboveEditor' });
   const result = await new SubagentUiSettingsStore(settingsPath).load();
@@ -113,7 +113,7 @@ test('subagent UI settings fall back to defaults for invalid config', async () =
   const settingsPath = join(root, 'subagent', 'settings.json');
   await mkdir(join(root, 'subagent'), { recursive: true });
   await writeFile(settingsPath, JSON.stringify({ widgetPlacement: 'besideEditor' }));
-  const { SubagentUiSettingsStore } = await import(`../dist/subagent-settings.js?t=${unique()}`);
+  const { SubagentUiSettingsStore } = await import(`../dist/ui/settings.js?t=${unique()}`);
 
   const result = await new SubagentUiSettingsStore(settingsPath).load();
 
@@ -127,7 +127,7 @@ test('registry loads markdown files from ctx cwd project dir and keys by frontma
   await mkdir(projectAgents, { recursive: true });
   await writeFile(join(projectAgents, 'filename.md'), `---\nname: runtime-name\ndescription: Runtime description\nresumable: true\n---\nSystem prompt`);
 
-  const { AgentRegistry } = await import(`../dist/agent-registry.js?t=${unique()}`);
+  const { AgentRegistry } = await import(`../dist/domain/agent-registry.js?t=${unique()}`);
   const registry = new AgentRegistry();
   await registry.reload(root);
 
@@ -137,8 +137,8 @@ test('registry loads markdown files from ctx cwd project dir and keys by frontma
 });
 
 test('agent transitions through start, finalize, and is idempotent on second finalize', async () => {
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
-  const { completedRun, errorRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const { completedRun, errorRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const config = { name: 'agent', description: 'desc', systemPrompt: 'prompt', source: 'project' };
   const opts = { agent: 'agent', prompt: 'do work' };
   const session = { subscribe() { return () => {}; }, abort() {} };
@@ -1054,8 +1054,8 @@ test('subagents command inspect view shows metadata and clears retained session 
 });
 
 test('subagent tool lists retained sessions as serialized DTOs with clear action', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent, prompt) => {
@@ -1138,8 +1138,8 @@ test('tool execution returns structured failed run for unknown agents', async ()
 
 test('manager returns ordered per-run output and reports unknown agents and child failures', async () => {
   const calls = [];
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const runner = async (_ctx, agent, prompt) => {
     calls.push(prompt);
     if (prompt === 'three') throw new Error('child failed');
@@ -1171,7 +1171,7 @@ test('manager returns ordered per-run output and reports unknown agents and chil
 });
 
 test('manager marks runner rejections before start as terminal error in grouped progress', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
   const runner = async () => {
     throw new Error('setup failed before start');
   };
@@ -1197,8 +1197,8 @@ test('manager marks runner rejections before start as terminal error in grouped 
 });
 
 test('manager returns skipped result and final group row for queued task whose signal aborted before it can start', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const calls = [];
   let finishFirst;
   const firstCanFinish = new Promise(resolve => { finishFirst = resolve; });
@@ -1236,8 +1236,8 @@ test('manager returns skipped result and final group row for queued task whose s
 });
 
 test('manager does not expose skipped resumable tasks as sessions', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   let finishFirst;
   const firstCanFinish = new Promise(resolve => { finishFirst = resolve; });
   const runner = async (_ctx, agent, prompt) => {
@@ -1270,8 +1270,8 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
 });
 
 test('manager does not expose or resume non-resumable completed sessions', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const runner = async (_ctx, agent, prompt) => {
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
     agent.attach(session);
@@ -1296,8 +1296,8 @@ test('manager does not expose or resume non-resumable completed sessions', async
 });
 
 test('manager retains only resumable interrupted sessions inspect-clear only after parent cancellation settles', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const runner = async (_ctx, agent, prompt, signal) => {
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
     agent.attach(session);
@@ -1337,8 +1337,8 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
 });
 
 test('manager retains, resumes, lists, and clears completed resumable sessions', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   let runEmit;
   let resumeEmit;
   const runner = async (_ctx, agent, prompt) => {
@@ -1390,8 +1390,8 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
 });
 
 test('manager reports resume setup failure as the follow-up prompt error without returning prior completion', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent, prompt) => {
     agent.attach(session);
@@ -1421,8 +1421,8 @@ test('manager reports resume setup failure as the follow-up prompt error without
 });
 
 test('manager keeps a retained completed session retryable after resume setup failure', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent, prompt) => {
     agent.attach(session);
@@ -1460,8 +1460,8 @@ test('manager keeps a retained completed session retryable after resume setup fa
 });
 
 test('agent re-subscribes on resume so events during a resumed cycle update its state', async () => {
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
-  const { completedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   let emit;
   const session = {
     messages: [],
@@ -1488,7 +1488,7 @@ test('agent re-subscribes on resume so events during a resumed cycle update its 
 });
 
 test('agent stores tool-use history and keeps active tool correct for overlapping executions', async () => {
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const session = {
     messages: [],
     subscribe(handler) { this.emit = handler; return () => { this.emit = undefined; }; },
@@ -1512,8 +1512,8 @@ test('agent stores tool-use history and keeps active tool correct for overlappin
 });
 
 test('manager emits grouped progress rows in input order including unknown agents', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent, prompt) => {
     agent.attach(session);
@@ -1545,8 +1545,8 @@ test('manager emits grouped progress rows in input order including unknown agent
 });
 
 test('manager emits live agent progress with the right transitions', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', model: 'test/model' }],
   ]) };
@@ -1581,8 +1581,8 @@ test('manager emits live agent progress with the right transitions', async () =>
 });
 
 test('subagent tool returns one ordered final group for mixed success, unknown, and failed children', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent, prompt) => {
@@ -1794,8 +1794,8 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
 });
 
 test('manager throttles live message snippets while lifecycle updates are immediate', async () => {
-  const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
   ]) };
@@ -1834,7 +1834,7 @@ test('manager throttles live message snippets while lifecycle updates are immedi
 });
 
 test('subagent DTO render helpers collapse groups and expand every child row', async () => {
-  const { formatSubagentToolLines } = await import(`../dist/format.js?t=${unique()}`);
+  const { formatSubagentToolLines } = await import(`../dist/view/format.js?t=${unique()}`);
   const group = {
     statusCounts: { completed: 1, running: 2, error: 1 },
     isError: true,
@@ -1885,7 +1885,7 @@ test('subagent DTO render helpers collapse groups and expand every child row', a
 });
 
 test('subagent resume message keeps context concise while preserving structured result details', async () => {
-  const { createSubagentResumeMessage } = await import(`../dist/format.js?t=${unique()}`);
+  const { createSubagentResumeMessage } = await import(`../dist/view/resume-message.js?t=${unique()}`);
   const fullOutput = `done ${'x'.repeat(1500)} secret-tail`;
   const message = createSubagentResumeMessage({
     agent: 'helper',
@@ -1912,7 +1912,7 @@ test('subagent resume message keeps context concise while preserving structured 
 });
 
 test('canResumeSubagentSession allows resume only for completed resumable agents', async () => {
-  const { canResumeSubagentSession } = await import(`../dist/serialize.js?t=${unique()}`);
+  const { canResumeSubagentSession } = await import(`../dist/view/view-helpers.js?t=${unique()}`);
 
   assert.equal(canResumeSubagentSession(fakeAgent({ config: { resumable: true } })), true);
   assert.equal(canResumeSubagentSession(fakeAgent({ config: { resumable: false } })), false);
@@ -1931,7 +1931,7 @@ test('canResumeSubagentSession allows resume only for completed resumable agents
 });
 
 test('format helpers render compact operational progress and auto-hide empty widgets', async () => {
-  const { formatSubagentSessionLine, formatWidgetLines } = await import(`../dist/format.js?t=${unique()}`);
+  const { formatSubagentSessionLine, formatWidgetLines } = await import(`../dist/view/format.js?t=${unique()}`);
   const running = fakeAgent({
     status: { kind: 'running', startedAt: 1_000 },
     message: 'reading source files',
@@ -1973,8 +1973,8 @@ test('run-agent skips before prompting when signal aborts during setup', async (
     sessionManager: cwd => ({ cwd }),
     settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
   };
-  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const agent = new Agent('id', 'group', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
   }, { agent: 'helper', prompt: 'work' }, () => {});
@@ -2006,8 +2006,8 @@ test('run-agent resolves relative task cwd against context cwd', async () => {
     sessionManager: cwd => ({ cwd }),
     settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
   };
-  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const agent = new Agent('id', 'group', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
   }, { agent: 'helper', prompt: 'work', cwd: 'nested/project' }, () => {});
@@ -2036,8 +2036,8 @@ test('run-agent uses frontmatter thinking when task does not override it', async
     sessionManager: cwd => ({ cwd }),
     settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
   };
-  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const agent = new Agent('id', 'group', {
     name: 'thinker', description: 'd', systemPrompt: 's', source: 'project', thinking: 'high'
   }, { agent: 'thinker', prompt: 'work' }, () => {});
@@ -2062,8 +2062,8 @@ test('run-agent forwards configured tools allowlist to createAgentSession', asyn
     sessionManager: cwd => ({ cwd }),
     settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
   };
-  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const agent = new Agent('id', 'group', {
     name: 'limited', description: 'd', systemPrompt: 's', source: 'project', tools: ['read', 'grep'], model: 'model-a'
   }, { agent: 'limited', prompt: 'work' }, () => {});
@@ -2095,8 +2095,8 @@ test('run-agent marks running parent cancellation as interrupted', async () => {
     sessionManager: cwd => ({ cwd }),
     settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
   };
-  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const agent = new Agent('id', 'group', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
   }, { agent: 'helper', prompt: 'work' }, () => {});
@@ -2130,8 +2130,8 @@ test('run-agent treats final assistant error stop reason as failed child run', a
     sessionManager: cwd => ({ cwd }),
     settingsManager: (cwd, agentDir) => ({ cwd, agentDir }),
   };
-  const { RunAgent } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { Agent } = await import(`../dist/agent.js?t=${unique()}`);
+  const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const agent = new Agent('id', 'group', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
   }, { agent: 'helper', prompt: 'work' }, () => {});

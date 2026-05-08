@@ -1,3 +1,4 @@
+import type { ModelThinkingLevel } from "@mariozechner/pi-ai";
 import { Type, type Static } from "typebox";
 
 export const TaskSchema = Type.Object({
@@ -21,3 +22,11 @@ export const SubagentParams = Type.Object({
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;
+
+export interface AgentOptions {
+  agent: string;
+  prompt: string;
+  model?: string;
+  thinking?: ModelThinkingLevel;
+  cwd?: string;
+}

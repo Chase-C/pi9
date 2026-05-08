@@ -1,13 +1,11 @@
 import type { Usage } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 
-import type { AgentView } from "./agent.js";
-import type { AgentConfig } from "./agent-config.js";
+import type { AgentConfig } from "../domain/agent-config.js";
+import type { AgentGroupView, AgentView } from "../domain/agent-view.js";
+import { serializeGroup } from "./serialize.js";
 import {
-  AgentGroupView,
   MESSAGE_SNIPPET_LENGTH,
-  OUTPUT_SNIPPET_LENGTH,
-  PROMPT_PREVIEW_LENGTH,
   canClearSubagentSession,
   canResumeSubagentSession,
   compact,
@@ -19,29 +17,9 @@ import {
   getStartedAt,
   getToolUseCount,
   isActiveStatusKind,
-  serializeGroup,
-} from "./serialize.js";
-
-const RESUME_MESSAGE_SNIPPET_LENGTH = 80;
+} from "./view-helpers.js";
 
 type Theme = { fg?: (color: string, text: string) => string } | undefined;
-
-export interface SubagentResumeMessageDetails {
-  sessionId: string;
-  agent: string;
-  status: string;
-  promptPreview: string;
-  outputSnippet?: string;
-  errorSnippet?: string;
-  result?: unknown;
-}
-
-export interface SubagentResumeMessage {
-  customType: "subagent-resume";
-  content: string;
-  display: true;
-  details: SubagentResumeMessageDetails;
-}
 
 export function formatAgentConfigSummary(config: AgentConfig): string {
   const badges = [config.source, config.resumable ? "resumable" : undefined].filter(Boolean);
@@ -142,49 +120,6 @@ export function formatSubagentToolLines(
   }
 
   return sessions.map(row => formatViewSessionLine(row, now));
-}
-
-export function createSubagentResumeMessage(result: {
-  agent: string;
-  prompt: string;
-  status: string;
-  output?: string;
-  error?: string;
-  sessionId?: string;
-}): SubagentResumeMessage {
-  const promptPreview = compact(result.prompt, PROMPT_PREVIEW_LENGTH);
-  const outputSnippet = result.output ? compact(result.output, OUTPUT_SNIPPET_LENGTH) : undefined;
-  const errorSnippet = result.error ? compact(result.error, OUTPUT_SNIPPET_LENGTH) : undefined;
-  const sessionId = result.sessionId ?? "unknown";
-  const details: SubagentResumeMessageDetails = {
-    sessionId,
-    agent: result.agent,
-    status: result.status,
-    promptPreview,
-    outputSnippet,
-    errorSnippet,
-    result,
-  };
-
-  return {
-    customType: "subagent-resume",
-    display: true,
-    content: formatSubagentResumeMessageContent(details),
-    details,
-  };
-}
-
-export function formatSubagentResumeMessageContent(details: SubagentResumeMessageDetails): string {
-  const title = details.status === "completed" ? "Subagent resume completed" : `Subagent resume ${details.status}`;
-  const parts = [
-    title,
-    `agent: ${details.agent}`,
-    `session: ${details.sessionId}`,
-    `prompt: ${details.promptPreview}`,
-  ];
-  if (details.outputSnippet) parts.push(`output: ${compact(details.outputSnippet, RESUME_MESSAGE_SNIPPET_LENGTH)}`);
-  if (details.errorSnippet) parts.push(`error: ${compact(details.errorSnippet, RESUME_MESSAGE_SNIPPET_LENGTH)}`);
-  return parts.join(" · ");
 }
 
 export function createSubagentTextComponent(

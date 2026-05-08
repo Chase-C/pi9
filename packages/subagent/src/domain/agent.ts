@@ -1,10 +1,11 @@
-import { ModelThinkingLevel, Usage } from "@mariozechner/pi-ai";
+import { Usage } from "@mariozechner/pi-ai";
 import { AgentSession } from "@mariozechner/pi-coding-agent";
 
-import { AgentConfig, AgentSource } from "./agent-config.js";
-import type { AgentOptions } from "./agent-options.js";
-import type { AgentRunResult } from "./run-agent.js";
-import { MESSAGE_SNIPPET_LENGTH, OUTPUT_SNIPPET_LENGTH, compact } from "./serialize.js";
+import { AgentConfig } from "./agent-config.js";
+import type { AgentRunResult } from "./agent-result.js";
+import type { AgentToolUse, AgentUpdateKind, AgentView, AgentViewStatus } from "./agent-view.js";
+import type { AgentOptions } from "../schema.js";
+import { MESSAGE_SNIPPET_LENGTH, OUTPUT_SNIPPET_LENGTH, compact } from "../view/view-helpers.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -15,55 +16,6 @@ export type AgentStatus =
   | { kind: "queued" }
   | { kind: "running"; session: AgentSession; startedAt: number }
   | { kind: "done"; result: AgentRunResult; ran?: { session: AgentSession; startedAt: number }; completedAt: number };
-
-export type AgentViewStatus =
-  | { readonly kind: "queued" }
-  | { readonly kind: "running"; readonly startedAt: number }
-  | {
-      readonly kind: "done";
-      readonly outcome: AgentRunResult["status"];
-      readonly completedAt: number;
-      readonly startedAt?: number;
-      readonly snippet?: string;
-    };
-
-export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
-
-export interface AgentToolUse {
-  readonly id: string;
-  readonly name: string;
-  readonly startedAt: number;
-  readonly completedAt?: number;
-  readonly isError?: boolean;
-}
-
-export interface AgentViewConfig {
-  readonly name: string;
-  readonly description?: string;
-  readonly source: AgentSource | undefined;
-  readonly sourcePath?: string;
-  readonly model: string | undefined;
-  readonly thinking: ModelThinkingLevel | undefined;
-  readonly tools: readonly string[] | undefined;
-  readonly resumable: boolean;
-}
-
-export interface AgentActivityView {
-  readonly messageSnippet?: string;
-  readonly turns: number;
-  readonly compactions: number;
-  readonly toolHistory: readonly AgentToolUse[];
-}
-
-export interface AgentView {
-  readonly id: string;
-  readonly inputIndex?: number;
-  readonly createdAt: number;
-  readonly config: AgentViewConfig;
-  readonly status: AgentViewStatus;
-  readonly activity: AgentActivityView;
-  readonly usage: Usage | undefined;
-}
 
 export class Agent {
 

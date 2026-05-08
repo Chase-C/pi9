@@ -1,52 +1,8 @@
-import type { Usage } from "@mariozechner/pi-ai";
-
-import type { AgentToolUse, AgentView, AgentViewStatus } from "./agent.js";
-import type { AgentConfig } from "./agent-config.js";
-import type { AgentRegistry } from "./agent-registry.js";
+import type { AgentToolUse, AgentView, AgentViewStatus } from "../domain/agent-view.js";
 
 export const PROMPT_PREVIEW_LENGTH = 120;
 export const MESSAGE_SNIPPET_LENGTH = 200;
 export const OUTPUT_SNIPPET_LENGTH = 200;
-
-export interface AgentGroupView {
-  statusCounts: Record<string, number>;
-  sessions: AgentView[];
-  isError: boolean;
-}
-
-export function serializeGroup(sessions: AgentView[]): AgentGroupView {
-  const statusCounts: Record<string, number> = {};
-  for (const session of sessions) {
-    const status = effectiveStatus(session.status);
-    statusCounts[status] = (statusCounts[status] ?? 0) + 1;
-  }
-
-  return {
-    statusCounts,
-    sessions,
-    isError: sessions.some(session => {
-      const status = effectiveStatus(session.status);
-      return !isActiveStatusKind(status) && status !== "completed";
-    }),
-  };
-}
-
-export function serializeAgentConfig(config: AgentConfig) {
-  return {
-    name: config.name,
-    description: config.description,
-    source: config.source,
-    model: config.model,
-    thinking: config.thinking,
-    tools: config.tools,
-    resumable: config.resumable,
-    sourcePath: config.sourcePath,
-  };
-}
-
-export function listAgentDefinitions(agentRegistry: AgentRegistry) {
-  return Array.from(agentRegistry.agents.values()).map(serializeAgentConfig);
-}
 
 export function activeOrRetainedAgents<T extends { status: { kind: string }; resumable: boolean }>(agents: T[]): T[] {
   return agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable);
@@ -106,5 +62,3 @@ function activeToolsFromHistory(history: readonly AgentToolUse[]): string[] {
     .filter(tool => tool.completedAt === undefined)
     .map(tool => tool.name);
 }
-
-export type { Usage };

@@ -2,30 +2,21 @@ import { randomUUID } from "node:crypto";
 
 import { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { Agent, type AgentUpdateKind, type AgentView } from "./agent.js";
-import type { AgentOptions } from "./agent-options.js";
-import { AgentRegistry } from "./agent-registry.js";
-import { activeOrRetainedAgents } from "./serialize.js";
+import { Agent } from "../domain/agent.js";
 import {
-  ResumeAgent,
-  RunAgent,
   errorRun,
   finalizeRun,
   interruptedRun,
   type AgentRunResult,
-} from "./run-agent.js";
+} from "../domain/agent-result.js";
+import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
+import { AgentRegistry } from "../domain/agent-registry.js";
+import type { AgentOptions } from "../schema.js";
+import { activeOrRetainedAgents } from "../view/view-helpers.js";
+import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
 
-export { type AgentRunResult } from "./run-agent.js";
-
-export interface SubagentBatchUpdate {
-  sessions: AgentView[];
-  active: boolean;
-}
-
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
-
-export type { AgentOptions } from "./agent-options.js";
 
 export type AgentManagerUpdateListener = (update: SubagentBatchUpdate) => void;
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
@@ -42,51 +33,6 @@ interface SpawnBatch {
   entries: BatchEntry[];
   listener?: AgentManagerUpdateListener;
   pendingMessageTimer?: NodeJS.Timeout;
-}
-
-function unknownEntry(
-  opts: AgentOptions,
-  error: string,
-  groupId: string,
-  inputIndex: number,
-  createdAt: number,
-): { view: AgentView; result: AgentRunResult } {
-  const result: AgentRunResult = {
-    agent: opts.agent,
-    prompt: opts.prompt,
-    status: "error",
-    error,
-    model: opts.model,
-    resumable: false,
-  };
-  return {
-    result,
-    view: {
-      id: `${groupId}:task-${inputIndex}`,
-      inputIndex,
-      createdAt,
-      config: {
-        name: opts.agent,
-        model: opts.model,
-        thinking: opts.thinking,
-        source: undefined,
-        tools: undefined,
-        resumable: false,
-      },
-      status: {
-        kind: "done",
-        outcome: "error",
-        completedAt: createdAt,
-        snippet: error,
-      },
-      activity: {
-        turns: 0,
-        compactions: 0,
-        toolHistory: [],
-      },
-      usage: undefined,
-    },
-  };
 }
 
 export class AgentManager {
@@ -157,9 +103,43 @@ export class AgentManager {
       const config = this.registry.agents.get(opts.agent);
       if (!config) {
         const error = `Unknown agent: ${opts.agent}. Available agents:\n${available()}`;
-        const { view, result } = unknownEntry(opts, error, groupId, inputIndex, groupCreatedAt);
-        entries.push({ view, inputIndex });
-        return Promise.resolve(result);
+        entries.push({
+          view: {
+            id: `${groupId}:task-${inputIndex}`,
+            inputIndex,
+            createdAt: groupCreatedAt,
+            config: {
+              name: opts.agent,
+              model: opts.model,
+              thinking: opts.thinking,
+              source: undefined,
+              tools: undefined,
+              resumable: false,
+            },
+            status: {
+              kind: "done",
+              outcome: "error",
+              completedAt: groupCreatedAt,
+              snippet: error,
+            },
+            activity: {
+              turns: 0,
+              compactions: 0,
+              toolHistory: [],
+            },
+            usage: undefined,
+          },
+          inputIndex,
+        });
+
+        return Promise.resolve({
+          agent: opts.agent,
+          prompt: opts.prompt,
+          status: "error",
+          error,
+          model: opts.model,
+          resumable: false,
+        } as AgentRunResult);
       }
 
       const agent = new Agent(randomUUID(), groupId, config, opts, this._agentUpdate.bind(this));
