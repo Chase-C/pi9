@@ -12,10 +12,13 @@ import {
   createSubagentTextComponent,
   formatSubagentResumeMessageContent,
   formatSubagentToolLines,
+} from "./format.js";
+import {
   listAgentDefinitions,
   serializeAgent,
   serializeGroup,
-} from "./subagent-ui.js";
+  serializeUnknownAgentError,
+} from "./serialize.js";
 
 const MAX_TASKS = 8;
 
@@ -60,7 +63,14 @@ function liveAgents(update: AgentManagerGroupUpdate): Agent[] {
 function snapshotGroup(update: AgentManagerGroupUpdate) {
   const sessions = [
     ...update.agents.map(entry => serializeAgent(entry.agent, entry.inputIndex)),
-    ...update.errors.map(entry => entry.serialized),
+    ...update.errors.map(error => serializeUnknownAgentError(
+      `${update.groupId}:task-${error.inputIndex}`,
+      update.groupId,
+      error.options,
+      error.error,
+      error.createdAt,
+      error.inputIndex,
+    )),
   ];
   sessions.sort((a, b) => (a.inputIndex ?? 0) - (b.inputIndex ?? 0));
   return serializeGroup(update.groupId, update.createdAt, sessions);
@@ -186,8 +196,7 @@ Execution notes:
         });
         updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
         const isError = results.some(result => result.status !== "completed");
-        const sessions = lastGroup?.sessions ?? agentManager.sessions.map(agent => serializeAgent(agent));
-        return toolResult({ results, group: lastGroup, sessions }, isError);
+        return toolResult({ results, group: lastGroup }, isError);
       }
 
       if (params.action === "resume") {
@@ -206,8 +215,7 @@ Execution notes:
             updateSubagentWidget(ctx, liveAgents(update), uiSettings);
           });
           updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
-          const sessions = lastGroup?.sessions ?? agentManager.sessions.map(agent => serializeAgent(agent));
-          return toolResult({ result, group: lastGroup, sessions }, result.status !== "completed");
+          return toolResult({ result, group: lastGroup }, result.status !== "completed");
         } catch (error) {
           return errorResult(error instanceof Error ? error.message : String(error), { sessionId: params.sessionId });
         }

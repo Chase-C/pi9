@@ -11,16 +11,18 @@ import {
 } from "./subagent-settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./subagent-widget.js";
 import {
-  canClearSubagentSession,
-  canResumeSubagentSession,
   createSubagentResumeMessage,
   formatAgentConfigInspect,
   formatAgentConfigSummary,
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
   formatSubagentToolLines,
+} from "./format.js";
+import {
+  canClearSubagentSession,
+  canResumeSubagentSession,
   serializeAgent,
-} from "./subagent-ui.js";
+} from "./serialize.js";
 import type { AgentConfig } from "./agent-config.js";
 
 function notify(ctx: ExtensionCommandContext, message: string, level: "info" | "warning" | "error" | "success" = "info") {

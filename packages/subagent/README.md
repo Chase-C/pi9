@@ -232,8 +232,7 @@ Tool results preserve input order and are returned in both text content (JSON) a
       error: "Unknown agent: missing. Available agents: ..."
     }
   ],
-  group: { /* live/final grouped UI DTO */ },
-  sessions: [ /* active and retained session DTOs */ ]
+  group: { /* live/final grouped UI DTO */ }
 }
 ```
 

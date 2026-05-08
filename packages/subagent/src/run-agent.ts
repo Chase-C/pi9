@@ -25,51 +25,48 @@ export interface AgentRunResult {
   resumable: boolean;
 }
 
-function baseFields(agent: Agent, prompt: string, hasSession: boolean) {
+export interface FinalizeRunArgs {
+  status: AgentRunResult["status"];
+  output?: string;
+  error?: string;
+  prompt?: string;
+}
+
+export function finalizeRun(agent: Agent, args: FinalizeRunArgs): AgentRunResult {
+  const prompt = args.prompt ?? agent.options.prompt;
+  const hasSession = args.status === "completed"
+    ? true
+    : args.status === "skipped"
+      ? false
+      : hasSessionAttached(agent);
   const resumable = Boolean(agent.config.resumable && hasSession);
-  return {
+  const result: AgentRunResult = {
     agent: agent.options.agent,
     prompt,
     model: agent.options.model ?? agent.config.model,
     resumable,
+    status: args.status,
     ...(resumable ? { sessionId: agent.id } : {}),
+    ...(args.output !== undefined ? { output: args.output } : {}),
+    ...(args.error !== undefined ? { error: args.error } : {}),
   };
+  agent.finalize(result);
+  return result;
 }
+
+export const completedRun = (agent: Agent, output: string, prompt?: string): AgentRunResult =>
+  finalizeRun(agent, { status: "completed", output, prompt });
+
+export const errorRun = (agent: Agent, error: string, prompt?: string): AgentRunResult =>
+  finalizeRun(agent, { status: "error", error, prompt });
+
+export const interruptedRun = (agent: Agent, error: string, prompt?: string): AgentRunResult =>
+  finalizeRun(agent, { status: "interrupted", error, prompt });
 
 function hasSessionAttached(agent: Agent): boolean {
   if (agent.status.kind === "running") return true;
   if (agent.status.kind === "done") return Boolean(agent.status.session);
   return false;
-}
-
-export function completedRun(agent: Agent, output: string, prompt: string = agent.options.prompt): AgentRunResult {
-  const result: AgentRunResult = { ...baseFields(agent, prompt, true), status: "completed", output };
-  agent.finalize(result);
-  return result;
-}
-
-export function interruptedRun(agent: Agent, error: string, prompt: string = agent.options.prompt): AgentRunResult {
-  const result: AgentRunResult = { ...baseFields(agent, prompt, hasSessionAttached(agent)), status: "interrupted", error };
-  agent.finalize(result);
-  return result;
-}
-
-export function errorRun(agent: Agent, error: string, prompt: string = agent.options.prompt): AgentRunResult {
-  const result: AgentRunResult = { ...baseFields(agent, prompt, hasSessionAttached(agent)), status: "error", error };
-  agent.finalize(result);
-  return result;
-}
-
-export function skippedRun(agent: Agent, prompt: string = agent.options.prompt): AgentRunResult {
-  const result: AgentRunResult = { ...baseFields(agent, prompt, false), status: "skipped", error: "Agent skipped." };
-  agent.finalize(result);
-  return result;
-}
-
-export function abortedRun(agent: Agent, prompt: string = agent.options.prompt): AgentRunResult {
-  const result: AgentRunResult = { ...baseFields(agent, prompt, hasSessionAttached(agent)), status: "aborted", error: "Agent aborted." };
-  agent.finalize(result);
-  return result;
 }
 
 export interface RunAgentDependencies {
@@ -94,7 +91,7 @@ export async function RunAgent(
   signal?: AbortSignal,
   dependencies: RunAgentDependencies = DefaultRunAgentDependencies,
 ): Promise<AgentRunResult> {
-  if (signal?.aborted) return skippedRun(agent);
+  if (signal?.aborted) return finalizeRun(agent, { status: "skipped", error: "Agent skipped." });
 
   const cwd = ResolveTaskCwd(ctx.cwd, agent.options.cwd);
   const agentDir = dependencies.getAgentDir();
@@ -112,7 +109,7 @@ export async function RunAgent(
   });
 
   await resourceLoader.reload();
-  if (signal?.aborted) return skippedRun(agent);
+  if (signal?.aborted) return finalizeRun(agent, { status: "skipped", error: "Agent skipped." });
 
   const { session } = await dependencies.createAgentSession({
     cwd,
@@ -128,7 +125,7 @@ export async function RunAgent(
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return skippedRun(agent);
+    return finalizeRun(agent, { status: "skipped", error: "Agent skipped." });
   }
 
   agent.attach(session);

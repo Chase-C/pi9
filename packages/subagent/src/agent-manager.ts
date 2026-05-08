@@ -5,32 +5,30 @@ import { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { Agent, type AgentUpdateKind } from "./agent.js";
 import { AgentRegistry } from "./agent-registry.js";
-import {
-  activeOrRetainedAgents,
-  serializeUnknownAgentError,
-} from "./subagent-ui.js";
+import { activeOrRetainedAgents } from "./serialize.js";
 import {
   ResumeAgent,
   RunAgent,
-  abortedRun,
   errorRun,
+  finalizeRun,
   interruptedRun,
-  skippedRun,
   type AgentRunResult,
 } from "./run-agent.js";
 
 export { type AgentRunResult } from "./run-agent.js";
 
-export type ErrorEntry = {
-  serialized: ReturnType<typeof serializeUnknownAgentError>;
+export interface UnknownAgentError {
+  options: AgentOptions;
+  error: string;
+  createdAt: number;
   inputIndex: number;
-};
+}
 
 export interface AgentManagerGroupUpdate {
   groupId: string;
   createdAt: number;
   agents: Array<{ agent: Agent; inputIndex: number }>;
-  errors: ErrorEntry[];
+  errors: UnknownAgentError[];
   active: boolean;
   updatedAt: number;
 }
@@ -51,7 +49,7 @@ export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: st
 
 type SubagentGroupEntry =
   | { kind: "agent"; agent: Agent; inputIndex: number }
-  | { kind: "error"; serialized: ReturnType<typeof serializeUnknownAgentError>; inputIndex: number };
+  | { kind: "error"; error: UnknownAgentError };
 
 interface SubagentGroupState {
   id: string;
@@ -104,7 +102,7 @@ export class AgentManager {
         cleared = 1;
         this._agents = this._agents.filter(a => a.id !== sessionId);
         if (agent.status.kind === "running") {
-          abortedRun(agent);
+          finalizeRun(agent, { status: "aborted", error: "Agent aborted." });
         } else {
           this._emitGroupUpdate(agent.groupId);
         }
@@ -145,8 +143,7 @@ export class AgentManager {
         const error = `Unknown agent: ${opts.agent}. Available agents:\n${available()}`;
         entries.push({
           kind: "error",
-          serialized: serializeUnknownAgentError(`${groupId}:task-${inputIndex}`, groupId, opts, error, groupCreatedAt, inputIndex),
-          inputIndex,
+          error: { options: opts, error, createdAt: groupCreatedAt, inputIndex },
         });
         return Promise.resolve({
           agent: opts.agent,
@@ -220,15 +217,16 @@ export class AgentManager {
     signal: AbortSignal | undefined,
     agent: Agent,
   ): Promise<AgentRunResult> {
+    const skipped = () => finalizeRun(agent, { status: "skipped", error: "Agent skipped." });
     return new Promise(resolve => {
       if (signal?.aborted) {
-        resolve(skippedRun(agent));
+        resolve(skipped());
         return;
       }
 
       this._queue.push(() => {
         if (signal?.aborted) {
-          resolve(skippedRun(agent));
+          resolve(skipped());
           this._flushQueue();
           return;
         }
@@ -243,7 +241,7 @@ export class AgentManager {
             const message = error instanceof Error ? error.message : String(error);
             if (signal?.aborted) {
               resolve(agent.status.kind === "queued"
-                ? skippedRun(agent)
+                ? skipped()
                 : interruptedRun(agent, message));
             } else {
               resolve(errorRun(agent, message));
@@ -304,13 +302,13 @@ export class AgentManager {
   private _buildUpdate(groupId: string): AgentManagerGroupUpdate {
     const group = this._groups.get(groupId);
     const agents: AgentManagerGroupUpdate["agents"] = [];
-    const errors: ErrorEntry[] = [];
+    const errors: UnknownAgentError[] = [];
     let createdAt: number;
 
     if (group) {
       createdAt = group.createdAt;
       for (const entry of group.entries) {
-        if (entry.kind === "error") errors.push({ serialized: entry.serialized, inputIndex: entry.inputIndex });
+        if (entry.kind === "error") errors.push(entry.error);
         else agents.push({ agent: entry.agent, inputIndex: entry.inputIndex });
       }
     } else {

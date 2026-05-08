@@ -1373,7 +1373,7 @@ test('agent re-subscribes on resume so events during a resumed cycle update its 
 test('manager emits grouped progress rows in input order including unknown agents', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const { serializeAgent, serializeUnknownAgentError } = await import(`../dist/serialize.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
     agent.attach(session);
@@ -1391,7 +1391,14 @@ test('manager emits grouped progress rows in input order including unknown agent
     { agent: 'helper', prompt: 'three' },
   ], update => snapshots.push({
     agents: update.agents.map(({ agent, inputIndex }) => serializeAgent(agent, inputIndex)),
-    errors: update.errors.map(e => e.serialized),
+    errors: update.errors.map(e => serializeUnknownAgentError(
+      `${update.groupId}:task-${e.inputIndex}`,
+      update.groupId,
+      e.options,
+      e.error,
+      e.createdAt,
+      e.inputIndex,
+    )),
   }));
 
   assert.deepEqual(results.map(result => result.agent), ['helper', 'missing', 'helper']);
@@ -1412,7 +1419,7 @@ test('manager emits grouped progress rows in input order including unknown agent
 test('manager emits live agent progress with the right transitions', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const { serializeAgent } = await import(`../dist/serialize.js?t=${unique()}`);
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', model: 'test/model' }],
   ]) };
@@ -1606,7 +1613,7 @@ test('subagent tool keeps subagent surfaces working but hides widget when placem
 
   assert.equal(result.isError, false);
   assert.equal(result.details.results[0].output, 'done');
-  assert.equal(result.details.sessions[0].agent, 'helper');
+  assert.equal(result.details.group.sessions[0].agent, 'helper');
   assert.ok(widgets.length > 0);
   assert.equal(widgets.every(call => call[0] === 'subagent' && call[1] === undefined), true);
 });
@@ -1652,7 +1659,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
 
   assert.equal(result.isError, false);
   assert.equal(result.details.results[0].output, 'done');
-  assert.equal(result.details.sessions[0].activeTool, 'read');
+  assert.equal(result.details.group.sessions[0].activeTool, 'read');
   assert.equal(partials[0].details.group.sessions[0].activeTool, 'read');
   assert.match(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], 'subagent');
@@ -1663,7 +1670,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
 test('manager throttles live message snippets while lifecycle updates are immediate', async () => {
   const { AgentManager } = await import(`../dist/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
-  const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const { serializeAgent } = await import(`../dist/serialize.js?t=${unique()}`);
   const registry = { agents: new Map([
     ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
   ]) };
@@ -1702,7 +1709,7 @@ test('manager throttles live message snippets while lifecycle updates are immedi
 });
 
 test('subagent DTO render helpers collapse groups and expand every child row', async () => {
-  const { formatSubagentToolLines } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const { formatSubagentToolLines } = await import(`../dist/format.js?t=${unique()}`);
   const group = {
     id: 'g1',
     createdAt: 1_000,
@@ -1738,7 +1745,7 @@ test('subagent DTO render helpers collapse groups and expand every child row', a
 });
 
 test('subagent resume message keeps context concise while preserving structured result details', async () => {
-  const { createSubagentResumeMessage } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const { createSubagentResumeMessage } = await import(`../dist/format.js?t=${unique()}`);
   const fullOutput = `done ${'x'.repeat(1500)} secret-tail`;
   const message = createSubagentResumeMessage({
     agent: 'helper',
@@ -1765,7 +1772,7 @@ test('subagent resume message keeps context concise while preserving structured 
 });
 
 test('canResumeSubagentSession allows resume only for completed resumable agents', async () => {
-  const { canResumeSubagentSession } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const { canResumeSubagentSession } = await import(`../dist/serialize.js?t=${unique()}`);
 
   assert.equal(canResumeSubagentSession(fakeAgent({ config: { resumable: true } })), true);
   assert.equal(canResumeSubagentSession(fakeAgent({ config: { resumable: false } })), false);
@@ -1784,7 +1791,7 @@ test('canResumeSubagentSession allows resume only for completed resumable agents
 });
 
 test('format helpers render compact operational progress and auto-hide empty widgets', async () => {
-  const { formatSubagentSessionLine, formatWidgetLines } = await import(`../dist/subagent-ui.js?t=${unique()}`);
+  const { formatSubagentSessionLine, formatWidgetLines } = await import(`../dist/format.js?t=${unique()}`);
   const running = fakeAgent({
     status: { kind: 'running', startedAt: 1_000 },
     message: 'reading source files',

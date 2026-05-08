@@ -1,6 +1,6 @@
 import type { Agent } from "./agent.js";
 import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentUiSettingsStore, type SubagentUiSettings, type SubagentUiSettingsLoadResult } from "./subagent-settings.js";
-import { formatWidgetLines } from "./subagent-ui.js";
+import { formatWidgetLines } from "./format.js";
 
 type SubagentWidgetContext = {
   hasUI?: boolean;
