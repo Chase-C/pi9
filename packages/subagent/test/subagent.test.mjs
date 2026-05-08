@@ -101,9 +101,9 @@ test('agent transitions through start, finalize, and is idempotent on second fin
   const session = { subscribe() { return () => {}; }, abort() {} };
 
   const running = new Agent('id', 'group', config, opts, () => {});
-  running.start(session);
+  running.attach(session);
   assert.equal(running.status.kind, 'running');
-  assert.throws(() => running.start(session), /Cannot start/);
+  assert.throws(() => running.attach(session), /Cannot attach/);
 
   completedRun(running, 'done');
   assert.equal(running.status.kind, 'done');
@@ -1017,7 +1017,7 @@ test('subagent tool lists retained sessions as serialized DTOs with clear action
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
-    agent.start(session);
+    agent.attach(session);
     return completedRun(agent, 'The final answer from the child.');
   };
   const fakeRegistry = {
@@ -1102,7 +1102,7 @@ test('manager returns ordered per-run output and reports unknown agents and chil
     calls.push(agent.options.prompt);
     if (agent.options.prompt === 'three') throw new Error('child failed');
     const session = { messages: [], subscribe: () => () => {}, async prompt() {}, abort() {} };
-    agent.start(session);
+    agent.attach(session);
     return completedRun(agent, `response:${agent.options.prompt}`);
   };
 
@@ -1164,7 +1164,7 @@ test('manager returns skipped result and final group row for queued task whose s
   const runner = async (_ctx, agent) => {
     calls.push(agent.options.prompt);
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
-    agent.start(session);
+    agent.attach(session);
     if (agent.options.prompt === 'one') await firstCanFinish;
     return completedRun(agent, `done:${agent.options.prompt}`);
   };
@@ -1201,7 +1201,7 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
   const firstCanFinish = new Promise(resolve => { finishFirst = resolve; });
   const runner = async (_ctx, agent) => {
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
-    agent.start(session);
+    agent.attach(session);
     await firstCanFinish;
     return completedRun(agent, 'done');
   };
@@ -1233,7 +1233,7 @@ test('manager does not expose or resume non-resumable completed sessions', async
   const { completedRun, interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
   const runner = async (_ctx, agent) => {
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
-    agent.start(session);
+    agent.attach(session);
     return completedRun(agent, 'done');
   };
   const registry = { agents: new Map([
@@ -1259,7 +1259,7 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   const { interruptedRun } = await import(`../dist/run-agent.js?t=${unique()}`);
   const runner = async (_ctx, agent, signal) => {
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
-    agent.start(session);
+    agent.attach(session);
     await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
     return interruptedRun(agent, 'cancelled by parent');
   };
@@ -1307,12 +1307,12 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
       async prompt() {},
       abort() {},
     };
-    agent.start(session);
+    agent.attach(session);
     runEmit({ type: 'turn_end' });
     return completedRun(agent, `response:${agent.options.prompt}`);
   };
   const resumeRunner = async (_ctx, agent, prompt) => {
-    agent.resume(agent.status.session);
+    agent.attach(agent.status.session);
     resumeEmit = runEmit;
     resumeEmit({ type: 'turn_end' });
     return completedRun(agent, `follow:${prompt}`, prompt);
@@ -1354,13 +1354,13 @@ test('agent re-subscribes on resume so events during a resumed cycle update its 
   };
   const agent = new Agent('id', 'gid', { name: 'a', description: 'd', systemPrompt: '', source: 'project', resumable: true }, { agent: 'a', prompt: 'p' }, () => {});
 
-  agent.start(session);
+  agent.attach(session);
   emit({ type: 'turn_end' });
   assert.equal(agent.turns, 1);
   completedRun(agent, 'done');
   assert.equal(emit, undefined, 'subscription should be torn down on complete');
 
-  agent.resume(session);
+  agent.attach(session);
   assert.ok(emit, 'resume should re-subscribe');
   emit({ type: 'turn_end' });
   emit({ type: 'tool_execution_start', toolName: 'read' });
@@ -1376,7 +1376,7 @@ test('manager emits grouped progress rows in input order including unknown agent
   const { serializeAgent } = await import(`../dist/subagent-ui.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
-    agent.start(session);
+    agent.attach(session);
     return completedRun(agent, `done:${agent.options.prompt}`);
   };
   const registry = { agents: new Map([
@@ -1419,7 +1419,7 @@ test('manager emits live agent progress with the right transitions', async () =>
   let emit;
   const session = { messages: [], subscribe(handler) { emit = handler; return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
-    agent.start(session);
+    agent.attach(session);
     emit({ type: 'message_start' });
     emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'working through the delegated task' } });
     emit({ type: 'tool_execution_start', toolName: 'read' });
@@ -1453,7 +1453,7 @@ test('subagent tool returns one ordered final group for mixed success, unknown, 
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent) => {
-    agent.start(session);
+    agent.attach(session);
     if (agent.options.agent === 'flaky') throw new Error('flaky failed');
     return completedRun(agent, `done:${agent.options.prompt}`);
   };
@@ -1672,7 +1672,7 @@ test('manager throttles live message snippets while lifecycle updates are immedi
   let finish;
   const allowFinish = new Promise(resolve => { finish = resolve; });
   const runner = async (_ctx, agent) => {
-    agent.start(session);
+    agent.attach(session);
     emit({ type: 'message_start' });
     emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'one' } });
     emit({ type: 'message_start' });

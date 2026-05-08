@@ -57,18 +57,12 @@ export class Agent {
 
   get createdAt() { return this._createdAt }
 
-  start(session: AgentSession) {
-    if (this._status.kind !== "queued") {
-      throw new Error(`Cannot start an agent that is already ${this._status.kind}.`);
-    }
-    this._subscribe(session);
-    this._status = { kind: "running", session, startedAt: Date.now() };
-    this.onUpdate(this, "status");
-  }
-
-  resume(session: AgentSession) {
-    if (this._status.kind !== "done" || this._status.result.status !== "completed") {
-      throw new Error(`Cannot resume an agent that is ${this._describe()}.`);
+  attach(session: AgentSession) {
+    const canAttach =
+      this._status.kind === "queued" ||
+      (this._status.kind === "done" && this._status.result.status === "completed");
+    if (!canAttach) {
+      throw new Error(`Cannot attach a session to an agent that is ${this._describe()}.`);
     }
     this._subscribe(session);
     this._status = { kind: "running", session, startedAt: Date.now() };

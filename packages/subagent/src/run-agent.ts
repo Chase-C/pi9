@@ -131,7 +131,7 @@ export async function RunAgent(
     return skippedRun(agent);
   }
 
-  agent.start(session);
+  agent.attach(session);
   return PromptAgent(session, agent, agent.options.prompt, signal);
 }
 
@@ -141,12 +141,12 @@ export async function ResumeAgent(
   prompt: string,
   signal?: AbortSignal,
 ): Promise<AgentRunResult> {
-  if (agent.status.kind !== "done" || agent.status.result.status !== "completed" || !agent.status.session) {
-    throw new Error(`Cannot resume an agent that is not completed.`);
+  const session = agent.status.kind === "done" ? agent.status.session : undefined;
+  if (!session) {
+    throw new Error(`Cannot resume an agent without a retained session.`);
   }
 
-  const session = agent.status.session;
-  agent.resume(session);
+  agent.attach(session);
   return PromptAgent(session, agent, prompt, signal);
 }
 
