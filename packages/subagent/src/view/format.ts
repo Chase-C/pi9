@@ -93,12 +93,7 @@ export function formatSubagentSessionLine(agent: AgentView, now = Date.now()): s
 
 export function formatWidgetLines(agents: AgentView[], now = Date.now()): string[] {
   const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || a.config.resumable);
-  if (visible.length === 0) return [];
-  if (visible.length === 1) return [formatSubagentSessionLine(visible[0], now)];
-
-  const active = visible.filter(a => isActiveStatusKind(a.status.kind)).length;
-  const retained = visible.length - active;
-  return [`Subagents: ${active} active · ${retained} retained`];
+  return visible.map(agent => formatSubagentSessionLine(agent, now));
 }
 
 export function formatSubagentToolLines(

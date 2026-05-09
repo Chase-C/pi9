@@ -177,6 +177,36 @@ test('display lines and widget prefer label over agent name when present', async
   assert.doesNotMatch(formatSubagentSessionSummary(labeled), /helper/);
 });
 
+test('widget lists each visible session with labels and agent-name fallbacks', async () => {
+  const { formatWidgetLines } = await import(`../dist/view/format.js?t=${unique()}`);
+
+  const labeled = fakeAgent({
+    id: 's1',
+    config: { name: 'helper' },
+    status: { kind: 'running', startedAt: 1_000 },
+  });
+  labeled.label = 'researcher';
+  const unlabeled = fakeAgent({
+    id: 's2',
+    config: { name: 'writer' },
+    status: { kind: 'running', startedAt: 1_000 },
+  });
+  const hiddenCompleted = fakeAgent({
+    id: 's3',
+    config: { name: 'auditor', resumable: false },
+    status: { kind: 'completed', startedAt: 1_000, completedAt: 2_000, response: 'done' },
+  });
+
+  const widget = formatWidgetLines([labeled, unlabeled, hiddenCompleted], 5_000);
+
+  assert.equal(widget.length, 2);
+  assert.match(widget[0], /researcher/);
+  assert.doesNotMatch(widget[0], /helper/);
+  assert.match(widget[1], /writer/);
+  assert.doesNotMatch(widget.join('\n'), /auditor/);
+  assert.doesNotMatch(widget.join('\n'), /Subagents:/);
+});
+
 test('AgentManager.spawn carries the input label on unknown-agent synthetic results and views', async () => {
   const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
   const registry = { agents: new Map() };
