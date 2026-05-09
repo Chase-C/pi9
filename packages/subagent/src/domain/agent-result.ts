@@ -22,7 +22,7 @@ export interface FinalizeRunArgs {
 export function finalizeRun(agent: Agent, prompt: string, args: FinalizeRunArgs): AgentRunResult {
   if (agent.status.kind === "done") return agent.status.result;
 
-  const resumable = Boolean(agent.config.resumable && hasSessionAttached(agent));
+  const resumable = Boolean(agent.resumable && hasSessionAttached(agent));
   const result: AgentRunResult = {
     agent: agent.agentName,
     ...(agent.label !== undefined ? { label: agent.label } : {}),

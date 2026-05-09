@@ -75,7 +75,8 @@ export class Agent {
   get resolvedThinking() { return this.thinkingOverride ?? this.config.thinking }
 
   get resumable(): boolean {
-    if (!this.config.resumable) return false;
+    const base = this.options.resumable ?? this.config.resumable;
+    if (!base) return false;
     if (this._status.kind !== "done") return true;
     return Boolean(this._status.ran);
   }

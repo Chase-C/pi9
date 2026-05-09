@@ -7,6 +7,9 @@ export const TaskSchema = Type.Object({
   label: Type.Optional(Type.String({
     description: "Optional human-readable label shown in widgets and logs. When omitted, the agent's name is shown instead."
   })),
+  resumable: Type.Optional(Type.Boolean({
+    description: "Override the agent's default resumable setting for this task. Decision is one-way after completion: a non-resumable session is discarded immediately."
+  })),
   model: Type.Optional(Type.String({ description: "Model for this subagent" })),
   thinking: Type.Optional(Type.String({ description: "Thinking level for this subagent" })),
   cwd: Type.Optional(Type.String({ description: "Working directory for this subagent" })),
@@ -30,6 +33,7 @@ export interface AgentOptions {
   agent: string;
   prompt: string;
   label?: string;
+  resumable?: boolean;
   model?: string;
   thinking?: ModelThinkingLevel;
   cwd?: string;

@@ -96,12 +96,41 @@ test('Agent exposes the label from options and falls back to undefined when abse
   assert.equal(unlabeled.label, undefined);
 });
 
+test('Agent uses a per-task resumable false override before the config default', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', resumable: true };
+
+  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'work', resumable: false }, () => {});
+
+  assert.equal(agent.resumable, false);
+  assert.equal(agent.toView().config.resumable, false);
+});
+
+test('Agent uses a per-task resumable true override before the config default', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', resumable: false };
+
+  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'work', resumable: true }, () => {});
+
+  assert.equal(agent.resumable, true);
+  assert.equal(agent.toView().config.resumable, true);
+});
+
 test('subagent tool description mentions the optional label per-task field', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } });
 
   assert.match(registeredTool.description, /label/);
+});
+
+test('subagent tool description mentions the per-task resumable override is one-way', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  assert.match(registeredTool.description, /resumable/);
+  assert.match(registeredTool.description, /one-way at completion/);
 });
 
 test('subagent renderCall shows labels when any task has one and falls back to count otherwise', async () => {
@@ -184,6 +213,20 @@ test('AgentRunResult propagates label from agent through completed/error/interru
   assert.equal(Object.prototype.hasOwnProperty.call(result, 'label'), false);
 });
 
+test('AgentRunResult resumable reflects the per-task override', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', resumable: false };
+  const session = { subscribe() { return () => {}; }, abort() {} };
+
+  const agent = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', resumable: true }, () => {});
+  agent.attach(session);
+  const result = completedRun(agent, 'work', 'done');
+
+  assert.equal(result.resumable, true);
+  assert.equal(result.sessionId, 'id1');
+});
+
 test('Agent.toView includes label when set and omits it otherwise', async () => {
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
@@ -214,6 +257,16 @@ test('TaskSchema accepts an optional label string and rejects non-string values'
   assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work' }), true);
   assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', label: 'researcher' }), true);
   assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', label: 42 }), false);
+});
+
+test('TaskSchema accepts an optional resumable boolean and rejects non-boolean values', async () => {
+  const { TaskSchema } = await import(`../dist/schema.js?t=${unique()}`);
+  const { Check } = await import('typebox/value');
+
+  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work' }), true);
+  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', resumable: true }), true);
+  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', resumable: false }), true);
+  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', resumable: 'true' }), false);
 });
 
 test('subagent UI settings default to below editor when file is missing', async () => {
@@ -1426,6 +1479,30 @@ test('manager does not expose or resume non-resumable completed sessions', async
   );
 });
 
+test('manager discards a completed session when a task overrides resumable to false', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+
+  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { agent: 'chatty', prompt: 'work', resumable: false },
+  ]);
+
+  assert.equal(results[0].status, 'completed');
+  assert.equal(results[0].resumable, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
+  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.clear(), { cleared: 0 });
+});
+
 test('manager retains only resumable interrupted sessions inspect-clear only after parent cancellation settles', async () => {
   const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
   const { interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
@@ -1465,6 +1542,38 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   );
   assert.deepEqual(manager.clear(results[1].sessionId), { cleared: 1, sessionId: results[1].sessionId });
   assert.deepEqual(manager.sessions, []);
+});
+
+test('manager retains a completed session when a task overrides resumable to true', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => {
+    agent.attach(session);
+    return completedRun(agent, prompt, `done:${prompt}`);
+  };
+  const resumeRunner = async (_ctx, agent, prompt) => {
+    agent.attach(agent.status.ran.session);
+    return completedRun(agent, prompt, `follow:${prompt}`);
+  };
+  const registry = { agents: new Map([
+    ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner, resumeRunner);
+
+  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { agent: 'oneshot', prompt: 'work', resumable: true },
+  ]);
+
+  assert.equal(results[0].resumable, true);
+  assert.ok(results[0].sessionId);
+  assert.deepEqual(manager.sessions.map(session => [session.id, session.config.name, session.config.resumable]), [
+    [results[0].sessionId, 'oneshot', true],
+  ]);
+
+  const resumed = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, results[0].sessionId, 'again');
+  assert.equal(resumed.status, 'completed');
+  assert.equal(resumed.output, 'follow:again');
 });
 
 test('manager retains, resumes, lists, and clears completed resumable sessions', async () => {

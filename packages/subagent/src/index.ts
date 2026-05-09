@@ -97,7 +97,7 @@ Use this tool when a task benefits from separation from the main conversation: c
 Inputs:
 - action: one of "list", "start", "resume", or "clear".
 - action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions.
-- action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project, and an optional label shown in widgets and logs in place of the agent name.
+- action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project, an optional label shown in widgets and logs in place of the agent name, and an optional resumable override whose non-resumable decision is one-way at completion.
 - action="resume": send a follow-up prompt to a completed resumable subagent session by sessionId.
 - action="clear": clear one known session by sessionId, aborting it if still running, or clear all non-running retained sessions when sessionId is omitted.
 

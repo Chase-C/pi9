@@ -156,7 +156,7 @@ export class AgentManager {
       this._agents = this._agents.filter(agent => {
         if (agent.groupId !== groupId) return true;
         if (agent.status.kind !== "done") return true;
-        return Boolean(agent.config.resumable && agent.status.kind === "done" && agent.status.ran);
+        return agent.resumable;
       });
 
       return results;
@@ -173,7 +173,7 @@ export class AgentManager {
     prompt: string,
     onUpdate?: AgentManagerUpdateListener,
   ): Promise<AgentRunResult> {
-    const agent = this._agents.find(a => a.id === sessionId && a.config.resumable);
+    const agent = this._agents.find(a => a.id === sessionId && a.resumable);
     if (!agent) {
       throw new Error(`Unknown resumable subagent session: ${sessionId}`);
     }
