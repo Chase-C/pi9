@@ -65,6 +65,7 @@ export class Agent {
     this._resumableOverride = value;
     this.onUpdate(this, "status");
   }
+  get resumableOverride() { return this._resumableOverride }
   get modelOverride() { return this.options.model }
   get thinkingOverride() { return this.options.thinking }
   get cwd() { return this.options.cwd }

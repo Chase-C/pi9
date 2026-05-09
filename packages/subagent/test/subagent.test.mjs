@@ -1809,6 +1809,62 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
   assert.deepEqual(manager.sessions, []);
 });
 
+test('manager rejects duplicate resume tasks without corrupting the retained session', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => {
+    agent.attach(session);
+    return completedRun(agent, prompt, `old:${prompt}`);
+  };
+  let finishResume;
+  const resumeCanFinish = new Promise(resolve => { finishResume = resolve; });
+  const resumePrompts = [];
+  const resumeRunner = async (_ctx, agent, prompt) => {
+    resumePrompts.push(prompt);
+    if (prompt !== 'first follow-up') throw new Error(`duplicate resume runner invoked for ${prompt}`);
+    agent.attach(agent.status.ran.session);
+    await resumeCanFinish;
+    return completedRun(agent, prompt, `new:${prompt}`);
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 2, runner, resumeRunner);
+  const [first] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'initial prompt' },
+  ]);
+
+  const pending = manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [
+      { kind: 'resume', sessionId: first.sessionId, prompt: 'first follow-up' },
+      { kind: 'resume', sessionId: first.sessionId, prompt: 'duplicate follow-up' },
+    ],
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(resumePrompts, ['first follow-up']);
+  finishResume();
+
+  const [resumed, duplicate] = await pending;
+  assert.equal(resumed.status, 'completed');
+  assert.equal(resumed.output, 'new:first follow-up');
+  assert.equal(resumed.sessionId, first.sessionId);
+
+  assert.equal(duplicate.status, 'error');
+  assert.equal(duplicate.prompt, 'duplicate follow-up');
+  assert.equal(duplicate.resumed, true);
+  assert.equal(duplicate.sessionId, first.sessionId);
+  assert.match(duplicate.error, /already.*resum/i);
+
+  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.sessions[0].id, first.sessionId);
+  assert.equal(manager.sessions[0].status.kind, 'done');
+  assert.equal(manager.sessions[0].status.outcome, 'completed');
+  assert.equal(manager.sessions[0].status.snippet, 'new:first follow-up');
+});
+
 test('manager reports resume setup failure as the follow-up prompt error without returning prior completion', async () => {
   const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
   const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
@@ -1888,6 +1944,78 @@ test('manager keeps a retained completed session retryable after resume setup fa
   assert.equal(retried.status, 'completed');
   assert.equal(retried.output, 'new:successful follow-up');
   assert.equal(retried.prompt, 'successful follow-up');
+  assert.equal(retried.sessionId, first.sessionId);
+});
+
+test('manager reports queued cancelled resume as skipped follow-up and keeps retained session retryable', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  let finishBlocker;
+  const blockerCanFinish = new Promise(resolve => { finishBlocker = resolve; });
+  const makeSession = () => ({ messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} });
+  const runner = async (_ctx, agent, prompt) => {
+    agent.attach(makeSession());
+    if (prompt === 'blocker prompt') await blockerCanFinish;
+    return completedRun(agent, prompt, `output:${prompt}`);
+  };
+  const resumeRunner = async (_ctx, agent, prompt) => {
+    agent.attach(agent.status.ran.session);
+    return completedRun(agent, prompt, `resumed:${prompt}`);
+  };
+  const registry = { agents: new Map([
+    ['blocker', { name: 'blocker', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner, resumeRunner);
+  const [first] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'initial prompt' },
+  ]);
+
+  const controller = new AbortController();
+  const updates = [];
+  const pending = manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    controller.signal,
+    [
+      { kind: 'spawn', agent: 'blocker', prompt: 'blocker prompt' },
+      { kind: 'resume', sessionId: first.sessionId, prompt: 'follow-up prompt', resumable: false },
+    ],
+    update => updates.push(update),
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  controller.abort();
+  finishBlocker();
+  const results = await pending;
+  const resumed = results[1];
+
+  assert.equal(resumed.status, 'skipped');
+  assert.equal(resumed.prompt, 'follow-up prompt');
+  assert.equal(resumed.resumed, true);
+  assert.equal(resumed.output, undefined);
+  assert.equal(resumed.sessionId, first.sessionId);
+  assert.equal(resumed.resumable, true);
+  assert.notEqual(resumed.output, first.output);
+
+  const finalResumeView = updates.at(-1).sessions[1];
+  assert.equal(finalResumeView.resumed, true);
+  assert.equal(finalResumeView.status.kind, 'done');
+  assert.equal(finalResumeView.status.outcome, 'skipped');
+  assert.equal(finalResumeView.status.snippet, 'Agent skipped.');
+  assert.equal(finalResumeView.config.resumable, true);
+
+  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.sessions[0].id, first.sessionId);
+  assert.equal(manager.sessions[0].status.kind, 'done');
+  assert.equal(manager.sessions[0].status.outcome, 'completed');
+  assert.equal(manager.sessions[0].status.snippet, 'output:initial prompt');
+
+  const [retried] = await manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'resume', sessionId: first.sessionId, prompt: 'retry prompt' }],
+  );
+  assert.equal(retried.status, 'completed');
+  assert.equal(retried.output, 'resumed:retry prompt');
   assert.equal(retried.sessionId, first.sessionId);
 });
 

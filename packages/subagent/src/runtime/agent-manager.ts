@@ -41,6 +41,7 @@ export class AgentManager {
   private _agents = new Array<Agent>();
   private _queue: TaskQueue;
   private _activeBatches = new Map<string, SpawnBatch>();
+  private _reservedResumeSessionIds = new Set<string>();
 
   constructor(
     readonly registry: AgentRegistry,
@@ -160,13 +161,16 @@ export class AgentManager {
       else {
         const target = this._agents.find(a => a.id === task.sessionId && a.resumable);
         const isInvalidStatus = target && (target.status.kind !== "done" || target.status.result.status !== "completed");
-        if (!target || isInvalidStatus) {
+        const isReserved = target && this._reservedResumeSessionIds.has(target.id);
+        if (!target || isInvalidStatus || isReserved) {
           const error = !target
             ? `Unknown resumable subagent session: ${task.sessionId}`
-            : (() => {
-                const detail = target.status.kind === "done" ? target.status.result.status : target.status.kind;
-                return `Cannot resume subagent session ${task.sessionId} while it is ${detail}.`;
-              })();
+            : isReserved
+              ? `Cannot resume subagent session ${task.sessionId} while it is already being resumed.`
+              : (() => {
+                  const detail = target.status.kind === "done" ? target.status.result.status : target.status.kind;
+                  return `Cannot resume subagent session ${task.sessionId} while it is ${detail}.`;
+                })();
           const labelForView = task.label ?? target?.label;
           entries.push({
             view: {
@@ -202,12 +206,18 @@ export class AgentManager {
           });
         }
 
+        this._reservedResumeSessionIds.add(target.id);
         if (task.label !== undefined) target.setLabel(task.label);
-        if (task.resumable !== undefined) target.setResumableOverride(task.resumable);
         target.setGroupId(groupId);
-        entries.push({ agent: target, inputIndex, resumed: true });
+        const entry: BatchEntry = { agent: target, inputIndex, resumed: true };
+        entries.push(entry);
         touched.add(target);
-        return this._enqueueRun(ctx, signal, target, task.prompt, true);
+        return this._enqueueRun(ctx, signal, target, task.prompt, true, task.resumable, result => {
+          entry.view = this._syntheticResumeView(target, inputIndex, result);
+          this._emitBatchUpdate(groupId);
+        }).finally(() => {
+          this._reservedResumeSessionIds.delete(target.id);
+        });
       }
     });
 
@@ -249,15 +259,36 @@ export class AgentManager {
     agent: Agent,
     prompt: string,
     resume: boolean,
+    resumableOverride?: boolean,
+    onPreAttachResult?: (result: AgentRunResult) => void,
   ): Promise<AgentRunResult> {
     // For a resume, the agent enters this method already in `done(completed)`. Capture that so
     // we can detect a runner that throws before re-attaching, and surface the resume failure
     // without overwriting the prior completion.
     const originalStatus = resume ? agent.status : undefined;
-    const skipped = () => finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped.", resumed: resume });
+    const originalResumableOverride = resume ? agent.resumableOverride : undefined;
+    const preAttachResult = (status: "skipped" | "error", error: string): AgentRunResult => {
+      const result: AgentRunResult = {
+        agent: agent.agentName,
+        ...(agent.label !== undefined ? { label: agent.label } : {}),
+        prompt,
+        status,
+        error,
+        model: agent.modelOverride ?? agent.config.model,
+        resumable: agent.resumable,
+        resumed: true,
+        ...(agent.resumable ? { sessionId: agent.id } : {}),
+      };
+      onPreAttachResult?.(result);
+      return result;
+    };
+    const skipped = () => resume && agent.status.kind === "done"
+      ? preAttachResult("skipped", "Agent skipped.")
+      : finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped.", resumed: resume });
 
     return this._queue.enqueue(async () => {
       if (signal?.aborted) return skipped();
+      if (resume && resumableOverride !== undefined) agent.setResumableOverride(resumableOverride);
       const runner = resume ? this._resumeAgent : this._runAgent;
       try {
         const result = await runner(ctx, agent, prompt, signal);
@@ -265,17 +296,8 @@ export class AgentManager {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (resume && agent.status === originalStatus) {
-          return {
-            agent: agent.agentName,
-            ...(agent.label !== undefined ? { label: agent.label } : {}),
-            prompt,
-            status: "error",
-            error: message,
-            model: agent.modelOverride ?? agent.config.model,
-            resumable: agent.resumable,
-            resumed: true,
-            sessionId: agent.id,
-          };
+          agent.setResumableOverride(originalResumableOverride);
+          return preAttachResult("error", message);
         }
         if (agent.status.kind === "done") return agent.status.result;
         if (signal?.aborted) {
@@ -284,6 +306,21 @@ export class AgentManager {
         return errorRun(agent, prompt, message, resume);
       }
     });
+  }
+
+  private _syntheticResumeView(agent: Agent, inputIndex: number, result: AgentRunResult): AgentView {
+    const baseView = agent.toView(inputIndex);
+    return {
+      ...baseView,
+      config: { ...baseView.config, resumable: result.resumable },
+      status: {
+        kind: "done",
+        outcome: result.status,
+        completedAt: Date.now(),
+        ...(result.error ? { snippet: result.error } : {}),
+        ...(result.output ? { snippet: result.output } : {}),
+      },
+    };
   }
 
   private _flushPendingMessageUpdate(batch: SpawnBatch) {
@@ -306,7 +343,7 @@ export class AgentManager {
       .slice()
       .sort((a, b) => a.inputIndex - b.inputIndex)
       .map(({ agent, view, inputIndex, resumed }) => {
-        const baseView = agent ? agent.toView(inputIndex) : view!;
+        const baseView = view ?? (agent ? agent.toView(inputIndex) : view!);
         return { ...baseView, resumed: Boolean(resumed) };
       });
     const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
