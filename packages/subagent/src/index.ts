@@ -97,7 +97,7 @@ Use this tool when a task benefits from separation from the main conversation: c
 Inputs:
 - action: one of "list", "start", "resume", or "clear".
 - action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions.
-- action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project.
+- action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project, and an optional label shown in widgets and logs in place of the agent name.
 - action="resume": send a follow-up prompt to a completed resumable subagent session by sessionId.
 - action="clear": clear one known session by sessionId, aborting it if still running, or clear all non-running retained sessions when sessionId is omitted.
 
@@ -120,8 +120,18 @@ Execution notes:
     parameters: SubagentParams,
     renderCall(args: any, theme: any) {
       const action = typeof args?.action === "string" ? args.action : "pending";
-      const count = Array.isArray(args?.tasks) ? args.tasks.length : undefined;
-      const suffix = count ? ` · ${count} task${count === 1 ? "" : "s"}` : "";
+      const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
+      const labels = tasks
+        .map((task: any) => (typeof task?.label === "string" ? task.label : undefined))
+        .filter((label: string | undefined): label is string => Boolean(label));
+      let suffix = "";
+      if (labels.length > 0) {
+        const joined = labels.join(", ");
+        const truncated = joined.length > 60 ? `${joined.slice(0, 57)}...` : joined;
+        suffix = ` · ${truncated}`;
+      } else if (tasks.length) {
+        suffix = ` · ${tasks.length} task${tasks.length === 1 ? "" : "s"}`;
+      }
       const line = `subagent ${action}${suffix}`;
       return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
     },

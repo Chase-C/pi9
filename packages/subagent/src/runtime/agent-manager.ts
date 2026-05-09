@@ -107,6 +107,7 @@ export class AgentManager {
           view: {
             id: `${groupId}:task-${inputIndex}`,
             inputIndex,
+            ...(opts.label !== undefined ? { label: opts.label } : {}),
             createdAt: groupCreatedAt,
             config: {
               name: opts.agent,
@@ -134,6 +135,7 @@ export class AgentManager {
 
         return Promise.resolve({
           agent: opts.agent,
+          ...(opts.label !== undefined ? { label: opts.label } : {}),
           prompt: opts.prompt,
           status: "error",
           error,
@@ -195,6 +197,7 @@ export class AgentManager {
       if (agent.status === originalStatus) {
         return {
           agent: agent.agentName,
+          ...(agent.label !== undefined ? { label: agent.label } : {}),
           prompt,
           status: "error",
           error: message,

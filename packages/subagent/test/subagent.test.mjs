@@ -85,6 +85,137 @@ function fakeAgent({ config: configOverrides, options: optionsOverrides, status:
   };
 }
 
+test('Agent exposes the label from options and falls back to undefined when absent', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+
+  const labeled = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  assert.equal(labeled.label, 'researcher');
+
+  const unlabeled = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  assert.equal(unlabeled.label, undefined);
+});
+
+test('subagent tool description mentions the optional label per-task field', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  assert.match(registeredTool.description, /label/);
+});
+
+test('subagent renderCall shows labels when any task has one and falls back to count otherwise', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const labeled = registeredTool.renderCall({
+    action: 'start',
+    tasks: [{ agent: 'helper', prompt: 'p1', label: 'researcher' }, { agent: 'helper', prompt: 'p2' }],
+  }, undefined).text;
+  assert.match(labeled, /researcher/);
+  assert.doesNotMatch(labeled, /2 tasks/);
+
+  const unlabeled = registeredTool.renderCall({
+    action: 'start',
+    tasks: [{ agent: 'helper', prompt: 'p1' }, { agent: 'helper', prompt: 'p2' }],
+  }, undefined).text;
+  assert.match(unlabeled, /2 tasks/);
+});
+
+test('display lines and widget prefer label over agent name when present', async () => {
+  const { formatSubagentSessionLine, formatWidgetLines, formatSubagentSessionSummary } =
+    await import(`../dist/view/format.js?t=${unique()}`);
+
+  const labeled = fakeAgent({
+    config: { name: 'helper', resumable: true },
+    options: { prompt: 'work' },
+    status: { kind: 'running', startedAt: 1 },
+  });
+  labeled.label = 'researcher';
+
+  const unlabeled = fakeAgent({ config: { name: 'helper', resumable: true }, status: { kind: 'running', startedAt: 1 } });
+
+  assert.match(formatSubagentSessionLine(labeled, 5_000), /researcher/);
+  assert.doesNotMatch(formatSubagentSessionLine(labeled, 5_000), /helper/);
+  assert.match(formatSubagentSessionLine(unlabeled, 5_000), /helper/);
+
+  const widget = formatWidgetLines([labeled], 5_000).join('\n');
+  assert.match(widget, /researcher/);
+  assert.doesNotMatch(widget, /helper/);
+
+  assert.match(formatSubagentSessionSummary(labeled), /researcher/);
+  assert.doesNotMatch(formatSubagentSessionSummary(labeled), /helper/);
+});
+
+test('AgentManager.spawn carries the input label on unknown-agent synthetic results and views', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const registry = { agents: new Map() };
+  const manager = new AgentManager(registry, 2, async () => ({ status: 'completed' }));
+
+  let lastUpdate;
+  const results = await manager.spawn(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ agent: 'missing', prompt: 'do work', label: 'researcher' }],
+    update => { lastUpdate = update; },
+  );
+
+  assert.equal(results[0].label, 'researcher');
+  assert.equal(lastUpdate.sessions[0].label, 'researcher');
+});
+
+test('AgentRunResult propagates label from agent through completed/error/interrupted runs', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const { completedRun, errorRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+
+  const labeled = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  assert.equal(completedRun(labeled, 'work', 'done').label, 'researcher');
+
+  const labeledErr = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  assert.equal(errorRun(labeledErr, 'work', 'fail').label, 'researcher');
+
+  const labeledInt = new Agent('id3', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  assert.equal(interruptedRun(labeledInt, 'work', 'stop').label, 'researcher');
+
+  const unlabeled = new Agent('id4', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  const result = completedRun(unlabeled, 'work', 'done');
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'label'), false);
+});
+
+test('Agent.toView includes label when set and omits it otherwise', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+
+  const labeled = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  assert.equal(labeled.toView().label, 'researcher');
+
+  const unlabeled = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  assert.equal(Object.prototype.hasOwnProperty.call(unlabeled.toView(), 'label'), false);
+});
+
+test('Agent.setLabel updates the label and emits a status update', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+  const updates = [];
+  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'work' }, (_a, kind) => updates.push(kind));
+
+  agent.setLabel('renamed');
+
+  assert.equal(agent.label, 'renamed');
+  assert.deepEqual(updates, ['status']);
+});
+
+test('TaskSchema accepts an optional label string and rejects non-string values', async () => {
+  const { TaskSchema } = await import(`../dist/schema.js?t=${unique()}`);
+  const { Check } = await import('typebox/value');
+
+  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work' }), true);
+  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', label: 'researcher' }), true);
+  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', label: 42 }), false);
+});
+
 test('subagent UI settings default to below editor when file is missing', async () => {
   const root = await mkdtemp(join(tmpdir(), 'subagent-settings-default-'));
   const { SubagentUiSettingsStore } = await import(`../dist/ui/settings.js?t=${unique()}`);

@@ -3,6 +3,7 @@ import type { AgentRunStatus } from "./agent-view.js";
 
 export interface AgentRunResult {
   agent: string;
+  label?: string;
   prompt: string;
   status: AgentRunStatus;
   output?: string;
@@ -24,6 +25,7 @@ export function finalizeRun(agent: Agent, prompt: string, args: FinalizeRunArgs)
   const resumable = Boolean(agent.config.resumable && hasSessionAttached(agent));
   const result: AgentRunResult = {
     agent: agent.agentName,
+    ...(agent.label !== undefined ? { label: agent.label } : {}),
     prompt,
     model: agent.modelOverride ?? agent.config.model,
     resumable,

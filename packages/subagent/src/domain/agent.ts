@@ -21,6 +21,8 @@ export class Agent {
 
   private _status: AgentStatus = { kind: "queued" };
 
+  private _label: string | undefined;
+
   private _message: string = "";
 
   private _turns: number = 0;
@@ -41,9 +43,16 @@ export class Agent {
     readonly config: AgentConfig,
     private readonly options: AgentOptions,
     private readonly onUpdate: (agent: Agent, kind: AgentUpdateKind) => void,
-  ) { }
+  ) {
+    this._label = options.label;
+  }
 
   get agentName() { return this.options.agent }
+  get label() { return this._label }
+  setLabel(label: string | undefined) {
+    this._label = label;
+    this.onUpdate(this, "status");
+  }
   get modelOverride() { return this.options.model }
   get thinkingOverride() { return this.options.thinking }
   get cwd() { return this.options.cwd }
@@ -75,6 +84,7 @@ export class Agent {
     return {
       id: this.id,
       ...(inputIndex !== undefined ? { inputIndex } : {}),
+      ...(this._label !== undefined ? { label: this._label } : {}),
       createdAt: this._createdAt,
       config: {
         name: this.agentName,

@@ -45,7 +45,7 @@ export function formatSubagentSessionSummary(agent: AgentView): string {
     agent.config.resumable ? "resumable" : undefined,
     `session:${agent.id}`,
   ].filter(Boolean);
-  return [agent.config.name, effectiveStatus(agent.status), ...badges].join(" · ");
+  return [agent.label ?? agent.config.name, effectiveStatus(agent.status), ...badges].join(" · ");
 }
 
 export function formatSubagentSessionInspect(agent: AgentView, now = Date.now()): string[] {
@@ -152,7 +152,7 @@ function formatViewSessionLine(row: AgentView, now: number): string {
   const status = effectiveStatus(row.status);
   const toolUses = getToolUseCount(row);
   const parts = [
-    row.config.name,
+    row.label ?? row.config.name,
     status,
     `${row.activity.turns} turn${row.activity.turns === 1 ? "" : "s"}`,
     `${toolUses} tool${toolUses === 1 ? "" : "s"}`,

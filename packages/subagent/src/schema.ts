@@ -4,6 +4,9 @@ import { Type, type Static } from "typebox";
 export const TaskSchema = Type.Object({
   agent: Type.String({ description: "Agent runtime name from ~/.pi/agent/agents or the nearest .pi/agents under the current cwd" }),
   prompt: Type.String({ description: "The task to delegate to the subagent" }),
+  label: Type.Optional(Type.String({
+    description: "Optional human-readable label shown in widgets and logs. When omitted, the agent's name is shown instead."
+  })),
   model: Type.Optional(Type.String({ description: "Model for this subagent" })),
   thinking: Type.Optional(Type.String({ description: "Thinking level for this subagent" })),
   cwd: Type.Optional(Type.String({ description: "Working directory for this subagent" })),
@@ -26,6 +29,7 @@ export type SubagentParams = Static<typeof SubagentParams>;
 export interface AgentOptions {
   agent: string;
   prompt: string;
+  label?: string;
   model?: string;
   thinking?: ModelThinkingLevel;
   cwd?: string;

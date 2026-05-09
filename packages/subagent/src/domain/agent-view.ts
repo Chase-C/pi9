@@ -46,6 +46,7 @@ export interface AgentActivityView {
 export interface AgentView {
   readonly id: string;
   readonly inputIndex?: number;
+  readonly label?: string;
   readonly createdAt: number;
   readonly config: AgentViewConfig;
   readonly status: AgentViewStatus;
