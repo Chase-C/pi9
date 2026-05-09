@@ -184,14 +184,14 @@ test('subagent renderCall shows labels when any task has one and falls back to c
   subagentExtension({ registerTool: tool => { registeredTool = tool; } });
 
   const labeled = registeredTool.renderCall({
-    action: 'start',
+    action: 'run',
     tasks: [{ agent: 'helper', prompt: 'p1', label: 'researcher' }, { agent: 'helper', prompt: 'p2' }],
   }, undefined).text;
   assert.match(labeled, /researcher/);
   assert.doesNotMatch(labeled, /2 tasks/);
 
   const unlabeled = registeredTool.renderCall({
-    action: 'start',
+    action: 'run',
     tasks: [{ agent: 'helper', prompt: 'p1' }, { agent: 'helper', prompt: 'p2' }],
   }, undefined).text;
   assert.match(unlabeled, /2 tasks/);
@@ -252,16 +252,16 @@ test('widget lists each visible session with labels and agent-name fallbacks', a
   assert.doesNotMatch(widget.join('\n'), /Subagents:/);
 });
 
-test('AgentManager.spawn carries the input label on unknown-agent synthetic results and views', async () => {
+test('AgentManager.run carries the input label on unknown-agent synthetic results and views', async () => {
   const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
   const registry = { agents: new Map() };
   const manager = new AgentManager(registry, 2, async () => ({ status: 'completed' }));
 
   let lastUpdate;
-  const results = await manager.spawn(
+  const results = await manager.run(
     { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
     undefined,
-    [{ agent: 'missing', prompt: 'do work', label: 'researcher' }],
+    [{ kind: 'spawn', agent: 'missing', prompt: 'do work', label: 'researcher' }],
     update => { lastUpdate = update; },
   );
 
@@ -481,7 +481,7 @@ test('tool execution validates task count and reports available agents', async (
   subagentExtension({ registerTool: tool => { registeredTool = tool; } });
 
   const result = await registeredTool.execute('tool-call', {
-    action: 'start',
+    action: 'run',
     tasks: Array.from({ length: 9 }, (_, i) => ({ agent: 'helper', prompt: `task ${i}` })),
   }, undefined, undefined, { cwd: root });
 
@@ -579,14 +579,22 @@ test('tool list action with an unrecognized type reports skills as a valid choic
   assert.match(result.content[0].text, /skills/);
 });
 
-test('tool resume action returns full output only once in JSON details', async () => {
+test('tool run action returns full output only once in JSON details for a resume task', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fullOutput = `resume output ${'q'.repeat(1500)} tail`;
   let registeredTool;
   const fakeManager = {
     sessions: [],
-    resume(_ctx, _signal, sessionId, prompt) {
-      return Promise.resolve({ agent: 'helper', prompt, status: 'completed', output: fullOutput, sessionId, resumable: true });
+    run(_ctx, _signal, tasks) {
+      return Promise.resolve(tasks.map(task => ({
+        agent: 'helper',
+        prompt: task.prompt,
+        status: 'completed',
+        output: fullOutput,
+        sessionId: task.sessionId ?? 's1',
+        resumable: true,
+        resumed: task.kind === 'resume',
+      })));
     },
   };
 
@@ -600,15 +608,13 @@ test('tool resume action returns full output only once in JSON details', async (
   });
 
   const result = await registeredTool.execute('tool-call', {
-    action: 'resume',
-    sessionId: 's1',
-    prompt: 'follow up',
+    action: 'run',
+    tasks: [{ sessionId: 's1', prompt: 'follow up' }],
   }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
 
   assert.equal(result.isError, false);
-  assert.equal(result.details.result.output, fullOutput);
+  assert.equal(result.details.results[0].output, fullOutput);
   assert.equal((result.content[0].text.match(new RegExp(fullOutput, 'g')) ?? []).length, 1);
-  assert.equal(result.details.message?.details?.result?.output, undefined);
 });
 
 test('/subagents settings exposes placement values, saves changes, and updates active widget', async () => {
@@ -1107,7 +1113,7 @@ test('/subagents command handles resume when editor UI is unavailable', async ()
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeManager = {
     sessions: [fakeAgent({ config: { resumable: true } })],
-    resume() { throw new Error('resume should not start'); },
+    run() { throw new Error('run should not start'); },
   };
   const commands = new Map();
   subagentExtension({
@@ -1135,10 +1141,10 @@ test('/subagents command handles resume when editor UI is unavailable', async ()
 
 test('/subagents command handles resume when editor UI throws', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  let resumeCalls = 0;
+  let runCalls = 0;
   const fakeManager = {
     sessions: [fakeAgent({ config: { resumable: true } })],
-    resume() { resumeCalls += 1; throw new Error('resume should not start'); },
+    run() { runCalls += 1; throw new Error('run should not start'); },
   };
   const commands = new Map();
   subagentExtension({
@@ -1162,7 +1168,7 @@ test('/subagents command handles resume when editor UI throws', async () => {
     },
   }));
 
-  assert.equal(resumeCalls, 0);
+  assert.equal(runCalls, 0);
   assert.match(notifications.at(-1)[0], /editor|UI/i);
   assert.match(notifications.at(-1)[0], /editor unavailable/);
   assert.equal(notifications.at(-1)[1], 'warning');
@@ -1174,8 +1180,8 @@ test('subagents command resume loader constrains long rendered lines to the TUI 
   const longAgent = `helper-${'z'.repeat(120)}`;
   const fakeManager = {
     sessions: [fakeAgent({ config: { name: longAgent, resumable: true } })],
-    resume(_ctx, _signal, sessionId, prompt) {
-      return Promise.resolve({ agent: longAgent, prompt, status: 'completed', output: 'done', sessionId, resumable: true });
+    run(_ctx, _signal, tasks) {
+      return Promise.resolve(tasks.map(task => ({ agent: longAgent, prompt: task.prompt, status: 'completed', output: 'done', sessionId: task.sessionId, resumable: true, resumed: true })));
     },
   };
   const commands = new Map();
@@ -1228,9 +1234,10 @@ test('subagents command resumes completed retained session with editor loader an
   const resumeCalls = [];
   const fakeManager = {
     sessions: [fakeAgent({ config: { resumable: true } })],
-    resume(_ctx, signal, sessionId, prompt) {
-      resumeCalls.push({ signal, sessionId, prompt });
-      return Promise.resolve({ agent: 'helper', prompt, status: 'completed', output: `Result ${'z'.repeat(1000)}`, sessionId, resumable: true });
+    run(_ctx, signal, tasks) {
+      const task = tasks[0];
+      resumeCalls.push({ signal, sessionId: task.sessionId, prompt: task.prompt });
+      return Promise.resolve([{ agent: 'helper', prompt: task.prompt, status: 'completed', output: `Result ${'z'.repeat(1000)}`, sessionId: task.sessionId, resumable: true, resumed: true }]);
     },
   };
   const commands = new Map();
@@ -1292,10 +1299,11 @@ test('subagents command resume cancellation aborts the child and reports interru
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeManager = {
     sessions: [fakeAgent({ config: { resumable: true } })],
-    resume(_ctx, signal, sessionId, prompt) {
+    run(_ctx, signal, tasks) {
+      const task = tasks[0];
       return new Promise(resolve => {
         signal.addEventListener('abort', () => {
-          resolve({ agent: 'helper', prompt, status: 'interrupted', error: 'Agent interrupted.', sessionId, resumable: true });
+          resolve([{ agent: 'helper', prompt: task.prompt, status: 'interrupted', error: 'Agent interrupted.', sessionId: task.sessionId, resumable: true, resumed: true }]);
         }, { once: true });
       });
     },
@@ -1414,7 +1422,7 @@ test('subagent tool lists retained sessions as serialized DTOs with clear action
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: manager });
 
   await registeredTool.execute('tool-call', {
-    action: 'start',
+    action: 'run',
     tasks: [{ agent: 'chatty', prompt: 'Remember this work.' }],
   }, undefined, undefined, { cwd: process.cwd(), hasUI: false, modelRegistry: { getAll: () => [] } });
 
@@ -1466,7 +1474,7 @@ test('tool execution returns structured failed run for unknown agents', async ()
   subagentExtension({ registerTool: tool => { registeredTool = tool; } });
 
   const result = await registeredTool.execute('tool-call', {
-    action: 'start',
+    action: 'run',
     tasks: [{ agent: 'missing', prompt: 'do work' }],
   }, undefined, undefined, { cwd: root });
 
@@ -1493,10 +1501,10 @@ test('manager returns ordered per-run output and reports unknown agents and chil
     ['bad', { name: 'bad', description: 'd', systemPrompt: 's', source: 'project' }],
   ]) };
   const manager = new AgentManager(registry, 2, runner);
-  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'good', prompt: 'one', model: 'm1' },
-    { agent: 'missing', prompt: 'two' },
-    { agent: 'bad', prompt: 'three' },
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'good', prompt: 'one', model: 'm1' },
+    { kind: 'spawn', agent: 'missing', prompt: 'two' },
+    { kind: 'spawn', agent: 'bad', prompt: 'three' },
   ]);
 
   assert.deepEqual(calls.sort(), ['one', 'three']);
@@ -1521,8 +1529,8 @@ test('manager marks runner rejections before start as terminal error in grouped 
   const manager = new AgentManager(registry, 1, runner);
   const updates = [];
 
-  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'helper', prompt: 'work' },
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'helper', prompt: 'work' },
   ], update => updates.push(update));
 
   assert.equal(results[0].status, 'error');
@@ -1556,9 +1564,9 @@ test('manager returns skipped result and final group row for queued task whose s
   const controller = new AbortController();
   const updates = [];
 
-  const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
-    { agent: 'helper', prompt: 'one' },
-    { agent: 'helper', prompt: 'two' },
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+    { kind: 'spawn', agent: 'helper', prompt: 'one' },
+    { kind: 'spawn', agent: 'helper', prompt: 'two' },
   ], update => updates.push(update));
 
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -1593,9 +1601,9 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
   const manager = new AgentManager(registry, 1, runner);
   const controller = new AbortController();
 
-  const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
-    { agent: 'blocker', prompt: 'one' },
-    { agent: 'chatty', prompt: 'two' },
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+    { kind: 'spawn', agent: 'blocker', prompt: 'one' },
+    { kind: 'spawn', agent: 'chatty', prompt: 'two' },
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
   controller.abort();
@@ -1611,7 +1619,7 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
 
 test('manager does not expose or resume non-resumable completed sessions', async () => {
   const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const runner = async (_ctx, agent, prompt) => {
     const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
     agent.attach(session);
@@ -1622,17 +1630,21 @@ test('manager does not expose or resume non-resumable completed sessions', async
   ]) };
   const manager = new AgentManager(registry, 1, runner);
 
-  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'oneshot', prompt: 'work' },
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'oneshot', prompt: 'work' },
   ]);
 
   assert.equal(results[0].status, 'completed');
   assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
   assert.deepEqual(manager.sessions, []);
-  await assert.rejects(
-    manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, 'anything', 'follow up'),
-    /Unknown resumable subagent session/,
+  const [retried] = await manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'resume', sessionId: 'anything', prompt: 'follow up' }],
   );
+  assert.equal(retried.status, 'error');
+  assert.equal(retried.resumed, true);
+  assert.match(retried.error, /Unknown resumable subagent session/);
 });
 
 test('manager discards a completed session when a task overrides resumable to false', async () => {
@@ -1648,8 +1660,8 @@ test('manager discards a completed session when a task overrides resumable to fa
   ]) };
   const manager = new AgentManager(registry, 1, runner);
 
-  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'chatty', prompt: 'work', resumable: false },
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'work', resumable: false },
   ]);
 
   assert.equal(results[0].status, 'completed');
@@ -1675,9 +1687,9 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   const manager = new AgentManager(registry, 2, runner);
   const controller = new AbortController();
 
-  const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
-    { agent: 'oneshot', prompt: 'one' },
-    { agent: 'chatty', prompt: 'two' },
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, controller.signal, [
+    { kind: 'spawn', agent: 'oneshot', prompt: 'one' },
+    { kind: 'spawn', agent: 'chatty', prompt: 'two' },
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
   controller.abort();
@@ -1692,10 +1704,14 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   assert.equal(sessions[0].status.kind, 'done');
   assert.equal(sessions[0].status.outcome, 'interrupted');
 
-  await assert.rejects(
-    manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, results[1].sessionId, 'follow up'),
-    /while it is interrupted/,
+  const [retried] = await manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'resume', sessionId: results[1].sessionId, prompt: 'follow up' }],
   );
+  assert.equal(retried.status, 'error');
+  assert.equal(retried.resumed, true);
+  assert.match(retried.error, /while it is interrupted/);
   assert.deepEqual(manager.clear(results[1].sessionId), { cleared: 1, sessionId: results[1].sessionId });
   assert.deepEqual(manager.sessions, []);
 });
@@ -1717,8 +1733,8 @@ test('manager retains a completed session when a task overrides resumable to tru
   ]) };
   const manager = new AgentManager(registry, 1, runner, resumeRunner);
 
-  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'oneshot', prompt: 'work', resumable: true },
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'oneshot', prompt: 'work', resumable: true },
   ]);
 
   assert.equal(results[0].resumable, true);
@@ -1727,7 +1743,11 @@ test('manager retains a completed session when a task overrides resumable to tru
     [results[0].sessionId, 'oneshot', true],
   ]);
 
-  const resumed = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, results[0].sessionId, 'again');
+  const [resumed] = await manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'resume', sessionId: results[0].sessionId, prompt: 'again' }],
+  );
   assert.equal(resumed.status, 'completed');
   assert.equal(resumed.output, 'follow:again');
 });
@@ -1759,8 +1779,8 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
     ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
   ]) };
   const manager = new AgentManager(registry, 2, runner, resumeRunner);
-  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'chatty', prompt: 'one' },
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'one' },
   ]);
 
   assert.equal(results[0].status, 'completed');
@@ -1769,7 +1789,11 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
 
   assert.deepEqual(manager.sessions.map(session => session.id), [results[0].sessionId]);
 
-  const resumed = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, results[0].sessionId, 'two');
+  const [resumed] = await manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'resume', sessionId: results[0].sessionId, prompt: 'two' }],
+  );
   assert.equal(resumed.status, 'completed');
   assert.equal(resumed.output, 'follow:two');
   assert.equal(resumed.prompt, 'two');
@@ -1800,11 +1824,15 @@ test('manager reports resume setup failure as the follow-up prompt error without
     ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
   ]) };
   const manager = new AgentManager(registry, 1, runner, resumeRunner);
-  const [first] = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'chatty', prompt: 'initial prompt' },
+  const [first] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'initial prompt' },
   ]);
 
-  const resumed = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, first.sessionId, 'follow-up prompt');
+  const [resumed] = await manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'resume', sessionId: first.sessionId, prompt: 'follow-up prompt' }],
+  );
 
   assert.equal(resumed.status, 'error');
   assert.equal(resumed.prompt, 'follow-up prompt');
@@ -1835,11 +1863,15 @@ test('manager keeps a retained completed session retryable after resume setup fa
     ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
   ]) };
   const manager = new AgentManager(registry, 1, runner, resumeRunner);
-  const [first] = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'chatty', prompt: 'initial prompt' },
+  const [first] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'initial prompt' },
   ]);
 
-  const failed = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, first.sessionId, 'failed follow-up');
+  const [failed] = await manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'resume', sessionId: first.sessionId, prompt: 'failed follow-up' }],
+  );
   assert.equal(failed.status, 'error');
 
   assert.equal(manager.sessions.length, 1);
@@ -1848,7 +1880,11 @@ test('manager keeps a retained completed session retryable after resume setup fa
   assert.equal(manager.sessions[0].status.outcome, 'completed');
   assert.equal(manager.sessions[0].status.snippet, 'old:initial prompt');
 
-  const retried = await manager.resume({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, first.sessionId, 'successful follow-up');
+  const [retried] = await manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'resume', sessionId: first.sessionId, prompt: 'successful follow-up' }],
+  );
   assert.equal(retried.status, 'completed');
   assert.equal(retried.output, 'new:successful follow-up');
   assert.equal(retried.prompt, 'successful follow-up');
@@ -1921,10 +1957,10 @@ test('manager emits grouped progress rows in input order including unknown agent
   const manager = new AgentManager(registry, 2, runner);
   const snapshots = [];
 
-  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'helper', prompt: 'one' },
-    { agent: 'missing', prompt: 'two' },
-    { agent: 'helper', prompt: 'three' },
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'helper', prompt: 'one' },
+    { kind: 'spawn', agent: 'missing', prompt: 'two' },
+    { kind: 'spawn', agent: 'helper', prompt: 'three' },
   ], update => snapshots.push(update.sessions));
 
   assert.deepEqual(results.map(result => result.agent), ['helper', 'missing', 'helper']);
@@ -1960,8 +1996,8 @@ test('manager emits live agent progress with the right transitions', async () =>
   const manager = new AgentManager(registry, 1, runner);
   const snapshots = [];
 
-  const results = await manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'helper', prompt: 'Summarize the project status for the parent agent.' },
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'helper', prompt: 'Summarize the project status for the parent agent.' },
   ], update => snapshots.push(update.sessions[0]));
 
   assert.equal(results[0].status, 'completed');
@@ -1999,7 +2035,7 @@ test('subagent tool returns one ordered final group for mixed success, unknown, 
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: manager });
 
   const result = await registeredTool.execute('tool-call', {
-    action: 'start',
+    action: 'run',
     tasks: [
       { agent: 'helper', prompt: 'first' },
       { agent: 'missing', prompt: 'second' },
@@ -2028,9 +2064,9 @@ test('subagent tool notifies invalid settings fallback without breaking executio
   };
   const fakeManager = {
     sessions: [],
-    async spawn(_ctx, _signal, _options, onUpdate) {
+    async run(_ctx, _signal, _tasks, onUpdate) {
       onUpdate({ sessions: [runningAgent], active: true });
-      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
+      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false, resumed: false }];
     },
   };
   let registeredTool;
@@ -2043,7 +2079,7 @@ test('subagent tool notifies invalid settings fallback without breaking executio
   const notifications = [];
   const widgets = [];
   const result = await registeredTool.execute('tool-call', {
-    action: 'start',
+    action: 'run',
     tasks: [{ agent: 'helper', prompt: 'work' }],
   }, undefined, undefined, {
     cwd: process.cwd(),
@@ -2068,9 +2104,9 @@ test('subagent tool falls back to default UI settings when settings load rejects
   };
   const fakeManager = {
     sessions: [],
-    async spawn(_ctx, _signal, _options, onUpdate) {
+    async run(_ctx, _signal, _tasks, onUpdate) {
       onUpdate({ sessions: [runningAgent], active: true });
-      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
+      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false, resumed: false }];
     },
   };
   let registeredTool;
@@ -2083,7 +2119,7 @@ test('subagent tool falls back to default UI settings when settings load rejects
   const notifications = [];
   const widgets = [];
   const result = await registeredTool.execute('tool-call', {
-    action: 'start',
+    action: 'run',
     tasks: [{ agent: 'helper', prompt: 'work' }],
   }, undefined, undefined, {
     cwd: process.cwd(),
@@ -2108,9 +2144,9 @@ test('subagent tool keeps subagent surfaces working but hides widget when placem
   };
   const fakeManager = {
     sessions: [runningAgent],
-    async spawn(_ctx, _signal, _options, onUpdate) {
+    async run(_ctx, _signal, _tasks, onUpdate) {
       onUpdate({ sessions: [runningAgent], active: true });
-      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
+      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false, resumed: false }];
     },
   };
   const fakeSettingsStore = {
@@ -2125,7 +2161,7 @@ test('subagent tool keeps subagent surfaces working but hides widget when placem
 
   const widgets = [];
   const result = await registeredTool.execute('tool-call', {
-    action: 'start',
+    action: 'run',
     tasks: [{ agent: 'helper', prompt: 'work' }],
   }, undefined, undefined, {
     cwd: process.cwd(),
@@ -2156,9 +2192,9 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
   };
   const fakeManager = {
     sessions: [],
-    async spawn(_ctx, _signal, _options, onUpdate) {
+    async run(_ctx, _signal, _tasks, onUpdate) {
       onUpdate({ sessions: [runningAgent], active: true });
-      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false }];
+      return [{ agent: 'helper', prompt: 'work', status: 'completed', output: 'done', sessionId: 's1', resumable: false, resumed: false }];
     },
   };
   const fakeSettingsStore = {
@@ -2171,7 +2207,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
   const partials = [];
   const widgets = [];
   const result = await registeredTool.execute('tool-call', {
-    action: 'start',
+    action: 'run',
     tasks: [{ agent: 'helper', prompt: 'work' }],
   }, undefined, partial => partials.push(partial), {
     cwd: process.cwd(),
@@ -2212,8 +2248,8 @@ test('manager throttles live message snippets while lifecycle updates are immedi
   };
   const manager = new AgentManager(registry, 1, runner);
   const snapshots = [];
-  const pending = manager.spawn({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
-    { agent: 'helper', prompt: 'work' },
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'helper', prompt: 'work' },
   ], update => snapshots.push(update.sessions[0]));
 
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -2801,4 +2837,404 @@ test('run-agent leaves the system prompt unchanged when no skills are requested'
 
   assert.equal(loaderOptions.systemPromptOverride(), 'BASE PROMPT');
   assert.equal(loadSkillsCalls, 0, 'should not load skills when none are requested');
+});
+
+test('parseTask classifies a task carrying sessionId as a resume request and preserves resume fields', async () => {
+  const { parseTask } = await import(`../dist/schema.js?t=${unique()}`);
+
+  const parsed = parseTask({
+    sessionId: 'sess-1',
+    prompt: 'follow up',
+    label: 'phase 2',
+    resumable: false,
+  });
+
+  assert.deepEqual(parsed, {
+    kind: 'resume',
+    sessionId: 'sess-1',
+    prompt: 'follow up',
+    label: 'phase 2',
+    resumable: false,
+  });
+});
+
+test('parseTask rejects a task that carries both agent and sessionId', async () => {
+  const { parseTask } = await import(`../dist/schema.js?t=${unique()}`);
+  const result = parseTask({ agent: 'helper', sessionId: 's', prompt: 'p' });
+  assert.ok('error' in result);
+  assert.match(result.error, /both agent and sessionId/);
+});
+
+test('parseTask rejects a task that carries neither agent nor sessionId', async () => {
+  const { parseTask } = await import(`../dist/schema.js?t=${unique()}`);
+  const result = parseTask({ prompt: 'p' });
+  assert.ok('error' in result);
+  assert.match(result.error, /exactly one of agent .* or sessionId/);
+});
+
+test('parseTask rejects a resume task that carries spawn-only fields', async () => {
+  const { parseTask } = await import(`../dist/schema.js?t=${unique()}`);
+  for (const field of ['model', 'thinking', 'cwd', 'skills']) {
+    const value = field === 'skills' ? ['tdd'] : 'whatever';
+    const result = parseTask({ sessionId: 's', prompt: 'p', [field]: value });
+    assert.ok('error' in result, `expected ${field} to be rejected`);
+    assert.match(result.error, new RegExp(`rejects ${field}`));
+  }
+});
+
+test('parseTask rejects an empty prompt and unstructured tasks', async () => {
+  const { parseTask } = await import(`../dist/schema.js?t=${unique()}`);
+  const empty = parseTask({ agent: 'helper', prompt: '   ' });
+  assert.ok('error' in empty);
+  assert.match(empty.error, /non-empty/);
+
+  const noObj = parseTask(null);
+  assert.ok('error' in noObj);
+  assert.match(noObj.error, /must be an object/);
+});
+
+test('parseTask rejects skills entries that are not non-empty strings', async () => {
+  const { parseTask } = await import(`../dist/schema.js?t=${unique()}`);
+  const result = parseTask({ agent: 'helper', prompt: 'p', skills: ['', 'x'] });
+  assert.ok('error' in result);
+  assert.match(result.error, /skills entries/);
+
+  const notArray = parseTask({ agent: 'helper', prompt: 'p', skills: 'tdd' });
+  assert.ok('error' in notArray);
+  assert.match(notArray.error, /skills must be an array/);
+});
+
+test('parseTask classifies a task carrying agent as a spawn request and preserves spawn fields', async () => {
+  const { parseTask } = await import(`../dist/schema.js?t=${unique()}`);
+
+  const parsed = parseTask({
+    agent: 'helper',
+    prompt: 'do work',
+    label: 'researcher',
+    skills: ['tdd'],
+    resumable: true,
+    model: 'm',
+    thinking: 'high',
+    cwd: 'sub',
+  });
+
+  assert.deepEqual(parsed, {
+    kind: 'spawn',
+    agent: 'helper',
+    prompt: 'do work',
+    label: 'researcher',
+    skills: ['tdd'],
+    resumable: true,
+    model: 'm',
+    thinking: 'high',
+    cwd: 'sub',
+  });
+});
+
+test('manager.run handles a mixed batch of one spawn and one resume in input order with resumed flags set correctly', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => {
+    agent.attach(session);
+    return completedRun(agent, prompt, `spawn:${prompt}`);
+  };
+  const resumeRunner = async (_ctx, agent, prompt) => {
+    agent.attach(agent.status.ran.session);
+    return completedRun(agent, prompt, `resume:${prompt}`, true);
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+    ['fresh', { name: 'fresh', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 2, runner, resumeRunner);
+
+  const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'first' },
+  ]);
+  assert.equal(seed.status, 'completed');
+  assert.equal(seed.resumed, false);
+  assert.ok(seed.sessionId);
+
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'fresh', prompt: 'two' },
+    { kind: 'resume', sessionId: seed.sessionId, prompt: 'three' },
+  ]);
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].agent, 'fresh');
+  assert.equal(results[0].resumed, false);
+  assert.equal(results[0].output, 'spawn:two');
+  assert.equal(results[1].agent, 'chatty');
+  assert.equal(results[1].resumed, true);
+  assert.equal(results[1].output, 'resume:three');
+  assert.equal(results[1].sessionId, seed.sessionId);
+});
+
+test('manager.run resume task with a new label overwrites the agent stored label', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => { agent.attach(session); return completedRun(agent, prompt, 'first'); };
+  const resumeRunner = async (_ctx, agent, prompt) => { agent.attach(agent.status.ran.session); return completedRun(agent, prompt, 'second', true); };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner, resumeRunner);
+
+  const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'one', label: 'phase-1' },
+  ]);
+
+  await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'resume', sessionId: seed.sessionId, prompt: 'two', label: 'phase-2' },
+  ]);
+
+  assert.equal(manager.sessions[0].label, 'phase-2');
+});
+
+test('manager.run resume task with resumable: false discards the session after completion', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => { agent.attach(session); return completedRun(agent, prompt, 'first'); };
+  const resumeRunner = async (_ctx, agent, prompt) => { agent.attach(agent.status.ran.session); return completedRun(agent, prompt, 'second', true); };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner, resumeRunner);
+
+  const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'one' },
+  ]);
+  assert.equal(manager.sessions.length, 1);
+
+  const [resumed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'resume', sessionId: seed.sessionId, prompt: 'two', resumable: false },
+  ]);
+  assert.equal(resumed.status, 'completed');
+  assert.equal(resumed.resumable, false);
+  assert.deepEqual(manager.sessions, []);
+});
+
+test('manager.run resume task targeting an unknown sessionId yields a per-task error and does not block siblings', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => { agent.attach(session); return completedRun(agent, prompt, `done:${prompt}`); };
+  const registry = { agents: new Map([
+    ['fresh', { name: 'fresh', description: 'd', systemPrompt: 's', source: 'project' }],
+  ]) };
+  const manager = new AgentManager(registry, 2, runner);
+
+  const results = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'resume', sessionId: 'nonexistent', prompt: 'ghost' },
+    { kind: 'spawn', agent: 'fresh', prompt: 'real' },
+  ]);
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].status, 'error');
+  assert.equal(results[0].resumed, true);
+  assert.match(results[0].error, /Unknown resumable subagent session: nonexistent/);
+  assert.equal(results[1].status, 'completed');
+  assert.equal(results[1].resumed, false);
+  assert.equal(results[1].output, 'done:real');
+});
+
+test('subagent action=run dispatches a spawn-only batch through agentManager.run with resumed flags', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let runCalls = 0;
+  let receivedTasks;
+  const fakeManager = {
+    sessions: [],
+    async run(_ctx, _signal, tasks) {
+      runCalls += 1;
+      receivedTasks = tasks;
+      return tasks.map(task => ({
+        agent: task.agent ?? '(unknown)',
+        prompt: task.prompt,
+        status: 'completed',
+        output: `done:${task.prompt}`,
+        resumable: false,
+        resumed: task.kind === 'resume',
+      }));
+    },
+  };
+  const fakeRegistry = {
+    agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
+    async reload() {},
+    summarizeAgent() { return 'helper (project)'; },
+  };
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: fakeRegistry,
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: 'belowEditor' } }; } },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [{ agent: 'helper', prompt: 'work' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(runCalls, 1);
+  assert.equal(receivedTasks.length, 1);
+  assert.equal(receivedTasks[0].kind, 'spawn');
+  assert.equal(receivedTasks[0].agent, 'helper');
+  assert.equal(result.isError, false);
+  assert.equal(result.details.results[0].output, 'done:work');
+  assert.equal(result.details.results[0].resumed, false);
+});
+
+test('subagent action=run accepts a heterogeneous batch of spawn and resume tasks', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let receivedTasks;
+  const fakeManager = {
+    sessions: [],
+    async run(_ctx, _signal, tasks) {
+      receivedTasks = tasks;
+      return tasks.map(task => ({
+        agent: task.kind === 'spawn' ? task.agent : 'chatty',
+        prompt: task.prompt,
+        status: 'completed',
+        output: `done:${task.prompt}`,
+        resumable: task.kind === 'resume',
+        resumed: task.kind === 'resume',
+        ...(task.kind === 'resume' ? { sessionId: task.sessionId } : {}),
+      }));
+    },
+  };
+  const fakeRegistry = {
+    agents: new Map([['helper', { name: 'helper', description: 'Helps', source: 'project' }]]),
+    async reload() {},
+    summarizeAgent() { return 'helper (project)'; },
+  };
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: fakeRegistry,
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: 'belowEditor' } }; } },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [
+      { agent: 'helper', prompt: 'one' },
+      { sessionId: 's-1', prompt: 'two' },
+    ],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, false);
+  assert.deepEqual(receivedTasks.map(t => t.kind), ['spawn', 'resume']);
+  assert.equal(receivedTasks[1].sessionId, 's-1');
+  assert.equal(result.details.results[0].resumed, false);
+  assert.equal(result.details.results[1].resumed, true);
+});
+
+test('subagent action=run rejects a task carrying both agent and sessionId at parse time', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let runCalls = 0;
+  const fakeManager = {
+    sessions: [],
+    async run() { runCalls += 1; return []; },
+  };
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: 'belowEditor' } }; } },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [{ agent: 'helper', sessionId: 's', prompt: 'p' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.equal(runCalls, 0);
+  assert.match(result.content[0].text, /both agent and sessionId/);
+});
+
+test('subagent action=resume is no longer recognized', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: { sessions: [] },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'resume',
+    sessionId: 'whatever',
+    prompt: 'follow up',
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Unknown action/);
+  assert.match(result.content[0].text, /run/);
+});
+
+test('subagent tool description documents the unified run surface and mutual exclusion', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  assert.match(registeredTool.description, /action="run"/);
+  assert.doesNotMatch(registeredTool.description, /action="start"/);
+  assert.doesNotMatch(registeredTool.description, /action="resume"/);
+  assert.match(registeredTool.description, /sessionId/);
+  assert.match(registeredTool.description, /agent/);
+  assert.match(registeredTool.description, /mutually exclusive|reject/i);
+});
+
+test('manager.run partial updates flag resumed entries on the rendered AgentView', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => { agent.attach(session); return completedRun(agent, prompt, 'first'); };
+  const resumeRunner = async (_ctx, agent, prompt) => { agent.attach(agent.status.ran.session); return completedRun(agent, prompt, 'second', true); };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+    ['fresh', { name: 'fresh', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 2, runner, resumeRunner);
+
+  const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'one' },
+  ]);
+
+  const updates = [];
+  await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'fresh', prompt: 'two' },
+    { kind: 'resume', sessionId: seed.sessionId, prompt: 'three' },
+  ], update => updates.push(update));
+
+  const final = updates.at(-1);
+  assert.equal(final.sessions.length, 2);
+  assert.equal(final.sessions[0].resumed, false);
+  assert.equal(final.sessions[1].resumed, true);
+});
+
+test('formatSubagentSessionLine adds a resumed marker when the session was resumed', async () => {
+  const { formatSubagentSessionLine } = await import(`../dist/view/format.js?t=${unique()}`);
+  const resumed = fakeAgent({
+    config: { resumable: true },
+    status: { kind: 'completed', startedAt: 1000, completedAt: 2000, response: 'done' },
+  });
+  resumed.resumed = true;
+  const line = formatSubagentSessionLine(resumed, 4000);
+  assert.match(line, /resumed/);
+});
+
+test('completedRun marks the result as not resumed by default', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'p' }, () => {});
+  agent.attach(session);
+
+  const result = completedRun(agent, 'p', 'done');
+  assert.equal(result.resumed, false);
 });

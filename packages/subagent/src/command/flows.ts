@@ -49,10 +49,10 @@ export async function resumeSessionFromCommand(
         done(value);
       };
 
-      agentManager.resume(ctx, loader.signal, action.sessionId, prompt, update => {
+      agentManager.run(ctx, loader.signal, [{ kind: "resume", sessionId: action.sessionId, prompt }], update => {
         updateSubagentWidget(ctx, update.sessions, uiSettings);
       }).then(
-        result => finish({ result }),
+        results => finish({ result: results[0] }),
         error => finish({ error }),
       );
 

@@ -11,12 +11,14 @@ export interface AgentRunResult {
   model?: string;
   sessionId?: string;
   resumable: boolean;
+  resumed: boolean;
 }
 
 export interface FinalizeRunArgs {
   status: AgentRunStatus;
   output?: string;
   error?: string;
+  resumed?: boolean;
 }
 
 export function finalizeRun(agent: Agent, prompt: string, args: FinalizeRunArgs): AgentRunResult {
@@ -29,6 +31,7 @@ export function finalizeRun(agent: Agent, prompt: string, args: FinalizeRunArgs)
     prompt,
     model: agent.modelOverride ?? agent.config.model,
     resumable,
+    resumed: Boolean(args.resumed),
     status: args.status,
     ...(resumable ? { sessionId: agent.id } : {}),
     ...(args.output !== undefined ? { output: args.output } : {}),
@@ -38,16 +41,16 @@ export function finalizeRun(agent: Agent, prompt: string, args: FinalizeRunArgs)
   return result;
 }
 
-export function completedRun(agent: Agent, prompt: string, output: string): AgentRunResult {
-  return finalizeRun(agent, prompt, { status: "completed", output });
+export function completedRun(agent: Agent, prompt: string, output: string, resumed = false): AgentRunResult {
+  return finalizeRun(agent, prompt, { status: "completed", output, resumed });
 }
 
-export function errorRun(agent: Agent, prompt: string, error: string): AgentRunResult {
-  return finalizeRun(agent, prompt, { status: "error", error });
+export function errorRun(agent: Agent, prompt: string, error: string, resumed = false): AgentRunResult {
+  return finalizeRun(agent, prompt, { status: "error", error, resumed });
 }
 
-export function interruptedRun(agent: Agent, prompt: string, error: string): AgentRunResult {
-  return finalizeRun(agent, prompt, { status: "interrupted", error });
+export function interruptedRun(agent: Agent, prompt: string, error: string, resumed = false): AgentRunResult {
+  return finalizeRun(agent, prompt, { status: "interrupted", error, resumed });
 }
 
 function hasSessionAttached(agent: Agent): boolean {

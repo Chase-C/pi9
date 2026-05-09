@@ -148,6 +148,7 @@ function formatViewSessionLine(row: AgentView, now: number): string {
   const toolUses = getToolUseCount(row);
   const parts = [
     row.label ?? row.config.name,
+    ...(row.resumed ? ["resumed"] : []),
     status,
     `${row.activity.turns} turn${row.activity.turns === 1 ? "" : "s"}`,
     `${toolUses} tool${toolUses === 1 ? "" : "s"}`,

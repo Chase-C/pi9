@@ -11,7 +11,7 @@ import {
 } from "../domain/agent-result.js";
 import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
-import type { AgentOptions } from "../schema.js";
+import type { AgentOptions, TaskRequest } from "../schema.js";
 import { activeOrRetainedAgents } from "../view/view-helpers.js";
 import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
@@ -26,6 +26,7 @@ interface BatchEntry {
   agent?: Agent;
   view?: AgentView;
   inputIndex: number;
+  resumed?: boolean;
 }
 
 interface SpawnBatch {
@@ -82,12 +83,12 @@ export class AgentManager {
     return { cleared };
   }
 
-  async spawn(
+  async run(
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
-    options: Array<AgentOptions>,
+    tasks: TaskRequest[],
     onUpdate?: AgentManagerUpdateListener,
-  ): Promise<Array<AgentRunResult>> {
+  ): Promise<AgentRunResult[]> {
     const groupId = randomUUID();
     const groupCreatedAt = Date.now();
     const available = () => Array
@@ -99,117 +100,129 @@ export class AgentManager {
     const batch: SpawnBatch = { groupId, entries, listener: onUpdate };
     this._activeBatches.set(groupId, batch);
 
-    const resultPromises = options.map((opts, inputIndex) => {
-      const config = this.registry.agents.get(opts.agent);
-      if (!config) {
-        const error = `Unknown agent: ${opts.agent}. Available agents:\n${available()}`;
-        entries.push({
-          view: {
-            id: `${groupId}:task-${inputIndex}`,
+    const touched = new Set<Agent>();
+
+    const resultPromises = tasks.map((task, inputIndex) => {
+      if (task.kind === "spawn") {
+        const config = this.registry.agents.get(task.agent);
+        if (!config) {
+          const error = `Unknown agent: ${task.agent}. Available agents:\n${available()}`;
+          entries.push({
+            view: {
+              id: `${groupId}:task-${inputIndex}`,
+              inputIndex,
+              ...(task.label !== undefined ? { label: task.label } : {}),
+              createdAt: groupCreatedAt,
+              config: {
+                name: task.agent,
+                model: task.model,
+                thinking: task.thinking,
+                source: undefined,
+                tools: undefined,
+                resumable: false,
+              },
+              status: { kind: "done", outcome: "error", completedAt: groupCreatedAt, snippet: error },
+              activity: { turns: 0, compactions: 0, toolHistory: [] },
+              usage: undefined,
+            },
             inputIndex,
-            ...(opts.label !== undefined ? { label: opts.label } : {}),
-            createdAt: groupCreatedAt,
-            config: {
-              name: opts.agent,
-              model: opts.model,
-              thinking: opts.thinking,
-              source: undefined,
-              tools: undefined,
-              resumable: false,
-            },
-            status: {
-              kind: "done",
-              outcome: "error",
-              completedAt: groupCreatedAt,
-              snippet: error,
-            },
-            activity: {
-              turns: 0,
-              compactions: 0,
-              toolHistory: [],
-            },
-            usage: undefined,
-          },
-          inputIndex,
-        });
+          });
+          return Promise.resolve<AgentRunResult>({
+            agent: task.agent,
+            ...(task.label !== undefined ? { label: task.label } : {}),
+            prompt: task.prompt,
+            status: "error",
+            error,
+            model: task.model,
+            resumable: false,
+            resumed: false,
+          });
+        }
 
-        return Promise.resolve({
-          agent: opts.agent,
-          ...(opts.label !== undefined ? { label: opts.label } : {}),
-          prompt: opts.prompt,
-          status: "error",
-          error,
-          model: opts.model,
-          resumable: false,
-        } as AgentRunResult);
+        const opts: AgentOptions = {
+          agent: task.agent,
+          prompt: task.prompt,
+          ...(task.label !== undefined ? { label: task.label } : {}),
+          ...(task.skills !== undefined ? { skills: task.skills } : {}),
+          ...(task.resumable !== undefined ? { resumable: task.resumable } : {}),
+          ...(task.model !== undefined ? { model: task.model } : {}),
+          ...(task.thinking !== undefined ? { thinking: task.thinking } : {}),
+          ...(task.cwd !== undefined ? { cwd: task.cwd } : {}),
+        };
+
+        const agent = new Agent(randomUUID(), groupId, config, opts, this._agentUpdate.bind(this));
+        entries.push({ agent, inputIndex });
+        this._agents.push(agent);
+        touched.add(agent);
+        return this._enqueueRun(ctx, signal, agent, task.prompt, false);
       }
+      // task.kind === "resume"
+      else {
+        const target = this._agents.find(a => a.id === task.sessionId && a.resumable);
+        const isInvalidStatus = target && (target.status.kind !== "done" || target.status.result.status !== "completed");
+        if (!target || isInvalidStatus) {
+          const error = !target
+            ? `Unknown resumable subagent session: ${task.sessionId}`
+            : (() => {
+                const detail = target.status.kind === "done" ? target.status.result.status : target.status.kind;
+                return `Cannot resume subagent session ${task.sessionId} while it is ${detail}.`;
+              })();
+          const labelForView = task.label ?? target?.label;
+          entries.push({
+            view: {
+              id: target ? target.id : `${groupId}:resume-${inputIndex}`,
+              inputIndex,
+              ...(labelForView !== undefined ? { label: labelForView } : {}),
+              createdAt: groupCreatedAt,
+              config: target?.toView().config ?? {
+                name: "(unknown)",
+                source: undefined,
+                model: undefined,
+                thinking: undefined,
+                tools: undefined,
+                resumable: false,
+              },
+              status: { kind: "done", outcome: "error", completedAt: groupCreatedAt, snippet: error },
+              activity: { turns: 0, compactions: 0, toolHistory: [] },
+              usage: undefined,
+            },
+            inputIndex,
+            resumed: true,
+          });
+          return Promise.resolve<AgentRunResult>({
+            agent: target?.agentName ?? "(unknown)",
+            ...(labelForView !== undefined ? { label: labelForView } : {}),
+            prompt: task.prompt,
+            status: "error",
+            error,
+            model: target ? (target.modelOverride ?? target.config.model) : undefined,
+            resumable: target?.resumable ?? false,
+            resumed: true,
+            ...(target ? { sessionId: target.id } : {}),
+          });
+        }
 
-      const agent = new Agent(randomUUID(), groupId, config, opts, this._agentUpdate.bind(this));
-      entries.push({ agent, inputIndex });
-      this._agents.push(agent);
-      return this._enqueue(ctx, signal, agent, opts.prompt);
+        if (task.label !== undefined) target.setLabel(task.label);
+        if (task.resumable !== undefined) target.setResumableOverride(task.resumable);
+        target.setGroupId(groupId);
+        entries.push({ agent: target, inputIndex, resumed: true });
+        touched.add(target);
+        return this._enqueueRun(ctx, signal, target, task.prompt, true);
+      }
     });
 
     this._emitBatchUpdate(groupId);
     try {
       const results = await Promise.all(resultPromises);
       this._agents = this._agents.filter(agent => {
-        if (agent.groupId !== groupId) return true;
+        if (!touched.has(agent)) return true;
         if (agent.status.kind !== "done") return true;
         return agent.resumable;
       });
-
       return results;
     } finally {
       this._flushPendingMessageUpdate(batch);
       this._activeBatches.delete(groupId);
-    }
-  }
-
-  async resume(
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    sessionId: string,
-    prompt: string,
-    onUpdate?: AgentManagerUpdateListener,
-  ): Promise<AgentRunResult> {
-    const agent = this._agents.find(a => a.id === sessionId && a.resumable);
-    if (!agent) {
-      throw new Error(`Unknown resumable subagent session: ${sessionId}`);
-    }
-    if (agent.status.kind !== "done" || agent.status.result.status !== "completed") {
-      const detail = agent.status.kind === "done" ? agent.status.result.status : agent.status.kind;
-      throw new Error(`Cannot resume subagent session ${sessionId} while it is ${detail}.`);
-    }
-
-    const batch: SpawnBatch = {
-      groupId: agent.groupId,
-      entries: [{ agent, inputIndex: 0 }],
-      listener: onUpdate,
-    };
-    this._activeBatches.set(agent.groupId, batch);
-
-    const originalStatus = agent.status;
-    try {
-      return await this._resumeAgent(ctx, agent, prompt, signal);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (agent.status === originalStatus) {
-        return {
-          agent: agent.agentName,
-          ...(agent.label !== undefined ? { label: agent.label } : {}),
-          prompt,
-          status: "error",
-          error: message,
-          model: agent.modelOverride ?? agent.config.model,
-          resumable: agent.resumable,
-          sessionId: agent.id,
-        };
-      }
-      return errorRun(agent, prompt, message);
-    } finally {
-      this._flushPendingMessageUpdate(batch);
-      this._activeBatches.delete(agent.groupId);
     }
   }
 
@@ -230,24 +243,45 @@ export class AgentManager {
     this._emitBatchUpdate(agent.groupId);
   }
 
-  private _enqueue(
+  private _enqueueRun(
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
     agent: Agent,
     prompt: string,
+    resume: boolean,
   ): Promise<AgentRunResult> {
-    const skipped = () => finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped." });
+    // For a resume, the agent enters this method already in `done(completed)`. Capture that so
+    // we can detect a runner that throws before re-attaching, and surface the resume failure
+    // without overwriting the prior completion.
+    const originalStatus = resume ? agent.status : undefined;
+    const skipped = () => finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped.", resumed: resume });
+
     return this._queue.enqueue(async () => {
       if (signal?.aborted) return skipped();
+      const runner = resume ? this._resumeAgent : this._runAgent;
       try {
-        return await this._runAgent(ctx, agent, prompt, signal);
+        const result = await runner(ctx, agent, prompt, signal);
+        return resume && !result.resumed ? { ...result, resumed: true } : result;
       } catch (error) {
-        if (agent.status.kind === "done") return agent.status.result;
         const message = error instanceof Error ? error.message : String(error);
-        if (signal?.aborted) {
-          return agent.status.kind === "queued" ? skipped() : interruptedRun(agent, prompt, message);
+        if (resume && agent.status === originalStatus) {
+          return {
+            agent: agent.agentName,
+            ...(agent.label !== undefined ? { label: agent.label } : {}),
+            prompt,
+            status: "error",
+            error: message,
+            model: agent.modelOverride ?? agent.config.model,
+            resumable: agent.resumable,
+            resumed: true,
+            sessionId: agent.id,
+          };
         }
-        return errorRun(agent, prompt, message);
+        if (agent.status.kind === "done") return agent.status.result;
+        if (signal?.aborted) {
+          return agent.status.kind === "queued" ? skipped() : interruptedRun(agent, prompt, message, resume);
+        }
+        return errorRun(agent, prompt, message, resume);
       }
     });
   }
@@ -271,7 +305,10 @@ export class AgentManager {
     const sessions = batch.entries
       .slice()
       .sort((a, b) => a.inputIndex - b.inputIndex)
-      .map(({ agent, view, inputIndex }) => agent ? agent.toView(inputIndex) : view!);
+      .map(({ agent, view, inputIndex, resumed }) => {
+        const baseView = agent ? agent.toView(inputIndex) : view!;
+        return { ...baseView, resumed: Boolean(resumed) };
+      });
     const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
     batch.listener({ sessions, active });
   }

@@ -21,7 +21,11 @@ export class Agent {
 
   private _status: AgentStatus = { kind: "queued" };
 
+  private _groupId: string;
+
   private _label: string | undefined;
+
+  private _resumableOverride: boolean | undefined;
 
   private _message: string = "";
 
@@ -39,18 +43,26 @@ export class Agent {
 
   constructor(
     readonly id: string,
-    readonly groupId: string,
+    groupId: string,
     readonly config: AgentConfig,
     private readonly options: AgentOptions,
     private readonly onUpdate: (agent: Agent, kind: AgentUpdateKind) => void,
   ) {
+    this._groupId = groupId;
     this._label = options.label;
+    this._resumableOverride = options.resumable;
   }
 
   get agentName() { return this.options.agent }
+  get groupId() { return this._groupId }
+  setGroupId(groupId: string) { this._groupId = groupId; }
   get label() { return this._label }
   setLabel(label: string | undefined) {
     this._label = label;
+    this.onUpdate(this, "status");
+  }
+  setResumableOverride(value: boolean | undefined) {
+    this._resumableOverride = value;
     this.onUpdate(this, "status");
   }
   get modelOverride() { return this.options.model }
@@ -76,7 +88,7 @@ export class Agent {
   get resolvedThinking() { return this.thinkingOverride ?? this.config.thinking }
 
   get resumable(): boolean {
-    const base = this.options.resumable ?? this.config.resumable;
+    const base = this._resumableOverride ?? this.config.resumable;
     if (!base) return false;
     if (this._status.kind !== "done") return true;
     return Boolean(this._status.ran);

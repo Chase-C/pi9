@@ -4,7 +4,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { AgentRegistry } from "./domain/agent-registry.js";
 import type { SubagentBatchUpdate } from "./domain/agent-view.js";
 import { AgentManager } from "./runtime/agent-manager.js";
-import { AgentOptions, SubagentParams } from "./schema.js";
+import { parseTask, SubagentParams, type TaskRequest } from "./schema.js";
 import { SubagentUiSettingsStore } from "./ui/settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./ui/widget.js";
 import { registerSubagentsCommand } from "./command/register.js";
@@ -23,15 +23,10 @@ interface SubagentExtensionDependencies {
   settingsStore?: Pick<SubagentUiSettingsStore, "load" | "save">;
 }
 
-function validateTasks(tasks: SubagentParams["tasks"] | undefined) {
-  if (!Array.isArray(tasks)) return "Provide a tasks array for action=start.";
+function validateTaskCount(tasks: SubagentParams["tasks"] | undefined) {
+  if (!Array.isArray(tasks)) return "Provide a tasks array for action=run.";
   if (tasks.length === 0) return "Provide at least one task.";
   if (tasks.length > MAX_TASKS) return `Too many tasks (${tasks.length}). Max is ${MAX_TASKS}.`;
-  return undefined;
-}
-
-function validateString(value: unknown, name: string) {
-  if (typeof value !== "string" || value.trim() === "") return `Provide a non-empty ${name}.`;
   return undefined;
 }
 
@@ -95,10 +90,9 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 Use this tool when a task benefits from separation from the main conversation: code research, planning, design review, bug investigation, test analysis, or a focused implementation handoff. Each subagent receives only its configured system prompt plus the prompt you provide, so prompts must be self-contained.
 
 Inputs:
-- action: one of "list", "start", "resume", or "clear".
+- action: one of "list", "run", or "clear".
 - action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions, or type="skills" to list skills available to inject. Listed agents include any default skills declared in their frontmatter alongside their tools.
-- action="start": run one to eight independent delegations. Each task requires an agent name and prompt, and can include cwd to run from a different directory relative to the current project, an optional label shown in widgets and logs in place of the agent name, an optional resumable override whose non-resumable decision is one-way at completion, and an optional skills array of skill names to inject into the subagent's system prompt (an unknown skill is a hard error; an explicitly named skill bypasses its disable-model-invocation flag). A per-task skills array fully replaces the agent's default skills declared in frontmatter — there is no merge — and an explicit empty array opts out of those defaults.
-- action="resume": send a follow-up prompt to a completed resumable subagent session by sessionId.
+- action="run": run one to eight subagent tasks. Each task is either a new spawn (carrying agent) or a resume of a completed resumable session (carrying sessionId). agent and sessionId are mutually exclusive — providing both is rejected. A spawn task takes agent and prompt and may include cwd, model, thinking, label, resumable, and skills. A resume task takes sessionId and prompt and may re-assert label and resumable; it rejects model, thinking, cwd, agent, and skills. The optional label is a human-readable identifier shown in widgets and logs in place of the agent name; on resume it overwrites the stored label. The optional resumable override applies one-way at completion: a resumable: false decision discards the session immediately, regardless of the agent's frontmatter default. The optional skills array (spawn only) injects named skills into the subagent's system prompt — unknown skill names are a hard error and an explicit skill bypasses its disable-model-invocation flag. Per-task skills fully replace the agent's default skills declared in frontmatter (no merge); an explicit empty array opts out of those defaults.
 - action="clear": clear one known session by sessionId, aborting it if still running, or clear all non-running retained sessions when sessionId is omitted.
 
 Prompt guidance:
@@ -107,11 +101,11 @@ Prompt guidance:
 - Prefer one writer task at a time. Parallel tasks should be independent and should not edit the same files unless the user explicitly requested that workflow.
 
 Execution notes:
-- Up to four start tasks run concurrently; final results preserve input order.
-- start and resume are blocking and return structured results when the child prompt completes.
-- Results include a resumable flag and include sessionId when a resumable child has or had a child AgentSession; only completed resumable sessions can be resumed.
+- Up to four run tasks execute concurrently; final results preserve input order.
+- run is blocking and returns structured results when each child prompt completes. Each result carries a resumed flag distinguishing fresh spawns from resumed sessions.
+- Results include a resumable flag and a sessionId when a resumable child has or had a child AgentSession; only completed resumable sessions can be resumed.
 - Resumable sessions live for the current Pi process lifetime or until cleared.
-- Unknown agents and failed subagents are reported as failed runs and do not prevent other scheduled start tasks from completing.
+- Unknown agents and unknown sessionIds surface as per-task error results (with resumed set accordingly) and do not prevent sibling tasks from running.
 `,
     promptSnippet: "Delegate focused tasks to specialized subagents with separate context windows",
     promptGuidelines: [
@@ -147,7 +141,7 @@ Execution notes:
       await agentRegistry.reload(ctx.cwd);
 
       if (!params.action) {
-        return errorResult(`Provide an action: "list", "start", "resume", or "clear".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
+        return errorResult(`Provide an action: "list", "run", or "clear".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
       }
 
       if (params.action === "list") {
@@ -165,17 +159,26 @@ Execution notes:
         return errorResult('For action=list, type must be "agents", "sessions", or "skills".');
       }
 
-      if (params.action === "start") {
-        const validationError = validateTasks(params.tasks);
-
-        if (validationError) {
-          return errorResult(`${validationError}\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
+      if (params.action === "run") {
+        const countError = validateTaskCount(params.tasks);
+        if (countError) {
+          return errorResult(`${countError}\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
         }
 
-        const options = params.tasks as Array<AgentOptions>;
+        const parsed: TaskRequest[] = [];
+        const errors: string[] = [];
+        (params.tasks ?? []).forEach((raw, index) => {
+          const result = parseTask(raw);
+          if ("error" in result) errors.push(`task[${index}]: ${result.error}`);
+          else parsed.push(result);
+        });
+        if (errors.length > 0) {
+          return errorResult(errors.join("\n"), { errors });
+        }
+
         const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
         let lastGroup: ReturnType<typeof serializeGroup> | undefined;
-        const results = await agentManager.spawn(ctx, signal, options, update => {
+        const results = await agentManager.run(ctx, signal, parsed, update => {
           const partial = partialToolResult(update);
           lastGroup = partial.details.group;
           onUpdate?.(partial);
@@ -184,28 +187,6 @@ Execution notes:
         updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
         const isError = results.some(result => result.status !== "completed");
         return toolResult({ results, group: lastGroup }, isError);
-      }
-
-      if (params.action === "resume") {
-        const sessionIdError = validateString(params.sessionId, "sessionId");
-        if (sessionIdError) return errorResult(sessionIdError);
-        const promptError = validateString(params.prompt, "prompt");
-        if (promptError) return errorResult(promptError);
-
-        try {
-          const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
-          let lastGroup: ReturnType<typeof serializeGroup> | undefined;
-          const result = await agentManager.resume(ctx, signal, params.sessionId!, params.prompt!, update => {
-            const partial = partialToolResult(update);
-            lastGroup = partial.details.group;
-            onUpdate?.(partial);
-            updateSubagentWidget(ctx, update.sessions, uiSettings);
-          });
-          updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
-          return toolResult({ result, group: lastGroup }, result.status !== "completed");
-        } catch (error) {
-          return errorResult(error instanceof Error ? error.message : String(error), { sessionId: params.sessionId });
-        }
       }
 
       if (params.action === "clear") {
@@ -220,7 +201,7 @@ Execution notes:
         return toolResult(result);
       }
 
-      return errorResult(`Unknown action: ${String(params.action)}. Use "list", "start", "resume", or "clear".`);
+      return errorResult(`Unknown action: ${String(params.action)}. Use "list", "run", or "clear".`);
     },
   }));
 }
