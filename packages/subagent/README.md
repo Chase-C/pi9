@@ -23,12 +23,13 @@ After edits, run the package build and reload Pi if needed.
 
 ## What the extension provides
 
-- A `subagent` tool with `list`, `start`, `resume`, and `clear` actions.
+- A `subagent` tool with `list`, `run`, and `clear` actions. `run` accepts a mix of spawn and resume tasks in one call.
 - Live progress updates while child agents are queued or running.
 - Custom collapsed/expanded rendering for `subagent` tool results.
 - An auto-hidden widget for active and retained resumable sessions.
 - A `/subagents` command with Sessions, Agents, and Settings views.
-- Process-lifetime resumable sessions for agents that opt in with `resumable: true`.
+- Process-lifetime resumable sessions for agents that opt in with `resumable: true`, with a per-task one-way override at completion.
+- Per-task injection of named skills into a child's system prompt, with agent-level defaults declared in frontmatter.
 
 ## Agent discovery
 
@@ -49,6 +50,7 @@ name: scout
 description: Read-only codebase reconnaissance
 model: anthropic/claude-sonnet-4
 tools: read, bash
+skills: codesearch
 resumable: true
 ---
 
@@ -64,63 +66,99 @@ Supported frontmatter:
 | `model` | no | Model for this agent, resolved through Pi's model registry. Use `provider/model` or an unambiguous model id. |
 | `thinking` | no | Thinking level for the child session. |
 | `tools` | no | Comma-separated tool allowlist passed to the child SDK session. |
-| `resumable` | no | Boolean. Defaults to `false`. When `true`, sessions with a child `AgentSession` can be retained for this Pi process lifetime. Only completed resumable sessions can be resumed. |
+| `skills` | no | Comma-separated default skill names injected into this agent's system prompt. Per-task `skills` fully replaces this list (no merge); use `none` or omit the field to declare none. |
+| `resumable` | no | Boolean. Defaults to `false`. When `true`, sessions with a child `AgentSession` can be retained for this Pi process lifetime. Only completed resumable sessions can be resumed. A per-task `resumable: false` override discards the session immediately at completion. |
 
 The markdown body after the frontmatter is trimmed and used as the child session's system prompt.
 
 ## Use the tool
 
-The tool accepts a required `action`.
+The tool accepts a required `action`: `list`, `run`, or `clear`.
 
-List available agent definitions:
+### `action: "list"`
+
+List configured agent definitions (the default):
 
 ```ts
-subagent({ action: "list" })
+subagent({ action: "list" })                  // same as type: "agents"
+subagent({ action: "list", type: "agents" })
 ```
 
-List active and retained sessions instead:
+List active and retained sessions:
 
 ```ts
 subagent({ action: "list", type: "sessions" })
 ```
 
-Start one or more delegations with `action: "start"`. Each task names an agent and provides the prompt to send to that agent.
+List skills available to inject into spawn tasks:
 
-Single delegation:
+```ts
+subagent({ action: "list", type: "skills" })
+```
+
+### `action: "run"`
+
+`run` takes a `tasks` array. Each task is either a **spawn** (carrying `agent`) or a **resume** (carrying `sessionId`). The two are mutually exclusive — providing both is rejected, and providing neither is rejected.
+
+Spawn task fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `agent` | yes | Runtime agent name from a discovered agent definition. |
+| `prompt` | yes | The task to delegate. |
+| `label` | no | Human-readable identifier shown in widgets and logs in place of the agent name. |
+| `resumable` | no | Boolean override of the agent's frontmatter default. The decision is one-way at completion: a `false` override discards the session immediately. |
+| `model` | no | Override the agent's configured model. |
+| `thinking` | no | Override the agent's configured thinking level. |
+| `cwd` | no | Working directory for the child session. Relative paths resolve against the parent `cwd`. |
+| `skills` | no | Skill names to inject into the child's system prompt. Fully replaces the agent's default `skills` (no merge); pass `[]` to opt out of defaults. Unknown names are a hard error. Explicit skills bypass each skill's `disable-model-invocation` flag. |
+
+Resume task fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `sessionId` | yes | A retained, `completed` resumable session id. |
+| `prompt` | yes | The follow-up to send to the resumed session. |
+| `label` | no | Re-asserts the label; a new value overwrites the stored one. |
+| `resumable` | no | Re-asserts the resumable override. `model`, `thinking`, `cwd`, `skills`, and `agent` are rejected on resume. |
+
+Single spawn:
 
 ```ts
 subagent({
-  action: "start",
+  action: "run",
   tasks: [
     { agent: "scout", prompt: "Find the auth entry points and summarize relevant files." }
   ]
 })
 ```
 
-Bounded multi-task delegation:
+Bounded multi-task spawn with labels and skills:
 
 ```ts
 subagent({
-  action: "start",
+  action: "run",
   tasks: [
-    { agent: "scout", prompt: "Map frontend auth code and list key files." },
-    { agent: "scout", prompt: "Map backend auth code and list key files." },
+    { agent: "scout", label: "frontend auth", prompt: "Map frontend auth code and list key files.", skills: ["codesearch"] },
+    { agent: "scout", label: "backend auth", prompt: "Map backend auth code and list key files." },
     { agent: "reviewer", prompt: "Review auth-related tests and summarize coverage gaps." }
   ]
 })
 ```
 
-Resume a completed retained run from an agent with `resumable: true`:
+Mixed spawn and resume in one call:
 
 ```ts
 subagent({
-  action: "resume",
-  sessionId: "...",
-  prompt: "Use your previous findings to propose the smallest implementation plan."
+  action: "run",
+  tasks: [
+    { sessionId: "...", prompt: "Use your previous findings to propose the smallest implementation plan." },
+    { agent: "reviewer", prompt: "Independently review the new plan once it lands." }
+  ]
 })
 ```
 
-Clear sessions:
+### `action: "clear"`
 
 ```ts
 subagent({ action: "clear", sessionId: "..." }) // clear one known session; aborts it if still running
@@ -131,11 +169,11 @@ The parent remains responsible for sequencing. If later work depends on earlier 
 
 ## Live tool rendering
 
-`subagent start` and `subagent resume` stream live updates into the tool result while children run.
+`subagent run` streams live updates into the tool result while children run, for both spawn and resume tasks.
 
 - Collapsed rendering shows an aggregate group line, such as task count, status counts, and overall outcome.
-- Expanded rendering shows one row per child session with agent name, status, turn/tool counts, elapsed time, active tool, live message snippet, and final outcome.
-- Multi-task starts keep input order in final results and group related child rows together.
+- Expanded rendering shows one row per child session with agent name (or per-task `label`), status, turn/tool counts, elapsed time, active tool, live message snippet, and final outcome.
+- Multi-task runs keep input order in final results and group related child rows together.
 - Mixed child failures mark the overall tool result as `isError` while preserving successful child results.
 
 Renderer failures fall back to simple text/JSON output instead of breaking the tool call.
@@ -218,35 +256,57 @@ Tool results preserve input order and are returned in both text content (JSON) a
   results: [
     {
       agent: "scout",
+      label: "frontend auth",
       prompt: "Map frontend auth code and list key files.",
       status: "completed",
       output: "...",
       model: "anthropic/claude-sonnet-4",
       resumable: true,
+      resumed: false,
+      sessionId: "..."
+    },
+    {
+      agent: "scout",
+      prompt: "Use your previous findings to propose the smallest implementation plan.",
+      status: "completed",
+      output: "...",
+      model: "anthropic/claude-sonnet-4",
+      resumable: true,
+      resumed: true,
       sessionId: "..."
     },
     {
       agent: "missing",
       prompt: "...",
       status: "error",
-      error: "Unknown agent: missing. Available agents: ..."
+      error: "Unknown agent: missing. Available agents: ...",
+      resumable: false,
+      resumed: false
     }
   ],
   group: { /* live/final grouped UI DTO */ }
 }
 ```
 
-`isError` is set when any run has a non-`completed` status. Unknown agents and child-session failures are reported as failed per-run results without discarding other scheduled results.
+Each result carries:
+
+- `resumed`: `true` if this task continued an existing session, `false` for a fresh spawn (and for tasks that errored before attaching to a session).
+- `resumable`: `true` only when a child `AgentSession` exists or existed and the effective `resumable` flag is on.
+- `sessionId`: present only when `resumable` is true.
+- `label`: present when the task or a prior invocation supplied one.
+
+`isError` is set when any run has a non-`completed` status. Unknown agents, unknown sessionIds, and child-session failures are reported as failed per-task results without discarding other scheduled results.
 
 ## Limits and current constraints
 
-- `action` is required; legacy `{ tasks: [...] }` calls are rejected.
-- Maximum eight tasks per `start` tool call.
-- Maximum four child sessions run concurrently.
+- `action` is required; legacy `{ tasks: [...] }` calls and the previous `start`/`resume` actions are rejected.
+- Maximum eight tasks per `run` tool call.
+- Maximum four child sessions run concurrently across spawn and resume tasks.
+- A given `sessionId` cannot be resumed more than once concurrently; a second concurrent resume of the same session surfaces as a per-task error.
 - Agent discovery always checks user agents and the nearest project agents for the execution `cwd`; there is no `agentScope` parameter.
 - No per-run timeout is exposed beyond parent abort/cancellation.
 - Child sessions isolate Pi message history/context, but they still run inside the same extension process.
-- Resumable sessions are retained only for the current Pi process lifetime and only for agents with `resumable: true`.
+- Resumable sessions are retained only for the current Pi process lifetime and only for agents with `resumable: true` (or a per-task `resumable: true` override on a session that has an attached child).
 
 ## MVP non-goals
 
