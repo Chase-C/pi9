@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
+import type { AgentInvocation, AgentSpawn } from "../domain/agent-invocation.js";
 import {
   errorRun,
   finalizeRun,
@@ -11,7 +12,7 @@ import {
 } from "../domain/agent-result.js";
 import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
-import type { AgentOptions, TaskRequest } from "../schema.js";
+import type { TaskRequest } from "../schema.js";
 import { activeOrRetainedAgents } from "../view/view-helpers.js";
 import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
@@ -41,6 +42,7 @@ export class AgentManager {
   private _agents = new Array<Agent>();
   private _queue: TaskQueue;
   private _activeBatches = new Map<string, SpawnBatch>();
+  private _agentBatch = new Map<string, string>();
   private _reservedResumeSessionIds = new Set<string>();
 
   constructor(
@@ -62,11 +64,13 @@ export class AgentManager {
       let cleared = 0;
       if (agent) {
         cleared = 1;
+        const groupId = this._agentBatch.get(agent.id);
         this._agents = this._agents.filter(a => a.id !== sessionId);
+        this._agentBatch.delete(agent.id);
         if (agent.status.kind === "running") {
           finalizeRun(agent, "", { status: "aborted", error: "Agent aborted." });
-        } else {
-          this._emitBatchUpdate(agent.groupId);
+        } else if (groupId) {
+          this._emitBatchUpdate(groupId);
         }
       }
 
@@ -77,9 +81,15 @@ export class AgentManager {
       return agent.status.kind == "queued" || agent.status.kind == "running";
     });
 
+    for (const agent of this._agents) {
+      if (!retained.includes(agent)) this._agentBatch.delete(agent.id);
+    }
     const cleared = this._agents.length - retained.length;
     this._agents = retained;
-    for (const agent of retained) this._emitBatchUpdate(agent.groupId);
+    for (const agent of retained) {
+      const groupId = this._agentBatch.get(agent.id);
+      if (groupId) this._emitBatchUpdate(groupId);
+    }
 
     return { cleared };
   }
@@ -140,20 +150,23 @@ export class AgentManager {
           });
         }
 
-        const opts: AgentOptions = {
+        const spawn: AgentSpawn = {
           agent: task.agent,
-          prompt: task.prompt,
-          ...(task.label !== undefined ? { label: task.label } : {}),
           ...(task.skills !== undefined ? { skills: task.skills } : {}),
-          ...(task.resumable !== undefined ? { resumable: task.resumable } : {}),
           ...(task.model !== undefined ? { model: task.model } : {}),
           ...(task.thinking !== undefined ? { thinking: task.thinking } : {}),
           ...(task.cwd !== undefined ? { cwd: task.cwd } : {}),
         };
+        const invocation: AgentInvocation = {
+          prompt: task.prompt,
+          ...(task.label !== undefined ? { label: task.label } : {}),
+          ...(task.resumable !== undefined ? { resumable: task.resumable } : {}),
+        };
 
-        const agent = new Agent(randomUUID(), groupId, config, opts, this._agentUpdate.bind(this));
+        const agent = new Agent(randomUUID(), config, spawn, invocation, this._agentUpdate.bind(this));
         entries.push({ agent, inputIndex });
         this._agents.push(agent);
+        this._agentBatch.set(agent.id, groupId);
         touched.add(agent);
         return this._enqueueRun(ctx, signal, agent, task.prompt, false);
       }
@@ -199,7 +212,7 @@ export class AgentManager {
             prompt: task.prompt,
             status: "error",
             error,
-            model: target ? (target.modelOverride ?? target.config.model) : undefined,
+            model: target ? (target.spawn.model ?? target.config.model) : undefined,
             resumable: target?.resumable ?? false,
             resumed: true,
             ...(target ? { sessionId: target.id } : {}),
@@ -207,12 +220,17 @@ export class AgentManager {
         }
 
         this._reservedResumeSessionIds.add(target.id);
-        if (task.label !== undefined) target.setLabel(task.label);
-        target.setGroupId(groupId);
+        const invocation: AgentInvocation = {
+          prompt: task.prompt,
+          ...(task.label !== undefined ? { label: task.label } : {}),
+          ...(task.resumable !== undefined ? { resumable: task.resumable } : {}),
+        };
+        const undo = target.apply(invocation);
+        this._agentBatch.set(target.id, groupId);
         const entry: BatchEntry = { agent: target, inputIndex, resumed: true };
         entries.push(entry);
         touched.add(target);
-        return this._enqueueRun(ctx, signal, target, task.prompt, true, task.resumable, result => {
+        return this._enqueueRun(ctx, signal, target, task.prompt, true, undo, result => {
           entry.view = this._syntheticResumeView(target, inputIndex, result);
           this._emitBatchUpdate(groupId);
         }).finally(() => {
@@ -227,7 +245,9 @@ export class AgentManager {
       this._agents = this._agents.filter(agent => {
         if (!touched.has(agent)) return true;
         if (agent.status.kind !== "done") return true;
-        return agent.resumable;
+        if (agent.resumable) return true;
+        this._agentBatch.delete(agent.id);
+        return false;
       });
       return results;
     } finally {
@@ -237,7 +257,9 @@ export class AgentManager {
   }
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
-    const batch = this._activeBatches.get(agent.groupId);
+    const groupId = this._agentBatch.get(agent.id);
+    if (!groupId) return;
+    const batch = this._activeBatches.get(groupId);
     if (!batch) return;
     if (kind === "message") {
       if (!batch.pendingMessageTimer) {
@@ -250,7 +272,7 @@ export class AgentManager {
       return;
     }
     this._clearPendingMessageUpdate(batch);
-    this._emitBatchUpdate(agent.groupId);
+    this._emitBatchUpdate(groupId);
   }
 
   private _enqueueRun(
@@ -259,14 +281,13 @@ export class AgentManager {
     agent: Agent,
     prompt: string,
     resume: boolean,
-    resumableOverride?: boolean,
+    undo?: () => void,
     onPreAttachResult?: (result: AgentRunResult) => void,
   ): Promise<AgentRunResult> {
     // For a resume, the agent enters this method already in `done(completed)`. Capture that so
     // we can detect a runner that throws before re-attaching, and surface the resume failure
     // without overwriting the prior completion.
     const originalStatus = resume ? agent.status : undefined;
-    const originalResumableOverride = resume ? agent.resumableOverride : undefined;
     const preAttachResult = (status: "skipped" | "error", error: string): AgentRunResult => {
       const result: AgentRunResult = {
         agent: agent.agentName,
@@ -274,7 +295,7 @@ export class AgentManager {
         prompt,
         status,
         error,
-        model: agent.modelOverride ?? agent.config.model,
+        model: agent.spawn.model ?? agent.config.model,
         resumable: agent.resumable,
         resumed: true,
         ...(agent.resumable ? { sessionId: agent.id } : {}),
@@ -287,8 +308,10 @@ export class AgentManager {
       : finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped.", resumed: resume });
 
     return this._queue.enqueue(async () => {
-      if (signal?.aborted) return skipped();
-      if (resume && resumableOverride !== undefined) agent.setResumableOverride(resumableOverride);
+      if (signal?.aborted) {
+        if (resume) undo?.();
+        return skipped();
+      }
       const runner = resume ? this._resumeAgent : this._runAgent;
       try {
         const result = await runner(ctx, agent, prompt, signal);
@@ -296,7 +319,7 @@ export class AgentManager {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (resume && agent.status === originalStatus) {
-          agent.setResumableOverride(originalResumableOverride);
+          undo?.();
           return preAttachResult("error", message);
         }
         if (agent.status.kind === "done") return agent.status.result;

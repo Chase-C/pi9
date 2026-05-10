@@ -29,7 +29,7 @@ export function finalizeRun(agent: Agent, prompt: string, args: FinalizeRunArgs)
     agent: agent.agentName,
     ...(agent.label !== undefined ? { label: agent.label } : {}),
     prompt,
-    model: agent.modelOverride ?? agent.config.model,
+    model: agent.spawn.model ?? agent.config.model,
     resumable,
     resumed: Boolean(args.resumed),
     status: args.status,

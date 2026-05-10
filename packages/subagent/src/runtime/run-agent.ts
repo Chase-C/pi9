@@ -51,10 +51,10 @@ export async function RunAgent(
 ): Promise<AgentRunResult> {
   if (signal?.aborted) return finalizeRun(agent, prompt, { status: "skipped", error: "Agent skipped." });
 
-  const cwd = ResolveTaskCwd(ctx.cwd, agent.cwd);
+  const cwd = ResolveTaskCwd(ctx.cwd, agent.spawn.cwd);
   const agentDir = dependencies.getAgentDir();
 
-  const requestedSkills = agent.skills ?? agent.config.skills ?? [];
+  const requestedSkills = agent.spawn.skills ?? agent.config.skills ?? [];
   let systemPrompt = agent.config.systemPrompt;
   if (requestedSkills.length > 0) {
     const { skills: available } = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true });
@@ -89,8 +89,8 @@ export async function RunAgent(
     cwd,
     agentDir,
     resourceLoader,
-    model: SelectModel(agent.modelOverride ?? agent.config.model, ctx.model, ctx.modelRegistry),
-    thinkingLevel: agent.thinkingOverride ?? agent.config.thinking,
+    model: SelectModel(agent.spawn.model ?? agent.config.model, ctx.model, ctx.modelRegistry),
+    thinkingLevel: agent.spawn.thinking ?? agent.config.thinking,
     modelRegistry: ctx.modelRegistry,
     tools: agent.config.tools,
     sessionManager: dependencies.sessionManager(cwd),

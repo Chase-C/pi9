@@ -89,10 +89,10 @@ test('Agent exposes the label from options and falls back to undefined when abse
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
 
-  const labeled = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  const labeled = new Agent('id1', config, { agent: 'helper' }, { prompt: 'work', label: 'researcher' }, () => {});
   assert.equal(labeled.label, 'researcher');
 
-  const unlabeled = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  const unlabeled = new Agent('id2', config, { agent: 'helper' }, { prompt: 'work' }, () => {});
   assert.equal(unlabeled.label, undefined);
 });
 
@@ -100,25 +100,25 @@ test('Agent exposes the per-task skills array as-is and preserves undefined when
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
 
-  const withSkills = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', skills: ['tdd'] }, () => {});
-  assert.deepEqual(withSkills.skills, ['tdd']);
+  const withSkills = new Agent('id1', config, { agent: 'helper', skills: ['tdd'] }, { prompt: 'work' }, () => {});
+  assert.deepEqual(withSkills.spawn.skills, ['tdd']);
 
-  const explicitlyEmpty = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work', skills: [] }, () => {});
-  assert.deepEqual(explicitlyEmpty.skills, []);
+  const explicitlyEmpty = new Agent('id2', config, { agent: 'helper', skills: [] }, { prompt: 'work' }, () => {});
+  assert.deepEqual(explicitlyEmpty.spawn.skills, []);
 
-  const without = new Agent('id3', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
-  assert.equal(without.skills, undefined);
+  const without = new Agent('id3', config, { agent: 'helper' }, { prompt: 'work' }, () => {});
+  assert.equal(without.spawn.skills, undefined);
 });
 
 test('Agent.toView surfaces the default skills from the agent config', async () => {
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', skills: ['foo', 'bar'] };
 
-  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  const agent = new Agent('id', config, { agent: 'helper' }, { prompt: 'work' }, () => {});
   assert.deepEqual(agent.toView().config.skills, ['foo', 'bar']);
 
   const noSkillsConfig = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
-  const noSkills = new Agent('id2', 'group', noSkillsConfig, { agent: 'helper', prompt: 'work' }, () => {});
+  const noSkills = new Agent('id2', noSkillsConfig, { agent: 'helper' }, { prompt: 'work' }, () => {});
   assert.equal(noSkills.toView().config.skills, undefined);
 });
 
@@ -126,7 +126,7 @@ test('Agent uses a per-task resumable false override before the config default',
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', resumable: true };
 
-  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'work', resumable: false }, () => {});
+  const agent = new Agent('id', config, { agent: 'helper' }, { prompt: 'work', resumable: false }, () => {});
 
   assert.equal(agent.resumable, false);
   assert.equal(agent.toView().config.resumable, false);
@@ -136,7 +136,7 @@ test('Agent uses a per-task resumable true override before the config default', 
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', resumable: false };
 
-  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'work', resumable: true }, () => {});
+  const agent = new Agent('id', config, { agent: 'helper' }, { prompt: 'work', resumable: true }, () => {});
 
   assert.equal(agent.resumable, true);
   assert.equal(agent.toView().config.resumable, true);
@@ -274,16 +274,16 @@ test('AgentRunResult propagates label from agent through completed/error/interru
   const { completedRun, errorRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
 
-  const labeled = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  const labeled = new Agent('id1', config, { agent: 'helper' }, { prompt: 'work', label: 'researcher' }, () => {});
   assert.equal(completedRun(labeled, 'work', 'done').label, 'researcher');
 
-  const labeledErr = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  const labeledErr = new Agent('id2', config, { agent: 'helper' }, { prompt: 'work', label: 'researcher' }, () => {});
   assert.equal(errorRun(labeledErr, 'work', 'fail').label, 'researcher');
 
-  const labeledInt = new Agent('id3', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  const labeledInt = new Agent('id3', config, { agent: 'helper' }, { prompt: 'work', label: 'researcher' }, () => {});
   assert.equal(interruptedRun(labeledInt, 'work', 'stop').label, 'researcher');
 
-  const unlabeled = new Agent('id4', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  const unlabeled = new Agent('id4', config, { agent: 'helper' }, { prompt: 'work' }, () => {});
   const result = completedRun(unlabeled, 'work', 'done');
   assert.equal(Object.prototype.hasOwnProperty.call(result, 'label'), false);
 });
@@ -294,7 +294,7 @@ test('AgentRunResult resumable reflects the per-task override', async () => {
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', resumable: false };
   const session = { subscribe() { return () => {}; }, abort() {} };
 
-  const agent = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', resumable: true }, () => {});
+  const agent = new Agent('id1', config, { agent: 'helper' }, { prompt: 'work', resumable: true }, () => {});
   agent.attach(session);
   const result = completedRun(agent, 'work', 'done');
 
@@ -306,23 +306,32 @@ test('Agent.toView includes label when set and omits it otherwise', async () => 
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
 
-  const labeled = new Agent('id1', 'group', config, { agent: 'helper', prompt: 'work', label: 'researcher' }, () => {});
+  const labeled = new Agent('id1', config, { agent: 'helper' }, { prompt: 'work', label: 'researcher' }, () => {});
   assert.equal(labeled.toView().label, 'researcher');
 
-  const unlabeled = new Agent('id2', 'group', config, { agent: 'helper', prompt: 'work' }, () => {});
+  const unlabeled = new Agent('id2', config, { agent: 'helper' }, { prompt: 'work' }, () => {});
   assert.equal(Object.prototype.hasOwnProperty.call(unlabeled.toView(), 'label'), false);
 });
 
-test('Agent.setLabel updates the label and emits a status update', async () => {
+test('Agent.apply updates label/resumable, emits status, and the returned undo restores prior state', async () => {
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project', resumable: false };
   const updates = [];
-  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'work' }, (_a, kind) => updates.push(kind));
-
-  agent.setLabel('renamed');
-
-  assert.equal(agent.label, 'renamed');
+  const agent = new Agent('id', config, { agent: 'helper' }, { prompt: 'work' }, (_a, kind) => updates.push(kind));
+  // Construction calls apply() once, which emits a status update.
   assert.deepEqual(updates, ['status']);
+  assert.equal(agent.label, undefined);
+  assert.equal(agent.resumableOverride, undefined);
+
+  const undo = agent.apply({ prompt: 'follow-up', label: 'renamed', resumable: true });
+  assert.equal(agent.label, 'renamed');
+  assert.equal(agent.resumableOverride, true);
+  assert.deepEqual(updates, ['status', 'status']);
+
+  undo();
+  assert.equal(agent.label, undefined);
+  assert.equal(agent.resumableOverride, undefined);
+  assert.deepEqual(updates, ['status', 'status', 'status']);
 });
 
 test('TaskSchema accepts an optional label string and rejects non-string values', async () => {
@@ -349,10 +358,10 @@ test('TaskSchema accepts an optional skills string array and rejects non-string-
   const { Check } = await import('typebox/value');
 
   assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work' }), true);
-  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', skills: [] }), true);
-  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', skills: ['tdd', 'review'] }), true);
+  assert.equal(Check(TaskSchema, { agent: 'helper', skills: [], prompt: 'do work' }), true);
+  assert.equal(Check(TaskSchema, { agent: 'helper', skills: ['tdd', 'review'], prompt: 'do work' }), true);
   assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', skills: 'tdd' }), false);
-  assert.equal(Check(TaskSchema, { agent: 'helper', prompt: 'do work', skills: [42] }), false);
+  assert.equal(Check(TaskSchema, { agent: 'helper', skills: [42], prompt: 'do work' }), false);
 });
 
 test('subagent UI settings default to below editor when file is missing', async () => {
@@ -420,24 +429,25 @@ test('agent transitions through start, finalize, and is idempotent on second fin
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
   const { completedRun, errorRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const config = { name: 'agent', description: 'desc', systemPrompt: 'prompt', source: 'project' };
-  const opts = { agent: 'agent', prompt: 'do work' };
+  const spawn = { agent: 'agent' };
+  const invocation = { prompt: 'do work' };
   const session = { subscribe() { return () => {}; }, abort() {} };
 
-  const running = new Agent('id', 'group', config, opts, () => {});
+  const running = new Agent('id', config, spawn, invocation, () => {});
   running.attach(session);
   assert.equal(running.status.kind, 'running');
   assert.throws(() => running.attach(session), /Cannot attach/);
 
-  completedRun(running, opts.prompt, 'done');
+  completedRun(running, invocation.prompt, 'done');
   assert.equal(running.status.kind, 'done');
   assert.equal(running.status.result.status, 'completed');
   assert.equal(running.status.result.output, 'done');
 
-  errorRun(running, opts.prompt, 'late');
+  errorRun(running, invocation.prompt, 'late');
   assert.equal(running.status.result.status, 'completed', 'finalize is idempotent — terminal state is sticky');
 
-  const queued = new Agent('q', 'group', config, opts, () => {});
-  errorRun(queued, opts.prompt, 'failed before start');
+  const queued = new Agent('q', config, spawn, invocation, () => {});
+  errorRun(queued, invocation.prompt, 'failed before start');
   assert.equal(queued.status.kind, 'done');
   assert.equal(queued.status.result.status, 'error');
   assert.equal(queued.status.result.error, 'failed before start');
@@ -2029,11 +2039,11 @@ test('agent re-subscribes on resume so events during a resumed cycle update its 
     async prompt() {},
     abort() {},
   };
-  const agent = new Agent('id', 'gid', { name: 'a', description: 'd', systemPrompt: '', source: 'project', resumable: true }, { agent: 'a', prompt: 'p' }, () => {});
+  const agent = new Agent('id', { name: 'a', description: 'd', systemPrompt: '', source: 'project', resumable: true }, { agent: 'a' }, { prompt: 'p' }, () => {});
 
   agent.attach(session);
   emit({ type: 'turn_end' });
-  assert.equal(agent.turns, 1);
+  assert.equal(agent.toView().activity.turns, 1);
   completedRun(agent, 'p', 'done');
   assert.equal(emit, undefined, 'subscription should be torn down on complete');
 
@@ -2041,8 +2051,9 @@ test('agent re-subscribes on resume so events during a resumed cycle update its 
   assert.ok(emit, 'resume should re-subscribe');
   emit({ type: 'turn_end' });
   emit({ type: 'tool_execution_start', toolName: 'read' });
-  assert.equal(agent.turns, 2);
-  assert.equal(agent.toolUses, 1);
+  const resumedActivity = agent.toView().activity;
+  assert.equal(resumedActivity.turns, 2);
+  assert.equal(resumedActivity.toolHistory.length, 1);
   completedRun(agent, 'p2', 'done2');
   assert.equal(emit, undefined, 'subscription should be torn down on complete after resume');
 });
@@ -2055,17 +2066,20 @@ test('agent stores tool-use history and keeps active tool correct for overlappin
     async prompt() {},
     abort() {},
   };
-  const agent = new Agent('id', 'gid', { name: 'a', description: 'd', systemPrompt: '', source: 'project' }, { agent: 'a', prompt: 'p' }, () => {});
+  const agent = new Agent('id', { name: 'a', description: 'd', systemPrompt: '', source: 'project' }, { agent: 'a' }, { prompt: 'p' }, () => {});
+
+  const activeNames = () => agent.toView().activity.toolHistory.filter(t => t.completedAt === undefined).map(t => t.name);
 
   agent.attach(session);
   session.emit({ type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read' });
   session.emit({ type: 'tool_execution_start', toolCallId: 'bash-1', toolName: 'bash' });
-  assert.deepEqual(agent.activeTools, ['read', 'bash']);
+  assert.deepEqual(activeNames(), ['read', 'bash']);
 
   session.emit({ type: 'tool_execution_end', toolCallId: 'read-1', toolName: 'read', isError: false });
-  assert.deepEqual(agent.activeTools, ['bash']);
-  assert.equal(agent.toolUses, 2);
-  assert.deepEqual(agent.toolHistory.map(tool => [tool.id, tool.name, Boolean(tool.completedAt), tool.isError]), [
+  const finalHistory = agent.toView().activity.toolHistory;
+  assert.deepEqual(activeNames(), ['bash']);
+  assert.equal(finalHistory.length, 2);
+  assert.deepEqual(finalHistory.map(tool => [tool.id, tool.name, Boolean(tool.completedAt), tool.isError]), [
     ['read-1', 'read', true, false],
     ['bash-1', 'bash', false, undefined],
   ]);
@@ -2535,9 +2549,9 @@ test('run-agent skips before prompting when signal aborts during setup', async (
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
-  }, { agent: 'helper', prompt: 'work' }, () => {});
+  }, { agent: 'helper' }, { prompt: 'work' }, () => {});
 
   const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', controller.signal, dependencies);
 
@@ -2568,9 +2582,9 @@ test('run-agent resolves relative task cwd against context cwd', async () => {
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
-  }, { agent: 'helper', prompt: 'work', cwd: 'nested/project' }, () => {});
+  }, { agent: 'helper', cwd: 'nested/project' }, { prompt: 'work' }, () => {});
 
   await RunAgent({ cwd: root, modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2598,9 +2612,9 @@ test('run-agent uses frontmatter thinking when task does not override it', async
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'thinker', description: 'd', systemPrompt: 's', source: 'project', thinking: 'high'
-  }, { agent: 'thinker', prompt: 'work' }, () => {});
+  }, { agent: 'thinker' }, { prompt: 'work' }, () => {});
 
   await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2624,9 +2638,9 @@ test('run-agent forwards configured tools allowlist to createAgentSession', asyn
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'limited', description: 'd', systemPrompt: 's', source: 'project', tools: ['read', 'grep'], model: 'model-a'
-  }, { agent: 'limited', prompt: 'work' }, () => {});
+  }, { agent: 'limited' }, { prompt: 'work' }, () => {});
 
   const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2657,9 +2671,9 @@ test('run-agent marks running parent cancellation as interrupted', async () => {
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
-  }, { agent: 'helper', prompt: 'work' }, () => {});
+  }, { agent: 'helper' }, { prompt: 'work' }, () => {});
 
   const pending = RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', controller.signal, dependencies);
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -2692,9 +2706,9 @@ test('run-agent treats final assistant error stop reason as failed child run', a
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
-  }, { agent: 'helper', prompt: 'work' }, () => {});
+  }, { agent: 'helper' }, { prompt: 'work' }, () => {});
 
   const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2731,9 +2745,9 @@ test('run-agent injects requested skills into the system prompt and disables loa
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 'BASE PROMPT', source: 'project'
-  }, { agent: 'helper', prompt: 'work', skills: ['tdd'] }, () => {});
+  }, { agent: 'helper', skills: ['tdd'] }, { prompt: 'work' }, () => {});
 
   const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2772,9 +2786,9 @@ test('run-agent includes a disable-model-invocation skill when explicitly named'
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 'BASE', source: 'project'
-  }, { agent: 'helper', prompt: 'work', skills: ['review'] }, () => {});
+  }, { agent: 'helper', skills: ['review'] }, { prompt: 'work' }, () => {});
 
   await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2794,9 +2808,9 @@ test('run-agent reports an unknown skill as a failed run without starting a sess
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project'
-  }, { agent: 'helper', prompt: 'work', skills: ['missing'] }, () => {});
+  }, { agent: 'helper', skills: ['missing'] }, { prompt: 'work' }, () => {});
 
   const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2833,9 +2847,9 @@ test('run-agent uses agent-frontmatter default skills when the task does not pro
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 'BASE PROMPT', source: 'project', skills: ['foo']
-  }, { agent: 'helper', prompt: 'work' }, () => {});
+  }, { agent: 'helper' }, { prompt: 'work' }, () => {});
 
   const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2874,9 +2888,9 @@ test('run-agent per-task skills fully replace agent-frontmatter default skills',
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 'BASE', source: 'project', skills: ['foo', 'baz']
-  }, { agent: 'helper', prompt: 'work', skills: ['bar'] }, () => {});
+  }, { agent: 'helper', skills: ['bar'] }, { prompt: 'work' }, () => {});
 
   await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2905,9 +2919,9 @@ test('run-agent explicit empty per-task skills opts out of agent-frontmatter def
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 'BASE PROMPT', source: 'project', skills: ['foo']
-  }, { agent: 'helper', prompt: 'work', skills: [] }, () => {});
+  }, { agent: 'helper', skills: [] }, { prompt: 'work' }, () => {});
 
   await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2927,9 +2941,9 @@ test('run-agent reports an unknown skill from agent-frontmatter defaults as a fa
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 's', source: 'project', skills: ['ghost']
-  }, { agent: 'helper', prompt: 'work' }, () => {});
+  }, { agent: 'helper' }, { prompt: 'work' }, () => {});
 
   const result = await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -2957,9 +2971,9 @@ test('run-agent leaves the system prompt unchanged when no skills are requested'
   };
   const { RunAgent } = await import(`../dist/runtime/run-agent.js?t=${unique()}`);
   const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
-  const agent = new Agent('id', 'group', {
+  const agent = new Agent('id', {
     name: 'helper', description: 'd', systemPrompt: 'BASE PROMPT', source: 'project'
-  }, { agent: 'helper', prompt: 'work' }, () => {});
+  }, { agent: 'helper' }, { prompt: 'work' }, () => {});
 
   await RunAgent({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, agent, 'p', undefined, dependencies);
 
@@ -3023,7 +3037,7 @@ test('parseTask rejects an empty prompt and unstructured tasks', async () => {
 
 test('parseTask rejects skills entries that are not non-empty strings', async () => {
   const { parseTask } = await import(`../dist/schema.js?t=${unique()}`);
-  const result = parseTask({ agent: 'helper', prompt: 'p', skills: ['', 'x'] });
+  const result = parseTask({ agent: 'helper', skills: ['', 'x'], prompt: 'p' });
   assert.ok('error' in result);
   assert.match(result.error, /skills entries/);
 
@@ -3360,7 +3374,7 @@ test('completedRun marks the result as not resumed by default', async () => {
 
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
-  const agent = new Agent('id', 'group', config, { agent: 'helper', prompt: 'p' }, () => {});
+  const agent = new Agent('id', config, { agent: 'helper' }, { prompt: 'p' }, () => {});
   agent.attach(session);
 
   const result = completedRun(agent, 'p', 'done');

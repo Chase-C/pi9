@@ -2,9 +2,9 @@ import { Usage } from "@mariozechner/pi-ai";
 import { AgentSession } from "@mariozechner/pi-coding-agent";
 
 import { AgentConfig } from "./agent-config.js";
+import type { AgentInvocation, AgentSpawn } from "./agent-invocation.js";
 import type { AgentRunResult } from "./agent-result.js";
 import type { AgentToolUse, AgentUpdateKind, AgentView, AgentViewStatus } from "./agent-view.js";
-import type { AgentOptions } from "../schema.js";
 import { MESSAGE_SNIPPET_LENGTH, OUTPUT_SNIPPET_LENGTH, compact } from "../view/view-helpers.js";
 
 const DefaultUsage: Usage = {
@@ -19,74 +19,49 @@ export type AgentStatus =
 
 export class Agent {
 
+  readonly agentName: string;
+  readonly createdAt = Date.now();
+
   private _status: AgentStatus = { kind: "queued" };
-
-  private _groupId: string;
-
   private _label: string | undefined;
-
   private _resumableOverride: boolean | undefined;
-
   private _message: string = "";
-
   private _turns: number = 0;
   private _toolHistory = new Array<AgentToolUse>();
   private _nextSyntheticToolId = 0;
   private _compactions: number = 0;
-
-  private _usage: Usage = DefaultUsage;
   private _totalUsage: Usage = DefaultUsage;
-
-  private _createdAt: number = Date.now();
-
   private _unsubscribe?: () => void;
 
   constructor(
     readonly id: string,
-    groupId: string,
     readonly config: AgentConfig,
-    private readonly options: AgentOptions,
+    readonly spawn: AgentSpawn,
+    invocation: AgentInvocation,
     private readonly onUpdate: (agent: Agent, kind: AgentUpdateKind) => void,
   ) {
-    this._groupId = groupId;
-    this._label = options.label;
-    this._resumableOverride = options.resumable;
+    this.agentName = spawn.agent;
+    this.apply(invocation);
   }
 
-  get agentName() { return this.options.agent }
-  get groupId() { return this._groupId }
-  setGroupId(groupId: string) { this._groupId = groupId; }
   get label() { return this._label }
-  setLabel(label: string | undefined) {
-    this._label = label;
-    this.onUpdate(this, "status");
-  }
-  setResumableOverride(value: boolean | undefined) {
-    this._resumableOverride = value;
-    this.onUpdate(this, "status");
-  }
   get resumableOverride() { return this._resumableOverride }
-  get modelOverride() { return this.options.model }
-  get thinkingOverride() { return this.options.thinking }
-  get cwd() { return this.options.cwd }
-  get skills(): readonly string[] | undefined { return this.options.skills }
-
   get status() { return this._status }
-
   get message() { return this._message }
-  get activeTools() { return this._toolHistory.filter(tool => tool.completedAt === undefined).map(tool => tool.name) }
-  get toolHistory(): readonly AgentToolUse[] { return this._toolHistory }
 
-  get turns() { return this._turns }
-  get toolUses() { return this._toolHistory.length }
-  get compactions() { return this._compactions }
-
-  get totalUsage() { return this._totalUsage }
-
-  get createdAt() { return this._createdAt }
-
-  get resolvedModel() { return this.modelOverride ?? this.config.model }
-  get resolvedThinking() { return this.thinkingOverride ?? this.config.thinking }
+  /** Apply per-invocation state. Returns an undo to roll back if the run aborts pre-attach. */
+  apply(invocation: AgentInvocation): () => void {
+    const prevLabel = this._label;
+    const prevResumable = this._resumableOverride;
+    if (invocation.label !== undefined) this._label = invocation.label;
+    if (invocation.resumable !== undefined) this._resumableOverride = invocation.resumable;
+    this.onUpdate(this, "status");
+    return () => {
+      this._label = prevLabel;
+      this._resumableOverride = prevResumable;
+      this.onUpdate(this, "status");
+    };
+  }
 
   get resumable(): boolean {
     const base = this._resumableOverride ?? this.config.resumable;
@@ -100,14 +75,14 @@ export class Agent {
       id: this.id,
       ...(inputIndex !== undefined ? { inputIndex } : {}),
       ...(this._label !== undefined ? { label: this._label } : {}),
-      createdAt: this._createdAt,
+      createdAt: this.createdAt,
       config: {
         name: this.agentName,
         description: this.config.description,
         source: this.config.source,
         sourcePath: this.config.sourcePath,
-        model: this.resolvedModel,
-        thinking: this.resolvedThinking,
+        model: this.spawn.model ?? this.config.model,
+        thinking: this.spawn.thinking ?? this.config.thinking,
         tools: this.config.tools,
         ...(this.config.skills !== undefined ? { skills: this.config.skills } : {}),
         resumable: this.resumable,
@@ -210,7 +185,6 @@ export class Agent {
         this._message = "";
       }
       else if (event.type === "message_end" && event.message.role === "assistant") {
-        this._usage = event.message.usage;
         this._totalUsage = CombineUsage(this._totalUsage, event.message.usage);
         this.onUpdate(this, "usage");
       }

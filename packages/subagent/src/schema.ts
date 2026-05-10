@@ -32,17 +32,6 @@ export const SubagentParams = Type.Object({
 
 export type SubagentParams = Static<typeof SubagentParams>;
 
-export interface AgentOptions {
-  agent: string;
-  prompt: string;
-  label?: string;
-  resumable?: boolean;
-  model?: string;
-  thinking?: ModelThinkingLevel;
-  cwd?: string;
-  skills?: string[];
-}
-
 export type TaskRequest =
   | {
       kind: "spawn";
