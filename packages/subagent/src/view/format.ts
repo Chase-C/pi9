@@ -101,10 +101,13 @@ export function formatSubagentToolLines(
   expanded = false,
   now = Date.now(),
 ): string[] {
+  const agents = extractAgents(details);
+  if (agents.length > 0) return formatAgentListLines(agents, expanded);
+
   const group = extractGroup(details);
   if (group) {
-    if (!expanded) return [formatViewGroupLine(group)];
-    return group.sessions.map(row => formatViewSessionLine(row, now));
+    if (!expanded) return group.sessions.map(row => formatViewSessionLine(row, now));
+    return group.sessions.flatMap((row, index) => formatExpandedSessionLines(row, now, index < group.sessions.length - 1));
   }
 
   const sessions = extractSessions(details);
@@ -114,7 +117,9 @@ export function formatSubagentToolLines(
     return [formatViewGroupLine(serializeGroup(sessions))];
   }
 
-  return sessions.map(row => formatViewSessionLine(row, now));
+  return expanded
+    ? sessions.flatMap((row, index) => formatExpandedSessionLines(row, now, index < sessions.length - 1))
+    : sessions.map(row => formatViewSessionLine(row, now));
 }
 
 export function createSubagentTextComponent(
@@ -146,12 +151,14 @@ function formatViewSessionLine(row: AgentView, now: number): string {
   const elapsed = formatElapsed((getStartedAt(row.status) ?? row.createdAt), getCompletedAt(row.status) ?? now);
   const status = effectiveStatus(row.status);
   const toolUses = getToolUseCount(row);
+  const tokens = row.usage?.totalTokens ?? 0;
   const parts = [
     row.label ?? row.config.name,
     ...(row.resumed ? ["resumed"] : []),
     status,
     `${row.activity.turns} turn${row.activity.turns === 1 ? "" : "s"}`,
     `${toolUses} tool${toolUses === 1 ? "" : "s"}`,
+    `${tokens} token${tokens === 1 ? "" : "s"}`,
     elapsed,
   ];
 
@@ -168,6 +175,52 @@ function formatViewSessionLine(row: AgentView, now: number): string {
   }
 
   return parts.join(" · ");
+}
+
+function formatExpandedSessionLines(row: AgentView, now: number, trailingBlank: boolean): string[] {
+  const lines = [formatViewSessionLine(row, now)];
+  if (row.prompt) {
+    lines.push("  Prompt:");
+    lines.push(...truncatePromptLines(row.prompt).map(line => `    ${line}`));
+  }
+
+  const recentTools = row.activity.toolHistory.slice(-8).map(tool => tool.name);
+  if (recentTools.length > 0) lines.push(`  Recent tools: ${recentTools.join(", ")}`);
+  if (trailingBlank) lines.push("");
+  return lines;
+}
+
+function truncatePromptLines(prompt: string): string[] {
+  const lines = prompt.split(/\r?\n/).slice(0, 3).map(line => compact(line, 120));
+  return lines.length ? lines : [""];
+}
+
+function formatAgentListLines(agents: AgentConfig[], expanded: boolean): string[] {
+  if (!expanded) {
+    return agents.slice(0, 8).map(agent => `${agent.name} · ${compact(agent.description, 100)}`);
+  }
+
+  return agents.flatMap((agent, index) => {
+    const lines = [
+      `${agent.name}`,
+      ...agent.description.split(/\r?\n/).map(line => `  ${line}`),
+      `  Model: ${agent.model ?? "default"}`,
+      `  Thinking: ${agent.thinking ?? "default"}`,
+      `  Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`,
+      `  Skills: ${agent.skills?.length ? agent.skills.join(", ") : "none"}`,
+      `  Resumable: ${agent.resumable}`,
+    ];
+    if (agent.sourcePath) lines.push(`  Path: ${agent.sourcePath}`);
+    if (index < agents.length - 1) lines.push("");
+    return lines;
+  });
+}
+
+function extractAgents(details: unknown): AgentConfig[] {
+  if (!details || typeof details !== "object") return [];
+  const record = details as { agents?: unknown };
+  if (Array.isArray(record.agents)) return record.agents as AgentConfig[];
+  return [];
 }
 
 function extractGroup(details: unknown): AgentGroupView | undefined {

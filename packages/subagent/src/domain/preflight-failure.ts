@@ -24,6 +24,7 @@ export function preflightSpawnFailure(args: PreflightSpawnFailureArgs): Prefligh
       id: `${groupId}:task-${inputIndex}`,
       inputIndex,
       ...labelField,
+      prompt: task.prompt,
       createdAt,
       config: {
         name: task.agent,
@@ -69,6 +70,7 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
       id: target?.id ?? `${groupId}:resume-${inputIndex}`,
       inputIndex,
       ...labelField,
+      prompt: task.prompt,
       createdAt,
       config: targetConfig ?? {
         name: "(unknown)",

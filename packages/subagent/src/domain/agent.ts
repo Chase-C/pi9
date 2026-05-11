@@ -25,6 +25,7 @@ export class Agent {
   private _status: AgentStatus = { kind: "queued" };
   private _label: string | undefined;
   private _resumableOverride: boolean | undefined;
+  private _prompt: string | undefined;
   private _message: string = "";
   private _turns: number = 0;
   private _toolHistory = new Array<AgentToolUse>();
@@ -53,12 +54,15 @@ export class Agent {
   apply(invocation: AgentInvocation): () => void {
     const prevLabel = this._label;
     const prevResumable = this._resumableOverride;
+    const prevPrompt = this._prompt;
+    this._prompt = invocation.prompt;
     if (invocation.label !== undefined) this._label = invocation.label;
     if (invocation.resumable !== undefined) this._resumableOverride = invocation.resumable;
     this.onUpdate(this, "status");
     return () => {
       this._label = prevLabel;
       this._resumableOverride = prevResumable;
+      this._prompt = prevPrompt;
       this.onUpdate(this, "status");
     };
   }
@@ -98,6 +102,7 @@ export class Agent {
       id: this.id,
       ...(inputIndex !== undefined ? { inputIndex } : {}),
       ...(this._label !== undefined ? { label: this._label } : {}),
+      ...(this._prompt !== undefined ? { prompt: this._prompt } : {}),
       createdAt: this.createdAt,
       config: {
         name: this.agentName,

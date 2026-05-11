@@ -63,6 +63,7 @@ function fakeAgent({ config: configOverrides, options: optionsOverrides, status:
   return {
     id: rest.id ?? 's1',
     ...(rest.inputIndex !== undefined ? { inputIndex: rest.inputIndex } : {}),
+    ...(rest.prompt !== undefined ? { prompt: rest.prompt } : {}),
     createdAt: rest.createdAt ?? 1,
     config: {
       name: cfg.name,
@@ -1453,6 +1454,41 @@ test('subagent tool lists retained sessions as serialized DTOs with clear action
   assert.equal(retained.status.snippet, 'The final answer from the child.');
 });
 
+test('subagent list rendering shows eight compact agents collapsed and full metadata expanded', async () => {
+  const { formatSubagentToolLines } = await import(`../dist/view/format.js?t=${unique()}`);
+  const agents = Array.from({ length: 9 }, (_, i) => ({
+    name: `agent-${i + 1}`,
+    description: i === 0
+      ? 'First line of a long description that should be truncated in collapsed mode. Second line should only appear expanded.'
+      : `Description for agent ${i + 1}.`,
+    source: 'project',
+    model: i === 0 ? 'provider/model' : undefined,
+    thinking: i === 0 ? 'high' : undefined,
+    tools: i === 0 ? ['read', 'bash'] : undefined,
+    skills: i === 0 ? ['review', 'tdd'] : undefined,
+    resumable: i === 0,
+    sourcePath: i === 0 ? '/tmp/agent.md' : undefined,
+  }));
+
+  const collapsed = formatSubagentToolLines({ agents }, false, 4_000);
+  assert.equal(collapsed.length, 8);
+  assert.match(collapsed[0], /agent-1/);
+  assert.match(collapsed[0], /First line/);
+  assert.doesNotMatch(collapsed.join('\n'), /agent-9/);
+  assert.doesNotMatch(collapsed.join('\n'), /Model:/);
+
+  const expanded = formatSubagentToolLines({ agents }, true, 4_000);
+  const expandedText = expanded.join('\n');
+  assert.match(expandedText, /agent-9/);
+  assert.match(expandedText, /First line of a long description/);
+  assert.match(expandedText, /Second line should only appear expanded/);
+  assert.match(expandedText, /Model: provider\/model/);
+  assert.match(expandedText, /Thinking: high/);
+  assert.match(expandedText, /Tools: read, bash/);
+  assert.match(expandedText, /Skills: review, tdd/);
+  assert.match(expandedText, /Resumable: true/);
+});
+
 test('subagent tool result renderer falls back to simple text when themed rendering fails', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   let registeredTool;
@@ -2407,6 +2443,41 @@ test('manager throttles live message snippets while lifecycle updates are immedi
   await pending;
 });
 
+test('subagent run rendering shows per-agent progress collapsed and prompt plus recent tools expanded', async () => {
+  const { formatSubagentToolLines } = await import(`../dist/view/format.js?t=${unique()}`);
+  const toolHistory = Array.from({ length: 10 }, (_, i) => ({
+    id: `tool-${i + 1}`,
+    name: `tool-${i + 1}`,
+    startedAt: 1_000 + i,
+    completedAt: 1_100 + i,
+  }));
+  const agent = fakeAgent({
+    prompt: 'line one prompt\nline two prompt\nline three prompt\nline four prompt should not render',
+    status: { kind: 'running', startedAt: 1_000 },
+    turns: 2,
+    activity: { toolHistory },
+    usage: { ...ZERO_USAGE, totalTokens: 1234 },
+    createdAt: 1_000,
+  });
+
+  const collapsed = formatSubagentToolLines({ group: { sessions: [agent], statusCounts: { running: 1 }, isError: false } }, false, 4_000);
+  assert.equal(collapsed.length, 1);
+  assert.match(collapsed[0], /helper/);
+  assert.match(collapsed[0], /10 tools/);
+  assert.match(collapsed[0], /1234 tokens/);
+  assert.match(collapsed[0], /3s/);
+  assert.doesNotMatch(collapsed[0], /1 subagents/);
+
+  const expanded = formatSubagentToolLines({ group: { sessions: [agent], statusCounts: { running: 1 }, isError: false } }, true, 4_000);
+  const expandedText = expanded.join('\n');
+  assert.match(expandedText, /Prompt:/);
+  assert.match(expandedText, /line one prompt/);
+  assert.match(expandedText, /line three prompt/);
+  assert.doesNotMatch(expandedText, /line four prompt/);
+  assert.match(expandedText, /Recent tools: tool-3, tool-4, tool-5, tool-6, tool-7, tool-8, tool-9, tool-10/);
+  assert.doesNotMatch(expandedText, /tool-1,/);
+});
+
 test('subagent DTO render helpers collapse groups and expand every child row', async () => {
   const { formatSubagentToolLines } = await import(`../dist/view/format.js?t=${unique()}`);
   const group = {
@@ -2445,17 +2516,25 @@ test('subagent DTO render helpers collapse groups and expand every child row', a
   };
 
   const collapsed = formatSubagentToolLines({ group }, false, 4_000);
-  assert.deepEqual(collapsed, ['4 subagents · 2 running · 1 completed · 1 error · outcome:error']);
+  assert.equal(collapsed.length, 4);
+  assert.match(collapsed[0], /helper/);
+  assert.match(collapsed[0], /0 tokens/);
+  assert.match(collapsed[1], /worker/);
+  assert.match(collapsed[1], /tool:bash/);
+  assert.match(collapsed[2], /missing/);
+  assert.match(collapsed[2], /Unknown agent: missing/);
+  assert.match(collapsed[3], /worker2/);
+  assert.match(collapsed[3], /tool:grep/);
 
   const expanded = formatSubagentToolLines({ group }, true, 4_000);
-  assert.equal(expanded.length, 4);
-  assert.match(expanded[0], /helper/);
-  assert.match(expanded[1], /worker/);
-  assert.match(expanded[1], /tool:bash/);
-  assert.match(expanded[2], /missing/);
-  assert.match(expanded[2], /Unknown agent: missing/);
-  assert.match(expanded[3], /worker2/);
-  assert.match(expanded[3], /tool:grep/);
+  const expandedText = expanded.join('\n');
+  assert.match(expandedText, /helper/);
+  assert.match(expandedText, /worker/);
+  assert.match(expandedText, /tool:bash/);
+  assert.match(expandedText, /missing/);
+  assert.match(expandedText, /Unknown agent: missing/);
+  assert.match(expandedText, /worker2/);
+  assert.match(expandedText, /tool:grep/);
 });
 
 test('subagent resume message keeps context concise while preserving structured result details', async () => {

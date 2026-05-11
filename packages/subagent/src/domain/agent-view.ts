@@ -49,6 +49,7 @@ export interface AgentView {
   readonly inputIndex?: number;
   readonly label?: string;
   readonly resumed?: boolean;
+  readonly prompt?: string;
   readonly createdAt: number;
   readonly config: AgentViewConfig;
   readonly status: AgentViewStatus;
