@@ -4,6 +4,8 @@ import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { formatAgentConfigSummary, formatSubagentToolLines, inventoryDetails } from "../view/format.js";
 import { SubagentUiSettingsStore } from "../ui/settings.js";
+import { loadSubagentUiSettings } from "../ui/widget.js";
+import { configureSubagentDisplay } from "../view/view-helpers.js";
 import {
   SubagentAgentsComponent,
   SubagentSessionsComponent,
@@ -33,7 +35,14 @@ export function registerSubagentsCommand(
           return;
         }
 
-        await agentRegistry.reload(ctx.cwd);
+        const settings = await loadSubagentUiSettings(ctx, settingsStore);
+        configureSubagentDisplay(settings.display);
+        agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
+        await agentRegistry.reload(ctx.cwd, {
+          discovery: settings.agentDiscovery,
+          defaultResumable: settings.runtime.defaultResumable,
+          onWarning: message => notify(ctx, message, "warning"),
+        });
         const agents = Array.from(agentRegistry.agents.values());
         if (!ctx.hasUI || !ctx.ui?.custom) {
           notify(ctx, agents.length

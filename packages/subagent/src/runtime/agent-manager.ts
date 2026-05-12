@@ -64,6 +64,10 @@ export class AgentManager {
     return activeOrRetainedAgents(this._agents).map(agent => agent.toView());
   }
 
+  configure(options: { maxRunning?: number }) {
+    if (options.maxRunning !== undefined) this._queue.maxRunning = options.maxRunning;
+  }
+
   clear(
     sessionId?: string,
   ): { cleared: number; sessionId?: string } {

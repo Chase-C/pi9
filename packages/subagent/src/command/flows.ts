@@ -5,6 +5,7 @@ import type { AgentManager } from "../runtime/agent-manager.js";
 import { createSubagentResumeMessage } from "../view/resume-message.js";
 import type { SubagentUiSettingsStore } from "../ui/settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "../ui/widget.js";
+import { configureSubagentDisplay } from "../view/view-helpers.js";
 import {
   SubagentResumeLoader,
   SubagentSettingsComponent,
@@ -38,6 +39,8 @@ export async function resumeSessionFromCommand(
   }
 
   const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
+  configureSubagentDisplay(uiSettings.display);
+  agentManager.configure?.({ maxRunning: uiSettings.runtime.maxConcurrentSubagents });
   let outcome: { result?: unknown; error?: unknown };
   try {
     outcome = await ctx.ui.custom<{ result?: unknown; error?: unknown }>((tui, theme, keybindings, done) => {
@@ -104,6 +107,8 @@ export async function openSubagentSettings(
   settingsStore: Pick<SubagentUiSettingsStore, "load" | "save">,
 ) {
   let settings = await loadSubagentUiSettings(ctx, settingsStore);
+  configureSubagentDisplay(settings.display);
+  agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
   if (!ctx.hasUI || !ctx.ui?.custom) {
     notify(ctx, `Subagent widget placement: ${settings.widgetPlacement}`, "info");
     return;
@@ -116,7 +121,7 @@ export async function openSubagentSettings(
       theme,
       keybindings,
       placement => {
-        settings = { widgetPlacement: placement };
+        settings = { ...settings, widgetPlacement: placement };
         updateSubagentWidget(ctx, agentManager.sessions, settings);
         const settingsToSave = settings;
         saveQueue = saveQueue.then(() => settingsStore.save(settingsToSave).then(

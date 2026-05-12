@@ -1,6 +1,4 @@
-import { OUTPUT_SNIPPET_LENGTH, PROMPT_PREVIEW_LENGTH, compact } from "./view-helpers.js";
-
-const RESUME_MESSAGE_SNIPPET_LENGTH = 80;
+import { compact, getSubagentDisplaySettings } from "./view-helpers.js";
 
 export interface SubagentResumeMessageDetails {
   sessionId: string;
@@ -27,9 +25,10 @@ export function createSubagentResumeMessage(result: {
   error?: string;
   sessionId?: string;
 }): SubagentResumeMessage {
-  const promptPreview = compact(result.prompt, PROMPT_PREVIEW_LENGTH);
-  const outputSnippet = result.output ? compact(result.output, OUTPUT_SNIPPET_LENGTH) : undefined;
-  const errorSnippet = result.error ? compact(result.error, OUTPUT_SNIPPET_LENGTH) : undefined;
+  const settings = getSubagentDisplaySettings();
+  const promptPreview = compact(result.prompt, settings.promptPreviewLength);
+  const outputSnippet = result.output ? compact(result.output, settings.outputSnippetLength) : undefined;
+  const errorSnippet = result.error ? compact(result.error, settings.outputSnippetLength) : undefined;
   const sessionId = result.sessionId ?? "unknown";
   const details: SubagentResumeMessageDetails = {
     sessionId,
@@ -57,7 +56,8 @@ export function formatSubagentResumeMessageContent(details: SubagentResumeMessag
     `session: ${details.sessionId}`,
     `prompt: ${details.promptPreview}`,
   ];
-  if (details.outputSnippet) parts.push(`output: ${compact(details.outputSnippet, RESUME_MESSAGE_SNIPPET_LENGTH)}`);
-  if (details.errorSnippet) parts.push(`error: ${compact(details.errorSnippet, RESUME_MESSAGE_SNIPPET_LENGTH)}`);
+  const settings = getSubagentDisplaySettings();
+  if (details.outputSnippet) parts.push(`output: ${compact(details.outputSnippet, settings.resumeMessageSnippetLength)}`);
+  if (details.errorSnippet) parts.push(`error: ${compact(details.errorSnippet, settings.resumeMessageSnippetLength)}`);
   return parts.join(" · ");
 }

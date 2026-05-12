@@ -23,7 +23,7 @@ export const SubagentParams = Type.Object({
   action: Type.String({
     description: "Subagent operation to perform. Use 'list' to list available agents, sessions, or skills, 'run' to spawn or resume tasks, and 'clear' to remove a paused session.",
   }),
-  tasks: Type.Optional(Type.Array(TaskSchema, { description: "One to eight subagent tasks to run for action=run. Each task is either a spawn (carrying agent) or a resume (carrying sessionId)." })),
+  tasks: Type.Optional(Type.Array(TaskSchema, { description: "Subagent tasks to run for action=run, up to configured maxTasksPerRun. Each task is either a spawn (carrying agent) or a resume (carrying sessionId)." })),
   type: Type.Optional(Type.String({
     description: "Type of items to list for action='list'. Use 'agents' to list available agents, 'sessions' for active or retained sessions, or 'skills' for skills available to inject. Defaults to 'agents'.",
   })),

@@ -5,7 +5,7 @@ import { AgentConfig } from "./agent-config.js";
 import type { AgentInvocation, AgentSpawn } from "./agent-invocation.js";
 import type { AgentRunResult, FinalizeRunArgs } from "./agent-result.js";
 import type { AgentToolUse, AgentUpdateKind, AgentView, AgentViewStatus } from "./agent-view.js";
-import { MESSAGE_SNIPPET_LENGTH, OUTPUT_SNIPPET_LENGTH, compact, compactMultiline } from "../view/view-helpers.js";
+import { compact, compactMultiline, getSubagentDisplaySettings } from "../view/view-helpers.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -119,7 +119,7 @@ export class Agent {
       },
       status: this._viewStatus(),
       activity: {
-        messageSnippet: this._message ? compact(this._message, MESSAGE_SNIPPET_LENGTH) : undefined,
+        messageSnippet: this._message ? compact(this._message, getSubagentDisplaySettings().messageSnippetLength) : undefined,
         turns: this._turns,
         compactions: this._compactions,
         toolHistory: this._toolHistory.map(tool => ({ ...tool })),
@@ -175,7 +175,7 @@ export class Agent {
       outcome: result.status,
       completedAt: this._status.completedAt,
       ...(startedAt !== undefined ? { startedAt } : {}),
-      ...(rawSnippet ? { snippet: compactMultiline(rawSnippet, OUTPUT_SNIPPET_LENGTH) } : {}),
+      ...(rawSnippet ? { snippet: compactMultiline(rawSnippet, getSubagentDisplaySettings().outputSnippetLength, getSubagentDisplaySettings().outputSnippetMaxLines) } : {}),
     };
   }
 

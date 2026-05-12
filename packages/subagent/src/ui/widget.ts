@@ -1,7 +1,8 @@
 import type { AgentView } from "../domain/agent-view.js";
 import { formatWidgetLines } from "../view/format.js";
 import {
-  DEFAULT_SUBAGENT_UI_SETTINGS,
+  DEFAULT_SUBAGENT_SETTINGS,
+  normalizeSettings,
   type SubagentUiSettings,
   type SubagentUiSettingsLoadResult,
   type SubagentUiSettingsStore,
@@ -21,12 +22,18 @@ export async function loadSubagentUiSettings(
 ) {
   try {
     const result = await settingsStore.load();
-    notifySettingsWarning(ctx, result);
-    return result.settings;
+    const normalized = normalizeSettings(result.settings);
+    notifySettingsWarning(ctx, result.warning ? result : normalized);
+    return normalized.settings;
   } catch (error) {
     const message = `Failed to load subagent UI settings; using defaults. ${error instanceof Error ? error.message : String(error)}`;
-    notifySettingsWarning(ctx, { settings: DEFAULT_SUBAGENT_UI_SETTINGS, warning: message });
-    return { ...DEFAULT_SUBAGENT_UI_SETTINGS };
+    notifySettingsWarning(ctx, { settings: DEFAULT_SUBAGENT_SETTINGS, warning: message });
+    return {
+      ...DEFAULT_SUBAGENT_SETTINGS,
+      runtime: { ...DEFAULT_SUBAGENT_SETTINGS.runtime },
+      agentDiscovery: { ...DEFAULT_SUBAGENT_SETTINGS.agentDiscovery, agentFileExtensions: [...DEFAULT_SUBAGENT_SETTINGS.agentDiscovery.agentFileExtensions] },
+      display: { ...DEFAULT_SUBAGENT_SETTINGS.display },
+    };
   }
 }
 

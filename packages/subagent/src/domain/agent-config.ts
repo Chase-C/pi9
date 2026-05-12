@@ -21,6 +21,7 @@ const requiredFields = [ "name", "description" ];
 export function BuildAgentConfig(
   content: string,
   source: AgentSource,
+  options: { defaultResumable?: boolean } = {},
 ): AgentConfig | { error: Error } {
   try {
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
@@ -31,7 +32,7 @@ export function BuildAgentConfig(
       thinking: parseString(frontmatter.thinking, "thinking") as ModelThinkingLevel | undefined,
       tools: parseCSVStrings(frontmatter.tools, "tools"),
       skills: parseCSVStrings(frontmatter.skills, "skills"),
-      resumable: parseBoolean(frontmatter.resumable, "resumable") ?? false,
+      resumable: parseBoolean(frontmatter.resumable, "resumable") ?? options.defaultResumable ?? false,
       systemPrompt: body.trim(),
       source,
       sourcePath: undefined,

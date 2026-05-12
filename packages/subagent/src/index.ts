@@ -6,7 +6,7 @@ import type { SubagentBatchUpdate } from "./domain/agent-view.js";
 import { AgentManager } from "./runtime/agent-manager.js";
 import { timingAsync, timingMark, timingStart, timingSync } from "./runtime/timing.js";
 import { parseTask, SubagentParams, type TaskRequest } from "./schema.js";
-import { SubagentUiSettingsStore } from "./ui/settings.js";
+import { SubagentUiSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./ui/settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./ui/widget.js";
 import { registerSubagentsCommand } from "./command/register.js";
 import {
@@ -17,9 +17,9 @@ import {
   runDetails,
 } from "./view/format.js";
 import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
+import { configureSubagentDisplay, getSubagentDisplaySettings } from "./view/view-helpers.js";
 import { listAgentDefinitions, listSkills, serializeGroup } from "./view/serialize.js";
 
-const MAX_TASKS = 8;
 
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;
@@ -27,10 +27,10 @@ interface SubagentExtensionDependencies {
   settingsStore?: Pick<SubagentUiSettingsStore, "load" | "save">;
 }
 
-function validateTaskCount(tasks: SubagentParams["tasks"] | undefined) {
+function validateTaskCount(tasks: SubagentParams["tasks"] | undefined, maxTasks = DEFAULT_SUBAGENT_SETTINGS.runtime.maxTasksPerRun) {
   if (!Array.isArray(tasks)) return "Provide a tasks array for action=run.";
   if (tasks.length === 0) return "Provide at least one task.";
-  if (tasks.length > MAX_TASKS) return `Too many tasks (${tasks.length}). Max is ${MAX_TASKS}.`;
+  if (tasks.length > maxTasks) return `Too many tasks (${tasks.length}). Max is ${maxTasks}.`;
   return undefined;
 }
 
@@ -48,6 +48,11 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
     details,
     isError: true,
   };
+}
+
+function applySettings(agentManager: AgentManager, settings: SubagentSettings) {
+  configureSubagentDisplay(settings.display);
+  agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
 }
 
 function partialToolResult(update: SubagentBatchUpdate) {
@@ -95,7 +100,7 @@ Use this tool when a task benefits from separation from the main conversation: c
 Inputs:
 - action: one of "list", "run", or "clear".
 - action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions, or type="skills" to list skills available to inject. Listed agents include any default skills declared in their frontmatter alongside their tools.
-- action="run": run one to eight subagent tasks. Each task is either a new spawn (carrying agent) or a resume of a completed resumable session (carrying sessionId). agent and sessionId are mutually exclusive — providing both is rejected. A spawn task takes agent and prompt and may include cwd, model, thinking, label, resumable, and skills. A resume task takes sessionId and prompt and may re-assert label and resumable; it rejects model, thinking, cwd, agent, and skills. The optional label is a human-readable identifier shown in widgets and logs in place of the agent name; on resume it overwrites the stored label. The optional resumable override applies one-way at completion: a resumable: false decision discards the session immediately, regardless of the agent's frontmatter default. The optional skills array (spawn only) injects named skills into the subagent's system prompt — unknown skill names are a hard error and an explicit skill bypasses its disable-model-invocation flag. Per-task skills fully replace the agent's default skills declared in frontmatter (no merge); an explicit empty array opts out of those defaults.
+- action="run": run one or more subagent tasks up to the configured maxTasksPerRun (default eight). Each task is either a new spawn (carrying agent) or a resume of a completed resumable session (carrying sessionId). agent and sessionId are mutually exclusive — providing both is rejected. A spawn task takes agent and prompt and may include cwd, model, thinking, label, resumable, and skills. A resume task takes sessionId and prompt and may re-assert label and resumable; it rejects model, thinking, cwd, agent, and skills. The optional label is a human-readable identifier shown in widgets and logs in place of the agent name; on resume it overwrites the stored label. The optional resumable override applies one-way at completion: a resumable: false decision discards the session immediately, regardless of the agent's frontmatter default. The optional skills array (spawn only) injects named skills into the subagent's system prompt — unknown skill names are a hard error and an explicit skill bypasses its disable-model-invocation flag. Per-task skills fully replace the agent's default skills declared in frontmatter (no merge); an explicit empty array opts out of those defaults.
 - action="clear": clear one known session by sessionId, aborting it if still running, or clear all non-running retained sessions when sessionId is omitted.
 
 Prompt guidance:
@@ -104,7 +109,7 @@ Prompt guidance:
 - Prefer one writer task at a time. Parallel tasks should be independent and should not edit the same files unless the user explicitly requested that workflow.
 
 Execution notes:
-- Up to four run tasks execute concurrently; final results preserve input order.
+- Up to maxConcurrentSubagents run tasks execute concurrently (default four); final results preserve input order.
 - run is blocking and returns structured results when each child prompt completes. Each result carries a resumed flag distinguishing fresh spawns from resumed sessions.
 - Results include a resumable flag and a sessionId when a resumable child has or had a child AgentSession; only completed resumable sessions can be resumed.
 - Resumable sessions live for the current Pi process lifetime or until cleared.
@@ -123,8 +128,9 @@ Execution notes:
         .filter((label: string | undefined): label is string => Boolean(label));
       let suffix = "";
       if (labels.length > 0) {
+        const limit = getSubagentDisplaySettings().toolCallLabelMaxLength;
         const joined = labels.join(", ");
-        const truncated = joined.length > 60 ? `${joined.slice(0, 57)}...` : joined;
+        const truncated = joined.length > limit ? `${joined.slice(0, Math.max(0, limit - 3))}...` : joined;
         suffix = ` · ${truncated}`;
       } else if (tasks.length) {
         suffix = ` · ${tasks.length} task${tasks.length === 1 ? "" : "s"}`;
@@ -142,7 +148,13 @@ Execution notes:
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       timingMark("tool.execute.start", { action: params.action, taskCount: Array.isArray(params.tasks) ? params.tasks.length : undefined, cwd: ctx.cwd });
-      await timingAsync("tool.agentRegistry.reload", { cwd: ctx.cwd }, () => agentRegistry.reload(ctx.cwd));
+      const settings = await timingAsync("tool.loadSettings", { hasUI: ctx.hasUI }, () => loadSubagentUiSettings(ctx, settingsStore));
+      applySettings(agentManager, settings);
+      await timingAsync("tool.agentRegistry.reload", { cwd: ctx.cwd }, () => agentRegistry.reload(ctx.cwd, {
+        discovery: settings.agentDiscovery,
+        defaultResumable: settings.runtime.defaultResumable,
+        onWarning: message => ctx.ui?.notify?.(message, "warning"),
+      }));
 
       if (!params.action) {
         return errorResult(`Provide an action: "list", "run", or "clear".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
@@ -159,7 +171,7 @@ Execution notes:
       }
 
       if (params.action === "run") {
-        const countError = validateTaskCount(params.tasks);
+        const countError = validateTaskCount(params.tasks, settings.runtime.maxTasksPerRun);
         if (countError) {
           return errorResult(`${countError}\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
         }
@@ -178,7 +190,6 @@ Execution notes:
           return errorResult(errors.join("\n"), { errors });
         }
 
-        const uiSettings = await timingAsync("tool.loadUiSettings", { hasUI: ctx.hasUI }, () => loadSubagentUiSettings(ctx, settingsStore));
         let lastGroup: ReturnType<typeof serializeGroup> | undefined;
         const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length });
         const results = await agentManager.run(ctx, signal, parsed, update => {
@@ -186,10 +197,10 @@ Execution notes:
           const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length }, () => partialToolResult(update));
           lastGroup = partial.details.group;
           timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
-          timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, uiSettings));
+          timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, settings));
         });
         runEnd({ ok: true, resultCount: results.length });
-        timingSync("tool.finalWidget", { sessionCount: agentManager.sessions.length }, () => updateSubagentWidget(ctx, agentManager.sessions, uiSettings));
+        timingSync("tool.finalWidget", { sessionCount: agentManager.sessions.length }, () => updateSubagentWidget(ctx, agentManager.sessions, settings));
         const isError = results.some(result => result.status !== "completed");
         const details = lastGroup ? runDetails(lastGroup, { results }) : { results };
         return toolResult(details, isError);

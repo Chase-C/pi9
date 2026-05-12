@@ -298,7 +298,12 @@ test('subagent UI settings default to below editor when file is missing', async 
 
   const result = await store.load();
 
-  assert.deepEqual(result.settings, { widgetPlacement: 'belowEditor' });
+  assert.equal(result.settings.widgetPlacement, 'belowEditor');
+  assert.equal(result.settings.runtime.maxTasksPerRun, 8);
+  assert.equal(result.settings.runtime.maxConcurrentSubagents, 4);
+  assert.equal(result.settings.runtime.defaultResumable, false);
+  assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, ['.md']);
+  assert.equal(result.settings.display.outputSnippetLength, 400);
   assert.equal(result.warning, undefined);
 });
 
@@ -310,7 +315,8 @@ test('subagent UI settings save and reload widget placement globally', async () 
   await new SubagentUiSettingsStore(settingsPath).save({ widgetPlacement: 'aboveEditor' });
   const result = await new SubagentUiSettingsStore(settingsPath).load();
 
-  assert.deepEqual(result.settings, { widgetPlacement: 'aboveEditor' });
+  assert.equal(result.settings.widgetPlacement, 'aboveEditor');
+  assert.equal(result.settings.runtime.maxTasksPerRun, 8);
   assert.equal(result.warning, undefined);
 });
 
@@ -323,8 +329,71 @@ test('subagent UI settings fall back to defaults for invalid config', async () =
 
   const result = await new SubagentUiSettingsStore(settingsPath).load();
 
-  assert.deepEqual(result.settings, { widgetPlacement: 'belowEditor' });
+  assert.equal(result.settings.widgetPlacement, 'belowEditor');
+  assert.equal(result.settings.runtime.maxConcurrentSubagents, 4);
   assert.match(result.warning, /widgetPlacement/);
+});
+
+test('subagent settings load runtime, discovery, and display overrides', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-settings-overrides-'));
+  const settingsPath = join(root, 'subagent', 'settings.json');
+  await mkdir(join(root, 'subagent'), { recursive: true });
+  await writeFile(settingsPath, JSON.stringify({
+    widgetPlacement: 'off',
+    runtime: { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultResumable: true },
+    agentDiscovery: { includeProjectAgents: false, agentFileExtensions: ['.md', '.agent.md'] },
+    display: { outputSnippetLength: 42, widgetShowRetainedSessions: false },
+  }));
+  const { SubagentUiSettingsStore } = await import(`../dist/ui/settings.js?t=${unique()}`);
+
+  const result = await new SubagentUiSettingsStore(settingsPath).load();
+
+  assert.equal(result.settings.widgetPlacement, 'off');
+  assert.deepEqual(result.settings.runtime, { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultResumable: true });
+  assert.equal(result.settings.agentDiscovery.includeProjectAgents, false);
+  assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, ['.md', '.agent.md']);
+  assert.equal(result.settings.display.outputSnippetLength, 42);
+  assert.equal(result.settings.display.widgetShowRetainedSessions, false);
+});
+
+test('registry honors discovery options and default resumable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-registry-config-'));
+  const projectAgents = join(root, '.pi', 'agents');
+  await mkdir(projectAgents, { recursive: true });
+  await writeFile(join(projectAgents, 'helper.md'), `---\nname: helper\ndescription: Helps\n---\nHelp prompt`);
+
+  const { AgentRegistry } = await import(`../dist/domain/agent-registry.js?t=${unique()}`);
+  const disabled = new AgentRegistry();
+  await disabled.reload(root, { discovery: { includeProjectAgents: false } });
+  assert.equal(disabled.agents.has('helper'), false);
+
+  const enabled = new AgentRegistry();
+  await enabled.reload(root, { defaultResumable: true });
+  assert.equal(enabled.agents.get('helper')?.resumable, true);
+});
+
+test('tool execution uses configured maxTasksPerRun from subagent settings', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-max-tasks-config-'));
+  const projectAgents = join(root, '.pi', 'agents');
+  await mkdir(projectAgents, { recursive: true });
+  await writeFile(join(projectAgents, 'helper.md'), `---\nname: helper\ndescription: Helps\n---\nHelp prompt`);
+
+  let registeredTool;
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    settingsStore: { load: async () => ({ settings: { widgetPlacement: 'belowEditor', runtime: { maxTasksPerRun: 1 } } }) },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [
+      { agent: 'helper', prompt: 'task 1' },
+      { agent: 'helper', prompt: 'task 2' },
+    ],
+  }, undefined, undefined, { cwd: root });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Too many tasks \(2\)\. Max is 1/);
 });
 
 test('registry loads markdown files from ctx cwd project dir and keys by frontmatter name', async () => {
@@ -618,7 +687,9 @@ test('/subagents settings exposes placement values, saves changes, and updates a
   assert.match(rendered, /Widget placement/);
   assert.match(rendered, /belowEditor/);
   assert.match(rendered, /Values: belowEditor, aboveEditor, off/);
-  assert.deepEqual(saved, [{ widgetPlacement: 'aboveEditor' }]);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].widgetPlacement, 'aboveEditor');
+  assert.equal(saved[0].runtime.maxTasksPerRun, 8);
   assert.equal(widgets.at(-1)[0], 'subagent');
   assert.deepEqual(widgets.at(-1)[2], { placement: 'aboveEditor' });
 });

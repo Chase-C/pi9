@@ -5,8 +5,8 @@ import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentView, AgentViewStatus } from "../domain/agent-view.js";
 import { serializeGroup } from "./serialize.js";
 import {
-  MESSAGE_SNIPPET_LENGTH,
   canClearSubagentSession,
+  getSubagentDisplaySettings,
   canResumeSubagentSession,
   compact,
   effectiveStatus,
@@ -112,7 +112,7 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
   if (snippet && label) {
     for (const line of snippetLines(label, snippet, 0)) lines.push(line.text);
   }
-  if (agent.activity.messageSnippet) lines.push(`Message: ${compact(agent.activity.messageSnippet, MESSAGE_SNIPPET_LENGTH)}`);
+  if (agent.activity.messageSnippet) lines.push(`Message: ${compact(agent.activity.messageSnippet, getSubagentDisplaySettings().messageSnippetLength)}`);
 
   const actions = ["inspect"];
   if (canResumeSubagentSession(agent)) actions.push("resume");
@@ -122,7 +122,8 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
 }
 
 export function formatWidgetLines(agents: AgentView[], now = Date.now()): string[] {
-  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || a.config.resumable);
+  const settings = getSubagentDisplaySettings();
+  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || (settings.widgetShowRetainedSessions && a.config.resumable));
   return visible.map(agent => formatSessionLine(agent, now));
 }
 
@@ -342,7 +343,8 @@ function rowElapsed(row: AgentView, now: number): string {
 
 function formatAgentListLines(agents: AgentListingEntry[], expanded: boolean, bold?: Bold): string[] {
   if (!expanded) {
-    return agents.slice(0, 8).map(agent => `${applyBold(bold, agent.name)} · ${compact(agent.description, 100)}`);
+    const settings = getSubagentDisplaySettings();
+    return agents.slice(0, settings.collapsedAgentListLimit).map(agent => `${applyBold(bold, agent.name)} · ${compact(agent.description, settings.collapsedDescriptionLength)}`);
   }
 
   return agents.flatMap((agent, index) => {

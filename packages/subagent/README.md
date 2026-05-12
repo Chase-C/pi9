@@ -187,7 +187,7 @@ The extension also updates a lightweight widget outside the tool row.
 - A single visible session renders a compact session line.
 - Multiple visible sessions render a one-line summary of active and retained counts.
 
-Configure placement with `/subagents settings`:
+Configure widget placement with `/subagents settings`:
 
 | Value | Behavior |
 | --- | --- |
@@ -195,7 +195,39 @@ Configure placement with `/subagents settings`:
 | `aboveEditor` | Show the widget above the editor. |
 | `off` | Disable only the persistent widget. Tool rendering and `/subagents` still work. |
 
-The setting is global for the user and is stored in the Pi agent directory.
+The settings are global for the user and stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. The file is normalized with defaults when saved. Supported keys:
+
+```json
+{
+  "widgetPlacement": "belowEditor",
+  "runtime": {
+    "maxTasksPerRun": 8,
+    "maxConcurrentSubagents": 4,
+    "defaultResumable": false
+  },
+  "agentDiscovery": {
+    "includeUserAgents": true,
+    "includeProjectAgents": true,
+    "projectAgentsStrategy": "nearest",
+    "agentFileExtensions": [".md"],
+    "duplicateNamePolicy": "projectOverridesUser",
+    "warnOnInvalidAgents": false
+  },
+  "display": {
+    "promptPreviewLength": 120,
+    "messageSnippetLength": 200,
+    "outputSnippetLength": 400,
+    "outputSnippetMaxLines": 8,
+    "resumeMessageSnippetLength": 80,
+    "toolCallLabelMaxLength": 60,
+    "collapsedAgentListLimit": 8,
+    "collapsedDescriptionLength": 100,
+    "widgetShowRetainedSessions": true
+  }
+}
+```
+
+`runtime.defaultResumable` only applies when an agent definition omits `resumable`; explicit frontmatter and per-task overrides still win. `agentDiscovery.duplicateNamePolicy` controls which source wins when user and project agents share a runtime name.
 
 ## `/subagents` command
 
@@ -300,10 +332,10 @@ Each result carries:
 ## Limits and current constraints
 
 - `action` is required; legacy `{ tasks: [...] }` calls and the previous `start`/`resume` actions are rejected.
-- Maximum eight tasks per `run` tool call.
-- Maximum four child sessions run concurrently across spawn and resume tasks.
+- Maximum tasks per `run` tool call defaults to eight and can be changed with `runtime.maxTasksPerRun`.
+- Maximum concurrent child sessions defaults to four and can be changed with `runtime.maxConcurrentSubagents`.
 - A given `sessionId` cannot be resumed more than once concurrently; a second concurrent resume of the same session surfaces as a per-task error.
-- Agent discovery always checks user agents and the nearest project agents for the execution `cwd`; there is no `agentScope` parameter.
+- Agent discovery checks user agents and the nearest project agents for the execution `cwd` by default. It can be narrowed with `agentDiscovery` settings; there is no per-call `agentScope` parameter.
 - No per-run timeout is exposed beyond parent abort/cancellation.
 - Child sessions isolate Pi message history/context, but they still run inside the same extension process.
 - Resumable sessions are retained only for the current Pi process lifetime and only for agents with `resumable: true` (or a per-task `resumable: true` override on a session that has an attached child).

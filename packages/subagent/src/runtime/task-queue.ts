@@ -5,7 +5,7 @@ export class TaskQueue {
   private _pending = new Array<() => void>();
   private _running = 0;
 
-  constructor(readonly maxRunning: number) { }
+  constructor(public maxRunning: number) { }
 
   enqueue<T>(task: () => Promise<T>, timingData: Record<string, unknown> = {}): Promise<T> {
     return new Promise<T>((resolve, reject) => {
