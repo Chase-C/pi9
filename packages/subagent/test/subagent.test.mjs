@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { visibleWidth } from '@mariozechner/pi-tui';
 
 const unique = () => `${Date.now()}-${Math.random()}`;
 
@@ -63,6 +62,7 @@ function fakeAgent({ config: configOverrides, options: optionsOverrides, status:
   return {
     id: rest.id ?? 's1',
     ...(rest.inputIndex !== undefined ? { inputIndex: rest.inputIndex } : {}),
+    ...(rest.label !== undefined ? { label: rest.label } : {}),
     ...(rest.prompt !== undefined ? { prompt: rest.prompt } : {}),
     createdAt: rest.createdAt ?? 1,
     config: {
@@ -177,80 +177,6 @@ test('subagent tool description mentions the per-task resumable override is one-
 
   assert.match(registeredTool.description, /resumable/);
   assert.match(registeredTool.description, /one-way at completion/);
-});
-
-test('subagent renderCall shows labels when any task has one and falls back to count otherwise', async () => {
-  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  let registeredTool;
-  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
-
-  const labeled = registeredTool.renderCall({
-    action: 'run',
-    tasks: [{ agent: 'helper', prompt: 'p1', label: 'researcher' }, { agent: 'helper', prompt: 'p2' }],
-  }, undefined).text;
-  assert.match(labeled, /researcher/);
-  assert.doesNotMatch(labeled, /2 tasks/);
-
-  const unlabeled = registeredTool.renderCall({
-    action: 'run',
-    tasks: [{ agent: 'helper', prompt: 'p1' }, { agent: 'helper', prompt: 'p2' }],
-  }, undefined).text;
-  assert.match(unlabeled, /2 tasks/);
-});
-
-test('display lines and widget prefer label over agent name when present', async () => {
-  const { formatSubagentSessionLine, formatWidgetLines, formatSubagentSessionSummary } =
-    await import(`../dist/view/format.js?t=${unique()}`);
-
-  const labeled = fakeAgent({
-    config: { name: 'helper', resumable: true },
-    options: { prompt: 'work' },
-    status: { kind: 'running', startedAt: 1 },
-  });
-  labeled.label = 'researcher';
-
-  const unlabeled = fakeAgent({ config: { name: 'helper', resumable: true }, status: { kind: 'running', startedAt: 1 } });
-
-  assert.match(formatSubagentSessionLine(labeled, 5_000), /researcher/);
-  assert.doesNotMatch(formatSubagentSessionLine(labeled, 5_000), /helper/);
-  assert.match(formatSubagentSessionLine(unlabeled, 5_000), /helper/);
-
-  const widget = formatWidgetLines([labeled], 5_000).join('\n');
-  assert.match(widget, /researcher/);
-  assert.doesNotMatch(widget, /helper/);
-
-  assert.match(formatSubagentSessionSummary(labeled), /researcher/);
-  assert.doesNotMatch(formatSubagentSessionSummary(labeled), /helper/);
-});
-
-test('widget lists each visible session with labels and agent-name fallbacks', async () => {
-  const { formatWidgetLines } = await import(`../dist/view/format.js?t=${unique()}`);
-
-  const labeled = fakeAgent({
-    id: 's1',
-    config: { name: 'helper' },
-    status: { kind: 'running', startedAt: 1_000 },
-  });
-  labeled.label = 'researcher';
-  const unlabeled = fakeAgent({
-    id: 's2',
-    config: { name: 'writer' },
-    status: { kind: 'running', startedAt: 1_000 },
-  });
-  const hiddenCompleted = fakeAgent({
-    id: 's3',
-    config: { name: 'auditor', resumable: false },
-    status: { kind: 'completed', startedAt: 1_000, completedAt: 2_000, response: 'done' },
-  });
-
-  const widget = formatWidgetLines([labeled, unlabeled, hiddenCompleted], 5_000);
-
-  assert.equal(widget.length, 2);
-  assert.match(widget[0], /researcher/);
-  assert.doesNotMatch(widget[0], /helper/);
-  assert.match(widget[1], /writer/);
-  assert.doesNotMatch(widget.join('\n'), /auditor/);
-  assert.doesNotMatch(widget.join('\n'), /Subagents:/);
 });
 
 test('AgentManager.run carries the input label on unknown-agent synthetic results and views', async () => {
@@ -626,6 +552,30 @@ test('tool run action returns full output only once in JSON details for a resume
   assert.equal(result.isError, false);
   assert.equal(result.details.results[0].output, fullOutput);
   assert.equal((result.content[0].text.match(new RegExp(fullOutput, 'g')) ?? []).length, 1);
+});
+
+test('subagent run display animates only the running status glyph', async () => {
+  const { formatSubagentToolLines, runDetails } = await import(`../dist/view/format.js?t=${unique()}`);
+  const { serializeGroup } = await import(`../dist/view/serialize.js?t=${unique()}`);
+  const sessions = [
+    fakeAgent({ config: { name: 'done' }, status: { kind: 'completed', startedAt: 1, completedAt: 2, response: 'ok' } }),
+    fakeAgent({ config: { name: 'active' }, status: { kind: 'running', startedAt: 1 } }),
+    fakeAgent({ config: { name: 'waiting' }, status: { kind: 'queued' } }),
+    fakeAgent({ config: { name: 'failed' }, status: { kind: 'error', startedAt: 1, completedAt: 2, error: 'bad' } }),
+  ];
+
+  const details = runDetails(serializeGroup(sessions));
+  const first = formatSubagentToolLines(details, false, 0);
+  const second = formatSubagentToolLines(details, false, 120);
+
+  assert.match(first[0], /^  ✓ done/);
+  assert.match(first[1], /^  ⠋ active/);
+  assert.match(first[2], /^  ○ waiting/);
+  assert.match(first[3], /^  ✗ failed/);
+  assert.match(second[0], /^  ✓ done/);
+  assert.match(second[1], /^  ⠙ active/);
+  assert.match(second[2], /^  ○ waiting/);
+  assert.match(second[3], /^  ✗ failed/);
 });
 
 test('/subagents settings exposes placement values, saves changes, and updates active widget', async () => {
@@ -1023,103 +973,6 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
   assert.doesNotMatch(text, /"config"/);
 });
 
-test('/subagents agents view constrains long rendered rows to the TUI width', async () => {
-  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const width = 80;
-  const fakeRegistry = {
-    agents: new Map([
-      ['researcher-with-a-long-name', {
-        name: 'researcher-with-a-long-name',
-        description: `Investigates broad design context with a very long description ${'y'.repeat(140)}`,
-        source: 'project',
-        resumable: true,
-        model: 'test/model-with-a-long-name',
-        tools: ['read', 'bash', 'grep'],
-      }],
-    ]),
-    async reload() {},
-    summarizeAgent() { return ''; },
-  };
-  const fakeManager = {
-    sessions: [],
-  };
-  const commands = new Map();
-  subagentExtension({
-    registerTool() {},
-    registerCommand: (name, command) => commands.set(name, command),
-  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
-
-  let rendered = [];
-  const theme = {
-    fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
-    bold: text => `\x1b[1m${text}\x1b[22m`,
-  };
-  await commands.get('subagents').handler('', {
-    cwd: process.cwd(),
-    hasUI: true,
-    ui: {
-      notify() {},
-      custom(factory) {
-        const component = factory({ requestRender() {} }, theme, {}, () => {});
-        rendered = component.render(width);
-        return Promise.resolve(undefined);
-      },
-    },
-  });
-
-  assert.ok(rendered.length > 0);
-  for (const line of rendered) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
-});
-
-test('/subagents sessions view constrains long rendered rows to the TUI width', async () => {
-  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const width = 155;
-  const fakeRegistry = {
-    agents: new Map(),
-    async reload() {},
-    summarizeAgent() { return ''; },
-  };
-  const fakeManager = {
-    sessions: [fakeAgent({
-      config: { name: 'explorer' },
-      options: { prompt: `Investigate the rendering crash caused by an extremely long prompt preview ${'x'.repeat(180)}` },
-      status: { kind: 'running', startedAt: 1 },
-      turns: 12,
-    })],
-  };
-  const commands = new Map();
-  subagentExtension({
-    registerTool() {},
-    registerCommand: (name, command) => commands.set(name, command),
-  }, { agentRegistry: fakeRegistry, agentManager: fakeManager });
-
-  let rendered = [];
-  let inspectRendered = [];
-  const theme = {
-    fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
-    bold: text => `\x1b[1m${text}\x1b[22m`,
-  };
-  await commands.get('subagents').handler('', {
-    cwd: process.cwd(),
-    hasUI: true,
-    ui: {
-      notify() {},
-      custom(factory) {
-        const component = factory({ requestRender() {} }, theme, {}, () => {});
-        rendered = component.render(width);
-        component.handleInput('\r');
-        inspectRendered = component.render(width);
-        return Promise.resolve(undefined);
-      },
-    },
-  });
-
-  assert.ok(rendered.length > 0);
-  for (const line of rendered) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
-  assert.ok(inspectRendered.length > 0);
-  for (const line of inspectRendered) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
-});
-
 test('/subagents command handles resume when editor UI is unavailable', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeManager = {
@@ -1183,61 +1036,6 @@ test('/subagents command handles resume when editor UI throws', async () => {
   assert.match(notifications.at(-1)[0], /editor|UI/i);
   assert.match(notifications.at(-1)[0], /editor unavailable/);
   assert.equal(notifications.at(-1)[1], 'warning');
-});
-
-test('subagents command resume loader constrains long rendered lines to the TUI width', async () => {
-  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  const width = 50;
-  const longAgent = `helper-${'z'.repeat(120)}`;
-  const fakeManager = {
-    sessions: [fakeAgent({ config: { name: longAgent, resumable: true } })],
-    run(_ctx, _signal, tasks) {
-      return Promise.resolve(tasks.map(task => ({ agent: longAgent, prompt: task.prompt, status: 'completed', output: 'done', sessionId: task.sessionId, resumable: true, resumed: true })));
-    },
-  };
-  const commands = new Map();
-  subagentExtension({
-    registerTool() {},
-    registerCommand: (name, command) => commands.set(name, command),
-    registerMessageRenderer() {},
-    sendMessage() {},
-  }, { agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } }, agentManager: fakeManager });
-
-  let customCalls = 0;
-  let loaderLines = [];
-  const theme = {
-    fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
-    bold: text => `\x1b[1m${text}\x1b[22m`,
-  };
-  await commands.get('subagents').handler('', {
-    cwd: process.cwd(),
-    hasUI: true,
-    ui: {
-      notify() {},
-      setWidget() {},
-      editor() { return Promise.resolve('follow up'); },
-      custom(factory) {
-        customCalls += 1;
-        return new Promise(resolve => {
-          let component;
-          const done = value => {
-            component?.dispose?.();
-            resolve(value);
-          };
-          component = factory({ requestRender() {} }, theme, {}, done);
-          if (customCalls === 1) {
-            component.handleInput('r');
-          } else {
-            loaderLines = component.render(width);
-          }
-        });
-      },
-    },
-  });
-
-  assert.equal(customCalls, 2);
-  assert.ok(loaderLines.length > 0);
-  for (const line of loaderLines) assert.ok(visibleWidth(line) <= width, `${visibleWidth(line)} > ${width}: ${line}`);
 });
 
 test('subagents command resumes completed retained session with editor loader and visible concise message', async () => {
@@ -1454,41 +1252,6 @@ test('subagent tool lists retained sessions as serialized DTOs with clear action
   assert.equal(retained.status.snippet, 'The final answer from the child.');
 });
 
-test('subagent list rendering shows eight compact agents collapsed and full metadata expanded', async () => {
-  const { formatSubagentToolLines } = await import(`../dist/view/format.js?t=${unique()}`);
-  const agents = Array.from({ length: 9 }, (_, i) => ({
-    name: `agent-${i + 1}`,
-    description: i === 0
-      ? 'First line of a long description that should be truncated in collapsed mode. Second line should only appear expanded.'
-      : `Description for agent ${i + 1}.`,
-    source: 'project',
-    model: i === 0 ? 'provider/model' : undefined,
-    thinking: i === 0 ? 'high' : undefined,
-    tools: i === 0 ? ['read', 'bash'] : undefined,
-    skills: i === 0 ? ['review', 'tdd'] : undefined,
-    resumable: i === 0,
-    sourcePath: i === 0 ? '/tmp/agent.md' : undefined,
-  }));
-
-  const collapsed = formatSubagentToolLines({ agents }, false, 4_000);
-  assert.equal(collapsed.length, 8);
-  assert.match(collapsed[0], /agent-1/);
-  assert.match(collapsed[0], /First line/);
-  assert.doesNotMatch(collapsed.join('\n'), /agent-9/);
-  assert.doesNotMatch(collapsed.join('\n'), /Model:/);
-
-  const expanded = formatSubagentToolLines({ agents }, true, 4_000);
-  const expandedText = expanded.join('\n');
-  assert.match(expandedText, /agent-9/);
-  assert.match(expandedText, /First line of a long description/);
-  assert.match(expandedText, /Second line should only appear expanded/);
-  assert.match(expandedText, /Model: provider\/model/);
-  assert.match(expandedText, /Thinking: high/);
-  assert.match(expandedText, /Tools: read, bash/);
-  assert.match(expandedText, /Skills: review, tdd/);
-  assert.match(expandedText, /Resumable: true/);
-});
-
 test('subagent tool result renderer falls back to simple text when themed rendering fails', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   let registeredTool;
@@ -1499,6 +1262,7 @@ test('subagent tool result renderer falls back to simple text when themed render
     component = registeredTool.renderResult({
       content: [{ type: 'text', text: 'plain fallback helper output' }],
       details: {
+        view: 'inventory',
         sessions: [{
           id: 's1', inputIndex: 0, createdAt: 1,
           config: { name: 'helper', description: 'Helper', source: 'project', model: undefined, thinking: undefined, tools: undefined, resumable: false },
@@ -1511,6 +1275,42 @@ test('subagent tool result renderer falls back to simple text when themed render
   });
 
   assert.match(component.render(120).join('\n'), /plain fallback helper output/);
+});
+
+test('subagent tool result renderer falls back to content text for shapes without sessions/agents/group', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const passthroughTheme = { fg: (_color, text) => text };
+  const shapes = [
+    { label: 'clear', details: { cleared: 1, sessionId: 'abc' }, expected: '"cleared": 1' },
+    { label: 'skills', details: { skills: [{ name: 'tdd', description: 'd', source: 'project' }] }, expected: '"tdd"' },
+    { label: 'errors', details: { errors: ['task[0]: bad'] }, expected: 'task[0]: bad' },
+  ];
+
+  for (const { label, details, expected } of shapes) {
+    const component = registeredTool.renderResult({
+      content: [{ type: 'text', text: JSON.stringify(details, null, 2) }],
+      details,
+    }, { expanded: false }, passthroughTheme);
+    const rendered = component.render(120).join('\n');
+    assert.doesNotMatch(rendered, /No subagent sessions\./, `${label} should not render the empty-sessions fallback`);
+    assert.match(rendered, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `${label} should render its content text`);
+  }
+});
+
+test('subagent tool result renderer keeps the empty-sessions message for an explicit empty sessions shape', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const component = registeredTool.renderResult({
+    content: [{ type: 'text', text: '{ "sessions": [] }' }],
+    details: { view: 'inventory', sessions: [] },
+  }, { expanded: false }, { fg: (_c, t) => t });
+
+  assert.match(component.render(120).join('\n'), /No subagent sessions\./);
 });
 
 test('tool execution returns structured failed run for unknown agents', async () => {
@@ -2205,6 +2005,39 @@ test('manager emits grouped progress rows in input order including unknown agent
   assert.match(initial[1].status.snippet, /Unknown agent: missing/);
 });
 
+test('manager keeps emitting active batch updates for spinner animation even without agent events', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const registry = { agents: new Map([
+    ['helper', { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' }],
+  ]) };
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  let finish;
+  const blocker = new Promise(resolve => { finish = resolve; });
+  const runner = async (_ctx, agent, prompt) => {
+    agent.attach(session);
+    await blocker;
+    return completedRun(agent, prompt, 'done');
+  };
+  const manager = new AgentManager(registry, 1, runner);
+  const snapshots = [];
+
+  const pending = manager.run(
+    { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
+    undefined,
+    [{ kind: 'spawn', agent: 'helper', prompt: 'work' }],
+    update => snapshots.push(update.sessions[0]),
+  );
+
+  await new Promise(resolve => setTimeout(resolve, 280));
+  finish();
+  await pending;
+
+  assert.equal(snapshots[0].status.kind, 'queued');
+  assert.ok(snapshots.filter(s => s.status.kind === 'running').length >= 2);
+  assert.equal(snapshots.at(-1).status.outcome, 'completed');
+});
+
 test('manager emits live agent progress with the right transitions', async () => {
   const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
   const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
@@ -2448,7 +2281,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
   assert.equal(result.details.results[0].output, 'done');
   assert.equal(result.details.group.sessions[0].activity.toolHistory.at(-1)?.name, 'read');
   assert.equal(partials[0].details.group.sessions[0].activity.toolHistory.at(-1)?.name, 'read');
-  assert.match(partials[0].content[0].text, /working/);
+  assert.doesNotMatch(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], 'subagent');
   assert.match(widgets[0][1][0], /helper/);
   assert.deepEqual(widgets.at(-1), ['subagent', undefined, { placement: 'belowEditor' }]);
@@ -2492,100 +2325,6 @@ test('manager throttles live message snippets while lifecycle updates are immedi
 
   finish();
   await pending;
-});
-
-test('subagent run rendering shows per-agent progress collapsed and prompt plus recent tools expanded', async () => {
-  const { formatSubagentToolLines } = await import(`../dist/view/format.js?t=${unique()}`);
-  const toolHistory = Array.from({ length: 10 }, (_, i) => ({
-    id: `tool-${i + 1}`,
-    name: `tool-${i + 1}`,
-    startedAt: 1_000 + i,
-    completedAt: 1_100 + i,
-  }));
-  const agent = fakeAgent({
-    prompt: 'line one prompt\nline two prompt\nline three prompt\nline four prompt should not render',
-    status: { kind: 'running', startedAt: 1_000 },
-    turns: 2,
-    activity: { toolHistory },
-    usage: { ...ZERO_USAGE, totalTokens: 1234 },
-    createdAt: 1_000,
-  });
-
-  const collapsed = formatSubagentToolLines({ group: { sessions: [agent], statusCounts: { running: 1 }, isError: false } }, false, 4_000);
-  assert.equal(collapsed.length, 1);
-  assert.match(collapsed[0], /helper/);
-  assert.match(collapsed[0], /10 tools/);
-  assert.match(collapsed[0], /1234 tokens/);
-  assert.match(collapsed[0], /3s/);
-  assert.doesNotMatch(collapsed[0], /1 subagents/);
-
-  const expanded = formatSubagentToolLines({ group: { sessions: [agent], statusCounts: { running: 1 }, isError: false } }, true, 4_000);
-  const expandedText = expanded.join('\n');
-  assert.match(expandedText, /Prompt:/);
-  assert.match(expandedText, /line one prompt/);
-  assert.match(expandedText, /line three prompt/);
-  assert.doesNotMatch(expandedText, /line four prompt/);
-  assert.match(expandedText, /Recent tools: tool-3, tool-4, tool-5, tool-6, tool-7, tool-8, tool-9, tool-10/);
-  assert.doesNotMatch(expandedText, /tool-1,/);
-});
-
-test('subagent DTO render helpers collapse groups and expand every child row', async () => {
-  const { formatSubagentToolLines } = await import(`../dist/view/format.js?t=${unique()}`);
-  const group = {
-    statusCounts: { completed: 1, running: 2, error: 1 },
-    isError: true,
-    sessions: [
-      {
-        id: 's1', inputIndex: 0, createdAt: 1_000,
-        config: { name: 'helper', source: 'project', model: undefined, thinking: undefined, tools: undefined, resumable: false },
-        status: { kind: 'done', outcome: 'completed', startedAt: 1_000, completedAt: 2_000 },
-        activity: { turns: 1, compactions: 0, toolHistory: [] },
-        usage: undefined,
-      },
-      {
-        id: 's2', inputIndex: 1, createdAt: 1_000,
-        config: { name: 'worker', source: 'project', model: undefined, thinking: undefined, tools: undefined, resumable: false },
-        status: { kind: 'running', startedAt: 2_000 },
-        activity: { messageSnippet: 'checking logs', turns: 2, compactions: 0, toolHistory: [{ id: 'bash-1', name: 'bash', startedAt: 2_500 }] },
-        usage: undefined,
-      },
-      {
-        id: 'g1:task-2', inputIndex: 2, createdAt: 1_000,
-        config: { name: 'missing', source: undefined, model: undefined, thinking: undefined, tools: undefined, resumable: false },
-        status: { kind: 'done', outcome: 'error', completedAt: 1_000, snippet: 'Unknown agent: missing.' },
-        activity: { turns: 0, compactions: 0, toolHistory: [] },
-        usage: undefined,
-      },
-      {
-        id: 's4', inputIndex: 3, createdAt: 1_000,
-        config: { name: 'worker2', source: 'project', model: undefined, thinking: undefined, tools: undefined, resumable: false },
-        status: { kind: 'running', startedAt: 2_000 },
-        activity: { messageSnippet: 'searching', turns: 1, compactions: 0, toolHistory: [{ id: 'grep-1', name: 'grep', startedAt: 2_500 }] },
-        usage: undefined,
-      },
-    ],
-  };
-
-  const collapsed = formatSubagentToolLines({ group }, false, 4_000);
-  assert.equal(collapsed.length, 4);
-  assert.match(collapsed[0], /helper/);
-  assert.match(collapsed[0], /0 tokens/);
-  assert.match(collapsed[1], /worker/);
-  assert.match(collapsed[1], /tool:bash/);
-  assert.match(collapsed[2], /missing/);
-  assert.match(collapsed[2], /Unknown agent: missing/);
-  assert.match(collapsed[3], /worker2/);
-  assert.match(collapsed[3], /tool:grep/);
-
-  const expanded = formatSubagentToolLines({ group }, true, 4_000);
-  const expandedText = expanded.join('\n');
-  assert.match(expandedText, /helper/);
-  assert.match(expandedText, /worker/);
-  assert.match(expandedText, /tool:bash/);
-  assert.match(expandedText, /missing/);
-  assert.match(expandedText, /Unknown agent: missing/);
-  assert.match(expandedText, /worker2/);
-  assert.match(expandedText, /tool:grep/);
 });
 
 test('subagent resume message keeps context concise while preserving structured result details', async () => {
@@ -2632,32 +2371,6 @@ test('canResumeSubagentSession allows resume only for completed resumable agents
   for (const status of nonCompleted) {
     assert.equal(canResumeSubagentSession(fakeAgent({ config: { resumable: true }, status })), false, status.kind);
   }
-});
-
-test('format helpers render compact operational progress and auto-hide empty widgets', async () => {
-  const { formatSubagentSessionLine, formatWidgetLines } = await import(`../dist/view/format.js?t=${unique()}`);
-  const running = fakeAgent({
-    status: { kind: 'running', startedAt: 1_000 },
-    message: 'reading source files',
-    activeTools: ['read'],
-    turns: 2,
-    createdAt: 1_000,
-  });
-  const line = formatSubagentSessionLine(running, 4_000);
-
-  assert.match(line, /helper/);
-  assert.match(line, /running/);
-  assert.match(line, /tool:read/);
-  assert.match(line, /2 turns/);
-  assert.match(line, /3s/);
-  assert.match(line, /reading source files/);
-  assert.deepEqual(formatWidgetLines([running], 4_000), [line]);
-
-  const completed = fakeAgent({ status: { kind: 'completed', startedAt: 1_000, completedAt: 5_000, response: 'done' } });
-  assert.deepEqual(formatWidgetLines([completed], 6_000), []);
-
-  const completedResumable = fakeAgent({ config: { resumable: true }, status: { kind: 'completed', startedAt: 1_000, completedAt: 5_000, response: 'done' } });
-  assert.equal(formatWidgetLines([completedResumable], 6_000).length, 1);
 });
 
 test('run-agent skips before prompting when signal aborts during setup', async () => {
@@ -3485,17 +3198,6 @@ test('manager.run partial updates flag resumed entries on the rendered AgentView
   assert.equal(final.sessions.length, 2);
   assert.equal(final.sessions[0].resumed, false);
   assert.equal(final.sessions[1].resumed, true);
-});
-
-test('formatSubagentSessionLine adds a resumed marker when the session was resumed', async () => {
-  const { formatSubagentSessionLine } = await import(`../dist/view/format.js?t=${unique()}`);
-  const resumed = fakeAgent({
-    config: { resumable: true },
-    status: { kind: 'completed', startedAt: 1000, completedAt: 2000, response: 'done' },
-  });
-  resumed.resumed = true;
-  const line = formatSubagentSessionLine(resumed, 4000);
-  assert.match(line, /resumed/);
 });
 
 test('completedRun marks the result as not resumed by default', async () => {

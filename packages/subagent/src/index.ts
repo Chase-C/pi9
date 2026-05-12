@@ -9,8 +9,11 @@ import { SubagentUiSettingsStore } from "./ui/settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./ui/widget.js";
 import { registerSubagentsCommand } from "./command/register.js";
 import {
+  agentsDetails,
   createSubagentTextComponent,
   formatSubagentToolLines,
+  inventoryDetails,
+  runDetails,
 } from "./view/format.js";
 import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
 import { listAgentDefinitions, listSkills, serializeGroup } from "./view/serialize.js";
@@ -30,7 +33,7 @@ function validateTaskCount(tasks: SubagentParams["tasks"] | undefined) {
   return undefined;
 }
 
-function toolResult(details: Record<string, unknown>, isError = false) {
+function toolResult(details: object, isError = false) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
     details,
@@ -47,8 +50,7 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
 }
 
 function partialToolResult(update: SubagentBatchUpdate) {
-  const group = serializeGroup(update.sessions);
-  const details = { group, active: update.active };
+  const details = runDetails(serializeGroup(update.sessions), { active: update.active });
   return {
     content: [{ type: "text" as const, text: formatSubagentToolLines(details, true).join("\n") }],
     details,
@@ -131,10 +133,10 @@ Execution notes:
     },
     renderResult(result: any, options: any, theme: any) {
       try {
-        return createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme);
-      } catch {
-        return new Text(simpleTextFromToolResult(result), 0, 0);
-      }
+        const component = createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme);
+        if (component) return component;
+      } catch { }
+      return new Text(simpleTextFromToolResult(result), 0, 0);
     },
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -147,8 +149,8 @@ Execution notes:
       if (params.action === "list") {
         const type = params.type ?? "agents";
         switch (type) {
-          case "agents": return toolResult({ agents: listAgentDefinitions(agentRegistry) });
-          case "sessions": return toolResult({ sessions: agentManager.sessions });
+          case "agents": return toolResult(agentsDetails(listAgentDefinitions(agentRegistry)));
+          case "sessions": return toolResult(inventoryDetails(agentManager.sessions));
           case "skills": return toolResult({ skills: listSkills(ctx.cwd) });
           default: return errorResult('For action=list, type must be "agents", "sessions", or "skills".');
         }
@@ -182,7 +184,8 @@ Execution notes:
         });
         updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
         const isError = results.some(result => result.status !== "completed");
-        return toolResult({ results, group: lastGroup }, isError);
+        const details = lastGroup ? runDetails(lastGroup, { results }) : { results };
+        return toolResult(details, isError);
       }
 
       if (params.action === "clear") {

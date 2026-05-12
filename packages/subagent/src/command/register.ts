@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-cod
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
-import { formatAgentConfigSummary, formatSubagentToolLines } from "../view/format.js";
+import { formatAgentConfigSummary, formatSubagentToolLines, inventoryDetails } from "../view/format.js";
 import { SubagentUiSettingsStore } from "../ui/settings.js";
 import {
   SubagentAgentsComponent,
@@ -56,7 +56,7 @@ export function registerSubagentsCommand(
       }
 
       if (!ctx.hasUI || !ctx.ui?.custom) {
-        notify(ctx, formatSubagentToolLines({ sessions }, true).join("\n"), "info");
+        notify(ctx, formatSubagentToolLines(inventoryDetails(sessions), true).join("\n"), "info");
         return;
       }
 

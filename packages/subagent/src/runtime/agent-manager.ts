@@ -21,6 +21,7 @@ import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
+const ANIMATION_UPDATE_INTERVAL_MS = 120;
 
 export type AgentManagerUpdateListener = (update: SubagentBatchUpdate) => void;
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
@@ -38,6 +39,7 @@ interface SpawnBatch {
   entries: BatchEntry[];
   listener?: AgentManagerUpdateListener;
   pendingMessageTimer?: NodeJS.Timeout;
+  animationTimer?: NodeJS.Timeout;
 }
 
 export class AgentManager {
@@ -179,6 +181,7 @@ export class AgentManager {
       return results;
     } finally {
       this._flushPendingMessageUpdate(batch);
+      this._clearAnimationUpdate(batch);
       this._activeBatches.delete(groupId);
     }
   }
@@ -189,6 +192,7 @@ export class AgentManager {
     const batch = this._activeBatches.get(groupId);
     if (!batch) return;
     if (kind === "message") {
+      this._clearAnimationUpdate(batch);
       if (!batch.pendingMessageTimer) {
         batch.pendingMessageTimer = setTimeout(() => {
           batch.pendingMessageTimer = undefined;
@@ -288,5 +292,25 @@ export class AgentManager {
       });
     const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
     batch.listener({ sessions, active });
+    this._scheduleAnimationUpdate(batch, active);
+  }
+
+  private _scheduleAnimationUpdate(batch: SpawnBatch, active: boolean) {
+    if (!active) {
+      this._clearAnimationUpdate(batch);
+      return;
+    }
+    if (batch.animationTimer) return;
+    batch.animationTimer = setTimeout(() => {
+      batch.animationTimer = undefined;
+      this._emitBatchUpdate(batch.groupId);
+    }, ANIMATION_UPDATE_INTERVAL_MS);
+    batch.animationTimer.unref?.();
+  }
+
+  private _clearAnimationUpdate(batch: SpawnBatch) {
+    if (!batch.animationTimer) return;
+    clearTimeout(batch.animationTimer);
+    batch.animationTimer = undefined;
   }
 }

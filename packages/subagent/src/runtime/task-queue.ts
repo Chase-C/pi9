@@ -9,7 +9,7 @@ export class TaskQueue {
     return new Promise<T>((resolve, reject) => {
       this._pending.push(() => {
         this._running++;
-        queueMicrotask(() => {
+        setImmediate(() => {
           task()
             .then(resolve, reject)
             .finally(() => {

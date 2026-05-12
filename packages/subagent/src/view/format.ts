@@ -1,8 +1,8 @@
 import type { Usage } from "@mariozechner/pi-ai";
-import { Text } from "@mariozechner/pi-tui";
+import { wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
-import type { AgentGroupView, AgentView } from "../domain/agent-view.js";
+import type { AgentGroupView, AgentView, AgentViewStatus } from "../domain/agent-view.js";
 import { serializeGroup } from "./serialize.js";
 import {
   MESSAGE_SNIPPET_LENGTH,
@@ -19,7 +19,40 @@ import {
   isActiveStatusKind,
 } from "./view-helpers.js";
 
-type Theme = { fg?: (color: string, text: string) => string } | undefined;
+type Theme = { fg?: (color: string, text: string) => string; bold?: (text: string) => string } | undefined;
+type DisplayStatus = "queued" | "running" | "completed" | "error" | "warning";
+type DisplayLine = { text: string; status?: DisplayStatus; hangingIndent?: number };
+type Bold = ((text: string) => string) | undefined;
+
+function applyBold(bold: Bold, text: string): string {
+  return bold ? bold(text) : text;
+}
+
+export type AgentListingEntry = Omit<AgentConfig, "systemPrompt">;
+
+export type SubagentDetails =
+  | { view: "agents"; agents: AgentListingEntry[] }
+  | { view: "run"; group: AgentGroupView; results?: unknown; active?: boolean }
+  | { view: "inventory"; sessions: AgentView[] };
+
+export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
+export type RunDetails = Extract<SubagentDetails, { view: "run" }>;
+export type InventoryDetails = Extract<SubagentDetails, { view: "inventory" }>;
+
+export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
+  return { view: "agents", agents };
+}
+
+export function runDetails(
+  group: AgentGroupView,
+  extras: { results?: unknown; active?: boolean } = {},
+): RunDetails {
+  return { view: "run", group, ...extras };
+}
+
+export function inventoryDetails(sessions: AgentView[]): InventoryDetails {
+  return { view: "inventory", sessions };
+}
 
 export function formatAgentConfigSummary(config: AgentConfig): string {
   const badges = [config.source, config.resumable ? "resumable" : undefined].filter(Boolean);
@@ -52,7 +85,6 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
   const status = agent.status;
   const startedAt = getStartedAt(status);
   const completedAt = getCompletedAt(status);
-  const elapsed = formatElapsed(startedAt ?? agent.createdAt, completedAt ?? now);
   const activeTools = getActiveTools(agent);
 
   const lines = [
@@ -71,13 +103,15 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
     lines.push(`Active tool${activeTools.length === 1 ? "" : "s"}: ${activeTools.join(", ")}`);
   }
   const toolUses = getToolUseCount(agent);
-  lines.push(`Progress: ${agent.activity.turns} turn${agent.activity.turns === 1 ? "" : "s"} · ${toolUses} tool use${toolUses === 1 ? "" : "s"} · ${agent.activity.compactions} compaction${agent.activity.compactions === 1 ? "" : "s"}`);
+  lines.push(`Progress: ${plural(agent.activity.turns, "turn")} · ${plural(toolUses, "tool use")} · ${plural(agent.activity.compactions, "compaction")}`);
   if (agent.usage) lines.push(`Usage: ${formatUsage(agent.usage)}`);
-  lines.push(`Timestamps: created ${formatTimestamp(agent.createdAt)}${startedAt ? ` · started ${formatTimestamp(startedAt)}` : ""}${completedAt ? ` · completed ${formatTimestamp(completedAt)}` : ""} · elapsed ${elapsed}`);
+  lines.push(`Timestamps: created ${formatTimestamp(agent.createdAt)}${startedAt ? ` · started ${formatTimestamp(startedAt)}` : ""}${completedAt ? ` · completed ${formatTimestamp(completedAt)}` : ""} · elapsed ${rowElapsed(agent, now)}`);
 
   const snippet = getSnippet(status);
   const label = getSnippetLabel(status);
-  if (snippet && label) lines.push(`${label}: ${snippet}`);
+  if (snippet && label) {
+    for (const line of snippetLines(label, snippet, 0)) lines.push(line.text);
+  }
   if (agent.activity.messageSnippet) lines.push(`Message: ${compact(agent.activity.messageSnippet, MESSAGE_SNIPPET_LENGTH)}`);
 
   const actions = ["inspect"];
@@ -87,13 +121,9 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
   return lines;
 }
 
-export function formatSubagentSessionLine(agent: AgentView, now = Date.now()): string {
-  return formatViewSessionLine(agent, now);
-}
-
 export function formatWidgetLines(agents: AgentView[], now = Date.now()): string[] {
   const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || a.config.resumable);
-  return visible.map(agent => formatSubagentSessionLine(agent, now));
+  return visible.map(agent => formatSessionLine(agent, now));
 }
 
 export function formatSubagentToolLines(
@@ -101,25 +131,7 @@ export function formatSubagentToolLines(
   expanded = false,
   now = Date.now(),
 ): string[] {
-  const agents = extractAgents(details);
-  if (agents.length > 0) return formatAgentListLines(agents, expanded);
-
-  const group = extractGroup(details);
-  if (group) {
-    if (!expanded) return group.sessions.map(row => formatViewSessionLine(row, now));
-    return group.sessions.flatMap((row, index) => formatExpandedSessionLines(row, now, index < group.sessions.length - 1));
-  }
-
-  const sessions = extractSessions(details);
-  if (sessions.length === 0) return ["No subagent sessions."];
-
-  if (!expanded && sessions.length > 1) {
-    return [formatViewGroupLine(serializeGroup(sessions))];
-  }
-
-  return expanded
-    ? sessions.flatMap((row, index) => formatExpandedSessionLines(row, now, index < sessions.length - 1))
-    : sessions.map(row => formatViewSessionLine(row, now));
+  return (formatSubagentToolDisplayLines(details, expanded, now) ?? []).map(line => line.text);
 }
 
 export function createSubagentTextComponent(
@@ -127,39 +139,100 @@ export function createSubagentTextComponent(
   expanded: boolean,
   theme: Theme,
   now = Date.now(),
-) {
-  const lines = formatSubagentToolLines(details, expanded, now);
-  const text = lines.map(line => colorLine(line, theme)).join("\n");
-  return new Text(text, 0, 0);
+): Component | undefined {
+  // Probe the theme eagerly so a broken theme throws here and renderResult can fall back to plain text.
+  if (theme?.fg) theme.fg("muted", "");
+  const lines = formatSubagentToolDisplayLines(details, expanded, now, theme?.bold);
+  return lines ? new SubagentTextComponent(lines, theme) : undefined;
 }
 
-function formatViewGroupLine(group: AgentGroupView): string {
-  const knownStatuses = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
-  const counts = knownStatuses
-    .filter(status => group.statusCounts[status])
-    .map(status => `${group.statusCounts[status]} ${status}`);
-  const extraCounts = Object.keys(group.statusCounts)
-    .filter(status => !knownStatuses.includes(status))
-    .sort()
-    .map(status => `${group.statusCounts[status]} ${status}`);
-  const active = group.sessions.some(session => isActiveStatusKind(effectiveStatus(session.status)));
-  const outcome = group.isError ? "error" : active ? "running" : "completed";
-  return [`${group.sessions.length} subagents`, ...counts, ...extraCounts, `outcome:${outcome}`].join(" · ");
+function formatSubagentToolDisplayLines(
+  details: unknown,
+  expanded = false,
+  now = Date.now(),
+  bold?: Bold,
+): DisplayLine[] | undefined {
+  const narrowed = narrowDetails(details);
+  if (!narrowed) return undefined;
+
+  switch (narrowed.view) {
+    case "agents":
+      return formatAgentListLines(narrowed.agents, expanded, bold).map(text => ({ text }));
+
+    case "run": {
+      const { sessions } = narrowed.group;
+      if (!expanded) return sessions.map(row => formatRunSessionLine(row, now, bold));
+      return sessions.flatMap((row, index) =>
+        expandedLines(formatRunSessionLine(row, now, bold), row, true, index < sessions.length - 1));
+    }
+
+    case "inventory": {
+      const { sessions } = narrowed;
+      if (sessions.length === 0) return [{ text: "No subagent sessions." }];
+      if (!expanded && sessions.length > 1) {
+        return [formatViewGroupLine(serializeGroup(sessions))];
+      }
+      return expanded
+        ? sessions.flatMap((row, index) => expandedLines(
+            { text: formatSessionLine(row, now, bold), status: statusPresentation(row.status).color },
+            row,
+            false,
+            index < sessions.length - 1,
+          ))
+        : sessions.map(row => ({ text: formatSessionLine(row, now, bold), status: statusPresentation(row.status).color }));
+    }
+  }
 }
 
-function formatViewSessionLine(row: AgentView, now: number): string {
-  const elapsed = formatElapsed((getStartedAt(row.status) ?? row.createdAt), getCompletedAt(row.status) ?? now);
+function narrowDetails(details: unknown): SubagentDetails | undefined {
+  if (!details || typeof details !== "object") return undefined;
+  const record = details as { view?: unknown; agents?: unknown; group?: unknown; sessions?: unknown };
+  switch (record.view) {
+    case "agents":
+      return Array.isArray(record.agents) ? { view: "agents", agents: record.agents as AgentListingEntry[] } : undefined;
+    case "run":
+      return record.group && typeof record.group === "object"
+        ? { view: "run", group: record.group as AgentGroupView }
+        : undefined;
+    case "inventory":
+      return Array.isArray(record.sessions) ? { view: "inventory", sessions: record.sessions as AgentView[] } : undefined;
+    default:
+      return undefined;
+  }
+}
+
+const ORDERED_GROUP_STATUSES = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
+
+function formatViewGroupLine(group: AgentGroupView): DisplayLine {
+  const known = new Set(ORDERED_GROUP_STATUSES);
+  const format = (status: string) => `${group.statusCounts[status]} ${status}`;
+  const counts = ORDERED_GROUP_STATUSES.filter(status => group.statusCounts[status]).map(format);
+  const extras = Object.keys(group.statusCounts).filter(status => !known.has(status)).sort().map(format);
+  const outcome = groupOutcome(group);
+  const outcomeLabel = outcome === "queued" ? "running" : outcome;
+  return {
+    text: [`${group.sessions.length} subagents`, ...counts, ...extras, `outcome:${outcomeLabel}`].join(" · "),
+    status: outcome,
+  };
+}
+
+function groupOutcome(group: AgentGroupView): DisplayStatus {
+  if (group.isError) return "error";
+  if (group.sessions.some(s => effectiveStatus(s.status) === "running")) return "running";
+  if (group.sessions.some(s => effectiveStatus(s.status) === "queued")) return "queued";
+  return "completed";
+}
+
+function formatSessionLine(row: AgentView, now: number, bold?: Bold): string {
   const status = effectiveStatus(row.status);
-  const toolUses = getToolUseCount(row);
-  const tokens = row.usage?.totalTokens ?? 0;
   const parts = [
-    row.label ?? row.config.name,
+    applyBold(bold, row.label ?? row.config.name),
     ...(row.resumed ? ["resumed"] : []),
     status,
-    `${row.activity.turns} turn${row.activity.turns === 1 ? "" : "s"}`,
-    `${toolUses} tool${toolUses === 1 ? "" : "s"}`,
-    `${tokens} token${tokens === 1 ? "" : "s"}`,
-    elapsed,
+    plural(row.activity.turns, "turn"),
+    plural(getToolUseCount(row), "tool"),
+    plural(row.usage?.totalTokens ?? 0, "token"),
+    rowElapsed(row, now),
   ];
 
   const activeTool = getActiveTools(row).at(-1);
@@ -167,42 +240,114 @@ function formatViewSessionLine(row: AgentView, now: number): string {
   if (row.activity.messageSnippet) parts.push(`"${row.activity.messageSnippet}"`);
 
   if (!isActiveStatusKind(status)) {
-    if (status === "completed") {
-      parts.push(`outcome:completed`);
-    } else {
-      parts.push(`outcome:${status}:${getSnippet(row.status) ?? status}`);
-    }
+    const tail = status === "completed" ? "" : `:${getSnippet(row.status) ?? status}`;
+    parts.push(`outcome:${status}${tail}`);
   }
 
   return parts.join(" · ");
 }
 
-function formatExpandedSessionLines(row: AgentView, now: number, trailingBlank: boolean): string[] {
-  const lines = [formatViewSessionLine(row, now)];
-  if (row.prompt) {
-    lines.push("  Prompt:");
-    lines.push(...truncatePromptLines(row.prompt).map(line => `    ${line}`));
-  }
+function formatRunSessionLine(row: AgentView, now: number, bold?: Bold): DisplayLine {
+  const { glyph, color } = statusPresentation(row.status, now);
+  const parts = [
+    `  ${glyph} ${applyBold(bold, row.config.name)}${(row.label) ? `  ${row.label}` : ""}`,
+    ...(row.resumed ? ["resumed"] : []),
+    plural(row.activity.turns, "turn"),
+    plural(row.usage?.totalTokens ?? 0, "token"),
+    rowElapsed(row, now),
+  ];
 
-  const recentTools = row.activity.toolHistory.slice(-8).map(tool => tool.name);
-  if (recentTools.length > 0) lines.push(`  Recent tools: ${recentTools.join(", ")}`);
-  if (trailingBlank) lines.push("");
+  const activeTool = getActiveTools(row).at(-1);
+  if (activeTool) parts.push(`tool:${activeTool}`);
+  return { text: parts.join(" · "), status: color };
+}
+
+function expandedLines(head: DisplayLine, row: AgentView, includeSnippet: boolean, trailingBlank: boolean): DisplayLine[] {
+  const lines = [head];
+  appendPrompt(lines, row);
+  if (includeSnippet) appendSnippet(lines, row);
+  appendToolCounts(lines, row);
+  if (trailingBlank) lines.push({ text: "" });
   return lines;
 }
 
-function truncatePromptLines(prompt: string): string[] {
-  const lines = prompt.split(/\r?\n/).slice(0, 3).map(line => compact(line, 120));
-  return lines.length ? lines : [""];
+function snippetLines(label: string, snippet: string, leadingIndent: number, color?: DisplayStatus): DisplayLine[] {
+  const lead = " ".repeat(leadingIndent);
+  const continuationIndent = leadingIndent + label.length + 2;
+  const continuation = " ".repeat(continuationIndent);
+  const [first, ...rest] = snippet.split("\n");
+  const head: DisplayLine = { text: `${lead}${label}: ${first}`, status: color, hangingIndent: leadingIndent };
+  return [head, ...rest.map(line => ({ text: `${continuation}${line}`, status: color, hangingIndent: continuationIndent }))];
 }
 
-function formatAgentListLines(agents: AgentConfig[], expanded: boolean): string[] {
+function appendSnippet(lines: DisplayLine[], row: AgentView) {
+  const snippet = getSnippet(row.status);
+  if (!snippet) return;
+  const label = effectiveStatus(row.status) === "completed" ? "Result" : "Error";
+  lines.push(...snippetLines(label, snippet, 4, statusPresentation(row.status).color));
+}
+
+function appendPrompt(lines: DisplayLine[], row: AgentView) {
+  if (!row.prompt) return;
+  lines.push({ text: "" });
+  for (const part of [...row.prompt.split(/\r?\n/), ""]) {
+    lines.push({ text: `    ${part}`, hangingIndent: 4 });
+  }
+}
+
+function appendToolCounts(lines: DisplayLine[], row: AgentView) {
+  const counts = aggregateToolCounts(row.activity.toolHistory);
+  if (counts.length === 0) return;
+  const summary = counts.map(({ name, count }) => `${name} ×${count}`).join(", ");
+  lines.push({ text: "" });
+  lines.push({ text: `    Tools: ${summary}`, hangingIndent: 4 });
+}
+
+function aggregateToolCounts(
+  history: AgentView["activity"]["toolHistory"],
+): Array<{ name: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const tool of history) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
+  return Array.from(counts, ([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+const RUNNING_GLYPHS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const RUNNING_GLYPH_INTERVAL_MS = 120;
+
+const STATUS_PRESENTATION: Record<string, { glyph: string; color: DisplayStatus }> = {
+  completed: { glyph: "✓", color: "completed" },
+  running: { glyph: RUNNING_GLYPHS[0], color: "running" },
+  queued: { glyph: "○", color: "queued" },
+  error: { glyph: "✗", color: "error" },
+};
+const FALLBACK_STATUS_PRESENTATION = { glyph: "!", color: "warning" as DisplayStatus };
+
+function statusPresentation(status: AgentViewStatus, now = Date.now()) {
+  const effective = effectiveStatus(status);
+  if (effective === "running") {
+    const frame = Math.floor(now / RUNNING_GLYPH_INTERVAL_MS) % RUNNING_GLYPHS.length;
+    return { glyph: RUNNING_GLYPHS[frame], color: "running" as DisplayStatus };
+  }
+  return STATUS_PRESENTATION[effective] ?? FALLBACK_STATUS_PRESENTATION;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function rowElapsed(row: AgentView, now: number): string {
+  return formatElapsed(getStartedAt(row.status) ?? row.createdAt, getCompletedAt(row.status) ?? now);
+}
+
+function formatAgentListLines(agents: AgentListingEntry[], expanded: boolean, bold?: Bold): string[] {
   if (!expanded) {
-    return agents.slice(0, 8).map(agent => `${agent.name} · ${compact(agent.description, 100)}`);
+    return agents.slice(0, 8).map(agent => `${applyBold(bold, agent.name)} · ${compact(agent.description, 100)}`);
   }
 
   return agents.flatMap((agent, index) => {
     const lines = [
-      `${agent.name}`,
+      applyBold(bold, agent.name),
       ...agent.description.split(/\r?\n/).map(line => `  ${line}`),
       `  Model: ${agent.model ?? "default"}`,
       `  Thinking: ${agent.thinking ?? "default"}`,
@@ -214,27 +359,6 @@ function formatAgentListLines(agents: AgentConfig[], expanded: boolean): string[
     if (index < agents.length - 1) lines.push("");
     return lines;
   });
-}
-
-function extractAgents(details: unknown): AgentConfig[] {
-  if (!details || typeof details !== "object") return [];
-  const record = details as { agents?: unknown };
-  if (Array.isArray(record.agents)) return record.agents as AgentConfig[];
-  return [];
-}
-
-function extractGroup(details: unknown): AgentGroupView | undefined {
-  if (!details || typeof details !== "object") return undefined;
-  const record = details as { group?: unknown };
-  if (record.group && typeof record.group === "object") return record.group as AgentGroupView;
-  return undefined;
-}
-
-function extractSessions(details: unknown): AgentView[] {
-  if (!details || typeof details !== "object") return [];
-  const record = details as { sessions?: unknown };
-  if (Array.isArray(record.sessions)) return record.sessions as AgentView[];
-  return [];
 }
 
 function formatElapsed(from: number, to: number) {
@@ -255,13 +379,31 @@ function formatUsage(usage: Usage) {
   return `${tokens}${cost}`;
 }
 
-function colorLine(line: string, theme: Theme) {
+class SubagentTextComponent implements Component {
+  constructor(private readonly lines: DisplayLine[], private readonly theme: Theme) { }
+
+  invalidate(): void { }
+
+  render(width: number): string[] {
+    return this.lines.flatMap(line => wrapDisplayLine(line, width).map(wrapped => colorLine(wrapped, line.status, this.theme)));
+  }
+}
+
+function wrapDisplayLine(line: DisplayLine, width: number): string[] {
+  if (!line.text) return [""];
+  const indent = line.hangingIndent ?? 0;
+  if (indent <= 0 || width <= indent + 1) return wrapTextWithAnsi(line.text, Math.max(1, width));
+
+  const prefix = " ".repeat(indent);
+  const content = line.text.startsWith(prefix) ? line.text.slice(indent) : line.text;
+  return wrapTextWithAnsi(content, Math.max(1, width - indent)).map(wrapped => `${prefix}${wrapped}`);
+}
+
+function colorLine(line: string, status: DisplayStatus | undefined, theme: Theme) {
   if (!theme?.fg) return line;
-  if (line.includes("status:error") || line.includes("outcome:error")) return theme.fg("error", line);
-  if (line.includes("status:aborted") || line.includes("outcome:aborted")) return theme.fg("warning", line);
-  if (line.includes("status:interrupted") || line.includes("outcome:interrupted")) return theme.fg("warning", line);
-  if (line.includes("status:skipped") || line.includes("outcome:skipped")) return theme.fg("warning", line);
-  if (line.includes("completed") || line.includes("outcome:completed")) return theme.fg("success", line);
-  if (line.includes("running")) return theme.fg("accent", line);
+  if (status === "error") return theme.fg("error", line);
+  if (status === "warning") return theme.fg("warning", line);
+  if (status === "completed") return theme.fg("success", line);
+  if (status === "running") return theme.fg("accent", line);
   return theme.fg("muted", line);
 }

@@ -5,7 +5,7 @@ import { AgentConfig } from "./agent-config.js";
 import type { AgentInvocation, AgentSpawn } from "./agent-invocation.js";
 import type { AgentRunResult, FinalizeRunArgs } from "./agent-result.js";
 import type { AgentToolUse, AgentUpdateKind, AgentView, AgentViewStatus } from "./agent-view.js";
-import { MESSAGE_SNIPPET_LENGTH, OUTPUT_SNIPPET_LENGTH, compact } from "../view/view-helpers.js";
+import { MESSAGE_SNIPPET_LENGTH, OUTPUT_SNIPPET_LENGTH, compact, compactMultiline } from "../view/view-helpers.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -175,7 +175,7 @@ export class Agent {
       outcome: result.status,
       completedAt: this._status.completedAt,
       ...(startedAt !== undefined ? { startedAt } : {}),
-      ...(rawSnippet ? { snippet: compact(rawSnippet, OUTPUT_SNIPPET_LENGTH) } : {}),
+      ...(rawSnippet ? { snippet: compactMultiline(rawSnippet, OUTPUT_SNIPPET_LENGTH) } : {}),
     };
   }
 
