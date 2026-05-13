@@ -119,7 +119,7 @@ export class AgentManager {
 
   private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
     if (scope === "background") return this._agents.filter(a => a.background);
-    if (scope === "retained") return this._agents.filter(a => a.status.kind !== "running" && a.resumable);
+    if (scope === "retained") return this._agents.filter(a => !a.background && a.status.kind !== "running" && a.resumable);
     if (scope === "non-running") return this._agents.filter(a => a.status.kind !== "running");
     throw new Error(`Unknown remove scope: ${String(scope)}`);
   }
@@ -212,6 +212,7 @@ export class AgentManager {
           return Promise.resolve(result);
         }
 
+        if (options.background) target.promoteToBackground();
         entries.push({ agent: target, inputIndex, resumed: true });
         timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id });
         this._agentBatch.set(target.id, groupId);

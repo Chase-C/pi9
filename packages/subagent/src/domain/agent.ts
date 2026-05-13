@@ -35,7 +35,7 @@ export class Agent {
   private _totalUsage: Usage = DefaultUsage;
   private _unsubscribe?: () => void;
 
-  readonly background: boolean;
+  private _background: boolean;
 
   constructor(
     readonly id: string,
@@ -46,8 +46,16 @@ export class Agent {
     options: { background?: boolean } = {},
   ) {
     this.agentName = spawn.agent;
-    this.background = options.background ?? false;
+    this._background = options.background ?? false;
     this.apply(invocation);
+  }
+
+  get background() { return this._background }
+
+  promoteToBackground() {
+    if (this._background) return;
+    this._background = true;
+    this.onUpdate(this, "status");
   }
 
   get label() { return this._label }

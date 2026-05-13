@@ -1115,6 +1115,40 @@ test("AgentManager.remove scope=retained removes retained resumable sessions and
   await pending;
 });
 
+test("AgentManager.remove scope=retained leaves resumable background sessions while removing foreground retained sessions", async () => {
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, `done:${prompt}`);
+  };
+  const registry = {
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const [foreground] = await manager.run(baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "foreground" },
+  ]);
+  const bgBatch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "chatty", prompt: "background" }],
+    undefined,
+    { background: true },
+  );
+  const [background] = await bgBatch.resultsPromise;
+
+  assert.deepEqual(manager.listSessions().map(s => s.kind).sort(), ["background", "retained"]);
+
+  const result = await manager.remove({ scope: "retained" });
+
+  assert.equal(result.removed, 1);
+  assert.deepEqual(result.sessionIds, [foreground.sessionId]);
+  const remaining = manager.listSessions();
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].id, background.sessionId);
+  assert.equal(remaining[0].kind, "background");
+});
+
 test("AgentManager.remove with a running sessionId aborts the underlying session and removes it", async () => {
   let abortCalls = 0;
   const runner = async (_ctx: any, agent: any, prompt: string) => {
@@ -1320,6 +1354,51 @@ test("AgentManager background non-resumable agents stay listed with terminal sta
   assert.equal(listed[0].kind, "background");
   assert.equal(listed[0].status.kind, "done");
   assert.equal(listed[0].status.kind === "done" && listed[0].status.outcome, "completed");
+});
+
+test("AgentManager.startBatch background:true promotes resumed sessions to background and remove scope=background selects them", async () => {
+  const session = makeSession();
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(session);
+    return completedRun(agent, prompt, `seed:${prompt}`);
+  };
+  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(agent.status.ran.session);
+    return completedRun(agent, prompt, `resumed:${prompt}`);
+  };
+  const registry = {
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner, resumeRunner);
+  const [seed] = await manager.run(baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "initial" },
+  ]);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "resume", sessionId: seed.sessionId!, prompt: "follow-up" }],
+    undefined,
+    { background: true },
+  );
+
+  assert.equal(batch.sessions.length, 1);
+  assert.equal(batch.sessions[0].id, seed.sessionId);
+  assert.equal(batch.sessions[0].kind, "background");
+
+  const [resumed] = await batch.resultsPromise;
+  assert.equal(resumed.status, "completed");
+  assert.equal(resumed.sessionId, seed.sessionId);
+
+  const listed = manager.listSessions();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, seed.sessionId);
+  assert.equal(listed[0].kind, "background");
+
+  const result = await manager.remove({ scope: "background" });
+  assert.equal(result.removed, 1);
+  assert.deepEqual(result.sessionIds, [seed.sessionId]);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test("AgentManager.remove scope=background removes terminal background agents and leaves foreground retained sessions", async () => {
