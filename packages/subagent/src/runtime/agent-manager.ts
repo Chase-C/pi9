@@ -24,6 +24,7 @@ const MESSAGE_UPDATE_THROTTLE_MS = 100;
 const ANIMATION_UPDATE_INTERVAL_MS = 120;
 
 export type AgentManagerUpdateListener = (update: SubagentBatchUpdate) => void;
+export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 
@@ -56,6 +57,7 @@ export class AgentManager {
   private _activeBatches = new Map<string, SpawnBatch>();
   private _agentBatch = new Map<string, string>();
   private _reservedResumeSessionIds = new Set<string>();
+  private _updateListeners = new Set<AgentUpdateListener>();
 
   constructor(
     readonly registry: AgentRegistry,
@@ -75,6 +77,11 @@ export class AgentManager {
 
   configure(options: { maxRunning?: number }) {
     if (options.maxRunning !== undefined) this._queue.maxRunning = options.maxRunning;
+  }
+
+  onAgentUpdate(listener: AgentUpdateListener): () => void {
+    this._updateListeners.add(listener);
+    return () => this._updateListeners.delete(listener);
   }
 
   async backgroundResults(
@@ -302,6 +309,7 @@ export class AgentManager {
   }
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
+    for (const listener of this._updateListeners) listener(agent, kind);
     const groupId = this._agentBatch.get(agent.id);
     if (!groupId) return;
     const batch = this._activeBatches.get(groupId);

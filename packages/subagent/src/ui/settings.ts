@@ -6,6 +6,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export type WidgetPlacement = "belowEditor" | "aboveEditor" | "off";
 export type ProjectAgentsStrategy = "nearest" | "off";
 export type DuplicateNamePolicy = "projectOverridesUser" | "userOverridesProject";
+export type BackgroundNotifyMode = "end-of-turn" | "next-tool-call" | "none";
 
 export interface SubagentUiSettings {
   widgetPlacement: WidgetPlacement;
@@ -15,6 +16,7 @@ export interface SubagentRuntimeSettings {
   maxTasksPerRun: number;
   maxConcurrentSubagents: number;
   defaultResumable: boolean;
+  backgroundNotify: BackgroundNotifyMode;
 }
 
 export interface SubagentAgentDiscoverySettings {
@@ -54,6 +56,7 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
     maxTasksPerRun: 8,
     maxConcurrentSubagents: 4,
     defaultResumable: false,
+    backgroundNotify: "end-of-turn",
   },
   agentDiscovery: {
     includeUserAgents: true,
@@ -84,6 +87,7 @@ export type SubagentUiSettingsLoadResult = {
 const WIDGET_PLACEMENTS = new Set<WidgetPlacement>(["belowEditor", "aboveEditor", "off"]);
 const PROJECT_AGENTS_STRATEGIES = new Set<ProjectAgentsStrategy>(["nearest", "off"]);
 const DUPLICATE_NAME_POLICIES = new Set<DuplicateNamePolicy>(["projectOverridesUser", "userOverridesProject"]);
+const BACKGROUND_NOTIFY_MODES = new Set<BackgroundNotifyMode>(["end-of-turn", "next-tool-call", "none"]);
 
 export class SubagentUiSettingsStore {
   constructor(readonly settingsPath = join(getAgentDir(), "subagent", "settings.json")) { }
@@ -133,6 +137,7 @@ export function normalizeSettings(value: unknown): SubagentUiSettingsLoadResult 
     assignPositiveInt(runtime, "maxTasksPerRun", value => { settings.runtime.maxTasksPerRun = value; }, warnings);
     assignPositiveInt(runtime, "maxConcurrentSubagents", value => { settings.runtime.maxConcurrentSubagents = value; }, warnings);
     assignBoolean(runtime, "defaultResumable", value => { settings.runtime.defaultResumable = value; }, warnings);
+    assignEnum(runtime, "backgroundNotify", BACKGROUND_NOTIFY_MODES, value => { settings.runtime.backgroundNotify = value; }, warnings);
   }
 
   const discovery = objectValue(record.agentDiscovery);

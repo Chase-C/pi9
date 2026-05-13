@@ -7,6 +7,7 @@ import { AgentManager } from "./runtime/agent-manager.js";
 import { timingAsync, timingMark, timingStart, timingSync } from "./runtime/timing.js";
 import { isSessionStatus, parseTask, SESSION_STATUSES, SubagentParams, type SessionStatus, type TaskRequest } from "./schema.js";
 import { SubagentUiSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./ui/settings.js";
+import { BackgroundNotifier } from "./runtime/background-notifier.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./ui/widget.js";
 import { registerSubagentsCommand } from "./command/register.js";
 import {
@@ -71,6 +72,10 @@ function applySettings(agentManager: AgentManager, settings: SubagentSettings) {
   agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
 }
 
+interface NotifierLike {
+  dispose(): void;
+}
+
 function partialToolResult(update: SubagentBatchUpdate) {
   const details = runDetails(serializeGroup(update.sessions), { active: update.active });
   return {
@@ -95,6 +100,14 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
   const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
+
+  let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
+  const notifier: NotifierLike = new BackgroundNotifier({
+    pi: pi as any,
+    manager: agentManager,
+    getMode: () => currentSettings.runtime.backgroundNotify,
+  });
+  try { pi.on("session_shutdown", () => notifier.dispose()); } catch { }
 
   registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry);
   try {
@@ -167,6 +180,7 @@ Execution notes:
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       timingMark("tool.execute.start", { action: params.action, taskCount: Array.isArray(params.tasks) ? params.tasks.length : undefined, cwd: ctx.cwd });
       const settings = await timingAsync("tool.loadSettings", { hasUI: ctx.hasUI }, () => loadSubagentUiSettings(ctx, settingsStore));
+      currentSettings = settings;
       applySettings(agentManager, settings);
       await timingAsync("tool.agentRegistry.reload", { cwd: ctx.cwd }, () => agentRegistry.reload(ctx.cwd, {
         discovery: settings.agentDiscovery,

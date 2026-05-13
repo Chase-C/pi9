@@ -246,7 +246,8 @@ The settings are global for the user and stored at `${PI_AGENT_DIR ?? ~/.pi/agen
   "runtime": {
     "maxTasksPerRun": 8,
     "maxConcurrentSubagents": 4,
-    "defaultResumable": false
+    "defaultResumable": false,
+    "backgroundNotify": "end-of-turn"
   },
   "agentDiscovery": {
     "includeUserAgents": true,
@@ -271,6 +272,16 @@ The settings are global for the user and stored at `${PI_AGENT_DIR ?? ~/.pi/agen
 ```
 
 `runtime.defaultResumable` only applies when an agent definition omits `resumable`; explicit frontmatter and per-task overrides still win. `agentDiscovery.duplicateNamePolicy` controls which source wins when user and project agents share a runtime name.
+
+`runtime.backgroundNotify` controls how the parent agent is told a background subagent finished:
+
+| Value | Behavior |
+| --- | --- |
+| `end-of-turn` | Append one coalesced notification at the end of the parent's current turn (default; least interrupting). |
+| `next-tool-call` | Inject a steering-style notification before the parent's next tool execution. |
+| `none` | Do not notify. The parent must call `subagent list` or `subagent results` to discover completions. |
+
+Notifications carry only metadata (session ids, agent, label, terminal status, elapsed time) and direct the parent to call `subagent results` for actual output. Multiple completions between dispatch events coalesce into one message.
 
 ## `/subagents` command
 
