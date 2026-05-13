@@ -375,6 +375,64 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   assert.equal(result.details.results[1].resumed, true);
 });
 
+test("subagent action=run background:true returns view:background-started immediately with initial session views", async () => {
+  let releaseRun: () => void;
+  const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    await runGate;
+    return completedRun(agent, prompt, `done:${prompt}`);
+  };
+  const fakeRegistry = {
+    agents: new Map([["helper", { name: "helper", description: "Helps", systemPrompt: "s", source: "project" }]]),
+    async reload() {},
+    summarizeAgent() { return "helper (project)"; },
+  };
+  const manager = new AgentManager(fakeRegistry as any, 2, runner);
+  const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
+
+  const result = await tool.execute("tool-call", {
+    action: "run",
+    background: true,
+    tasks: [{ agent: "helper", prompt: "background work" }],
+  }, undefined, undefined, baseCtx());
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.view, "background-started");
+  assert.equal(result.details.background, true);
+  assert.equal(result.details.sessions.length, 1);
+  assert.equal(result.details.sessions[0].kind, "background");
+  const liveStatus = manager.listSessions()[0].status.kind;
+  assert.ok(liveStatus === "queued" || liveStatus === "running", `expected non-terminal status, got ${liveStatus}`);
+
+  releaseRun!();
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+});
+
+test("subagent action=run rejects a per-task background field with the batch-level migration error", async () => {
+  let runCalls = 0;
+  const fakeManager = {
+    listSessions(): any[] { return this.sessions; },
+    sessions: [] as any[],
+    async run() { runCalls += 1; return []; },
+  };
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
+  });
+
+  const result = await tool.execute("tool-call", {
+    action: "run",
+    tasks: [{ agent: "helper", prompt: "p", background: true }],
+  }, undefined, undefined, baseCtx());
+
+  assert.equal(result.isError, true);
+  assert.equal(runCalls, 0);
+  assert.match(result.content[0].text, /background is a batch-level flag on action='run', not a per-task field\./);
+});
+
 test("subagent action=run rejects a task carrying both agent and sessionId at parse time", async () => {
   let runCalls = 0;
   const fakeManager = {

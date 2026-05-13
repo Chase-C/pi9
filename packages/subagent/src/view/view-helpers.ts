@@ -16,8 +16,8 @@ export function getSubagentDisplaySettings(): SubagentDisplaySettings {
   return activeDisplaySettings;
 }
 
-export function activeOrRetainedAgents<T extends { status: { kind: string }; resumable: boolean }>(agents: T[]): T[] {
-  return agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable);
+export function activeOrRetainedAgents<T extends { status: { kind: string }; resumable: boolean; background?: boolean }>(agents: T[]): T[] {
+  return agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable || a.background === true);
 }
 
 export function canResumeSubagentSession(agent: AgentView): boolean {

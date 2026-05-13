@@ -1196,5 +1196,206 @@ test("AgentManager.remove rejects an unknown internal scope without removing ses
   assert.equal(manager.listSessions().length, 1);
 });
 
+test("AgentManager.startBatch returns sessions synchronously and a resultsPromise mirroring run() for background:false", async () => {
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, `done:${prompt}`);
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [
+      { kind: "spawn", agent: "helper", prompt: "one" },
+      { kind: "spawn", agent: "helper", prompt: "two" },
+    ],
+    undefined,
+    { background: false },
+  );
+
+  assert.equal(typeof batch.groupId, "string");
+  assert.ok(batch.groupId);
+  assert.equal(batch.sessions.length, 2);
+  assert.deepEqual(batch.sessions.map(s => s.config.name), ["helper", "helper"]);
+  assert.deepEqual(batch.sessions.map(s => s.kind), ["retained", "retained"]);
+
+  const results = await batch.resultsPromise;
+  assert.deepEqual(results.map(r => r.status), ["completed", "completed"]);
+  assert.deepEqual(results.map(r => r.output), ["done:one", "done:two"]);
+});
+
+test("AgentManager.startBatch with background:true returns sessions tagged kind:background and surfaces them in listSessions while running", async () => {
+  let releaseRun: () => void;
+  const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    await runGate;
+    return completedRun(agent, prompt, `done:${prompt}`);
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "helper", prompt: "go" }],
+    undefined,
+    { background: true },
+  );
+
+  assert.equal(batch.sessions.length, 1);
+  assert.equal(batch.sessions[0].kind, "background");
+
+  const listed = manager.listSessions();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].kind, "background");
+
+  releaseRun!();
+  await batch.resultsPromise;
+});
+
+test("AgentManager.startBatch background:true ignores parent signal abort and lets children complete", async () => {
+  const seenSignals: Array<AbortSignal | undefined> = [];
+  let releaseRun: () => void;
+  const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
+  const runner = async (_ctx: any, agent: any, prompt: string, signal: AbortSignal | undefined) => {
+    seenSignals.push(signal);
+    agent.attach(makeSession());
+    await runGate;
+    return completedRun(agent, prompt, `done:${prompt}`);
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+  const controller = new AbortController();
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    controller.signal,
+    [{ kind: "spawn", agent: "helper", prompt: "background work" }],
+    undefined,
+    { background: true },
+  );
+
+  controller.abort();
+  await new Promise(resolve => setTimeout(resolve, 5));
+
+  releaseRun!();
+  const results = await batch.resultsPromise;
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "completed");
+  assert.equal(results[0].output, "done:background work");
+  assert.notEqual(seenSignals[0], controller.signal);
+});
+
+test("AgentManager background non-resumable agents stay listed with terminal status after settlement", async () => {
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "oneshot", prompt: "work" }],
+    undefined,
+    { background: true },
+  );
+  await batch.resultsPromise;
+
+  const listed = manager.listSessions();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].kind, "background");
+  assert.equal(listed[0].status.kind, "done");
+  assert.equal(listed[0].status.kind === "done" && listed[0].status.outcome, "completed");
+});
+
+test("AgentManager.remove scope=background removes terminal background agents and leaves foreground retained sessions", async () => {
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, "done");
+  };
+  const registry = {
+    agents: new Map([
+      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
+      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
+    ]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  await manager.run(baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "foreground retained" },
+  ]);
+  const bgBatch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "oneshot", prompt: "bg work" }],
+    undefined,
+    { background: true },
+  );
+  await bgBatch.resultsPromise;
+
+  assert.equal(manager.listSessions().length, 2);
+
+  const result = await manager.remove({ scope: "background" });
+
+  assert.equal(result.removed, 1);
+  assert.equal(result.aborted, 0);
+  const remaining = manager.listSessions();
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].kind, "retained");
+});
+
+test("AgentManager.remove scope=background aborts running background sessions", async () => {
+  let unblockRunning: () => void;
+  const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
+  let abortCalls = 0;
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    const session = {
+      messages: [] as any[],
+      subscribe: () => () => {},
+      prompt: async () => {},
+      abort: () => { abortCalls += 1; unblockRunning?.(); },
+    };
+    agent.attach(session);
+    await runningGate;
+    return interruptedRun(agent, prompt, "aborted by remove");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const bgBatch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "oneshot", prompt: "long running bg" }],
+    undefined,
+    { background: true },
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(manager.listSessions()[0].status.kind, "running");
+
+  const result = await manager.remove({ scope: "background" });
+  await bgBatch.resultsPromise;
+
+  assert.equal(result.removed, 1);
+  assert.equal(result.aborted, 1);
+  assert.equal(abortCalls, 1);
+  assert.deepEqual(manager.listSessions(), []);
+});
+
 // Suppress unused-variable warnings for shared types.
 void undefined as unknown as AnyManager;

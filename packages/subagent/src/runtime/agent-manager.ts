@@ -40,6 +40,8 @@ interface SpawnBatch {
   listener?: AgentManagerUpdateListener;
   pendingMessageTimer?: NodeJS.Timeout;
   animationTimer?: NodeJS.Timeout;
+  background: boolean;
+  controller?: AbortController;
 }
 
 export class AgentManager {
@@ -116,7 +118,7 @@ export class AgentManager {
   }
 
   private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
-    if (scope === "background") return [];
+    if (scope === "background") return this._agents.filter(a => a.background);
     if (scope === "retained") return this._agents.filter(a => a.status.kind !== "running" && a.resumable);
     if (scope === "non-running") return this._agents.filter(a => a.status.kind !== "running");
     throw new Error(`Unknown remove scope: ${String(scope)}`);
@@ -128,14 +130,27 @@ export class AgentManager {
     tasks: TaskRequest[],
     onUpdate?: AgentManagerUpdateListener,
   ): Promise<AgentRunResult[]> {
+    const batch = this.startBatch(ctx, signal, tasks, onUpdate, { background: false });
+    return batch.resultsPromise;
+  }
+
+  startBatch(
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+    tasks: TaskRequest[],
+    onUpdate: AgentManagerUpdateListener | undefined,
+    options: { background: boolean },
+  ): { groupId: string; sessions: AgentView[]; resultsPromise: Promise<AgentRunResult[]> } {
     const groupId = randomUUID();
     const groupCreatedAt = Date.now();
-    timingMark("manager.run.start", { groupId, taskCount: tasks.length });
+    timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background });
 
     const entries: BatchEntry[] = [];
-    const batch: SpawnBatch = { groupId, entries, listener: onUpdate };
+    const controller = options.background ? new AbortController() : undefined;
+    const batch: SpawnBatch = { groupId, entries, listener: onUpdate, background: options.background, controller };
     this._activeBatches.set(groupId, batch);
 
+    const childSignal = controller ? controller.signal : signal;
     const touched = new Set<Agent>();
 
     const resultPromises = tasks.map((task, inputIndex) => {
@@ -156,13 +171,20 @@ export class AgentManager {
         }
 
         const { spawn, invocation } = InvocationFromTask(task);
-        const agent = new Agent(randomUUID(), config, spawn, invocation, this._agentUpdate.bind(this));
+        const agent = new Agent(
+          randomUUID(),
+          config,
+          spawn,
+          invocation,
+          this._agentUpdate.bind(this),
+          { background: options.background },
+        );
         entries.push({ agent, inputIndex });
         timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id });
         this._agents.push(agent);
         this._agentBatch.set(agent.id, groupId);
         touched.add(agent);
-        return this._runSpawn(ctx, signal, agent, task.prompt);
+        return this._runSpawn(ctx, childSignal, agent, task.prompt);
       }
       // task.kind === "resume"
       else {
@@ -194,29 +216,46 @@ export class AgentManager {
         timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id });
         this._agentBatch.set(target.id, groupId);
         touched.add(target);
-        return this._runResume(ctx, signal, target, task);
+        return this._runResume(ctx, childSignal, target, task);
       }
     });
 
     timingMark("manager.initialEmit.before", { groupId, entries: entries.length });
     this._emitBatchUpdate(groupId);
     timingMark("manager.initialEmit.after", { groupId });
-    try {
-      const results = await Promise.all(resultPromises);
-      this._agents = this._agents.filter(agent => {
-        if (!touched.has(agent)) return true;
-        if (agent.status.kind !== "done") return true;
-        if (agent.resumable) return true;
-        this._agentBatch.delete(agent.id);
-        return false;
+
+    const sessions = this._snapshotEntries(batch.entries);
+
+    const resultsPromise = Promise.all(resultPromises)
+      .then(results => {
+        this._agents = this._agents.filter(agent => {
+          if (!touched.has(agent)) return true;
+          if (agent.background) return true;
+          if (agent.status.kind !== "done") return true;
+          if (agent.resumable) return true;
+          this._agentBatch.delete(agent.id);
+          return false;
+        });
+        timingMark("manager.run.results", { groupId, resultCount: results.length });
+        return results;
+      })
+      .finally(() => {
+        this._flushPendingMessageUpdate(batch);
+        this._clearAnimationUpdate(batch);
+        this._activeBatches.delete(groupId);
       });
-      timingMark("manager.run.results", { groupId, resultCount: results.length });
-      return results;
-    } finally {
-      this._flushPendingMessageUpdate(batch);
-      this._clearAnimationUpdate(batch);
-      this._activeBatches.delete(groupId);
-    }
+
+    return { groupId, sessions, resultsPromise };
+  }
+
+  private _snapshotEntries(entries: BatchEntry[]): AgentView[] {
+    return entries
+      .slice()
+      .sort((a, b) => a.inputIndex - b.inputIndex)
+      .map(({ agent, view, inputIndex, resumed }) => {
+        const baseView = view ?? (agent ? agent.toView(inputIndex) : view!);
+        return { ...baseView, resumed: Boolean(resumed) };
+      });
   }
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
@@ -361,13 +400,7 @@ export class AgentManager {
     if (!batch?.listener) return;
 
     const end = timingStart("manager.emitBatchUpdate", { groupId, entries: batch.entries.length });
-    const sessions = batch.entries
-      .slice()
-      .sort((a, b) => a.inputIndex - b.inputIndex)
-      .map(({ agent, view, inputIndex, resumed }) => {
-        const baseView = view ?? (agent ? agent.toView(inputIndex) : view!);
-        return { ...baseView, resumed: Boolean(resumed) };
-      });
+    const sessions = this._snapshotEntries(batch.entries);
     const active = sessions.some(s => s.status.kind === "queued" || s.status.kind === "running");
     timingSync("manager.listener", { groupId, sessionCount: sessions.length, active }, () => batch.listener?.({ sessions, active }));
     this._scheduleAnimationUpdate(batch, active);

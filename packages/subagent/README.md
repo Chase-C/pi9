@@ -161,6 +161,20 @@ subagent({
 })
 ```
 
+Batch-level `background: true` dispatches the run non-blocking. The call returns immediately with initial session views; children continue under a manager-owned `AbortController` and remain visible in `list` until removed or collected. `background` is rejected on individual tasks — it is a batch-level flag.
+
+```ts
+subagent({
+  action: "run",
+  background: true,
+  tasks: [
+    { agent: "scout", prompt: "Map auth code; respond when complete." }
+  ]
+})
+```
+
+Background results persist until removed or collected — call `subagent results` to retrieve and either pass `remove: true` or call `subagent remove` afterward.
+
 ### `action: "remove"`
 
 ```ts
@@ -249,6 +263,29 @@ When active or retained sessions exist, `/subagents` opens the Sessions view. Fr
 If no active or retained sessions exist, `/subagents` opens the read-only Agents browser instead. The browser lists discovered user/project agent definitions and lets you inspect model, thinking, tools, resumable status, and source path metadata. It does not launch agents.
 
 Run `/subagents settings` to open the Settings view directly.
+
+## Background subagents
+
+Background dispatch lets a `run` batch return immediately so the parent agent can continue working while children execute. Pass batch-level `background: true` on `action: "run"`.
+
+Lifecycle:
+
+1. The tool call returns immediately with `view: "background-started"` and the initial session views.
+2. Children run under a manager-owned `AbortController` and are not bound to the parent tool-call signal — completing the parent tool call does not cancel them.
+3. Background sessions appear in `subagent list` with `kind: "background"` and the appropriate `status`.
+4. When a background session finishes, it is retained until removed or collected with `subagent results` (`{ remove: true }`) or `subagent remove`.
+
+`kind` and `resumable` are independent:
+
+- `kind: "retained"` rows in `list` always have `resumable: true` (resumable foreground sessions retained for the current Pi process).
+- `kind: "background"` rows may be either resumable or not. The point of the background-retention rule is that a non-resumable background job's result is still visible after completion until it is removed or collected.
+
+Removal:
+
+```ts
+subagent({ action: "remove", scope: "background" })   // remove all background sessions (running ones aborted)
+subagent({ action: "remove", sessionIds: ["..."] })   // remove specific sessions; running ones aborted
+```
 
 ## Session lifetime and retention
 

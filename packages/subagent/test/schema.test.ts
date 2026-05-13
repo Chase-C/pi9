@@ -83,6 +83,16 @@ test("parseTask rejects skills entries that are not non-empty strings", () => {
   assert.match(notArray.error, /skills must be an array/);
 });
 
+test("parseTask rejects a task carrying the batch-level background field", () => {
+  const spawn = parseTask({ agent: "helper", prompt: "do work", background: true });
+  assert.ok("error" in spawn);
+  assert.match(spawn.error, /background is a batch-level flag on action='run', not a per-task field\./);
+
+  const resume = parseTask({ sessionId: "s", prompt: "follow up", background: true });
+  assert.ok("error" in resume);
+  assert.match(resume.error, /background is a batch-level flag on action='run', not a per-task field\./);
+});
+
 test("parseTask classifies a task carrying agent as a spawn request and preserves spawn fields", () => {
   const parsed = parseTask({
     agent: "helper",

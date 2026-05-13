@@ -11,6 +11,7 @@ import { loadSubagentUiSettings, updateSubagentWidget } from "./ui/widget.js";
 import { registerSubagentsCommand } from "./command/register.js";
 import {
   agentsDetails,
+  backgroundStartedDetails,
   createSubagentTextComponent,
   formatSubagentToolLines,
   inventoryDetails,
@@ -111,7 +112,7 @@ Inputs:
 - action: one of "agents", "list", "run", or "remove".
 - action="agents": list configured agent definitions. Each entry carries the agent's tools and any default skills declared in its frontmatter. Takes no other parameters.
 - action="list": list active and retained subagent sessions. Optional status: an array of session statuses ("queued" | "running" | "completed" | "error" | "aborted" | "interrupted" | "skipped") that filters the result; an empty array returns no sessions. Each row carries a kind tag ("background" | "retained") describing how it was dispatched. The legacy type parameter has been removed; passing it returns a migration error. Skills listing is no longer exposed through this tool.
-- action="run": run one or more subagent tasks up to the configured maxTasksPerRun (default eight). Each task is either a new spawn (carrying agent) or a resume of a completed resumable session (carrying sessionId). agent and sessionId are mutually exclusive — providing both is rejected. A spawn task takes agent and prompt and may include cwd, model, thinking, label, resumable, and skills. A resume task takes sessionId and prompt and may re-assert label and resumable; it rejects model, thinking, cwd, agent, and skills. The optional label is a human-readable identifier shown in widgets and logs in place of the agent name; on resume it overwrites the stored label. The optional resumable override applies one-way at completion: a resumable: false decision discards the session immediately, regardless of the agent's frontmatter default. The optional skills array (spawn only) injects named skills into the subagent's system prompt — unknown skill names are a hard error and an explicit skill bypasses its disable-model-invocation flag. Per-task skills fully replace the agent's default skills declared in frontmatter (no merge); an explicit empty array opts out of those defaults.
+- action="run": run one or more subagent tasks up to the configured maxTasksPerRun (default eight). Each task is either a new spawn (carrying agent) or a resume of a completed resumable session (carrying sessionId). agent and sessionId are mutually exclusive — providing both is rejected. A spawn task takes agent and prompt and may include cwd, model, thinking, label, resumable, and skills. A resume task takes sessionId and prompt and may re-assert label and resumable; it rejects model, thinking, cwd, agent, and skills. The optional label is a human-readable identifier shown in widgets and logs in place of the agent name; on resume it overwrites the stored label. The optional resumable override applies one-way at completion: a resumable: false decision discards the session immediately, regardless of the agent's frontmatter default. The optional skills array (spawn only) injects named skills into the subagent's system prompt — unknown skill names are a hard error and an explicit skill bypasses its disable-model-invocation flag. Per-task skills fully replace the agent's default skills declared in frontmatter (no merge); an explicit empty array opts out of those defaults. An optional batch-level background: true flag dispatches the run non-blocking; the call returns immediately with initial session views and the children continue under a manager-owned controller. Background results persist until removed or collected — call \`subagent results\` to retrieve and either pass remove: true or call \`subagent remove\` afterward. Per-task background is rejected with a migration error.
 - action="remove": remove subagent sessions by id or scope. Pass exactly one of sessionIds (an array of known session ids) or scope ("background" | "retained" | "non-running"). Running sessions in the targeted set are aborted before removal. Unknown ids surface as per-id errors in the response without setting isError; the overall remove call succeeds. Bare or conflicting calls are rejected.
 
 Prompt guidance:
@@ -213,6 +214,19 @@ Execution notes:
 
         if (errors.length > 0) {
           return errorResult(errors.join("\n"), { errors });
+        }
+
+        const background = params.background === true;
+
+        if (background) {
+          const batch = agentManager.startBatch(ctx, signal, parsed, update => {
+            const partial = partialToolResult(update);
+            onUpdate?.(partial);
+            updateSubagentWidget(ctx, update.sessions, settings);
+          }, { background: true });
+          batch.resultsPromise.catch(() => {});
+          updateSubagentWidget(ctx, batch.sessions, settings);
+          return toolResult(backgroundStartedDetails(batch.sessions));
         }
 
         let lastGroup: ReturnType<typeof serializeGroup> | undefined;

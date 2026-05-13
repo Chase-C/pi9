@@ -60,3 +60,11 @@ test("subagent tool description documents action=remove and drops references to 
   assert.match(description, /scope/);
   assert.doesNotMatch(description, /action="clear"/);
 });
+
+test("subagent tool description documents batch-level background flag and references results/remove", () => {
+  const description = registerTool().description;
+  assert.match(description, /background/);
+  assert.match(description, /batch-level/);
+  assert.match(description, /subagent results/);
+  assert.match(description, /subagent remove/);
+});

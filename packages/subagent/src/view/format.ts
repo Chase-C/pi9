@@ -43,12 +43,14 @@ export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
   | { view: "run"; group: AgentGroupView; results?: unknown; active?: boolean }
   | { view: "inventory"; sessions: AgentView[]; filter?: InventoryFilter }
-  | { view: "remove-summary"; summary: RemoveSummary };
+  | { view: "remove-summary"; summary: RemoveSummary }
+  | { view: "background-started"; sessions: AgentView[]; background: true };
 
 export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
 export type RunDetails = Extract<SubagentDetails, { view: "run" }>;
 export type InventoryDetails = Extract<SubagentDetails, { view: "inventory" }>;
 export type RemoveSummaryDetails = Extract<SubagentDetails, { view: "remove-summary" }>;
+export type BackgroundStartedDetails = Extract<SubagentDetails, { view: "background-started" }>;
 
 export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
   return { view: "agents", agents };
@@ -63,6 +65,10 @@ export function runDetails(
 
 export function inventoryDetails(sessions: AgentView[], filter?: InventoryFilter): InventoryDetails {
   return { view: "inventory", sessions, ...(filter ? { filter } : {}) };
+}
+
+export function backgroundStartedDetails(sessions: AgentView[]): BackgroundStartedDetails {
+  return { view: "background-started", sessions, background: true };
 }
 
 export function formatAgentConfigSummary(config: AgentConfig): string {
@@ -197,7 +203,37 @@ function formatSubagentToolDisplayLines(
 
     case "remove-summary":
       return formatRemoveSummaryLines(narrowed.summary, expanded);
+
+    case "background-started":
+      return formatBackgroundStartedLines(narrowed.sessions, expanded, bold);
   }
+}
+
+function formatBackgroundStartedLines(sessions: AgentView[], expanded: boolean, bold?: Bold): DisplayLine[] {
+  const counts = new Map<string, number>();
+  for (const session of sessions) {
+    const status = effectiveStatus(session.status);
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+  const orderedStatuses = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
+  const knownParts = orderedStatuses
+    .filter(status => counts.get(status))
+    .map(status => `${counts.get(status)} ${status}`);
+  const extraParts = Array.from(counts.keys())
+    .filter(status => !orderedStatuses.includes(status))
+    .sort()
+    .map(status => `${counts.get(status)} ${status}`);
+  const head: DisplayLine = {
+    text: [`${plural(sessions.length, "background subagent")} started`, ...knownParts, ...extraParts].join(" · "),
+  };
+  if (!expanded) return [head];
+  const lines: DisplayLine[] = [head];
+  for (const session of sessions) {
+    const label = session.label ?? session.config.name;
+    const status = effectiveStatus(session.status);
+    lines.push({ text: `  ${applyBold(bold, label)} · ${session.id} · ${status}` });
+  }
+  return lines;
 }
 
 function formatRemoveSummaryLines(summary: RemoveSummary, expanded: boolean): DisplayLine[] {
@@ -238,6 +274,10 @@ function narrowDetails(details: unknown): SubagentDetails | undefined {
     case "remove-summary":
       return record.summary && typeof record.summary === "object"
         ? { view: "remove-summary", summary: record.summary as RemoveSummary }
+        : undefined;
+    case "background-started":
+      return Array.isArray(record.sessions)
+        ? { view: "background-started", sessions: record.sessions as AgentView[], background: true }
         : undefined;
     default:
       return undefined;

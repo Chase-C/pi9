@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import {
+  backgroundStartedDetails,
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
   formatSubagentToolLines,
@@ -61,6 +62,35 @@ test("formatSessionLine appends kind:background segment only for background sess
 
   const backgroundLines = formatSubagentToolLines(inventoryDetails([background]), false, 0);
   assert.match(backgroundLines.join("\n"), /kind:background/);
+});
+
+test("background-started view collapsed line shows count summary by status", () => {
+  const sessions = [
+    fakeAgent({ id: "s1", kind: "background", config: { name: "scout" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "s2", kind: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "s3", kind: "background", config: { name: "reviewer" }, status: { kind: "queued" } }),
+  ];
+
+  const collapsed = formatSubagentToolLines(backgroundStartedDetails(sessions), false, 0);
+  const joined = collapsed.join("\n");
+  assert.match(joined, /3 background subagents started/);
+  assert.match(joined, /2 queued/);
+  assert.match(joined, /1 running/);
+});
+
+test("background-started view expanded shows one line per session with session id and initial status", () => {
+  const sessions = [
+    fakeAgent({ id: "scout-1", kind: "background", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
+    fakeAgent({ id: "rev-1", kind: "background", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
+  ];
+
+  const expanded = formatSubagentToolLines(backgroundStartedDetails(sessions), true, 0).join("\n");
+  assert.match(expanded, /frontend auth/);
+  assert.match(expanded, /scout-1/);
+  assert.match(expanded, /queued/);
+  assert.match(expanded, /reviewer/);
+  assert.match(expanded, /rev-1/);
+  assert.match(expanded, /running/);
 });
 
 test("subagent session inspect output uses remove terminology", () => {

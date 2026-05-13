@@ -24,6 +24,9 @@ export const SubagentParams = Type.Object({
     description: "Subagent operation to perform. Use 'agents' to list configured agent definitions, 'list' to list active or retained subagent sessions, 'run' to spawn or resume tasks, and 'remove' to remove sessions by id or scope.",
   }),
   tasks: Type.Optional(Type.Array(TaskSchema, { description: "Subagent tasks to run for action=run, up to configured maxTasksPerRun. Each task is either a spawn (carrying agent) or a resume (carrying sessionId)." })),
+  background: Type.Optional(Type.Boolean({
+    description: "Batch-level flag for action=run. When true, the call returns immediately with initial session views; children continue under a manager-owned controller and remain visible in 'list' until removed or collected. Default false.",
+  })),
   status: Type.Optional(Type.Array(Type.String(), {
     description: "Optional session status filter for action=list. Values: queued, running, completed, error, aborted, interrupted, skipped. Empty array returns no sessions.",
   })),
@@ -73,6 +76,10 @@ export type ParsedTask = TaskRequest | { error: string };
 export function parseTask(raw: unknown): ParsedTask {
   if (!raw || typeof raw !== "object") return { error: "Task must be an object." };
   const task = raw as Record<string, unknown>;
+
+  if (task.background !== undefined) {
+    return { error: "background is a batch-level flag on action='run', not a per-task field." };
+  }
 
   const hasAgent = task.agent !== undefined;
   const hasSessionId = task.sessionId !== undefined;

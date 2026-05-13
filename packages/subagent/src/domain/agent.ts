@@ -27,7 +27,6 @@ export class Agent {
   private _label: string | undefined;
   private _resumableOverride: boolean | undefined;
   private _prompt: string | undefined;
-  private _background = false;
   private _message: string = "";
   private _turns: number = 0;
   private _toolHistory = new Array<AgentToolUse>();
@@ -36,14 +35,18 @@ export class Agent {
   private _totalUsage: Usage = DefaultUsage;
   private _unsubscribe?: () => void;
 
+  readonly background: boolean;
+
   constructor(
     readonly id: string,
     readonly config: AgentConfig,
     readonly spawn: AgentSpawn,
     invocation: AgentInvocation,
     private readonly onUpdate: (agent: Agent, kind: AgentUpdateKind) => void,
+    options: { background?: boolean } = {},
   ) {
     this.agentName = spawn.agent;
+    this.background = options.background ?? false;
     this.apply(invocation);
   }
 
@@ -107,7 +110,7 @@ export class Agent {
       ...(this._label !== undefined ? { label: this._label } : {}),
       ...(this._prompt !== undefined ? { prompt: this._prompt } : {}),
       createdAt: this.createdAt,
-      kind: this._background ? "background" : "retained",
+      kind: this.background ? "background" : "retained",
       config: {
         name: this.agentName,
         description: this.config.description,

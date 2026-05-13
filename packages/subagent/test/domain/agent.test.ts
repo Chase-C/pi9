@@ -36,6 +36,16 @@ test("Agent exposes the per-task skills array as-is and preserves undefined when
   assert.equal(without.spawn.skills, undefined);
 });
 
+test("Agent constructor optional background flag controls toView kind", () => {
+  const defaultAgent = new Agent("id1", baseConfig, { agent: "helper" }, { prompt: "p" }, () => {});
+  assert.equal(defaultAgent.background, false);
+  assert.equal(defaultAgent.toView().kind, "retained");
+
+  const backgroundAgent = new Agent("id2", baseConfig, { agent: "helper" }, { prompt: "p" }, () => {}, { background: true });
+  assert.equal(backgroundAgent.background, true);
+  assert.equal(backgroundAgent.toView().kind, "background");
+});
+
 test("Agent.toView surfaces the default skills from the agent config", () => {
   const config = { ...baseConfig, skills: ["foo", "bar"] };
   const agent = new Agent("id", config, { agent: "helper" }, { prompt: "work" }, () => {});
