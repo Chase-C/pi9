@@ -67,7 +67,7 @@ export async function resumeSessionFromCommand(
   }
 
   const result = normalizeResumeOutcome(action, prompt, outcome);
-  updateSubagentWidget(ctx, agentManager.sessions, uiSettings);
+  updateSubagentWidget(ctx, agentManager.listSessions(), uiSettings);
   pi.sendMessage?.(createSubagentResumeMessage(result));
   notify(ctx, result.status === "completed"
     ? `Subagent session ${action.sessionId} resumed.`
@@ -122,7 +122,7 @@ export async function openSubagentSettings(
       keybindings,
       placement => {
         settings = { ...settings, widgetPlacement: placement };
-        updateSubagentWidget(ctx, agentManager.sessions, settings);
+        updateSubagentWidget(ctx, agentManager.listSessions(), settings);
         const settingsToSave = settings;
         saveQueue = saveQueue.then(() => settingsStore.save(settingsToSave).then(
           () => notify(ctx, `Subagent widget placement set to ${placement}.`, "info"),

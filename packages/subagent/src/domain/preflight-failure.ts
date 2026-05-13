@@ -26,6 +26,7 @@ export function preflightSpawnFailure(args: PreflightSpawnFailureArgs): Prefligh
       ...labelField,
       prompt: task.prompt,
       createdAt,
+      kind: "retained",
       config: {
         name: task.agent,
         source: undefined,
@@ -72,6 +73,7 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
       ...labelField,
       prompt: task.prompt,
       createdAt,
+      kind: target ? target.toView().kind : "retained",
       config: targetConfig ?? {
         name: "(unknown)",
         source: undefined,

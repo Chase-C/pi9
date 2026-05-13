@@ -14,8 +14,8 @@ import {
 import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import { preflightResumeFailure, preflightSpawnFailure } from "../domain/preflight-failure.js";
-import type { ResumeRequest, TaskRequest } from "../schema.js";
-import { activeOrRetainedAgents } from "../view/view-helpers.js";
+import type { ResumeRequest, TaskRequest, SessionStatus } from "../schema.js";
+import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
 import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
 import { timingMark, timingStart, timingSync } from "./timing.js";
@@ -59,8 +59,11 @@ export class AgentManager {
     this._queue = new TaskQueue(maxRunning);
   }
 
-  get sessions(): AgentView[] {
-    return activeOrRetainedAgents(this._agents).map(agent => agent.toView());
+  listSessions(filter?: { status?: SessionStatus[] }): AgentView[] {
+    const views = activeOrRetainedAgents(this._agents).map(agent => agent.toView());
+    if (!filter || filter.status === undefined) return views;
+    const allowed = new Set(filter.status);
+    return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
   }
 
   configure(options: { maxRunning?: number }) {

@@ -27,6 +27,7 @@ export class Agent {
   private _label: string | undefined;
   private _resumableOverride: boolean | undefined;
   private _prompt: string | undefined;
+  private _background = false;
   private _message: string = "";
   private _turns: number = 0;
   private _toolHistory = new Array<AgentToolUse>();
@@ -106,6 +107,7 @@ export class Agent {
       ...(this._label !== undefined ? { label: this._label } : {}),
       ...(this._prompt !== undefined ? { prompt: this._prompt } : {}),
       createdAt: this.createdAt,
+      kind: this._background ? "background" : "retained",
       config: {
         name: this.agentName,
         description: this.config.description,

@@ -21,11 +21,11 @@ export const TaskSchema = Type.Object({
 
 export const SubagentParams = Type.Object({
   action: Type.String({
-    description: "Subagent operation to perform. Use 'list' to list active or retained sessions, 'run' to spawn or resume tasks, and 'remove' to remove sessions by id or scope.",
+    description: "Subagent operation to perform. Use 'agents' to list configured agent definitions, 'list' to list active or retained subagent sessions, 'run' to spawn or resume tasks, and 'remove' to remove sessions by id or scope.",
   }),
   tasks: Type.Optional(Type.Array(TaskSchema, { description: "Subagent tasks to run for action=run, up to configured maxTasksPerRun. Each task is either a spawn (carrying agent) or a resume (carrying sessionId)." })),
-  type: Type.Optional(Type.String({
-    description: "Type of items to list for action='list'. Use 'agents' to list available agents, 'sessions' for active or retained sessions, or 'skills' for skills available to inject. Defaults to 'agents'.",
+  status: Type.Optional(Type.Array(Type.String(), {
+    description: "Optional session status filter for action=list. Values: queued, running, completed, error, aborted, interrupted, skipped. Empty array returns no sessions.",
   })),
   sessionIds: Type.Optional(Type.Array(Type.String(), { description: "Subagent session ids targeted by action=remove. Mutually exclusive with scope." })),
   scope: Type.Optional(Type.Union([
@@ -36,6 +36,13 @@ export const SubagentParams = Type.Object({
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;
+
+export const SESSION_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
+export type SessionStatus = typeof SESSION_STATUSES[number];
+
+export function isSessionStatus(value: unknown): value is SessionStatus {
+  return typeof value === "string" && (SESSION_STATUSES as readonly string[]).includes(value);
+}
 
 export type TaskRequest =
   | SpawnRequest

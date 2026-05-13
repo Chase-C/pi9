@@ -5,7 +5,7 @@ import { AgentRegistry } from "./domain/agent-registry.js";
 import type { SubagentBatchUpdate } from "./domain/agent-view.js";
 import { AgentManager } from "./runtime/agent-manager.js";
 import { timingAsync, timingMark, timingStart, timingSync } from "./runtime/timing.js";
-import { parseTask, SubagentParams, type TaskRequest } from "./schema.js";
+import { isSessionStatus, parseTask, SESSION_STATUSES, SubagentParams, type SessionStatus, type TaskRequest } from "./schema.js";
 import { SubagentUiSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./ui/settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "./ui/widget.js";
 import { registerSubagentsCommand } from "./command/register.js";
@@ -18,7 +18,7 @@ import {
 } from "./view/format.js";
 import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
 import { configureSubagentDisplay, getSubagentDisplaySettings } from "./view/view-helpers.js";
-import { listAgentDefinitions, listSkills, serializeGroup } from "./view/serialize.js";
+import { listAgentDefinitions, serializeGroup } from "./view/serialize.js";
 
 
 interface SubagentExtensionDependencies {
@@ -108,8 +108,9 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 Use this tool when a task benefits from separation from the main conversation: code research, planning, design review, bug investigation, test analysis, or a focused implementation handoff. Each subagent receives only its configured system prompt plus the prompt you provide, so prompts must be self-contained.
 
 Inputs:
-- action: one of "list", "run", or "remove".
-- action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions, or type="skills" to list skills available to inject. Listed agents include any default skills declared in their frontmatter alongside their tools.
+- action: one of "agents", "list", "run", or "remove".
+- action="agents": list configured agent definitions. Each entry carries the agent's tools and any default skills declared in its frontmatter. Takes no other parameters.
+- action="list": list active and retained subagent sessions. Optional status: an array of session statuses ("queued" | "running" | "completed" | "error" | "aborted" | "interrupted" | "skipped") that filters the result; an empty array returns no sessions. Each row carries a kind tag ("background" | "retained") describing how it was dispatched. The legacy type parameter has been removed; passing it returns a migration error. Skills listing is no longer exposed through this tool.
 - action="run": run one or more subagent tasks up to the configured maxTasksPerRun (default eight). Each task is either a new spawn (carrying agent) or a resume of a completed resumable session (carrying sessionId). agent and sessionId are mutually exclusive — providing both is rejected. A spawn task takes agent and prompt and may include cwd, model, thinking, label, resumable, and skills. A resume task takes sessionId and prompt and may re-assert label and resumable; it rejects model, thinking, cwd, agent, and skills. The optional label is a human-readable identifier shown in widgets and logs in place of the agent name; on resume it overwrites the stored label. The optional resumable override applies one-way at completion: a resumable: false decision discards the session immediately, regardless of the agent's frontmatter default. The optional skills array (spawn only) injects named skills into the subagent's system prompt — unknown skill names are a hard error and an explicit skill bypasses its disable-model-invocation flag. Per-task skills fully replace the agent's default skills declared in frontmatter (no merge); an explicit empty array opts out of those defaults.
 - action="remove": remove subagent sessions by id or scope. Pass exactly one of sessionIds (an array of known session ids) or scope ("background" | "retained" | "non-running"). Running sessions in the targeted set are aborted before removal. Unknown ids surface as per-id errors in the response without setting isError; the overall remove call succeeds. Bare or conflicting calls are rejected.
 
@@ -170,14 +171,28 @@ Execution notes:
         return errorResult(`Provide an action: "list", "run", or "remove".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
       }
 
+      if (params.action === "agents") {
+        return toolResult(agentsDetails(listAgentDefinitions(agentRegistry)));
+      }
+
       if (params.action === "list") {
-        const type = params.type ?? "agents";
-        switch (type) {
-          case "agents": return toolResult(agentsDetails(listAgentDefinitions(agentRegistry)));
-          case "sessions": return toolResult(inventoryDetails(agentManager.sessions));
-          case "skills": return toolResult({ skills: listSkills(ctx.cwd) });
-          default: return errorResult('For action=list, type must be "agents", "sessions", or "skills".');
+        if ((params as { type?: unknown }).type !== undefined) {
+          return errorResult("The 'type' parameter has been removed. Use action: 'agents' to list definitions, or action: 'list' (optionally with status: [...]) for sessions. Skills listing is no longer exposed through the subagent tool.");
         }
+        const statusFilter = params.status;
+        let filter: { status: SessionStatus[] } | undefined;
+        if (statusFilter !== undefined) {
+          if (!Array.isArray(statusFilter)) {
+            return errorResult("list status must be an array of status strings.");
+          }
+          for (const value of statusFilter) {
+            if (!isSessionStatus(value)) {
+              return errorResult(`Unknown status '${String(value)}'. Valid: ${SESSION_STATUSES.join(", ")}.`);
+            }
+          }
+          filter = { status: statusFilter as SessionStatus[] };
+        }
+        return toolResult(inventoryDetails(agentManager.listSessions(filter), filter));
       }
 
       if (params.action === "run") {
@@ -210,7 +225,7 @@ Execution notes:
           timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, settings));
         });
         runEnd({ ok: true, resultCount: results.length });
-        timingSync("tool.finalWidget", { sessionCount: agentManager.sessions.length }, () => updateSubagentWidget(ctx, agentManager.sessions, settings));
+        timingSync("tool.finalWidget", { sessionCount: agentManager.listSessions().length }, () => updateSubagentWidget(ctx, agentManager.listSessions(), settings));
         const isError = results.some(result => result.status !== "completed");
         const details = lastGroup ? runDetails(lastGroup, { results }) : { results };
         return toolResult(details, isError);

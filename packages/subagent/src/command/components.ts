@@ -282,7 +282,7 @@ export class SubagentSessionsComponent implements Component {
   }
 
   private get sessions(): AgentView[] {
-    return this.agentManager.sessions;
+    return this.agentManager.listSessions();
   }
 
   private accent(text: string) {

@@ -151,14 +151,14 @@ test('subagent tool description mentions the optional label per-task field', asy
   assert.match(registeredTool.description, /label/);
 });
 
-test('subagent tool description mentions the per-task skills field and the skills listing type', async () => {
+test('subagent tool description mentions the per-task skills field and rejects unknown skills', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } });
 
   assert.match(registeredTool.description, /skills/);
   assert.match(registeredTool.description, /unknown skill/i);
-  assert.match(registeredTool.description, /type="skills"/);
+  assert.doesNotMatch(registeredTool.description, /type="skills"/);
 });
 
 test('subagent tool description mentions agent-frontmatter default skills and replace semantics', async () => {
@@ -496,8 +496,8 @@ test('tool execution validates task count and reports available agents', async (
   assert.match(result.content[0].text, /helper \(project\)/);
 });
 
-test('tool list action returns agent definitions or resumable sessions by type', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'subagent-list-'));
+test('tool agents action returns the flat definition list with tools and source path', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-agents-'));
   const projectAgents = join(root, '.pi', 'agents');
   await mkdir(projectAgents, { recursive: true });
   await writeFile(join(projectAgents, 'helper.md'), `---\nname: helper\ndescription: Helps\nresumable: true\nmodel: test/model\ntools: read, bash\n---\nHelp prompt`);
@@ -506,27 +506,21 @@ test('tool list action returns agent definitions or resumable sessions by type',
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   subagentExtension({ registerTool: tool => { registeredTool = tool; } });
 
-  const agents = await registeredTool.execute('tool-call', {
-    action: 'list',
+  const result = await registeredTool.execute('tool-call', {
+    action: 'agents',
   }, undefined, undefined, { cwd: root });
-  assert.equal(agents.isError, false);
-  const helper = agents.details.agents.find(agent => agent.name === 'helper');
+  assert.equal(result.isError, false);
+  assert.equal(result.details.view, 'agents');
+  const helper = result.details.agents.find(agent => agent.name === 'helper');
   assert.ok(helper);
   assert.equal(helper.resumable, true);
   assert.deepEqual(helper.tools, ['read', 'bash']);
   assert.equal(helper.sourcePath, join(projectAgents, 'helper.md'));
   assert.equal(Object.prototype.hasOwnProperty.call(helper, 'systemPrompt'), false);
-
-  const sessions = await registeredTool.execute('tool-call', {
-    action: 'list',
-    type: 'sessions',
-  }, undefined, undefined, { cwd: root });
-  assert.equal(sessions.isError, false);
-  assert.deepEqual(sessions.details.sessions, []);
 });
 
-test('tool list action returns each agent default skills alongside tools', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'subagent-list-skills-default-'));
+test('tool agents action returns each agent default skills alongside tools', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-agents-skills-default-'));
   const projectAgents = join(root, '.pi', 'agents');
   await mkdir(projectAgents, { recursive: true });
   await writeFile(join(projectAgents, 'helper.md'), `---\nname: helper\ndescription: Helps\ntools: read\nskills: foo, bar\n---\nHelp prompt`);
@@ -536,7 +530,7 @@ test('tool list action returns each agent default skills alongside tools', async
   subagentExtension({ registerTool: tool => { registeredTool = tool; } });
 
   const result = await registeredTool.execute('tool-call', {
-    action: 'list',
+    action: 'agents',
   }, undefined, undefined, { cwd: root });
 
   assert.equal(result.isError, false);
@@ -546,13 +540,41 @@ test('tool list action returns each agent default skills alongside tools', async
   assert.deepEqual(helper.tools, ['read']);
 });
 
-test('tool list action with type=skills returns skills loaded from project .pi/skills', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'subagent-list-skills-'));
-  const skillName = 'project-only-skill';
-  const skillDir = join(root, '.pi', 'skills', skillName);
-  await mkdir(skillDir, { recursive: true });
-  await writeFile(join(skillDir, 'SKILL.md'), `---\nname: ${skillName}\ndescription: Project-only skill body for listing\n---\nSkill body`);
+test('tool list action with legacy type=agents returns a migration error pointing at action=agents', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-list-type-agents-'));
+  let registeredTool;
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
 
+  const result = await registeredTool.execute('tool-call', {
+    action: 'list',
+    type: 'agents',
+  }, undefined, undefined, { cwd: root });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /'type' parameter has been removed/);
+  assert.match(result.content[0].text, /action: 'agents'/);
+  assert.match(result.content[0].text, /Skills listing is no longer exposed/);
+});
+
+test('tool list action with legacy type=sessions returns the same migration error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-list-type-sessions-'));
+  let registeredTool;
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'list',
+    type: 'sessions',
+  }, undefined, undefined, { cwd: root });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /'type' parameter has been removed/);
+  assert.match(result.content[0].text, /action: 'list'/);
+});
+
+test('tool list action with legacy type=skills returns the migration error noting skills are no longer exposed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-list-type-skills-'));
   let registeredTool;
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   subagentExtension({ registerTool: tool => { registeredTool = tool; } });
@@ -562,27 +584,8 @@ test('tool list action with type=skills returns skills loaded from project .pi/s
     type: 'skills',
   }, undefined, undefined, { cwd: root });
 
-  assert.equal(result.isError, false);
-  assert.ok(Array.isArray(result.details.skills));
-  const skill = result.details.skills.find(s => s.name === skillName);
-  assert.ok(skill, `expected ${skillName} skill to be listed`);
-  assert.equal(skill.description, 'Project-only skill body for listing');
-  assert.equal(skill.source, 'project');
-});
-
-test('tool list action with an unrecognized type reports skills as a valid choice', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'subagent-list-bad-type-'));
-  let registeredTool;
-  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
-  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
-
-  const result = await registeredTool.execute('tool-call', {
-    action: 'list',
-    type: 'whatever',
-  }, undefined, undefined, { cwd: root });
-
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /skills/);
+  assert.match(result.content[0].text, /Skills listing is no longer exposed/);
 });
 
 test('tool run action returns full output only once in JSON details for a resume task', async () => {
@@ -590,6 +593,7 @@ test('tool run action returns full output only once in JSON details for a resume
   const fullOutput = `resume output ${'q'.repeat(1500)} tail`;
   let registeredTool;
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     run(_ctx, _signal, tasks) {
       return Promise.resolve(tasks.map(task => ({
@@ -651,6 +655,7 @@ test('/subagents settings exposes placement values, saves changes, and updates a
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const runningSession = fakeAgent({ status: { kind: 'running', startedAt: 1 }, turns: 1 });
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [runningSession],
   };
   let current = 'belowEditor';
@@ -698,6 +703,7 @@ test('/subagents settings persists the latest rapid placement change before comm
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const runningSession = fakeAgent({ status: { kind: 'running', startedAt: 1 }, turns: 1 });
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [runningSession],
   };
   let persisted = 'belowEditor';
@@ -759,7 +765,7 @@ test('/subagents settings closes through injected cancel keybindings', async () 
     registerCommand: (name, command) => commands.set(name, command),
   }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
-    agentManager: { sessions: [] },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
     settingsStore: { async load() { return { settings: { widgetPlacement: 'belowEditor' } }; }, async save() {} },
   });
 
@@ -795,6 +801,7 @@ test('/subagents command no-ops without UI or notify instead of throwing', async
     summarizeAgent() { return ''; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
   };
   const commands = new Map();
@@ -817,6 +824,7 @@ test('/subagents command does not notify through UI when hasUI is false', async 
     summarizeAgent() { return ''; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
   };
   const commands = new Map();
@@ -847,6 +855,7 @@ test('subagents command opens agents browser by default when sessions are empty'
     summarizeAgent() { return ''; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
   };
   const commands = new Map();
@@ -909,7 +918,7 @@ test('/subagents command closes agents and sessions menus on terminal escape seq
       async reload() {},
       summarizeAgent() { return ''; },
     },
-    agentManager: { sessions: [] },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
   });
 
   let agentsClosed = false;
@@ -938,6 +947,7 @@ test('/subagents command closes agents and sessions menus on terminal escape seq
   }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
     agentManager: {
+      listSessions() { return this.sessions; },
       sessions: [fakeAgent({ status: { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' }, turns: 1 })],
       },
   });
@@ -973,6 +983,7 @@ test('/subagents command reports custom UI failure without throwing', async () =
     summarizeAgent() { return ''; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [fakeAgent({ config: { name: 'helper', resumable: true, source: 'project' }, status: { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' }, turns: 1 })],
   };
   const commands = new Map();
@@ -1003,6 +1014,7 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
     summarizeAgent() { return ''; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [fakeAgent({
       config: { resumable: true },
       options: { prompt: 'Fix issue by updating the API' },
@@ -1047,6 +1059,7 @@ test('subagents command opens a sessions view from serialized DTOs', async () =>
 test('/subagents command handles resume when editor UI is unavailable', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [fakeAgent({ config: { resumable: true } })],
     run() { throw new Error('run should not start'); },
   };
@@ -1078,6 +1091,7 @@ test('/subagents command handles resume when editor UI throws', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   let runCalls = 0;
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [fakeAgent({ config: { resumable: true } })],
     run() { runCalls += 1; throw new Error('run should not start'); },
   };
@@ -1113,6 +1127,7 @@ test('subagents command resumes completed retained session with editor loader an
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const resumeCalls = [];
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [fakeAgent({ config: { resumable: true } })],
     run(_ctx, signal, tasks) {
       const task = tasks[0];
@@ -1178,6 +1193,7 @@ test('subagents command resumes completed retained session with editor loader an
 test('subagents command resume cancellation aborts the child and reports interruption', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [fakeAgent({ config: { resumable: true } })],
     run(_ctx, signal, tasks) {
       const task = tasks[0];
@@ -1253,6 +1269,7 @@ test('subagents command inspect view shows metadata and removes retained session
   });
   const clearCalls = [];
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [retainedSession],
     async remove(args) {
       const [sessionId] = args.sessionIds;
@@ -1299,9 +1316,214 @@ test('subagents command inspect view shows metadata and removes retained session
   assert.match(notifications.at(-1)[0], /Removed subagent session s1/);
 });
 
-test('subagent tool lists retained sessions as serialized DTOs', async () => {
+test('subagent tool action=list with status filter [completed, error] returns terminal-success and terminal-failed sessions but excludes others', async () => {
   const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
-  const { completedRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const { completedRun, errorRun, interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+
+  let nextRunner = null;
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    return nextRunner(agent, prompt);
+  };
+  const fakeRegistry = {
+    agents: new Map([
+      ['good', { name: 'good', description: '', systemPrompt: '', source: 'project', resumable: true, tools: [] }],
+      ['bad', { name: 'bad', description: '', systemPrompt: '', source: 'project', resumable: true, tools: [] }],
+      ['cut', { name: 'cut', description: '', systemPrompt: '', source: 'project', resumable: true, tools: [] }],
+    ]),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const manager = new AgentManager(fakeRegistry, 1, runner);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: manager });
+
+  nextRunner = (agent, prompt) => completedRun(agent, prompt, 'ok');
+  await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [{ agent: 'good', prompt: 'good task' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+  nextRunner = (agent, prompt) => errorRun(agent, prompt, 'failed');
+  await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [{ agent: 'bad', prompt: 'bad task' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+  nextRunner = (agent, prompt) => interruptedRun(agent, prompt, 'cancelled');
+  await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [{ agent: 'cut', prompt: 'cut task' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'list',
+    status: ['completed', 'error'],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.sessions.length, 2);
+  const outcomes = result.details.sessions.map(s => s.status.outcome).sort();
+  assert.deepEqual(outcomes, ['completed', 'error']);
+});
+
+test('AgentManager.listSessions returns all retained sessions when called with no filter', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => {
+    agent.attach(session);
+    return completedRun(agent, prompt, 'ok');
+  };
+  const registry = {
+    agents: new Map([['good', { name: 'good', description: '', systemPrompt: '', source: 'project', resumable: true, tools: [] }]]),
+  };
+  const manager = new AgentManager(registry, 1, runner);
+  await manager.run({ cwd: process.cwd(), hasUI: false }, undefined, [{ kind: 'spawn', agent: 'good', prompt: 'go' }]);
+
+  const all = manager.listSessions();
+  assert.equal(all.length, 1);
+  assert.equal(all[0].kind, 'retained');
+});
+
+test('subagent tool action=list with empty status filter returns no sessions distinct from no filter', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    return completedRun(agent, prompt, 'ok');
+  };
+  const fakeRegistry = {
+    agents: new Map([
+      ['good', { name: 'good', description: '', systemPrompt: '', source: 'project', resumable: true, tools: [] }],
+    ]),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const manager = new AgentManager(fakeRegistry, 1, runner);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: manager });
+
+  await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [{ agent: 'good', prompt: 'go' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  const noFilter = await registeredTool.execute('tool-call', {
+    action: 'list',
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+  assert.equal(noFilter.details.sessions.length, 1);
+
+  const emptyFilter = await registeredTool.execute('tool-call', {
+    action: 'list',
+    status: [],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+  assert.equal(emptyFilter.isError, false);
+  assert.deepEqual(emptyFilter.details.sessions, []);
+});
+
+test('subagent tool action=list with an unknown status value returns the unknown-status error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'subagent-list-unknown-status-'));
+  let registeredTool;
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'list',
+    status: ['weird'],
+  }, undefined, undefined, { cwd: root });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Unknown status 'weird'/);
+  assert.match(result.content[0].text, /queued, running, completed, error, aborted, interrupted, skipped/);
+});
+
+test('collapsed inventory group line surfaces a filter:<statuses> segment when a status filter is active', async () => {
+  const { formatSubagentToolLines, inventoryDetails } = await import(`../dist/view/format.js?t=${unique()}`);
+  const a = { ...fakeAgent({ id: 's1', config: { name: 'a' }, status: { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' } }), kind: 'retained' };
+  const b = { ...fakeAgent({ id: 's2', config: { name: 'b' }, status: { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' } }), kind: 'retained' };
+
+  const noFilter = formatSubagentToolLines(inventoryDetails([a, b]), false, 0);
+  assert.doesNotMatch(noFilter.join('\n'), /filter:/);
+
+  const filtered = formatSubagentToolLines(inventoryDetails([a, b], { status: ['completed', 'error'] }), false, 0);
+  assert.match(filtered.join('\n'), /· filter:completed,error/);
+});
+
+test('formatSubagentSessionSummary surfaces kind:background only for background-kind sessions', async () => {
+  const { formatSubagentSessionSummary } = await import(`../dist/view/format.js?t=${unique()}`);
+  const retained = { ...fakeAgent({ config: { name: 'helper', resumable: true } }), kind: 'retained' };
+  const background = { ...fakeAgent({ id: 's2', config: { name: 'helper', resumable: true } }), kind: 'background' };
+
+  assert.doesNotMatch(formatSubagentSessionSummary(retained), /kind:/);
+  assert.match(formatSubagentSessionSummary(background), /kind:background/);
+});
+
+test('formatSessionLine appends kind:background segment only for background sessions and never for retained', async () => {
+  const { formatSubagentToolLines, inventoryDetails } = await import(`../dist/view/format.js?t=${unique()}`);
+  const retained = { ...fakeAgent({ config: { name: 'helper' }, status: { kind: 'completed', startedAt: 1, completedAt: 2, response: 'done' } }), kind: 'retained' };
+  const background = { ...fakeAgent({ id: 's2', config: { name: 'helper' }, status: { kind: 'running', startedAt: 1 } }), kind: 'background' };
+
+  const retainedLines = formatSubagentToolLines(inventoryDetails([retained]), false, 0);
+  assert.doesNotMatch(retainedLines.join('\n'), /kind:/);
+
+  const backgroundLines = formatSubagentToolLines(inventoryDetails([background]), false, 0);
+  assert.match(backgroundLines.join('\n'), /kind:background/);
+});
+
+test('subagent tool action=list with status filter [completed] returns only completed sessions', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun, errorRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+
+  let nextRunner = null;
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    const outcome = nextRunner?.(agent, prompt) ?? completedRun(agent, prompt, 'ok');
+    return outcome;
+  };
+  const fakeRegistry = {
+    agents: new Map([
+      ['good', { name: 'good', description: '', systemPrompt: '', source: 'project', resumable: true, tools: [] }],
+      ['bad', { name: 'bad', description: '', systemPrompt: '', source: 'project', resumable: true, tools: [] }],
+    ]),
+    async reload() {},
+    summarizeAgent() { return ''; },
+  };
+  const manager = new AgentManager(fakeRegistry, 1, runner);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, { agentRegistry: fakeRegistry, agentManager: manager });
+
+  nextRunner = (agent, prompt) => completedRun(agent, prompt, 'ok');
+  await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [{ agent: 'good', prompt: 'good task' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  nextRunner = (agent, prompt) => errorRun(agent, prompt, 'failed');
+  await registeredTool.execute('tool-call', {
+    action: 'run',
+    tasks: [{ agent: 'bad', prompt: 'bad task' }],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'list',
+    status: ['completed'],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, false);
+  assert.equal(result.details.sessions.length, 1);
+  assert.equal(result.details.sessions[0].config.name, 'good');
+  assert.equal(result.details.sessions[0].status.outcome, 'completed');
+});
+
+test('subagent tool action=list with no filter returns retained sessions tagged kind: retained', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
   const runner = async (_ctx, agent, prompt) => {
@@ -1326,10 +1548,10 @@ test('subagent tool lists retained sessions as serialized DTOs', async () => {
 
   const result = await registeredTool.execute('tool-call', {
     action: 'list',
-    type: 'sessions',
   }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
 
   assert.equal(result.isError, false);
+  assert.equal(result.details.view, 'inventory');
   assert.equal(result.details.sessions.length, 1);
   const retained = result.details.sessions[0];
   assert.equal(retained.config.name, 'chatty');
@@ -1339,6 +1561,7 @@ test('subagent tool lists retained sessions as serialized DTOs', async () => {
   assert.equal(retained.config.model, 'test/model');
   assert.deepEqual(retained.config.tools, ['read']);
   assert.equal(retained.status.snippet, 'The final answer from the child.');
+  assert.equal(retained.kind, 'retained');
 });
 
 test('subagent tool result renderer falls back to simple text when themed rendering fails', async () => {
@@ -1475,7 +1698,7 @@ test('manager marks runner rejections before start as terminal error in grouped 
   assert.equal(final.sessions[0].status.kind, 'done');
   assert.equal(final.sessions[0].status.outcome, 'error');
   assert.match(final.sessions[0].status.snippet, /setup failed before start/);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('manager returns skipped result and final group row for queued task whose signal aborted before it can start', async () => {
@@ -1514,7 +1737,7 @@ test('manager returns skipped result and final group row for queued task whose s
   assert.equal(results[1].resumable, false);
   const final = updates.at(-1);
   assert.deepEqual(final.sessions.map(s => s.status.kind === 'done' ? s.status.outcome : s.status.kind), ['completed', 'skipped']);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('manager does not expose skipped resumable tasks as sessions', async () => {
@@ -1547,7 +1770,7 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
   assert.equal(results[1].status, 'skipped');
   assert.equal(results[1].resumable, false);
   assert.equal(Object.prototype.hasOwnProperty.call(results[1], 'sessionId'), false);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
   assert.deepEqual(await manager.remove({ scope: 'non-running' }), { removed: 0, aborted: 0, sessionIds: [], errors: [] });
 });
 
@@ -1570,7 +1793,7 @@ test('manager does not expose or resume non-resumable completed sessions', async
 
   assert.equal(results[0].status, 'completed');
   assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
   const [retried] = await manager.run(
     { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
     undefined,
@@ -1601,7 +1824,7 @@ test('manager discards a completed session when a task overrides resumable to fa
   assert.equal(results[0].status, 'completed');
   assert.equal(results[0].resumable, false);
   assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
   assert.deepEqual(await manager.remove({ scope: 'non-running' }), { removed: 0, aborted: 0, sessionIds: [], errors: [] });
 });
 
@@ -1633,7 +1856,7 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
   assert.ok(results[1].sessionId);
 
-  const sessions = manager.sessions;
+  const sessions = manager.listSessions();
   assert.deepEqual(sessions.map(session => session.config.name), ['chatty']);
   assert.equal(sessions[0].status.kind, 'done');
   assert.equal(sessions[0].status.outcome, 'interrupted');
@@ -1647,7 +1870,7 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   assert.equal(retried.resumed, true);
   assert.match(retried.error, /while it is interrupted/);
   assert.deepEqual(await manager.remove({ sessionIds: [results[1].sessionId] }), { removed: 1, aborted: 0, sessionIds: [results[1].sessionId], errors: [] });
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('manager retains a completed session when a task overrides resumable to true', async () => {
@@ -1673,7 +1896,7 @@ test('manager retains a completed session when a task overrides resumable to tru
 
   assert.equal(results[0].resumable, true);
   assert.ok(results[0].sessionId);
-  assert.deepEqual(manager.sessions.map(session => [session.id, session.config.name, session.config.resumable]), [
+  assert.deepEqual(manager.listSessions().map(session => [session.id, session.config.name, session.config.resumable]), [
     [results[0].sessionId, 'oneshot', true],
   ]);
 
@@ -1721,7 +1944,7 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
   assert.equal(results[0].output, 'response:one');
   assert.ok(results[0].sessionId);
 
-  assert.deepEqual(manager.sessions.map(session => session.id), [results[0].sessionId]);
+  assert.deepEqual(manager.listSessions().map(session => session.id), [results[0].sessionId]);
 
   const [resumed] = await manager.run(
     { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
@@ -1733,14 +1956,14 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
   assert.equal(resumed.prompt, 'two');
   assert.equal(resumed.sessionId, results[0].sessionId);
 
-  const retained = manager.sessions[0];
+  const retained = manager.listSessions()[0];
   assert.equal(retained.id, results[0].sessionId);
   assert.equal(retained.status.kind, 'done');
   assert.equal(retained.status.outcome, 'completed');
   assert.equal(retained.status.snippet, 'follow:two');
 
   assert.deepEqual(await manager.remove({ sessionIds: [results[0].sessionId] }), { removed: 1, aborted: 0, sessionIds: [results[0].sessionId], errors: [] });
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('manager rejects duplicate resume tasks without corrupting the retained session', async () => {
@@ -1792,11 +2015,11 @@ test('manager rejects duplicate resume tasks without corrupting the retained ses
   assert.equal(duplicate.sessionId, first.sessionId);
   assert.match(duplicate.error, /already.*resum/i);
 
-  assert.equal(manager.sessions.length, 1);
-  assert.equal(manager.sessions[0].id, first.sessionId);
-  assert.equal(manager.sessions[0].status.kind, 'done');
-  assert.equal(manager.sessions[0].status.outcome, 'completed');
-  assert.equal(manager.sessions[0].status.snippet, 'new:first follow-up');
+  assert.equal(manager.listSessions().length, 1);
+  assert.equal(manager.listSessions()[0].id, first.sessionId);
+  assert.equal(manager.listSessions()[0].status.kind, 'done');
+  assert.equal(manager.listSessions()[0].status.outcome, 'completed');
+  assert.equal(manager.listSessions()[0].status.snippet, 'new:first follow-up');
 });
 
 test('manager reports resume setup failure as the follow-up prompt error without returning prior completion', async () => {
@@ -1864,12 +2087,12 @@ test('manager keeps a retained completed session retryable after resume setup fa
   );
   assert.equal(failed.status, 'error');
 
-  assert.equal(manager.sessions.length, 1);
-  assert.equal(manager.sessions[0].id, first.sessionId);
-  assert.equal(manager.sessions[0].status.kind, 'done');
-  assert.equal(manager.sessions[0].status.outcome, 'error');
-  assert.equal(manager.sessions[0].status.snippet, 'resume setup exploded');
-  assert.equal(manager.sessions[0].config.resumable, true);
+  assert.equal(manager.listSessions().length, 1);
+  assert.equal(manager.listSessions()[0].id, first.sessionId);
+  assert.equal(manager.listSessions()[0].status.kind, 'done');
+  assert.equal(manager.listSessions()[0].status.outcome, 'error');
+  assert.equal(manager.listSessions()[0].status.snippet, 'resume setup exploded');
+  assert.equal(manager.listSessions()[0].config.resumable, true);
 
   const [retried] = await manager.run(
     { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
@@ -1910,25 +2133,25 @@ test('manager keeps a session retryable after repeated pre-attach resume failure
   ]);
   assert.equal(firstFail.status, 'error');
   assert.equal(firstFail.error, 'resume failed #1');
-  assert.equal(manager.sessions[0].status.outcome, 'error');
-  assert.equal(manager.sessions[0].status.snippet, 'resume failed #1');
-  assert.equal(manager.sessions[0].config.resumable, true);
+  assert.equal(manager.listSessions()[0].status.outcome, 'error');
+  assert.equal(manager.listSessions()[0].status.snippet, 'resume failed #1');
+  assert.equal(manager.listSessions()[0].config.resumable, true);
 
   const [secondFail] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { kind: 'resume', sessionId: first.sessionId, prompt: 'try 2' },
   ]);
   assert.equal(secondFail.status, 'error');
   assert.equal(secondFail.error, 'resume failed #2');
-  assert.equal(manager.sessions[0].status.snippet, 'resume failed #2');
-  assert.equal(manager.sessions[0].config.resumable, true);
+  assert.equal(manager.listSessions()[0].status.snippet, 'resume failed #2');
+  assert.equal(manager.listSessions()[0].config.resumable, true);
 
   const [retried] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { kind: 'resume', sessionId: first.sessionId, prompt: 'try 3' },
   ]);
   assert.equal(retried.status, 'completed');
   assert.equal(retried.output, 'new:try 3');
-  assert.equal(manager.sessions[0].status.outcome, 'completed');
-  assert.equal(manager.sessions[0].status.snippet, 'new:try 3');
+  assert.equal(manager.listSessions()[0].status.outcome, 'completed');
+  assert.equal(manager.listSessions()[0].status.snippet, 'new:try 3');
 });
 
 test('manager reports queued cancelled resume as skipped follow-up and keeps retained session retryable', async () => {
@@ -1987,12 +2210,12 @@ test('manager reports queued cancelled resume as skipped follow-up and keeps ret
   assert.equal(finalResumeView.status.snippet, 'Agent skipped.');
   assert.equal(finalResumeView.config.resumable, true);
 
-  assert.equal(manager.sessions.length, 1);
-  assert.equal(manager.sessions[0].id, first.sessionId);
-  assert.equal(manager.sessions[0].status.kind, 'done');
-  assert.equal(manager.sessions[0].status.outcome, 'skipped');
-  assert.equal(manager.sessions[0].status.snippet, 'Agent skipped.');
-  assert.equal(manager.sessions[0].config.resumable, true);
+  assert.equal(manager.listSessions().length, 1);
+  assert.equal(manager.listSessions()[0].id, first.sessionId);
+  assert.equal(manager.listSessions()[0].status.kind, 'done');
+  assert.equal(manager.listSessions()[0].status.outcome, 'skipped');
+  assert.equal(manager.listSessions()[0].status.snippet, 'Agent skipped.');
+  assert.equal(manager.listSessions()[0].config.resumable, true);
 
   const [retried] = await manager.run(
     { cwd: process.cwd(), modelRegistry: { getAll: () => [] } },
@@ -2213,6 +2436,7 @@ test('subagent tool notifies invalid settings fallback without breaking executio
     summarizeAgent() { return 'helper (project)'; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     async run(_ctx, _signal, _tasks, onUpdate) {
       onUpdate({ sessions: [runningAgent], active: true });
@@ -2253,6 +2477,7 @@ test('subagent tool falls back to default UI settings when settings load rejects
     summarizeAgent() { return 'helper (project)'; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     async run(_ctx, _signal, _tasks, onUpdate) {
       onUpdate({ sessions: [runningAgent], active: true });
@@ -2293,6 +2518,7 @@ test('subagent tool keeps subagent surfaces working but hides widget when placem
     summarizeAgent() { return 'helper (project)'; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [runningAgent],
     async run(_ctx, _signal, _tasks, onUpdate) {
       onUpdate({ sessions: [runningAgent], active: true });
@@ -2341,6 +2567,7 @@ test('subagent tool forwards live manager updates to onUpdate and widget UI', as
     summarizeAgent() { return 'helper (project)'; },
   };
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     async run(_ctx, _signal, _tasks, onUpdate) {
       onUpdate({ sessions: [runningAgent], active: true });
@@ -3063,7 +3290,7 @@ test('manager.run resume task with a new label overwrites the agent stored label
     { kind: 'resume', sessionId: seed.sessionId, prompt: 'two', label: 'phase-2' },
   ]);
 
-  assert.equal(manager.sessions[0].label, 'phase-2');
+  assert.equal(manager.listSessions()[0].label, 'phase-2');
 });
 
 test('manager.run resume task with resumable: false discards the session after completion', async () => {
@@ -3080,14 +3307,14 @@ test('manager.run resume task with resumable: false discards the session after c
   const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { kind: 'spawn', agent: 'chatty', prompt: 'one' },
   ]);
-  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.listSessions().length, 1);
 
   const [resumed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { kind: 'resume', sessionId: seed.sessionId, prompt: 'two', resumable: false },
   ]);
   assert.equal(resumed.status, 'completed');
   assert.equal(resumed.resumable, false);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('manager.run resume task targeting an unknown sessionId yields a per-task error and does not block siblings', async () => {
@@ -3119,6 +3346,7 @@ test('subagent action=run dispatches a spawn-only batch through agentManager.run
   let runCalls = 0;
   let receivedTasks;
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     async run(_ctx, _signal, tasks) {
       runCalls += 1;
@@ -3163,6 +3391,7 @@ test('subagent action=run accepts a heterogeneous batch of spawn and resume task
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   let receivedTasks;
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     async run(_ctx, _signal, tasks) {
       receivedTasks = tasks;
@@ -3208,6 +3437,7 @@ test('subagent action=run rejects a task carrying both agent and sessionId at pa
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   let runCalls = 0;
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     async run() { runCalls += 1; return []; },
   };
@@ -3233,7 +3463,7 @@ test('subagent action=resume is no longer recognized', async () => {
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
-    agentManager: { sessions: [] },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
   });
 
   const result = await registeredTool.execute('tool-call', {
@@ -3367,14 +3597,14 @@ test('AgentManager.remove scope=non-running removes terminal and queued sessions
     { kind: 'spawn', agent: 'oneshot', prompt: 'queued' },
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.deepEqual(manager.sessions.map(s => s.status.kind).sort(), ['done', 'queued', 'running']);
+  assert.deepEqual(manager.listSessions().map(s => s.status.kind).sort(), ['done', 'queued', 'running']);
 
   const result = await manager.remove({ scope: 'non-running' });
 
   assert.equal(result.removed, 2);
   assert.equal(result.aborted, 0);
-  assert.equal(manager.sessions.length, 1);
-  assert.equal(manager.sessions[0].status.kind, 'running');
+  assert.equal(manager.listSessions().length, 1);
+  assert.equal(manager.listSessions()[0].status.kind, 'running');
 
   unblockRunning();
   await pending;
@@ -3403,7 +3633,7 @@ test('AgentManager.remove with a queued sessionId prevents the queued spawn from
     { kind: 'spawn', agent: 'oneshot', prompt: 'queued' },
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
-  const queued = manager.sessions.find(session => session.status.kind === 'queued');
+  const queued = manager.listSessions().find(session => session.status.kind === 'queued');
   assert.ok(queued);
 
   const result = await manager.remove({ sessionIds: [queued.id] });
@@ -3415,7 +3645,7 @@ test('AgentManager.remove with a queued sessionId prevents the queued spawn from
 
   assert.deepEqual(runnerPrompts, ['block']);
   assert.equal(results[1].status, 'skipped');
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('AgentManager.remove scope=non-running prevents queued spawns from later invoking the runner', async () => {
@@ -3441,7 +3671,7 @@ test('AgentManager.remove scope=non-running prevents queued spawns from later in
     { kind: 'spawn', agent: 'oneshot', prompt: 'queued' },
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(manager.sessions.some(session => session.status.kind === 'queued'));
+  assert.ok(manager.listSessions().some(session => session.status.kind === 'queued'));
 
   const result = await manager.remove({ scope: 'non-running' });
   assert.equal(result.removed, 1);
@@ -3452,7 +3682,7 @@ test('AgentManager.remove scope=non-running prevents queued spawns from later in
 
   assert.deepEqual(runnerPrompts, ['block']);
   assert.equal(results[1].status, 'skipped');
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('AgentManager.remove with a queued resume sessionId prevents the queued resume runner from starting', async () => {
@@ -3498,7 +3728,21 @@ test('AgentManager.remove with a queued resume sessionId prevents the queued res
   assert.equal(resumeCalls, 0);
   assert.equal(results[1].status, 'skipped');
   assert.equal(results[1].resumed, true);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
+});
+
+test('subagent tool description documents action=agents and action=list (sessions only) without skills listing', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  assert.match(registeredTool.description, /action="agents"/);
+  assert.match(registeredTool.description, /action="list"/);
+  assert.match(registeredTool.description, /status: an array/i);
+  assert.match(registeredTool.description, /kind tag/i);
+  assert.doesNotMatch(registeredTool.description, /type="skills"/);
+  assert.doesNotMatch(registeredTool.description, /type="sessions"/);
+  assert.doesNotMatch(registeredTool.description, /type="agents"/);
 });
 
 test('subagent tool description documents action=remove and drops references to action=clear', async () => {
@@ -3562,6 +3806,7 @@ test('subagent action=remove returns a remove-summary view with the manager.remo
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const removeCalls = [];
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     async remove(args) {
       removeCalls.push(args);
@@ -3588,6 +3833,7 @@ test('subagent action=remove returns a remove-summary view with the manager.remo
 test('subagent action=remove keeps isError false when manager.remove reports per-id errors', async () => {
   const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
   const fakeManager = {
+    listSessions() { return this.sessions; },
     sessions: [],
     async remove() {
       return { removed: 0, aborted: 0, sessionIds: [], errors: [{ sessionId: 'unknown', error: 'Unknown subagent session: unknown' }] };
@@ -3650,12 +3896,12 @@ test('AgentManager.remove scope=background is a valid no-op until background dis
   await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { kind: 'spawn', agent: 'chatty', prompt: 'one' },
   ]);
-  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.listSessions().length, 1);
 
   const result = await manager.remove({ scope: 'background' });
 
   assert.deepEqual(result, { removed: 0, aborted: 0, sessionIds: [], errors: [] });
-  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.listSessions().length, 1);
 });
 
 test('AgentManager.remove scope=retained removes retained resumable sessions and leaves running and queued alone', async () => {
@@ -3679,7 +3925,7 @@ test('AgentManager.remove scope=retained removes retained resumable sessions and
   await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { kind: 'spawn', agent: 'chatty', prompt: 'remember me' },
   ]);
-  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.listSessions().length, 1);
 
   // Start a second batch: one running (held by gate), one queued behind it.
   const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
@@ -3687,7 +3933,7 @@ test('AgentManager.remove scope=retained removes retained resumable sessions and
     { kind: 'spawn', agent: 'oneshot', prompt: 'queued' },
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
-  const kinds = manager.sessions.map(s => s.status.kind).sort();
+  const kinds = manager.listSessions().map(s => s.status.kind).sort();
   assert.deepEqual(kinds, ['done', 'queued', 'running']);
 
   const result = await manager.remove({ scope: 'retained' });
@@ -3695,7 +3941,7 @@ test('AgentManager.remove scope=retained removes retained resumable sessions and
   assert.equal(result.removed, 1);
   assert.equal(result.aborted, 0);
   assert.equal(result.sessionIds.length, 1);
-  const survivingKinds = manager.sessions.map(s => s.status.kind).sort();
+  const survivingKinds = manager.listSessions().map(s => s.status.kind).sort();
   assert.deepEqual(survivingKinds, ['queued', 'running']);
 
   unblockRunning();
@@ -3728,8 +3974,8 @@ test('AgentManager.remove with a running sessionId aborts the underlying session
     { kind: 'spawn', agent: 'chatty', prompt: 'work' },
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
-  const runningId = manager.sessions[0].id;
-  assert.equal(manager.sessions[0].status.kind, 'running');
+  const runningId = manager.listSessions()[0].id;
+  assert.equal(manager.listSessions()[0].status.kind, 'running');
 
   const result = await manager.remove({ sessionIds: [runningId] });
   await pending;
@@ -3738,7 +3984,7 @@ test('AgentManager.remove with a running sessionId aborts the underlying session
   assert.equal(result.aborted, 1);
   assert.deepEqual(result.sessionIds, [runningId]);
   assert.equal(abortCalls, 1);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('AgentManager.remove with a known terminal sessionId removes that session', async () => {
@@ -3756,7 +4002,7 @@ test('AgentManager.remove with a known terminal sessionId removes that session',
   const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
     { kind: 'spawn', agent: 'chatty', prompt: 'work' },
   ]);
-  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.listSessions().length, 1);
 
   const result = await manager.remove({ sessionIds: [seed.sessionId] });
 
@@ -3764,7 +4010,7 @@ test('AgentManager.remove with a known terminal sessionId removes that session',
   assert.equal(result.aborted, 0);
   assert.deepEqual(result.sessionIds, [seed.sessionId]);
   assert.deepEqual(result.errors, []);
-  assert.deepEqual(manager.sessions, []);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test('subagent action=remove rejects a bare call with no sessionIds or scope', async () => {
@@ -3772,7 +4018,7 @@ test('subagent action=remove rejects a bare call with no sessionIds or scope', a
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
-    agentManager: { sessions: [] },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
   });
 
   const result = await registeredTool.execute('tool-call', { action: 'remove' }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
@@ -3786,7 +4032,7 @@ test('subagent action=remove rejects a call that supplies both sessionIds and sc
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
-    agentManager: { sessions: [] },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
   });
 
   const result = await registeredTool.execute('tool-call', {
@@ -3805,7 +4051,7 @@ test('subagent action=remove rejects an invalid scope without calling manager.re
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
-    agentManager: { sessions: [], async remove() { removeCalls += 1; throw new Error('should not remove'); } },
+    agentManager: { sessions: [], listSessions() { return this.sessions; }, async remove() { removeCalls += 1; throw new Error('should not remove'); } },
   });
 
   const result = await registeredTool.execute('tool-call', {
@@ -3824,7 +4070,7 @@ test('subagent action=remove rejects non-array sessionIds without calling manage
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
-    agentManager: { sessions: [], async remove() { removeCalls += 1; throw new Error('should not remove'); } },
+    agentManager: { sessions: [], listSessions() { return this.sessions; }, async remove() { removeCalls += 1; throw new Error('should not remove'); } },
   });
 
   const result = await registeredTool.execute('tool-call', {
@@ -3843,7 +4089,7 @@ test('subagent action=remove rejects non-string sessionIds entries without calli
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
-    agentManager: { sessions: [], async remove() { removeCalls += 1; throw new Error('should not remove'); } },
+    agentManager: { sessions: [], listSessions() { return this.sessions; }, async remove() { removeCalls += 1; throw new Error('should not remove'); } },
   });
 
   const result = await registeredTool.execute('tool-call', {
@@ -3876,7 +4122,7 @@ test('AgentManager.remove rejects an unknown internal scope without removing ses
     () => manager.remove({ scope: 'retianed' }),
     /Unknown remove scope: retianed/,
   );
-  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.listSessions().length, 1);
 });
 
 test('subagent action=clear is rejected with the remove migration error', async () => {
@@ -3884,7 +4130,7 @@ test('subagent action=clear is rejected with the remove migration error', async 
   let registeredTool;
   subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
-    agentManager: { sessions: [] },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
   });
 
   const result = await registeredTool.execute('tool-call', {

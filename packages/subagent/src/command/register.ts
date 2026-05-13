@@ -28,7 +28,7 @@ export function registerSubagentsCommand(
         return;
       }
 
-      const sessions = agentManager.sessions;
+      const sessions = agentManager.listSessions();
       if (sessions.length === 0) {
         if (!agentRegistry) {
           notify(ctx, "No active or retained subagent sessions.", "info");

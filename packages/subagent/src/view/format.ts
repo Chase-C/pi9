@@ -37,10 +37,12 @@ export type RemoveSummary = {
   errors?: Array<{ sessionId: string; error: string }>;
 };
 
+export type InventoryFilter = { status?: string[] };
+
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
   | { view: "run"; group: AgentGroupView; results?: unknown; active?: boolean }
-  | { view: "inventory"; sessions: AgentView[] }
+  | { view: "inventory"; sessions: AgentView[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary };
 
 export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
@@ -59,8 +61,8 @@ export function runDetails(
   return { view: "run", group, ...extras };
 }
 
-export function inventoryDetails(sessions: AgentView[]): InventoryDetails {
-  return { view: "inventory", sessions };
+export function inventoryDetails(sessions: AgentView[], filter?: InventoryFilter): InventoryDetails {
+  return { view: "inventory", sessions, ...(filter ? { filter } : {}) };
 }
 
 export function formatAgentConfigSummary(config: AgentConfig): string {
@@ -85,6 +87,7 @@ export function formatAgentConfigInspect(config: AgentConfig): string[] {
 export function formatSubagentSessionSummary(agent: AgentView): string {
   const badges = [
     agent.config.resumable ? "resumable" : undefined,
+    agent.kind === "background" ? "kind:background" : undefined,
     `session:${agent.id}`,
   ].filter(Boolean);
   return [agent.label ?? agent.config.name, effectiveStatus(agent.status), ...badges].join(" · ");
@@ -177,10 +180,10 @@ function formatSubagentToolDisplayLines(
     }
 
     case "inventory": {
-      const { sessions } = narrowed;
+      const { sessions, filter } = narrowed;
       if (sessions.length === 0) return [{ text: "No subagent sessions." }];
       if (!expanded && sessions.length > 1) {
-        return [formatViewGroupLine(serializeGroup(sessions))];
+        return [formatViewGroupLine(serializeGroup(sessions), filter)];
       }
       return expanded
         ? sessions.flatMap((row, index) => expandedLines(
@@ -225,7 +228,13 @@ function narrowDetails(details: unknown): SubagentDetails | undefined {
         ? { view: "run", group: record.group as AgentGroupView }
         : undefined;
     case "inventory":
-      return Array.isArray(record.sessions) ? { view: "inventory", sessions: record.sessions as AgentView[] } : undefined;
+      return Array.isArray(record.sessions)
+        ? {
+            view: "inventory",
+            sessions: record.sessions as AgentView[],
+            ...((record as { filter?: InventoryFilter }).filter ? { filter: (record as { filter?: InventoryFilter }).filter } : {}),
+          }
+        : undefined;
     case "remove-summary":
       return record.summary && typeof record.summary === "object"
         ? { view: "remove-summary", summary: record.summary as RemoveSummary }
@@ -237,15 +246,16 @@ function narrowDetails(details: unknown): SubagentDetails | undefined {
 
 const ORDERED_GROUP_STATUSES = ["queued", "running", "completed", "error", "interrupted", "skipped", "aborted"];
 
-function formatViewGroupLine(group: AgentGroupView): DisplayLine {
+function formatViewGroupLine(group: AgentGroupView, filter?: InventoryFilter): DisplayLine {
   const known = new Set(ORDERED_GROUP_STATUSES);
   const format = (status: string) => `${group.statusCounts[status]} ${status}`;
   const counts = ORDERED_GROUP_STATUSES.filter(status => group.statusCounts[status]).map(format);
   const extras = Object.keys(group.statusCounts).filter(status => !known.has(status)).sort().map(format);
   const outcome = groupOutcome(group);
   const outcomeLabel = outcome === "queued" ? "running" : outcome;
+  const filterSegment = filter?.status && filter.status.length > 0 ? [`filter:${filter.status.join(",")}`] : [];
   return {
-    text: [`${group.sessions.length} subagents`, ...counts, ...extras, `outcome:${outcomeLabel}`].join(" · "),
+    text: [`${group.sessions.length} subagents`, ...counts, ...extras, `outcome:${outcomeLabel}`, ...filterSegment].join(" · "),
     status: outcome,
   };
 }
@@ -272,6 +282,7 @@ function formatSessionLine(row: AgentView, now: number, bold?: Bold): string {
   const activeTool = getActiveTools(row).at(-1);
   if (activeTool) parts.push(`tool:${activeTool}`);
   if (row.activity.messageSnippet) parts.push(`"${row.activity.messageSnippet}"`);
+  if (row.kind === "background") parts.push("kind:background");
 
   if (!isActiveStatusKind(status)) {
     const tail = status === "completed" ? "" : `:${getSnippet(row.status) ?? status}`;

@@ -1,5 +1,3 @@
-import { getAgentDir, loadSkills } from "@mariozechner/pi-coding-agent";
-
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentGroupView, AgentView } from "../domain/agent-view.js";
@@ -38,19 +36,4 @@ export function serializeAgentConfig(config: AgentConfig) {
 
 export function listAgentDefinitions(agentRegistry: AgentRegistry) {
   return Array.from(agentRegistry.agents.values()).map(serializeAgentConfig);
-}
-
-export interface SkillSummary {
-  name: string;
-  description: string;
-  source: string;
-}
-
-export function listSkills(cwd: string): SkillSummary[] {
-  const { skills } = loadSkills({ cwd, agentDir: getAgentDir(), skillPaths: [], includeDefaults: true });
-  return skills.map(skill => ({
-    name: skill.name,
-    description: skill.description,
-    source: skill.sourceInfo.scope ?? "path",
-  }));
 }

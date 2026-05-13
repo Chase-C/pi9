@@ -23,7 +23,7 @@ After edits, run the package build and reload Pi if needed.
 
 ## What the extension provides
 
-- A `subagent` tool with `list`, `run`, and `remove` actions. `run` accepts a mix of spawn and resume tasks in one call.
+- A `subagent` tool with `agents`, `list`, `run`, and `remove` actions. `run` accepts a mix of spawn and resume tasks in one call.
 - Live progress updates while child agents are queued or running.
 - Custom collapsed/expanded rendering for `subagent` tool results.
 - An auto-hidden widget for active and retained resumable sessions.
@@ -73,28 +73,31 @@ The markdown body after the frontmatter is trimmed and used as the child session
 
 ## Use the tool
 
-The tool accepts a required `action`: `list`, `run`, or `remove`.
+The tool accepts a required `action`: `agents`, `list`, `run`, or `remove`.
+
+### `action: "agents"`
+
+List configured agent definitions. Each entry carries the agent's `tools` and any default `skills` declared in its frontmatter alongside the rest of its config.
+
+```ts
+subagent({ action: "agents" })
+```
 
 ### `action: "list"`
 
-List configured agent definitions (the default):
+List active and retained subagent sessions. Each row carries a `kind` tag (`"background" | "retained"`) describing how it was dispatched. Without a filter, all active and retained sessions are returned:
 
 ```ts
-subagent({ action: "list" })                  // same as type: "agents"
-subagent({ action: "list", type: "agents" })
+subagent({ action: "list" })
 ```
 
-List active and retained sessions:
+Optionally pass a `status` array to filter by effective status. Valid values: `queued`, `running`, `completed`, `error`, `aborted`, `interrupted`, `skipped`. An empty array returns no sessions (distinct from no filter):
 
 ```ts
-subagent({ action: "list", type: "sessions" })
+subagent({ action: "list", status: ["completed", "error"] })
 ```
 
-List skills available to inject into spawn tasks:
-
-```ts
-subagent({ action: "list", type: "skills" })
-```
+The legacy `type` parameter is rejected with a migration error. Use `action: "agents"` for definitions or `action: "list"` for sessions. Skills listing is no longer exposed through this tool — the parent already discovers skills.
 
 ### `action: "run"`
 

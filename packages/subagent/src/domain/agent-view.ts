@@ -44,6 +44,8 @@ export interface AgentActivityView {
   readonly toolHistory: readonly AgentToolUse[];
 }
 
+export type AgentKind = "background" | "retained";
+
 export interface AgentView {
   readonly id: string;
   readonly inputIndex?: number;
@@ -55,6 +57,7 @@ export interface AgentView {
   readonly status: AgentViewStatus;
   readonly activity: AgentActivityView;
   readonly usage: Usage | undefined;
+  readonly kind: AgentKind;
 }
 
 export interface AgentGroupView {
