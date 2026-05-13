@@ -23,7 +23,7 @@ After edits, run the package build and reload Pi if needed.
 
 ## What the extension provides
 
-- A `subagent` tool with `list`, `run`, and `clear` actions. `run` accepts a mix of spawn and resume tasks in one call.
+- A `subagent` tool with `list`, `run`, and `remove` actions. `run` accepts a mix of spawn and resume tasks in one call.
 - Live progress updates while child agents are queued or running.
 - Custom collapsed/expanded rendering for `subagent` tool results.
 - An auto-hidden widget for active and retained resumable sessions.
@@ -73,7 +73,7 @@ The markdown body after the frontmatter is trimmed and used as the child session
 
 ## Use the tool
 
-The tool accepts a required `action`: `list`, `run`, or `clear`.
+The tool accepts a required `action`: `list`, `run`, or `remove`.
 
 ### `action: "list"`
 
@@ -158,12 +158,16 @@ subagent({
 })
 ```
 
-### `action: "clear"`
+### `action: "remove"`
 
 ```ts
-subagent({ action: "clear", sessionId: "..." }) // clear one known session; aborts it if still running
-subagent({ action: "clear" })                   // clear all non-running retained sessions
+subagent({ action: "remove", sessionIds: ["..."] })        // remove specific sessions; running ones are aborted
+subagent({ action: "remove", scope: "retained" })          // remove all retained resumable sessions
+subagent({ action: "remove", scope: "non-running" })       // remove everything that isn't currently running
+subagent({ action: "remove", scope: "background" })        // remove all background sessions (terminal and running)
 ```
+
+Exactly one of `sessionIds` or `scope` is required; bare or conflicting calls are rejected. The response shape is `{ removed, aborted, sessionIds, errors }`. Unknown ids appear in `errors[]` without setting `isError` — partial-success is success.
 
 The parent remains responsible for sequencing. If later work depends on earlier output, make one `subagent` call, inspect the result, then make the next call.
 
@@ -264,7 +268,7 @@ Tool results and UI session rows use these terminal states:
 | --- | --- | --- |
 | `completed` | The child run finished and returned output. | Yes, if `resumable: true`. |
 | `error` | The agent was unknown, failed before running, or the child session failed without cancellation semantics. | No. |
-| `aborted` | A running session was explicitly aborted, such as by clearing it directly through the tool API. | No. |
+| `aborted` | A running session was explicitly aborted, such as by removing it directly through the tool API. `Agent.abort()` calls `session.abort()` on the underlying SDK session and finalizes the agent with this status. | No. |
 | `interrupted` | A running child was stopped because the parent tool/command was cancelled. | No. |
 | `skipped` | A queued task never started because the parent was cancelled before a child `AgentSession` was created. | No. |
 
@@ -331,7 +335,7 @@ Each result carries:
 
 ## Limits and current constraints
 
-- `action` is required; legacy `{ tasks: [...] }` calls and the previous `start`/`resume` actions are rejected.
+- `action` is required; legacy `{ tasks: [...] }` calls and the previous `start`/`resume`/`clear` actions are rejected.
 - Maximum tasks per `run` tool call defaults to eight and can be changed with `runtime.maxTasksPerRun`.
 - Maximum concurrent child sessions defaults to four and can be changed with `runtime.maxConcurrentSubagents`.
 - A given `sessionId` cannot be resumed more than once concurrently; a second concurrent resume of the same session surfaces as a per-task error.

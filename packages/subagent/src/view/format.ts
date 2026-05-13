@@ -30,14 +30,23 @@ function applyBold(bold: Bold, text: string): string {
 
 export type AgentListingEntry = Omit<AgentConfig, "systemPrompt">;
 
+export type RemoveSummary = {
+  removed: number;
+  aborted: number;
+  sessionIds: string[];
+  errors?: Array<{ sessionId: string; error: string }>;
+};
+
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
   | { view: "run"; group: AgentGroupView; results?: unknown; active?: boolean }
-  | { view: "inventory"; sessions: AgentView[] };
+  | { view: "inventory"; sessions: AgentView[] }
+  | { view: "remove-summary"; summary: RemoveSummary };
 
 export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
 export type RunDetails = Extract<SubagentDetails, { view: "run" }>;
 export type InventoryDetails = Extract<SubagentDetails, { view: "inventory" }>;
+export type RemoveSummaryDetails = Extract<SubagentDetails, { view: "remove-summary" }>;
 
 export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
   return { view: "agents", agents };
@@ -182,12 +191,32 @@ function formatSubagentToolDisplayLines(
           ))
         : sessions.map(row => ({ text: formatSessionLine(row, now, bold), status: statusPresentation(row.status).color }));
     }
+
+    case "remove-summary":
+      return formatRemoveSummaryLines(narrowed.summary, expanded);
   }
+}
+
+function formatRemoveSummaryLines(summary: RemoveSummary, expanded: boolean): DisplayLine[] {
+  const errors = summary.errors ?? [];
+  const parts = [`Removed ${plural(summary.removed, "session")}`];
+  if (summary.aborted > 0) parts.push(`aborted ${summary.aborted}`);
+  if (errors.length > 0) parts.push(plural(errors.length, "error"));
+  const head: DisplayLine = { text: parts.join(" · ") };
+  if (!expanded) return [head];
+  const lines: DisplayLine[] = [head];
+  for (const id of summary.sessionIds) lines.push({ text: `  ${id}` });
+  if (errors.length > 0) {
+    lines.push({ text: "" });
+    lines.push({ text: "Errors:" });
+    for (const entry of errors) lines.push({ text: `  ${entry.sessionId}: ${entry.error}`, status: "error" });
+  }
+  return lines;
 }
 
 function narrowDetails(details: unknown): SubagentDetails | undefined {
   if (!details || typeof details !== "object") return undefined;
-  const record = details as { view?: unknown; agents?: unknown; group?: unknown; sessions?: unknown };
+  const record = details as { view?: unknown; agents?: unknown; group?: unknown; sessions?: unknown; summary?: unknown };
   switch (record.view) {
     case "agents":
       return Array.isArray(record.agents) ? { view: "agents", agents: record.agents as AgentListingEntry[] } : undefined;
@@ -197,6 +226,10 @@ function narrowDetails(details: unknown): SubagentDetails | undefined {
         : undefined;
     case "inventory":
       return Array.isArray(record.sessions) ? { view: "inventory", sessions: record.sessions as AgentView[] } : undefined;
+    case "remove-summary":
+      return record.summary && typeof record.summary === "object"
+        ? { view: "remove-summary", summary: record.summary as RemoveSummary }
+        : undefined;
     default:
       return undefined;
   }

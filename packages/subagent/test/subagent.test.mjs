@@ -1238,10 +1238,11 @@ test('subagents command inspect view shows metadata and clears retained session 
   const clearCalls = [];
   const fakeManager = {
     sessions: [retainedSession],
-    clear(sessionId) {
+    async remove(args) {
+      const [sessionId] = args.sessionIds;
       clearCalls.push(sessionId);
       this.sessions = this.sessions.filter(session => session.id !== sessionId);
-      return { cleared: 1, sessionId };
+      return { removed: 1, aborted: 0, sessionIds: [sessionId], errors: [] };
     },
   };
   const commands = new Map();
@@ -1355,7 +1356,6 @@ test('subagent tool result renderer falls back to content text for shapes withou
 
   const passthroughTheme = { fg: (_color, text) => text };
   const shapes = [
-    { label: 'clear', details: { cleared: 1, sessionId: 'abc' }, expected: '"cleared": 1' },
     { label: 'skills', details: { skills: [{ name: 'tdd', description: 'd', source: 'project' }] }, expected: '"tdd"' },
     { label: 'errors', details: { errors: ['task[0]: bad'] }, expected: 'task[0]: bad' },
   ];
@@ -1531,7 +1531,7 @@ test('manager does not expose skipped resumable tasks as sessions', async () => 
   assert.equal(results[1].resumable, false);
   assert.equal(Object.prototype.hasOwnProperty.call(results[1], 'sessionId'), false);
   assert.deepEqual(manager.sessions, []);
-  assert.deepEqual(manager.clear(), { cleared: 0 });
+  assert.deepEqual(await manager.remove({ scope: 'non-running' }), { removed: 0, aborted: 0, sessionIds: [], errors: [] });
 });
 
 test('manager does not expose or resume non-resumable completed sessions', async () => {
@@ -1585,7 +1585,7 @@ test('manager discards a completed session when a task overrides resumable to fa
   assert.equal(results[0].resumable, false);
   assert.equal(Object.prototype.hasOwnProperty.call(results[0], 'sessionId'), false);
   assert.deepEqual(manager.sessions, []);
-  assert.deepEqual(manager.clear(), { cleared: 0 });
+  assert.deepEqual(await manager.remove({ scope: 'non-running' }), { removed: 0, aborted: 0, sessionIds: [], errors: [] });
 });
 
 test('manager retains only resumable interrupted sessions inspect-clear only after parent cancellation settles', async () => {
@@ -1629,7 +1629,7 @@ test('manager retains only resumable interrupted sessions inspect-clear only aft
   assert.equal(retried.status, 'error');
   assert.equal(retried.resumed, true);
   assert.match(retried.error, /while it is interrupted/);
-  assert.deepEqual(manager.clear(results[1].sessionId), { cleared: 1, sessionId: results[1].sessionId });
+  assert.deepEqual(await manager.remove({ sessionIds: [results[1].sessionId] }), { removed: 1, aborted: 0, sessionIds: [results[1].sessionId], errors: [] });
   assert.deepEqual(manager.sessions, []);
 });
 
@@ -1722,7 +1722,7 @@ test('manager retains, resumes, lists, and clears completed resumable sessions',
   assert.equal(retained.status.outcome, 'completed');
   assert.equal(retained.status.snippet, 'follow:two');
 
-  assert.deepEqual(manager.clear(results[0].sessionId), { cleared: 1, sessionId: results[0].sessionId });
+  assert.deepEqual(await manager.remove({ sessionIds: [results[0].sessionId] }), { removed: 1, aborted: 0, sessionIds: [results[0].sessionId], errors: [] });
   assert.deepEqual(manager.sessions, []);
 });
 
@@ -3282,4 +3282,417 @@ test('completedRun marks the result as not resumed by default', async () => {
 
   const result = completedRun(agent, 'p', 'done');
   assert.equal(result.resumed, false);
+});
+
+test('Agent.abort on a running agent aborts the underlying session and finalizes as aborted', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+  let abortCalls = 0;
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() { abortCalls += 1; } };
+  const agent = new Agent('id', config, { agent: 'helper' }, { prompt: 'p' }, () => {});
+  agent.attach(session);
+
+  await agent.abort();
+
+  assert.equal(abortCalls, 1);
+  assert.equal(agent.status.kind, 'done');
+  assert.equal(agent.status.result.status, 'aborted');
+});
+
+test('Agent.abort on a queued agent finalizes as skipped without touching a session', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+  const agent = new Agent('id', config, { agent: 'helper' }, { prompt: 'p' }, () => {});
+  assert.equal(agent.status.kind, 'queued');
+
+  await agent.abort();
+
+  assert.equal(agent.status.kind, 'done');
+  assert.equal(agent.status.result.status, 'skipped');
+});
+
+test('AgentManager.remove with an unknown sessionId returns the unknown-id error and no removals', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const registry = { agents: new Map() };
+  const manager = new AgentManager(registry, 1, async () => ({ status: 'completed' }));
+
+  const result = await manager.remove({ sessionIds: ['unknown'] });
+
+  assert.equal(result.removed, 0);
+  assert.equal(result.aborted, 0);
+  assert.deepEqual(result.sessionIds, []);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].sessionId, 'unknown');
+  assert.match(result.errors[0].error, /Unknown.*session/i);
+});
+
+test('AgentManager.remove scope=non-running removes terminal and queued sessions but leaves running ones', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  let unblockRunning;
+  const runningGate = new Promise(resolve => { unblockRunning = resolve; });
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    if (prompt === 'block') await runningGate;
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+    ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+  await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'retain me' },
+  ]);
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'oneshot', prompt: 'block' },
+    { kind: 'spawn', agent: 'oneshot', prompt: 'queued' },
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(manager.sessions.map(s => s.status.kind).sort(), ['done', 'queued', 'running']);
+
+  const result = await manager.remove({ scope: 'non-running' });
+
+  assert.equal(result.removed, 2);
+  assert.equal(result.aborted, 0);
+  assert.equal(manager.sessions.length, 1);
+  assert.equal(manager.sessions[0].status.kind, 'running');
+
+  unblockRunning();
+  await pending;
+});
+
+test('subagent tool description documents action=remove and drops references to action=clear', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  assert.match(registeredTool.description, /action="remove"/);
+  assert.match(registeredTool.description, /sessionIds/);
+  assert.match(registeredTool.description, /scope/);
+  assert.doesNotMatch(registeredTool.description, /action="clear"/);
+});
+
+test('subagent renderer for remove-summary shows the removed count collapsed and omits aborted when zero', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const passthroughTheme = { fg: (_color, text) => text };
+  const details = { view: 'remove-summary', summary: { removed: 2, aborted: 0, sessionIds: ['s1', 's2'], errors: [] } };
+  const component = registeredTool.renderResult({ content: [{ type: 'text', text: JSON.stringify(details) }], details }, { expanded: false }, passthroughTheme);
+  const rendered = component.render(120).join('\n');
+
+  assert.match(rendered, /Removed 2 sessions/);
+  assert.doesNotMatch(rendered, /aborted/);
+  assert.doesNotMatch(rendered, /errors/);
+});
+
+test('subagent renderer for remove-summary appends aborted and errors segments collapsed when non-zero', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const passthroughTheme = { fg: (_color, text) => text };
+  const details = { view: 'remove-summary', summary: { removed: 1, aborted: 1, sessionIds: ['s1'], errors: [{ sessionId: 's2', error: 'Unknown subagent session: s2' }] } };
+  const component = registeredTool.renderResult({ content: [{ type: 'text', text: JSON.stringify(details) }], details }, { expanded: false }, passthroughTheme);
+  const rendered = component.render(120).join('\n');
+
+  assert.match(rendered, /Removed 1 session/);
+  assert.match(rendered, /aborted 1/);
+  assert.match(rendered, /1 error/);
+});
+
+test('subagent renderer for remove-summary lists each removed sessionId and error when expanded', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } });
+
+  const passthroughTheme = { fg: (_color, text) => text };
+  const details = { view: 'remove-summary', summary: { removed: 2, aborted: 1, sessionIds: ['s1', 's2'], errors: [{ sessionId: 'unknown', error: 'Unknown subagent session: unknown' }] } };
+  const component = registeredTool.renderResult({ content: [{ type: 'text', text: JSON.stringify(details) }], details }, { expanded: true }, passthroughTheme);
+  const rendered = component.render(120).join('\n');
+
+  assert.match(rendered, /s1/);
+  assert.match(rendered, /s2/);
+  assert.match(rendered, /Errors:/);
+  assert.match(rendered, /Unknown subagent session: unknown/);
+});
+
+test('subagent action=remove returns a remove-summary view with the manager.remove payload', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const removeCalls = [];
+  const fakeManager = {
+    sessions: [],
+    async remove(args) {
+      removeCalls.push(args);
+      return { removed: 1, aborted: 0, sessionIds: ['s1'], errors: [] };
+    },
+  };
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: fakeManager,
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'remove',
+    sessionIds: ['s1'],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, false);
+  assert.deepEqual(removeCalls, [{ sessionIds: ['s1'] }]);
+  assert.equal(result.details.view, 'remove-summary');
+  assert.deepEqual(result.details.summary, { removed: 1, aborted: 0, sessionIds: ['s1'], errors: [] });
+});
+
+test('subagent action=remove keeps isError false when manager.remove reports per-id errors', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  const fakeManager = {
+    sessions: [],
+    async remove() {
+      return { removed: 0, aborted: 0, sessionIds: [], errors: [{ sessionId: 'unknown', error: 'Unknown subagent session: unknown' }] };
+    },
+  };
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: fakeManager,
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'remove',
+    sessionIds: ['unknown'],
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, false);
+  assert.deepEqual(result.details.summary.errors, [{ sessionId: 'unknown', error: 'Unknown subagent session: unknown' }]);
+});
+
+test('AgentManager.remove on a second pass of the same sessionId returns the unknown-id error', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+  const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'work' },
+  ]);
+
+  const firstResult = await manager.remove({ sessionIds: [seed.sessionId] });
+  assert.equal(firstResult.removed, 1);
+  assert.deepEqual(firstResult.errors, []);
+
+  const secondResult = await manager.remove({ sessionIds: [seed.sessionId] });
+  assert.equal(secondResult.removed, 0);
+  assert.equal(secondResult.errors.length, 1);
+  assert.equal(secondResult.errors[0].sessionId, seed.sessionId);
+  assert.match(secondResult.errors[0].error, /Unknown.*session/i);
+});
+
+test('AgentManager.remove scope=background is a valid no-op until background dispatch lands', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+  await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'one' },
+  ]);
+  assert.equal(manager.sessions.length, 1);
+
+  const result = await manager.remove({ scope: 'background' });
+
+  assert.deepEqual(result, { removed: 0, aborted: 0, sessionIds: [], errors: [] });
+  assert.equal(manager.sessions.length, 1);
+});
+
+test('AgentManager.remove scope=retained removes retained resumable sessions and leaves running and queued alone', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  let unblockRunning;
+  const runningGate = new Promise(resolve => { unblockRunning = resolve; });
+  const runner = async (_ctx, agent, prompt) => {
+    const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+    agent.attach(session);
+    if (prompt === 'block') await runningGate;
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+    ['oneshot', { name: 'oneshot', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+
+  // Seed a retained completed session.
+  await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'remember me' },
+  ]);
+  assert.equal(manager.sessions.length, 1);
+
+  // Start a second batch: one running (held by gate), one queued behind it.
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'oneshot', prompt: 'block' },
+    { kind: 'spawn', agent: 'oneshot', prompt: 'queued' },
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const kinds = manager.sessions.map(s => s.status.kind).sort();
+  assert.deepEqual(kinds, ['done', 'queued', 'running']);
+
+  const result = await manager.remove({ scope: 'retained' });
+
+  assert.equal(result.removed, 1);
+  assert.equal(result.aborted, 0);
+  assert.equal(result.sessionIds.length, 1);
+  const survivingKinds = manager.sessions.map(s => s.status.kind).sort();
+  assert.deepEqual(survivingKinds, ['queued', 'running']);
+
+  unblockRunning();
+  await pending;
+});
+
+test('AgentManager.remove with a running sessionId aborts the underlying session and removes it', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { interruptedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  let abortCalls = 0;
+  const runner = async (_ctx, agent, prompt) => {
+    let resolveAbort;
+    const aborted = new Promise(resolve => { resolveAbort = resolve; });
+    const session = {
+      messages: [],
+      subscribe() { return () => {}; },
+      async prompt() {},
+      abort() { abortCalls += 1; resolveAbort(); },
+    };
+    agent.attach(session);
+    await aborted;
+    return interruptedRun(agent, prompt, 'aborted by remove');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: false }],
+  ]) };
+  const manager = new AgentManager(registry, 2, runner);
+
+  const pending = manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'work' },
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const runningId = manager.sessions[0].id;
+  assert.equal(manager.sessions[0].status.kind, 'running');
+
+  const result = await manager.remove({ sessionIds: [runningId] });
+  await pending;
+
+  assert.equal(result.removed, 1);
+  assert.equal(result.aborted, 1);
+  assert.deepEqual(result.sessionIds, [runningId]);
+  assert.equal(abortCalls, 1);
+  assert.deepEqual(manager.sessions, []);
+});
+
+test('AgentManager.remove with a known terminal sessionId removes that session', async () => {
+  const { AgentManager } = await import(`../dist/runtime/agent-manager.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() {} };
+  const runner = async (_ctx, agent, prompt) => {
+    agent.attach(session);
+    return completedRun(agent, prompt, 'done');
+  };
+  const registry = { agents: new Map([
+    ['chatty', { name: 'chatty', description: 'd', systemPrompt: 's', source: 'project', resumable: true }],
+  ]) };
+  const manager = new AgentManager(registry, 1, runner);
+  const [seed] = await manager.run({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } }, undefined, [
+    { kind: 'spawn', agent: 'chatty', prompt: 'work' },
+  ]);
+  assert.equal(manager.sessions.length, 1);
+
+  const result = await manager.remove({ sessionIds: [seed.sessionId] });
+
+  assert.equal(result.removed, 1);
+  assert.equal(result.aborted, 0);
+  assert.deepEqual(result.sessionIds, [seed.sessionId]);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(manager.sessions, []);
+});
+
+test('subagent action=remove rejects a bare call with no sessionIds or scope', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: { sessions: [] },
+  });
+
+  const result = await registeredTool.execute('tool-call', { action: 'remove' }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /remove requires either sessionIds or scope\./);
+});
+
+test('subagent action=remove rejects a call that supplies both sessionIds and scope', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: { sessions: [] },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'remove',
+    sessionIds: ['s1'],
+    scope: 'retained',
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /exactly one of sessionIds or scope/);
+});
+
+test('subagent action=clear is rejected with the remove migration error', async () => {
+  const { default: subagentExtension } = await import(`../dist/index.js?t=${unique()}`);
+  let registeredTool;
+  subagentExtension({ registerTool: tool => { registeredTool = tool; } }, {
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ''; } },
+    agentManager: { sessions: [] },
+  });
+
+  const result = await registeredTool.execute('tool-call', {
+    action: 'clear',
+    sessionId: 'whatever',
+  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /'clear' action has been replaced by 'remove'/);
+  assert.match(result.content[0].text, /scope: 'background' \| 'retained' \| 'non-running'/);
+});
+
+test('Agent.abort on a terminal agent is a no-op and does not re-finalize', async () => {
+  const { Agent } = await import(`../dist/domain/agent.js?t=${unique()}`);
+  const { completedRun } = await import(`../dist/domain/agent-result.js?t=${unique()}`);
+  const config = { name: 'helper', description: 'd', systemPrompt: 's', source: 'project' };
+  let abortCalls = 0;
+  const session = { messages: [], subscribe() { return () => {}; }, async prompt() {}, abort() { abortCalls += 1; } };
+  const agent = new Agent('id', config, { agent: 'helper' }, { prompt: 'p' }, () => {});
+  agent.attach(session);
+  const firstResult = completedRun(agent, 'p', 'done');
+  assert.equal(agent.status.kind, 'done');
+
+  await agent.abort();
+
+  assert.equal(abortCalls, 0);
+  assert.equal(agent.status.kind, 'done');
+  assert.equal(agent.status.result, firstResult);
 });

@@ -21,13 +21,14 @@ export const TaskSchema = Type.Object({
 
 export const SubagentParams = Type.Object({
   action: Type.String({
-    description: "Subagent operation to perform. Use 'list' to list available agents, sessions, or skills, 'run' to spawn or resume tasks, and 'clear' to remove a paused session.",
+    description: "Subagent operation to perform. Use 'list' to list active or retained sessions, 'run' to spawn or resume tasks, and 'remove' to remove sessions by id or scope.",
   }),
   tasks: Type.Optional(Type.Array(TaskSchema, { description: "Subagent tasks to run for action=run, up to configured maxTasksPerRun. Each task is either a spawn (carrying agent) or a resume (carrying sessionId)." })),
   type: Type.Optional(Type.String({
     description: "Type of items to list for action='list'. Use 'agents' to list available agents, 'sessions' for active or retained sessions, or 'skills' for skills available to inject. Defaults to 'agents'.",
   })),
-  sessionId: Type.Optional(Type.String({ description: "Resumable subagent session id for action=clear" })),
+  sessionIds: Type.Optional(Type.Array(Type.String(), { description: "Subagent session ids targeted by action=remove. Mutually exclusive with scope." })),
+  scope: Type.Optional(Type.String({ description: "Removal scope for action=remove. One of 'background' | 'retained' | 'non-running'. Mutually exclusive with sessionIds." })),
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;

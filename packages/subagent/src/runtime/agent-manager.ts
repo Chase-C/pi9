@@ -6,7 +6,6 @@ import { Agent } from "../domain/agent.js";
 import { InvocationFromTask } from "../domain/agent-invocation.js";
 import {
   errorRun,
-  finalizeRun,
   interruptedRun,
   skippedRun,
   type AgentRunResult,
@@ -68,38 +67,54 @@ export class AgentManager {
     if (options.maxRunning !== undefined) this._queue.maxRunning = options.maxRunning;
   }
 
-  clear(
-    sessionId?: string,
-  ): { cleared: number; sessionId?: string } {
-    if (sessionId) {
-      const agent = this._agents.find(a => a.id === sessionId);
-      if (!agent) {
-        return { cleared: 0, sessionId };
-      }
+  async remove(
+    args: { sessionIds: string[] } | { scope: "background" | "retained" | "non-running" },
+  ): Promise<{ removed: number; aborted: number; sessionIds: string[]; errors: Array<{ sessionId: string; error: string }> }> {
+    const errors: Array<{ sessionId: string; error: string }> = [];
+    const targets: Agent[] = [];
 
-      const groupId = this._agentBatch.get(agent.id);
-      this._agents = this._agents.filter(a => a.id !== sessionId);
-      this._agentBatch.delete(agent.id);
-      if (agent.status.kind === "running") {
-        finalizeRun(agent, "", { status: "aborted", error: "Agent aborted." });
-      } else if (groupId) {
-        this._emitBatchUpdate(groupId);
+    if ("sessionIds" in args) {
+      for (const id of args.sessionIds) {
+        const agent = this._agents.find(a => a.id === id);
+        if (!agent) errors.push({ sessionId: id, error: `Unknown subagent session: ${id}` });
+        else targets.push(agent);
       }
-
-      return { cleared: 1, sessionId };
+    } else {
+      targets.push(...this._matchScope(args.scope));
     }
 
-    const keep = (agent: Agent) => agent.status.kind === "queued" || agent.status.kind === "running";
-    const toClear = this._agents.filter(a => !keep(a));
-    this._agents = this._agents.filter(a => keep(a));
+    let aborted = 0;
+    for (const agent of targets) {
+      if (agent.status.kind === "running") {
+        await agent.abort();
+        aborted += 1;
+      }
+    }
 
-    toClear.forEach(agent => this._agentBatch.delete(agent.id));
-    this._agents.forEach(agent => {
-      const groupId = this._agentBatch.get(agent.id);
-      if (groupId) this._emitBatchUpdate(groupId);
-    });
+    const removedIds = new Set(targets.map(a => a.id));
+    if (removedIds.size > 0) {
+      this._agents = this._agents.filter(a => !removedIds.has(a.id));
+      const touchedGroups = new Set<string>();
+      for (const id of removedIds) {
+        const groupId = this._agentBatch.get(id);
+        if (groupId) touchedGroups.add(groupId);
+        this._agentBatch.delete(id);
+      }
+      for (const groupId of touchedGroups) this._emitBatchUpdate(groupId);
+    }
 
-    return { cleared: toClear.length };
+    return {
+      removed: removedIds.size,
+      aborted,
+      sessionIds: Array.from(removedIds),
+      errors,
+    };
+  }
+
+  private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
+    if (scope === "background") return [];
+    if (scope === "retained") return this._agents.filter(a => a.status.kind !== "running" && a.resumable);
+    return this._agents.filter(a => a.status.kind !== "running");
   }
 
   async run(

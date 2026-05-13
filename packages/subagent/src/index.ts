@@ -98,10 +98,10 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 Use this tool when a task benefits from separation from the main conversation: code research, planning, design review, bug investigation, test analysis, or a focused implementation handoff. Each subagent receives only its configured system prompt plus the prompt you provide, so prompts must be self-contained.
 
 Inputs:
-- action: one of "list", "run", or "clear".
+- action: one of "list", "run", or "remove".
 - action="list": list configured agent definitions by default. Pass type="sessions" to list active and retained subagent sessions instead of definitions, or type="skills" to list skills available to inject. Listed agents include any default skills declared in their frontmatter alongside their tools.
 - action="run": run one or more subagent tasks up to the configured maxTasksPerRun (default eight). Each task is either a new spawn (carrying agent) or a resume of a completed resumable session (carrying sessionId). agent and sessionId are mutually exclusive — providing both is rejected. A spawn task takes agent and prompt and may include cwd, model, thinking, label, resumable, and skills. A resume task takes sessionId and prompt and may re-assert label and resumable; it rejects model, thinking, cwd, agent, and skills. The optional label is a human-readable identifier shown in widgets and logs in place of the agent name; on resume it overwrites the stored label. The optional resumable override applies one-way at completion: a resumable: false decision discards the session immediately, regardless of the agent's frontmatter default. The optional skills array (spawn only) injects named skills into the subagent's system prompt — unknown skill names are a hard error and an explicit skill bypasses its disable-model-invocation flag. Per-task skills fully replace the agent's default skills declared in frontmatter (no merge); an explicit empty array opts out of those defaults.
-- action="clear": clear one known session by sessionId, aborting it if still running, or clear all non-running retained sessions when sessionId is omitted.
+- action="remove": remove subagent sessions by id or scope. Pass exactly one of sessionIds (an array of known session ids) or scope ("background" | "retained" | "non-running"). Running sessions in the targeted set are aborted before removal. Unknown ids surface as per-id errors in the response without setting isError; the overall remove call succeeds. Bare or conflicting calls are rejected.
 
 Prompt guidance:
 - Name the exact objective, relevant files/directories, constraints, and expected output format.
@@ -157,7 +157,7 @@ Execution notes:
       }));
 
       if (!params.action) {
-        return errorResult(`Provide an action: "list", "run", or "clear".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
+        return errorResult(`Provide an action: "list", "run", or "remove".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
       }
 
       if (params.action === "list") {
@@ -207,19 +207,22 @@ Execution notes:
       }
 
       if (params.action === "clear") {
-        if (params.sessionId !== undefined && typeof params.sessionId !== "string") {
-          return errorResult("sessionId must be a string when provided.");
-        }
-
-        const result = agentManager.clear(params.sessionId);
-        if (params.sessionId && result.cleared === 0) {
-          return errorResult(`Unknown resumable subagent session: ${params.sessionId}`, result);
-        }
-
-        return toolResult(result);
+        return errorResult("The 'clear' action has been replaced by 'remove'. Pass either { sessionIds: [...] } or { scope: 'background' | 'retained' | 'non-running' }.");
       }
 
-      return errorResult(`Unknown action: ${String(params.action)}. Use "list", "run", or "clear".`);
+      if (params.action === "remove") {
+        const { sessionIds, scope } = params;
+        const hasIds = sessionIds !== undefined;
+        const hasScope = scope !== undefined;
+        if (hasIds && hasScope) return errorResult("remove requires exactly one of sessionIds or scope.");
+        if (!hasIds && !hasScope) return errorResult("remove requires either sessionIds or scope.");
+        const summary = hasIds
+          ? await agentManager.remove({ sessionIds: sessionIds as string[] })
+          : await agentManager.remove({ scope: scope as "background" | "retained" | "non-running" });
+        return toolResult({ view: "remove-summary", summary });
+      }
+
+      return errorResult(`Unknown action: ${String(params.action)}. Use "list", "run", or "remove".`);
     },
   }));
 }

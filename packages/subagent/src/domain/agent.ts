@@ -128,6 +128,20 @@ export class Agent {
     };
   }
 
+  async abort(_reason?: string): Promise<void> {
+    if (this._status.kind === "running") {
+      const session = this._status.session;
+      await Promise.resolve(session.abort()).catch(() => undefined);
+      const result = this.buildResult(this._prompt ?? "", { status: "aborted", error: "Agent aborted." });
+      this.finalize(result);
+      return;
+    }
+    if (this._status.kind === "queued") {
+      const result = this.buildResult(this._prompt ?? "", { status: "skipped", error: "Agent skipped." });
+      this.finalize(result);
+    }
+  }
+
   attach(session: AgentSession) {
     const canAttach =
       this._status.kind === "queued" ||
