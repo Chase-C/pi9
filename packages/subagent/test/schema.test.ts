@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 
-import { TaskSchema, parseTask } from "../src/schema.js";
+import { SubagentParams, TaskSchema, parseTask } from "../src/schema.js";
 
 test("TaskSchema accepts an optional label string and rejects non-string values", () => {
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work" }), true);
@@ -91,6 +91,16 @@ test("parseTask rejects a task carrying the batch-level background field", () =>
   const resume = parseTask({ sessionId: "s", prompt: "follow up", background: true });
   assert.ok("error" in resume);
   assert.match(resume.error, /background is a batch-level flag on action='run', not a per-task field\./);
+});
+
+test("SubagentParams accepts results action with sessionIds and optional remove flag", () => {
+  assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"] }), true);
+  assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1", "s2"], remove: true }), true);
+  assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: false }), true);
+});
+
+test("SubagentParams rejects results action when remove is not a boolean", () => {
+  assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: "yes" }), false);
 });
 
 test("parseTask classifies a task carrying agent as a spawn request and preserves spawn fields", () => {

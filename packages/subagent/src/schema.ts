@@ -21,7 +21,7 @@ export const TaskSchema = Type.Object({
 
 export const SubagentParams = Type.Object({
   action: Type.String({
-    description: "Subagent operation to perform. Use 'agents' to list configured agent definitions, 'list' to list active or retained subagent sessions, 'run' to spawn or resume tasks, and 'remove' to remove sessions by id or scope.",
+    description: "Subagent operation to perform. Use 'agents' to list configured agent definitions, 'list' to list active or retained subagent sessions, 'run' to spawn or resume tasks, 'results' to retrieve background results by sessionIds (never blocks), and 'remove' to remove sessions by id or scope.",
   }),
   tasks: Type.Optional(Type.Array(TaskSchema, { description: "Subagent tasks to run for action=run, up to configured maxTasksPerRun. Each task is either a spawn (carrying agent) or a resume (carrying sessionId)." })),
   background: Type.Optional(Type.Boolean({
@@ -30,12 +30,13 @@ export const SubagentParams = Type.Object({
   status: Type.Optional(Type.Array(Type.String(), {
     description: "Optional session status filter for action=list. Values: queued, running, completed, error, aborted, interrupted, skipped. Empty array returns no sessions.",
   })),
-  sessionIds: Type.Optional(Type.Array(Type.String(), { description: "Subagent session ids targeted by action=remove. Mutually exclusive with scope." })),
-  scope: Type.Optional(Type.Union([
-    Type.Literal("background"),
-    Type.Literal("retained"),
-    Type.Literal("non-running"),
-  ], { description: "Removal scope for action=remove. One of 'background' | 'retained' | 'non-running'. Mutually exclusive with sessionIds." })),
+  sessionIds: Type.Optional(Type.Array(Type.String(), { description: "Subagent session ids targeted by action=remove or action=results. For action=remove, mutually exclusive with scope." })),
+  scope: Type.Optional(Type.String({
+    description: "Removal scope for action=remove. One of 'background' | 'retained' | 'non-running'. Mutually exclusive with sessionIds.",
+  })),
+  remove: Type.Optional(Type.Boolean({
+    description: "Optional flag for action=results. When true, terminal entries are removed after their result is returned. Running entries are never removed.",
+  })),
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;

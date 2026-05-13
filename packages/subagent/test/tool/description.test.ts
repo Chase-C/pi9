@@ -68,3 +68,11 @@ test("subagent tool description documents batch-level background flag and refere
   assert.match(description, /subagent results/);
   assert.match(description, /subagent remove/);
 });
+
+test("subagent tool description documents action=results, never-blocks contract, and the remove option", () => {
+  const description = registerTool().description;
+  assert.match(description, /action="results"/);
+  assert.match(description, /sessionIds/);
+  assert.match(description, /never blocks/i);
+  assert.match(description, /remove: true/);
+});

@@ -175,6 +175,28 @@ subagent({
 
 Background results persist until removed or collected — call `subagent results` to retrieve and either pass `remove: true` or call `subagent remove` afterward.
 
+### `action: "results"`
+
+```ts
+subagent({ action: "results", sessionIds: ["..."] })                  // peek without removing
+subagent({ action: "results", sessionIds: ["..."], remove: true })    // collect terminal entries and sweep them
+```
+
+`results` never blocks. It returns one entry per id in input order (duplicates allowed):
+
+```ts
+type BackgroundResult =
+  | { sessionId: string; ready: true; result: AgentRunResult }
+  | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
+  | { sessionId: string; error: string };
+```
+
+- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return their full `AgentRunResult` under `{ ready: true, result }`.
+- Queued/running entries return `{ ready: false, status, elapsedMs, agent, label? }`. `elapsedMs` is measured from when the child started (running) or from when the agent was created (queued).
+- Unknown ids return `{ sessionId, error: "Unknown subagent session: <id>" }`. The overall response stays `isError: false` — partial-success is success.
+- `remove: true` sweeps terminal entries after their result is collected. Running entries are never removed regardless of the flag. A subsequent `results` call for a swept id returns the unknown-id error.
+- The action is not background-only: passing a retained resumable `sessionId` returns its result the same way.
+
 ### `action: "remove"`
 
 ```ts

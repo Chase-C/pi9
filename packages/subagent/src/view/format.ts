@@ -3,6 +3,7 @@ import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentView, AgentViewStatus } from "../domain/agent-view.js";
+import type { BackgroundResult } from "../runtime/agent-manager.js";
 import { serializeGroup } from "./serialize.js";
 import {
   canClearSubagentSession,
@@ -44,13 +45,15 @@ export type SubagentDetails =
   | { view: "run"; group: AgentGroupView; results?: unknown; active?: boolean }
   | { view: "inventory"; sessions: AgentView[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
-  | { view: "background-started"; sessions: AgentView[]; background: true };
+  | { view: "background-started"; sessions: AgentView[]; background: true }
+  | { view: "background-results"; results: BackgroundResult[] };
 
 export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
 export type RunDetails = Extract<SubagentDetails, { view: "run" }>;
 export type InventoryDetails = Extract<SubagentDetails, { view: "inventory" }>;
 export type RemoveSummaryDetails = Extract<SubagentDetails, { view: "remove-summary" }>;
 export type BackgroundStartedDetails = Extract<SubagentDetails, { view: "background-started" }>;
+export type BackgroundResultsDetails = Extract<SubagentDetails, { view: "background-results" }>;
 
 export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
   return { view: "agents", agents };
@@ -69,6 +72,10 @@ export function inventoryDetails(sessions: AgentView[], filter?: InventoryFilter
 
 export function backgroundStartedDetails(sessions: AgentView[]): BackgroundStartedDetails {
   return { view: "background-started", sessions, background: true };
+}
+
+export function backgroundResultsDetails(results: BackgroundResult[]): BackgroundResultsDetails {
+  return { view: "background-results", results };
 }
 
 export function formatAgentConfigSummary(config: AgentConfig): string {
@@ -206,7 +213,63 @@ function formatSubagentToolDisplayLines(
 
     case "background-started":
       return formatBackgroundStartedLines(narrowed.sessions, expanded, bold);
+
+    case "background-results":
+      return formatBackgroundResultsLines(narrowed.results, expanded, bold);
   }
+}
+
+function formatBackgroundResultsLines(results: BackgroundResult[], expanded: boolean, bold?: Bold): DisplayLine[] {
+  let ready = 0;
+  let notReady = 0;
+  let errors = 0;
+  for (const entry of results) {
+    if ("error" in entry) errors += 1;
+    else if (entry.ready) ready += 1;
+    else notReady += 1;
+  }
+  const segments = [plural(results.length, "result")];
+  if (ready > 0) segments.push(`${ready} ready`);
+  if (notReady > 0) segments.push(`${notReady} not ready`);
+  if (errors > 0) segments.push(plural(errors, "error"));
+  const head: DisplayLine = { text: segments.join(" · ") };
+  if (!expanded) return [head];
+
+  const lines: DisplayLine[] = [head];
+  for (const entry of results) {
+    lines.push({ text: "" });
+    if ("error" in entry) {
+      lines.push({ text: `${entry.sessionId} · error: ${entry.error}`, status: "error" });
+    } else if (entry.ready) {
+      const result = entry.result;
+      const color = statusColorForOutcome(result.status);
+      const labelSegment = result.label ? `  ${result.label}` : "";
+      lines.push({
+        text: [`${applyBold(bold, result.agent)}${labelSegment}`, result.status, `session:${entry.sessionId}`].join(" · "),
+        status: color,
+      });
+      const snippet = result.status === "completed" ? result.output : result.error ?? result.status;
+      if (snippet) {
+        const snippetLabel = result.status === "completed" ? "Result" : "Error";
+        lines.push(...snippetLines(snippetLabel, snippet, 2, color));
+      }
+    } else {
+      const labelSegment = entry.label ? `  ${entry.label}` : "";
+      lines.push({
+        text: `${applyBold(bold, entry.agent)}${labelSegment} · ${entry.status} · ${formatElapsed(0, entry.elapsedMs)}`,
+        status: entry.status,
+      });
+    }
+  }
+  return lines;
+}
+
+function statusColorForOutcome(status: string): DisplayStatus {
+  if (status === "completed") return "completed";
+  if (status === "error") return "error";
+  if (status === "running") return "running";
+  if (status === "queued") return "queued";
+  return "warning";
 }
 
 function formatBackgroundStartedLines(sessions: AgentView[], expanded: boolean, bold?: Bold): DisplayLine[] {
@@ -278,6 +341,10 @@ function narrowDetails(details: unknown): SubagentDetails | undefined {
     case "background-started":
       return Array.isArray(record.sessions)
         ? { view: "background-started", sessions: record.sessions as AgentView[], background: true }
+        : undefined;
+    case "background-results":
+      return Array.isArray((record as { results?: unknown }).results)
+        ? { view: "background-results", results: (record as { results: BackgroundResult[] }).results }
         : undefined;
     default:
       return undefined;

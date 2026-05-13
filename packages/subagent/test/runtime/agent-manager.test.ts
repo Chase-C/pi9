@@ -1476,5 +1476,265 @@ test("AgentManager.remove scope=background aborts running background sessions", 
   assert.deepEqual(manager.listSessions(), []);
 });
 
+test("AgentManager.backgroundResults returns ready:true with the AgentRunResult for a completed background session", async () => {
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, "bg-output");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "oneshot", prompt: "go" }],
+    undefined,
+    { background: true },
+  );
+  await batch.resultsPromise;
+  const sessionId = batch.sessions[0].id;
+
+  const results = await manager.backgroundResults([sessionId]);
+
+  assert.equal(results.length, 1);
+  const entry = results[0];
+  assert.equal(entry.sessionId, sessionId);
+  assert.equal((entry as any).ready, true);
+  assert.equal((entry as any).result.status, "completed");
+  assert.equal((entry as any).result.output, "bg-output");
+  assert.equal((entry as any).result.agent, "oneshot");
+});
+
+test("AgentManager.backgroundResults returns ready:false running with elapsedMs and agent for a running background session", async () => {
+  let release: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    await gate;
+    return completedRun(agent, prompt, "done");
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "helper", prompt: "longwork", label: "phase 1" }],
+    undefined,
+    { background: true },
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = batch.sessions[0].id;
+
+  const results = await manager.backgroundResults([sessionId]);
+
+  assert.equal(results.length, 1);
+  const entry = results[0] as any;
+  assert.equal(entry.sessionId, sessionId);
+  assert.equal(entry.ready, false);
+  assert.equal(entry.status, "running");
+  assert.equal(entry.agent, "helper");
+  assert.equal(entry.label, "phase 1");
+  assert.ok(typeof entry.elapsedMs === "number" && entry.elapsedMs >= 0);
+
+  release!();
+  await batch.resultsPromise;
+});
+
+test("AgentManager.backgroundResults returns ready:false queued with elapsedMs from createdAt for a queued background session", async () => {
+  let release: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    await gate;
+    return completedRun(agent, prompt, "done");
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 1, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [
+      { kind: "spawn", agent: "helper", prompt: "first" },
+      { kind: "spawn", agent: "helper", prompt: "queued one" },
+    ],
+    undefined,
+    { background: true },
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const queuedId = batch.sessions[1].id;
+
+  const results = await manager.backgroundResults([queuedId]);
+
+  assert.equal(results.length, 1);
+  const entry = results[0] as any;
+  assert.equal(entry.ready, false);
+  assert.equal(entry.status, "queued");
+  assert.equal(entry.agent, "helper");
+  assert.ok(typeof entry.elapsedMs === "number" && entry.elapsedMs >= 0);
+
+  release!();
+  await batch.resultsPromise;
+});
+
+test("AgentManager.backgroundResults returns a per-id error entry for an unknown sessionId", async () => {
+  const registry = { agents: new Map() };
+  const manager = new AgentManager(registry as any, 1, async () => ({} as any));
+
+  const results = await manager.backgroundResults(["nope"]);
+
+  assert.equal(results.length, 1);
+  const entry = results[0] as any;
+  assert.equal(entry.sessionId, "nope");
+  assert.equal(entry.error, "Unknown subagent session: nope");
+  assert.equal(entry.ready, undefined);
+});
+
+test("AgentManager.backgroundResults preserves input order across mixed entries and supports duplicates", async () => {
+  let release: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    if (prompt === "running") await gate;
+    return completedRun(agent, prompt, `done:${prompt}`);
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const completedBatch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "helper", prompt: "completed" }],
+    undefined,
+    { background: true },
+  );
+  await completedBatch.resultsPromise;
+  const completedId = completedBatch.sessions[0].id;
+
+  const runningBatch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "helper", prompt: "running" }],
+    undefined,
+    { background: true },
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const runningId = runningBatch.sessions[0].id;
+
+  const results = await manager.backgroundResults([completedId, runningId, "missing", completedId]);
+
+  assert.equal(results.length, 4);
+  assert.equal(results[0].sessionId, completedId);
+  assert.equal((results[0] as any).ready, true);
+  assert.equal(results[1].sessionId, runningId);
+  assert.equal((results[1] as any).ready, false);
+  assert.equal((results[1] as any).status, "running");
+  assert.equal(results[2].sessionId, "missing");
+  assert.match((results[2] as any).error, /Unknown subagent session: missing/);
+  assert.equal(results[3].sessionId, completedId);
+  assert.equal((results[3] as any).ready, true);
+
+  release!();
+  await runningBatch.resultsPromise;
+});
+
+test("AgentManager.backgroundResults remove:true sweeps terminal entries and a follow-up list omits them", async () => {
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    return completedRun(agent, prompt, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "oneshot", prompt: "go" }],
+    undefined,
+    { background: true },
+  );
+  await batch.resultsPromise;
+  const sessionId = batch.sessions[0].id;
+  assert.equal(manager.listSessions().length, 1);
+
+  const first = await manager.backgroundResults([sessionId], { remove: true });
+  assert.equal((first[0] as any).ready, true);
+  assert.deepEqual(manager.listSessions(), []);
+
+  const second = await manager.backgroundResults([sessionId], { remove: true });
+  assert.equal(second.length, 1);
+  assert.match((second[0] as any).error, /Unknown subagent session/);
+});
+
+test("AgentManager.backgroundResults remove:true does not remove running entries", async () => {
+  let release: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(makeSession());
+    await gate;
+    return completedRun(agent, prompt, "done");
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "helper", prompt: "long" }],
+    undefined,
+    { background: true },
+  );
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = batch.sessions[0].id;
+
+  const results = await manager.backgroundResults([sessionId], { remove: true });
+  assert.equal((results[0] as any).ready, false);
+  assert.equal((results[0] as any).status, "running");
+
+  const listed = manager.listSessions();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, sessionId);
+
+  release!();
+  await batch.resultsPromise;
+});
+
+test("AgentManager.backgroundResults returns the result for a retained non-background session", async () => {
+  const session = makeSession();
+  const runner = async (_ctx: any, agent: any, prompt: string) => {
+    agent.attach(session);
+    return completedRun(agent, prompt, "retained-output");
+  };
+  const registry = {
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 1, runner);
+
+  const [seed] = await manager.run(baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "initial" },
+  ]);
+
+  const results = await manager.backgroundResults([seed.sessionId!]);
+
+  assert.equal(results.length, 1);
+  const entry = results[0] as any;
+  assert.equal(entry.ready, true);
+  assert.equal(entry.result.output, "retained-output");
+  assert.equal(entry.result.resumable, true);
+});
+
 // Suppress unused-variable warnings for shared types.
 void undefined as unknown as AnyManager;

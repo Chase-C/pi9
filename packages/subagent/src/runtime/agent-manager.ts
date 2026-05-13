@@ -27,6 +27,11 @@ export type AgentManagerUpdateListener = (update: SubagentBatchUpdate) => void;
 export type AgentRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
 
+export type BackgroundResult =
+  | { sessionId: string; ready: true; result: AgentRunResult }
+  | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
+  | { sessionId: string; error: string };
+
 interface BatchEntry {
   agent?: Agent;
   view?: AgentView;
@@ -70,6 +75,41 @@ export class AgentManager {
 
   configure(options: { maxRunning?: number }) {
     if (options.maxRunning !== undefined) this._queue.maxRunning = options.maxRunning;
+  }
+
+  async backgroundResults(
+    sessionIds: string[],
+    options: { remove?: boolean } = {},
+  ): Promise<BackgroundResult[]> {
+    const remove = options.remove === true;
+    const results: BackgroundResult[] = [];
+    for (const id of sessionIds) {
+      const agent = this._agents.find(a => a.id === id);
+      if (!agent) {
+        results.push({ sessionId: id, error: `Unknown subagent session: ${id}` });
+        continue;
+      }
+      const status = agent.status;
+      if (status.kind === "done" || status.kind === "resumeFailed") {
+        results.push({ sessionId: id, ready: true, result: status.result });
+        if (remove) await this.remove({ sessionIds: [id] });
+        continue;
+      }
+      const now = Date.now();
+      const elapsedMs = status.kind === "running"
+        ? now - status.startedAt
+        : now - agent.createdAt;
+      const entry: Extract<BackgroundResult, { ready: false }> = {
+        sessionId: id,
+        ready: false,
+        status: status.kind === "running" ? "running" : "queued",
+        elapsedMs,
+        agent: agent.agentName,
+      };
+      if (agent.label !== undefined) entry.label = agent.label;
+      results.push(entry);
+    }
+    return results;
   }
 
   async remove(
