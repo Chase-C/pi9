@@ -45,6 +45,19 @@ test("collapsed inventory group line surfaces a filter:<statuses> segment when a
   assert.match(filtered.join("\n"), /· filter:completed,error/);
 });
 
+test("queued session elapsed uses queuedAt instead of session createdAt", () => {
+  const session = fakeAgent({
+    createdAt: 1_000,
+    config: { name: "helper" },
+    status: { kind: "queued", queuedAt: 10_000 },
+  });
+
+  const lines = formatSubagentToolLines(inventoryDetails([session]), false, 11_250);
+
+  assert.match(lines.join("\n"), /1s/);
+  assert.doesNotMatch(lines.join("\n"), /10s/);
+});
+
 test("formatSubagentSessionSummary surfaces kind:background only for background-kind sessions", () => {
   const retained = fakeAgent({ config: { name: "helper", resumable: true } });
   const background = fakeAgent({ id: "s2", kind: "background", config: { name: "helper", resumable: true } });

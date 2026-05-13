@@ -48,7 +48,7 @@ test("tool list action with legacy type=skills returns the migration error notin
 
 test("subagent tool action=list with status filter [completed, error] returns terminal-success and terminal-failed sessions but excludes others", async () => {
   let nextRunner: ((agent: any, prompt: string) => any) | null = null;
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return nextRunner!(agent, prompt);
   };
@@ -64,11 +64,11 @@ test("subagent tool action=list with status filter [completed, error] returns te
   const manager = new AgentManager(fakeRegistry as any, 1, runner);
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
-  nextRunner = (agent, prompt) => completedRun(agent, prompt, "ok");
+  nextRunner = (agent, prompt) => completedRun(agent, "ok");
   await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "good task" }] }, undefined, undefined, baseCtx());
-  nextRunner = (agent, prompt) => errorRun(agent, prompt, "failed");
+  nextRunner = (agent, prompt) => errorRun(agent, "failed");
   await tool.execute("tool-call", { action: "run", tasks: [{ agent: "bad", prompt: "bad task" }] }, undefined, undefined, baseCtx());
-  nextRunner = (agent, prompt) => interruptedRun(agent, prompt, "cancelled");
+  nextRunner = (agent, prompt) => interruptedRun(agent, "cancelled");
   await tool.execute("tool-call", { action: "run", tasks: [{ agent: "cut", prompt: "cut task" }] }, undefined, undefined, baseCtx());
 
   const result = await tool.execute("tool-call", { action: "list", status: ["completed", "error"] }, undefined, undefined, baseCtx());
@@ -80,9 +80,9 @@ test("subagent tool action=list with status filter [completed, error] returns te
 });
 
 test("subagent tool action=list with empty status filter returns no sessions distinct from no filter", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
-    return completedRun(agent, prompt, "ok");
+    return completedRun(agent, "ok");
   };
   const fakeRegistry = {
     agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }]]),
@@ -114,9 +114,9 @@ test("subagent tool action=list with an unknown status value returns the unknown
 
 test("subagent tool action=list with status filter [completed] returns only completed sessions", async () => {
   let nextRunner: ((agent: any, prompt: string) => any) | null = null;
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
-    return nextRunner?.(agent, prompt) ?? completedRun(agent, prompt, "ok");
+    return nextRunner?.(agent, prompt) ?? completedRun(agent, "ok");
   };
   const fakeRegistry = {
     agents: new Map([
@@ -129,10 +129,10 @@ test("subagent tool action=list with status filter [completed] returns only comp
   const manager = new AgentManager(fakeRegistry as any, 1, runner);
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
-  nextRunner = (agent, prompt) => completedRun(agent, prompt, "ok");
+  nextRunner = (agent, prompt) => completedRun(agent, "ok");
   await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "good task" }] }, undefined, undefined, baseCtx());
 
-  nextRunner = (agent, prompt) => errorRun(agent, prompt, "failed");
+  nextRunner = (agent, prompt) => errorRun(agent, "failed");
   await tool.execute("tool-call", { action: "run", tasks: [{ agent: "bad", prompt: "bad task" }] }, undefined, undefined, baseCtx());
 
   const result = await tool.execute("tool-call", { action: "list", status: ["completed"] }, undefined, undefined, baseCtx());
@@ -144,9 +144,9 @@ test("subagent tool action=list with status filter [completed] returns only comp
 });
 
 test("subagent tool action=list with no filter returns retained sessions tagged kind: retained", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
-    return completedRun(agent, prompt, "The final answer from the child.");
+    return completedRun(agent, "The final answer from the child.");
   };
   const fakeRegistry = {
     agents: new Map([

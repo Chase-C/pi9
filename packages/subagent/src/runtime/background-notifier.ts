@@ -66,12 +66,9 @@ export class BackgroundNotifier {
       this._notifiedTerminalSessionIds.delete(agent.id);
       return;
     }
-    if (status.kind !== "done" && status.kind !== "resumeFailed") return;
     if (this._notifiedTerminalSessionIds.has(agent.id)) return;
     this._notifiedTerminalSessionIds.add(agent.id);
-    const startedAt = status.kind === "done"
-      ? status.ran?.startedAt ?? agent.createdAt
-      : status.ran.startedAt;
+    const startedAt = status.startedAt ?? agent.createdAt;
     const elapsedMs = Math.max(0, status.completedAt - startedAt);
     const entry: CompletionEntry = {
       sessionId: agent.id,

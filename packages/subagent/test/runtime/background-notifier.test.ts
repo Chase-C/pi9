@@ -73,9 +73,9 @@ async function runBackgroundOne(manager: AgentManager, prompt = "go") {
   return batch.sessions[0].id;
 }
 
-const completingRunner = async (_ctx: any, agent: any, prompt: string) => {
+const completingRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
   agent.attach(makeSession());
-  return completedRun(agent, prompt, "ok");
+  return completedRun(agent, "ok");
 };
 
 test("BackgroundNotifier in end-of-turn mode fires no message until agent_end, then exactly one with the completed sessionId", async () => {
@@ -96,9 +96,9 @@ test("BackgroundNotifier in end-of-turn mode fires no message until agent_end, t
 });
 
 test("BackgroundNotifier payload references subagent results, includes per-session metadata, and never includes output or error from the child", async () => {
-  const manager = makeManager(async (_ctx: any, agent: any, prompt: string) => {
+  const manager = makeManager(async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "SUPER-SECRET-CHILD-OUTPUT");
+    return completedRun(agent, "SUPER-SECRET-CHILD-OUTPUT");
   });
   const pi = fakePi();
   const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "end-of-turn" });
@@ -197,13 +197,13 @@ test("BackgroundNotifier in next-tool-call mode fires no message until tool_exec
 });
 
 test("BackgroundNotifier notifies again when a background session resumes and completes with the same sessionId", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "ok");
+    return completedRun(agent, "ok");
   };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "ok again", true);
+    return completedRun(agent, "ok again", true);
   };
   const manager = makeManager(runner, resumeRunner);
   const pi = fakePi();

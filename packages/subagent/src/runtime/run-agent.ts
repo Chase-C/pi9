@@ -46,11 +46,10 @@ const DefaultRunAgentDependencies: RunAgentDependencies = {
 export async function RunAgent(
   ctx: ExtensionContext,
   agent: Agent,
-  prompt: string,
   signal?: AbortSignal,
   dependencies: RunAgentDependencies = DefaultRunAgentDependencies,
 ): Promise<AgentRunResult> {
-  if (signal?.aborted) return skippedRun(agent, prompt);
+  if (signal?.aborted) return skippedRun(agent);
 
   const runData = { agent: agent.agentName, sessionId: agent.id };
   timingMark("runAgent.start", { ...runData, cwd: ctx.cwd, taskCwd: agent.spawn.cwd });
@@ -70,7 +69,7 @@ export async function RunAgent(
       }
       return undefined;
     });
-    if (missingSkill) return errorRun(agent, prompt, `Unknown skill: ${missingSkill}`);
+    if (missingSkill) return errorRun(agent, `Unknown skill: ${missingSkill}`);
     const skillBlock = timingSync("runAgent.formatSkills", { ...runData, matchedSkillCount: matched.length }, () => formatSkillsForPrompt(matched));
     if (skillBlock) systemPrompt = `${systemPrompt}\n\n${skillBlock}`;
   }
@@ -88,7 +87,7 @@ export async function RunAgent(
   }));
 
   await timingAsync("runAgent.resourceLoader.reload", { ...runData, cwd }, () => resourceLoader.reload());
-  if (signal?.aborted) return skippedRun(agent, prompt);
+  if (signal?.aborted) return skippedRun(agent);
 
   const selectedModel = timingSync("runAgent.selectModel", { ...runData, requestedModel: agent.spawn.model ?? agent.config.model }, () => SelectModel(agent.spawn.model ?? agent.config.model, ctx.model, ctx.modelRegistry));
   const sessionManager = timingSync("runAgent.sessionManager", { ...runData, cwd }, () => dependencies.sessionManager(cwd));
@@ -107,41 +106,39 @@ export async function RunAgent(
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return skippedRun(agent, prompt);
+    return skippedRun(agent);
   }
 
   timingSync("runAgent.attach", runData, () => agent.attach(session));
-  return PromptAgent(session, agent, prompt, signal);
+  return PromptAgent(session, agent, signal);
 }
 
 export async function ResumeAgent(
   _ctx: ExtensionContext,
   agent: Agent,
-  prompt: string,
   signal?: AbortSignal,
 ): Promise<AgentRunResult> {
-  const session = (agent.status.kind === "done" || agent.status.kind === "resumeFailed")
-    ? agent.status.ran?.session
-    : undefined;
+  const session = agent.retainedSession();
   if (!session) {
     throw new Error(`Cannot resume an agent without a retained session.`);
   }
 
   timingSync("resumeAgent.attach", { agent: agent.agentName, sessionId: agent.id }, () => agent.attach(session));
-  return PromptAgent(session, agent, prompt, signal);
+  return PromptAgent(session, agent, signal, true);
 }
 
 async function PromptAgent(
   session: AgentSession,
   agent: Agent,
-  prompt: string,
   signal?: AbortSignal,
+  resumed = false,
 ): Promise<AgentRunResult> {
+  const prompt = agent.requireCurrentAttempt().prompt;
   const onAbort = () => { void AbortSession(session); }
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return interruptedRun(agent, prompt, "Agent interrupted.");
+    return interruptedRun(agent, "Agent interrupted.", resumed);
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -150,19 +147,19 @@ async function PromptAgent(
     await timingAsync("runAgent.session.prompt", { agent: agent.agentName, sessionId: agent.id, promptLength: prompt.length }, () => session.prompt(prompt));
     const finalMessage = GetFinalAssistantMessage(session);
     if (finalMessage.stopReason === "aborted") {
-      return interruptedRun(agent, prompt, finalMessage.errorMessage || "Agent interrupted.");
+      return interruptedRun(agent, finalMessage.errorMessage || "Agent interrupted.", resumed);
     }
     if (finalMessage.stopReason === "error") {
-      return errorRun(agent, prompt, finalMessage.errorMessage || finalMessage.response || "Agent failed.");
+      return errorRun(agent, finalMessage.errorMessage || finalMessage.response || "Agent failed.", resumed);
     }
 
     const response = agent.message || finalMessage.response;
-    return completedRun(agent, prompt, response);
+    return completedRun(agent, response, resumed);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return signal?.aborted
-      ? interruptedRun(agent, prompt, message)
-      : errorRun(agent, prompt, message);
+      ? interruptedRun(agent, message, resumed)
+      : errorRun(agent, message, resumed);
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }

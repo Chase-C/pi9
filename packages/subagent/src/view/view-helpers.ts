@@ -21,7 +21,9 @@ export function activeOrRetainedAgents<T extends { status: { kind: string }; res
 }
 
 export function canResumeSubagentSession(agent: AgentView): boolean {
-  return agent.config.resumable && agent.status.kind === "done" && agent.status.outcome === "completed";
+  if (!agent.config.resumable || agent.status.kind !== "done") return false;
+  if (agent.status.outcome === "completed") return true;
+  return agent.status.startedAt === undefined;
 }
 
 export function canClearSubagentSession(agent: AgentView): boolean {
@@ -36,6 +38,10 @@ export function getStartedAt(status: AgentViewStatus): number | undefined {
   if (status.kind === "running") return status.startedAt;
   if (status.kind === "done") return status.startedAt;
   return undefined;
+}
+
+export function getQueuedAt(status: AgentViewStatus): number | undefined {
+  return status.kind === "queued" ? status.queuedAt : undefined;
 }
 
 export function getCompletedAt(status: AgentViewStatus): number | undefined {

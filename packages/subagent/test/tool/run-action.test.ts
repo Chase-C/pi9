@@ -85,10 +85,10 @@ test("tool execution returns structured failed run for unknown agents", async ()
 });
 
 test("subagent tool returns one ordered final group for mixed success, unknown, and failed children", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     if (agent.agentName === "flaky") throw new Error("flaky failed");
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const fakeRegistry = {
     agents: new Map([
@@ -378,10 +378,10 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
 test("subagent action=run background:true returns view:background-started immediately with initial session views", async () => {
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     await runGate;
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const fakeRegistry = {
     agents: new Map([["helper", { name: "helper", description: "Helps", systemPrompt: "s", source: "project" }]]),
@@ -413,10 +413,10 @@ test("subagent action=run background:true returns view:background-started immedi
 test("subagent action=run background:true never invokes the parent onUpdate channel", async () => {
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     await runGate;
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const fakeRegistry = {
     agents: new Map([["helper", { name: "helper", description: "Helps", systemPrompt: "s", source: "project" }]]),

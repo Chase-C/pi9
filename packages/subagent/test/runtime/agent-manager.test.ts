@@ -33,9 +33,9 @@ test("AgentManager.run carries the input label on unknown-agent synthetic result
 
 test("AgentManager.listSessions returns all retained sessions when called with no filter", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, "ok");
+    return completedRun(agent, "ok");
   };
   const registry: FakeRegistry = {
     agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }]]),
@@ -50,11 +50,11 @@ test("AgentManager.listSessions returns all retained sessions when called with n
 
 test("manager returns ordered per-run output and reports unknown agents and child failures", async () => {
   const calls: string[] = [];
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     calls.push(prompt);
     if (prompt === "three") throw new Error("child failed");
     agent.attach(makeSession());
-    return completedRun(agent, prompt, `response:${prompt}`);
+    return completedRun(agent, `response:${prompt}`);
   };
   const registry = {
     agents: new Map([
@@ -110,11 +110,11 @@ test("manager returns skipped result and final group row for queued task whose s
   const calls: string[] = [];
   let finishFirst: () => void;
   const firstCanFinish = new Promise<void>(resolve => { finishFirst = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     calls.push(prompt);
     agent.attach(makeSession());
     if (prompt === "one") await firstCanFinish;
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -153,10 +153,10 @@ test("manager returns skipped result and final group row for queued task whose s
 test("manager does not expose skipped resumable tasks as sessions", async () => {
   let finishFirst: () => void;
   const firstCanFinish = new Promise<void>(resolve => { finishFirst = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     await firstCanFinish;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([
@@ -184,9 +184,9 @@ test("manager does not expose skipped resumable tasks as sessions", async () => 
 });
 
 test("manager does not expose or resume non-resumable completed sessions", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -209,9 +209,9 @@ test("manager does not expose or resume non-resumable completed sessions", async
 });
 
 test("manager discards a completed session when a task overrides resumable to false", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -230,10 +230,10 @@ test("manager discards a completed session when a task overrides resumable to fa
 });
 
 test("manager retains only resumable interrupted sessions inspect-clear only after parent cancellation settles", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string, signal: AbortSignal) => {
+  const runner = async (_ctx: any, agent: any, signal: AbortSignal) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
-    return interruptedRun(agent, prompt, "cancelled by parent");
+    return interruptedRun(agent, "cancelled by parent");
   };
   const registry = {
     agents: new Map([
@@ -273,13 +273,13 @@ test("manager retains only resumable interrupted sessions inspect-clear only aft
 
 test("manager retains a completed session when a task overrides resumable to true", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
-    agent.attach(agent.status.ran.session);
-    return completedRun(agent, prompt, `follow:${prompt}`);
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `follow:${prompt}`);
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -304,9 +304,97 @@ test("manager retains a completed session when a task overrides resumable to tru
   assert.equal(resumed.output, "follow:again");
 });
 
+test("manager preserves a stored label across unlabeled resume and overwrites on labeled resume", async () => {
+  const session = makeSession();
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(session);
+    return completedRun(agent, `response:${agent.current.prompt}`);
+  };
+  const resumeRunner = async (_ctx: any, agent: any) => {
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `follow:${agent.current.prompt}`, true);
+  };
+  const registry = {
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+
+  const [initial] = await manager.run(baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "one", label: "original" },
+  ]);
+  assert.equal(initial.label, "original");
+  assert.ok(initial.sessionId);
+
+  const [unlabeledResume] = await manager.run(baseCtx(), undefined, [
+    { kind: "resume", sessionId: initial.sessionId!, prompt: "two" },
+  ]);
+  assert.equal(unlabeledResume.label, "original");
+  assert.equal(manager.listSessions()[0].label, "original");
+
+  const [backgroundEntry] = await manager.backgroundResults([initial.sessionId!]);
+  assert.equal(backgroundEntry.ready, true);
+  assert.equal(backgroundEntry.result.label, "original");
+
+  const [renamedResume] = await manager.run(baseCtx(), undefined, [
+    { kind: "resume", sessionId: initial.sessionId!, prompt: "three", label: "renamed" },
+  ]);
+  assert.equal(renamedResume.label, "renamed");
+  assert.equal(manager.listSessions()[0].label, "renamed");
+});
+
+test("manager reports queued resume elapsed from the current attempt time", async () => {
+  const realNow = Date.now;
+  let now = 1_000;
+  Date.now = () => now;
+  let releaseBlocker: (() => void) | undefined;
+  try {
+    const retainedSession = makeSession();
+    const registry = {
+      agents: new Map([
+        ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
+        ["blocker", { name: "blocker", description: "d", systemPrompt: "s", source: "project", resumable: false }],
+      ]),
+    };
+    const runner = async (_ctx: any, agent: any) => {
+      agent.attach(agent.agentName === "chatty" ? retainedSession : makeSession());
+      if (agent.agentName === "blocker") await new Promise<void>(resolve => { releaseBlocker = resolve; });
+      return completedRun(agent, `done:${agent.current.prompt}`);
+    };
+    const resumeRunner = async (_ctx: any, agent: any) => {
+      agent.attach(agent.retainedSession()!);
+      return completedRun(agent, `follow:${agent.current.prompt}`, true);
+    };
+    const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+
+    const [initial] = await manager.run(baseCtx(), undefined, [
+      { kind: "spawn", agent: "chatty", prompt: "old" },
+    ]);
+    assert.ok(initial.sessionId);
+
+    now = 100_000;
+    const batch = manager.startBatch(baseCtx(), undefined, [
+      { kind: "spawn", agent: "blocker", prompt: "block" },
+      { kind: "resume", sessionId: initial.sessionId!, prompt: "queued" },
+    ], undefined, { background: true });
+
+    await new Promise(resolve => setImmediate(resolve));
+    now = 100_250;
+    const [queued] = await manager.backgroundResults([initial.sessionId!]);
+    assert.equal(queued.ready, false);
+    assert.equal(queued.status, "queued");
+    assert.equal(queued.elapsedMs, 250);
+    assert.equal(manager.listSessions().find(s => s.id === initial.sessionId)!.status.kind, "queued");
+
+    releaseBlocker?.();
+    await batch.resultsPromise;
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("manager retains, resumes, lists, and clears completed resumable sessions", async () => {
   let runEmit: ((event: any) => void) | undefined;
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     const session = {
       messages: [],
       subscribe(handler: any) { runEmit = handler; return () => { runEmit = undefined; }; },
@@ -315,12 +403,12 @@ test("manager retains, resumes, lists, and clears completed resumable sessions",
     };
     agent.attach(session);
     runEmit!({ type: "turn_end" });
-    return completedRun(agent, prompt, `response:${prompt}`);
+    return completedRun(agent, `response:${prompt}`);
   };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
-    agent.attach(agent.status.ran.session);
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+    agent.attach(agent.retainedSession()!);
     runEmit!({ type: "turn_end" });
-    return completedRun(agent, prompt, `follow:${prompt}`);
+    return completedRun(agent, `follow:${prompt}`);
   };
 
   const registry = {
@@ -356,19 +444,19 @@ test("manager retains, resumes, lists, and clears completed resumable sessions",
 
 test("manager rejects duplicate resume tasks without corrupting the retained session", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, `old:${prompt}`);
+    return completedRun(agent, `old:${prompt}`);
   };
   let finishResume: () => void;
   const resumeCanFinish = new Promise<void>(resolve => { finishResume = resolve; });
   const resumePrompts: string[] = [];
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     resumePrompts.push(prompt);
     if (prompt !== "first follow-up") throw new Error(`duplicate resume runner invoked for ${prompt}`);
-    agent.attach(agent.status.ran.session);
+    agent.attach(agent.retainedSession()!);
     await resumeCanFinish;
-    return completedRun(agent, prompt, `new:${prompt}`);
+    return completedRun(agent, `new:${prompt}`);
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -407,9 +495,9 @@ test("manager rejects duplicate resume tasks without corrupting the retained ses
 
 test("manager reports resume setup failure as the follow-up prompt error without returning prior completion", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, `old:${prompt}`);
+    return completedRun(agent, `old:${prompt}`);
   };
   const resumeRunner = async () => { throw new Error("resume setup exploded"); };
   const registry = {
@@ -436,16 +524,16 @@ test("manager reports resume setup failure as the follow-up prompt error without
 
 test("manager keeps a retained completed session retryable after resume setup failure", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, `old:${prompt}`);
+    return completedRun(agent, `old:${prompt}`);
   };
   let resumeAttempts = 0;
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     resumeAttempts += 1;
     if (resumeAttempts === 1) throw new Error("resume setup exploded");
-    agent.attach(agent.status.ran.session);
-    return completedRun(agent, prompt, `new:${prompt}`);
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `new:${prompt}`);
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -479,16 +567,16 @@ test("manager keeps a retained completed session retryable after resume setup fa
 
 test("manager keeps a session retryable after repeated pre-attach resume failures", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, `old:${prompt}`);
+    return completedRun(agent, `old:${prompt}`);
   };
   let resumeAttempts = 0;
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     resumeAttempts += 1;
     if (resumeAttempts <= 2) throw new Error(`resume failed #${resumeAttempts}`);
-    agent.attach(agent.status.ran.session);
-    return completedRun(agent, prompt, `new:${prompt}`);
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `new:${prompt}`);
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -530,14 +618,14 @@ test("manager keeps a session retryable after repeated pre-attach resume failure
 test("manager reports queued cancelled resume as skipped follow-up and keeps retained session retryable", async () => {
   let finishBlocker: () => void;
   const blockerCanFinish = new Promise<void>(resolve => { finishBlocker = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     if (prompt === "blocker prompt") await blockerCanFinish;
-    return completedRun(agent, prompt, `output:${prompt}`);
+    return completedRun(agent, `output:${prompt}`);
   };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
-    agent.attach(agent.status.ran.session);
-    return completedRun(agent, prompt, `resumed:${prompt}`);
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `resumed:${prompt}`);
   };
   const registry = {
     agents: new Map([
@@ -599,9 +687,9 @@ test("manager reports queued cancelled resume as skipped follow-up and keeps ret
 });
 
 test("manager emits grouped progress rows in input order including unknown agents", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -638,10 +726,10 @@ test("manager keeps emitting active batch updates for spinner animation even wit
   };
   let finish: () => void;
   const blocker = new Promise<void>(resolve => { finish = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     await blocker;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const manager = new AgentManager(registry as any, 1, runner);
   const snapshots: any[] = [];
@@ -668,14 +756,14 @@ test("manager emits live agent progress with the right transitions", async () =>
   };
   let emit: ((e: any) => void) | undefined;
   const session = { messages: [], subscribe(handler: any) { emit = handler; return () => {}; }, prompt: async () => {}, abort: () => {} };
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
     emit!({ type: "message_start" });
     emit!({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "working through the delegated task" } });
     emit!({ type: "tool_execution_start", toolName: "read" });
     emit!({ type: "turn_end" });
     emit!({ type: "tool_execution_end" });
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const manager = new AgentManager(registry as any, 1, runner);
   const snapshots: any[] = [];
@@ -707,7 +795,7 @@ test("manager throttles live message snippets while lifecycle updates are immedi
   const session = { messages: [], subscribe(handler: any) { emit = handler; return () => {}; }, prompt: async () => {}, abort: () => {} };
   let finish: () => void;
   const allowFinish = new Promise<void>(resolve => { finish = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
     emit!({ type: "message_start" });
     emit!({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "one" } });
@@ -716,7 +804,7 @@ test("manager throttles live message snippets while lifecycle updates are immedi
     emit!({ type: "message_start" });
     emit!({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "three" } });
     await allowFinish;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const manager = new AgentManager(registry as any, 1, runner);
   const snapshots: any[] = [];
@@ -742,10 +830,10 @@ test("manager throttles live message snippets while lifecycle updates are immedi
 
 test("manager.run handles a mixed batch of one spawn and one resume in input order with resumed flags set correctly", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => { agent.attach(session); return completedRun(agent, prompt, `spawn:${prompt}`); };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
-    agent.attach(agent.status.ran.session);
-    return completedRun(agent, prompt, `resume:${prompt}`, true);
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? ""; agent.attach(session); return completedRun(agent, `spawn:${prompt}`); };
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `resume:${prompt}`, true);
   };
   const registry = {
     agents: new Map([
@@ -779,8 +867,8 @@ test("manager.run handles a mixed batch of one spawn and one resume in input ord
 
 test("manager.run resume task with a new label overwrites the agent stored label", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => { agent.attach(session); return completedRun(agent, prompt, "first"); };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => { agent.attach(agent.status.ran.session); return completedRun(agent, prompt, "second", true); };
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? ""; agent.attach(session); return completedRun(agent, "first"); };
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? ""; agent.attach(agent.retainedSession()!); return completedRun(agent, "second", true); };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
@@ -799,8 +887,8 @@ test("manager.run resume task with a new label overwrites the agent stored label
 
 test("manager.run resume task with resumable: false discards the session after completion", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => { agent.attach(session); return completedRun(agent, prompt, "first"); };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => { agent.attach(agent.status.ran.session); return completedRun(agent, prompt, "second", true); };
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? ""; agent.attach(session); return completedRun(agent, "first"); };
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? ""; agent.attach(agent.retainedSession()!); return completedRun(agent, "second", true); };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
@@ -821,7 +909,7 @@ test("manager.run resume task with resumable: false discards the session after c
 
 test("manager.run resume task targeting an unknown sessionId yields a per-task error and does not block siblings", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => { agent.attach(session); return completedRun(agent, prompt, `done:${prompt}`); };
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? ""; agent.attach(session); return completedRun(agent, `done:${prompt}`); };
   const registry = {
     agents: new Map([["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project" }]]),
   };
@@ -843,8 +931,8 @@ test("manager.run resume task targeting an unknown sessionId yields a per-task e
 
 test("manager.run partial updates flag resumed entries on the rendered AgentView", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => { agent.attach(session); return completedRun(agent, prompt, "first"); };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => { agent.attach(agent.status.ran.session); return completedRun(agent, prompt, "second", true); };
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? ""; agent.attach(session); return completedRun(agent, "first"); };
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? ""; agent.attach(agent.retainedSession()!); return completedRun(agent, "second", true); };
   const registry = {
     agents: new Map([
       ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
@@ -886,10 +974,10 @@ test("AgentManager.remove with an unknown sessionId returns the unknown-id error
 test("AgentManager.remove scope=non-running removes terminal and queued sessions but leaves running ones", async () => {
   let unblockRunning: () => void;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     if (prompt === "block") await runningGate;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([
@@ -923,11 +1011,11 @@ test("AgentManager.remove with a queued sessionId prevents the queued spawn from
   let unblockRunning: () => void;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
   const runnerPrompts: string[] = [];
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     runnerPrompts.push(prompt);
     agent.attach(makeSession());
     if (prompt === "block") await runningGate;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -958,11 +1046,11 @@ test("AgentManager.remove scope=non-running prevents queued spawns from later in
   let unblockRunning: () => void;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
   const runnerPrompts: string[] = [];
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     runnerPrompts.push(prompt);
     agent.attach(makeSession());
     if (prompt === "block") await runningGate;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -991,16 +1079,16 @@ test("AgentManager.remove scope=non-running prevents queued spawns from later in
 test("AgentManager.remove with a queued resume sessionId prevents the queued resume runner from starting", async () => {
   let unblockRunning: () => void;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     if (prompt === "block") await runningGate;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   let resumeCalls = 0;
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     resumeCalls += 1;
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "resumed");
+    return completedRun(agent, "resumed");
   };
   const registry = {
     agents: new Map([
@@ -1033,9 +1121,9 @@ test("AgentManager.remove with a queued resume sessionId prevents the queued res
 });
 
 test("AgentManager.remove on a second pass of the same sessionId returns the unknown-id error", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -1057,9 +1145,9 @@ test("AgentManager.remove on a second pass of the same sessionId returns the unk
 });
 
 test("AgentManager.remove scope=background is a valid no-op until background dispatch lands", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -1079,10 +1167,10 @@ test("AgentManager.remove scope=background is a valid no-op until background dis
 test("AgentManager.remove scope=retained removes retained resumable sessions and leaves running and queued alone", async () => {
   let unblockRunning: () => void;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     if (prompt === "block") await runningGate;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([
@@ -1116,9 +1204,9 @@ test("AgentManager.remove scope=retained removes retained resumable sessions and
 });
 
 test("AgentManager.remove scope=retained leaves resumable background sessions while removing foreground retained sessions", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -1151,7 +1239,7 @@ test("AgentManager.remove scope=retained leaves resumable background sessions wh
 
 test("AgentManager.remove with a running sessionId aborts the underlying session and removes it", async () => {
   let abortCalls = 0;
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     let resolveAbort: () => void;
     const aborted = new Promise<void>(resolve => { resolveAbort = resolve; });
     const session = {
@@ -1162,7 +1250,7 @@ test("AgentManager.remove with a running sessionId aborts the underlying session
     };
     agent.attach(session);
     await aborted;
-    return interruptedRun(agent, prompt, "aborted by remove");
+    return interruptedRun(agent, "aborted by remove");
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -1188,9 +1276,9 @@ test("AgentManager.remove with a running sessionId aborts the underlying session
 
 test("AgentManager.remove with a known terminal sessionId removes that session", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -1211,9 +1299,9 @@ test("AgentManager.remove with a known terminal sessionId removes that session",
 });
 
 test("AgentManager.remove rejects an unknown internal scope without removing sessions", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -1231,9 +1319,9 @@ test("AgentManager.remove rejects an unknown internal scope without removing ses
 });
 
 test("AgentManager.startBatch returns sessions synchronously and a resultsPromise mirroring run() for background:false", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -1265,10 +1353,10 @@ test("AgentManager.startBatch returns sessions synchronously and a resultsPromis
 test("AgentManager.startBatch with background:true returns sessions tagged kind:background and surfaces them in listSessions while running", async () => {
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     await runGate;
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -1298,11 +1386,11 @@ test("AgentManager.startBatch background:true ignores parent signal abort and le
   const seenSignals: Array<AbortSignal | undefined> = [];
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string, signal: AbortSignal | undefined) => {
+  const runner = async (_ctx: any, agent: any, signal: AbortSignal | undefined) => { const prompt = agent.current?.prompt ?? "";
     seenSignals.push(signal);
     agent.attach(makeSession());
     await runGate;
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -1331,9 +1419,9 @@ test("AgentManager.startBatch background:true ignores parent signal abort and le
 });
 
 test("AgentManager background non-resumable agents stay listed with terminal status after settlement", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -1358,13 +1446,13 @@ test("AgentManager background non-resumable agents stay listed with terminal sta
 
 test("AgentManager.startBatch background:true promotes resumed sessions to background and remove scope=background selects them", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, `seed:${prompt}`);
+    return completedRun(agent, `seed:${prompt}`);
   };
-  const resumeRunner = async (_ctx: any, agent: any, prompt: string) => {
-    agent.attach(agent.status.ran.session);
-    return completedRun(agent, prompt, `resumed:${prompt}`);
+  const resumeRunner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `resumed:${prompt}`);
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -1402,9 +1490,9 @@ test("AgentManager.startBatch background:true promotes resumed sessions to backg
 });
 
 test("AgentManager.remove scope=background removes terminal background agents and leaves foreground retained sessions", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([
@@ -1441,7 +1529,7 @@ test("AgentManager.remove scope=background aborts running background sessions", 
   let unblockRunning: () => void;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
   let abortCalls = 0;
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     const session = {
       messages: [] as any[],
       subscribe: () => () => {},
@@ -1450,7 +1538,7 @@ test("AgentManager.remove scope=background aborts running background sessions", 
     };
     agent.attach(session);
     await runningGate;
-    return interruptedRun(agent, prompt, "aborted by remove");
+    return interruptedRun(agent, "aborted by remove");
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -1477,9 +1565,9 @@ test("AgentManager.remove scope=background aborts running background sessions", 
 });
 
 test("AgentManager.backgroundResults returns ready:true with the AgentRunResult for a completed background session", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "bg-output");
+    return completedRun(agent, "bg-output");
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -1510,10 +1598,10 @@ test("AgentManager.backgroundResults returns ready:true with the AgentRunResult 
 test("AgentManager.backgroundResults returns ready:false running with elapsedMs and agent for a running background session", async () => {
   let release: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     await gate;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -1548,10 +1636,10 @@ test("AgentManager.backgroundResults returns ready:false running with elapsedMs 
 test("AgentManager.backgroundResults returns ready:false queued with elapsedMs from createdAt for a queued background session", async () => {
   let release: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     await gate;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -1600,10 +1688,10 @@ test("AgentManager.backgroundResults returns a per-id error entry for an unknown
 test("AgentManager.backgroundResults preserves input order across mixed entries and supports duplicates", async () => {
   let release: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     if (prompt === "running") await gate;
-    return completedRun(agent, prompt, `done:${prompt}`);
+    return completedRun(agent, `done:${prompt}`);
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -1648,9 +1736,9 @@ test("AgentManager.backgroundResults preserves input order across mixed entries 
 });
 
 test("AgentManager.backgroundResults remove:true sweeps terminal entries and a follow-up list omits them", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -1678,9 +1766,9 @@ test("AgentManager.backgroundResults remove:true sweeps terminal entries and a f
 });
 
 test("AgentManager.backgroundResults remove:true returns duplicate terminal results before sweeping", async () => {
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
@@ -1716,10 +1804,10 @@ test("AgentManager.backgroundResults remove:true returns duplicate terminal resu
 test("AgentManager.backgroundResults remove:true does not remove running entries", async () => {
   let release: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(makeSession());
     await gate;
-    return completedRun(agent, prompt, "done");
+    return completedRun(agent, "done");
   };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
@@ -1750,9 +1838,9 @@ test("AgentManager.backgroundResults remove:true does not remove running entries
 
 test("AgentManager.backgroundResults returns the result for a retained non-background session", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, prompt: string) => {
+  const runner = async (_ctx: any, agent: any) => { const prompt = agent.current?.prompt ?? "";
     agent.attach(session);
-    return completedRun(agent, prompt, "retained-output");
+    return completedRun(agent, "retained-output");
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),

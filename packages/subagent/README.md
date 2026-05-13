@@ -67,7 +67,7 @@ Supported frontmatter:
 | `thinking` | no | Thinking level for the child session. |
 | `tools` | no | Comma-separated tool allowlist passed to the child SDK session. |
 | `skills` | no | Comma-separated default skill names injected into this agent's system prompt. Per-task `skills` fully replaces this list (no merge); use `none` or omit the field to declare none. |
-| `resumable` | no | Boolean. Defaults to `false`. When `true`, sessions with a child `AgentSession` can be retained for this Pi process lifetime. Only completed resumable sessions can be resumed. A per-task `resumable: false` override discards the session immediately at completion. |
+| `resumable` | no | Boolean. Defaults to `false`. When `true`, sessions with a child `AgentSession` can be retained for this Pi process lifetime. Completed resumable sessions can be resumed, and resume attempts that fail before re-attaching to the retained session remain retryable. A per-task `resumable: false` override discards the session immediately at completion. |
 
 The markdown body after the frontmatter is trimmed and used as the child session's system prompt.
 
@@ -120,9 +120,9 @@ Resume task fields:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `sessionId` | yes | A retained, `completed` resumable session id. |
+| `sessionId` | yes | A retained resumable session id that is completed, or that last failed before re-attaching during resume. |
 | `prompt` | yes | The follow-up to send to the resumed session. |
-| `label` | no | Re-asserts the label; a new value overwrites the stored one. |
+| `label` | no | Re-asserts the label; a new value overwrites the stored one, while omitting it keeps the stored label. |
 | `resumable` | no | Re-asserts the resumable override. `model`, `thinking`, `cwd`, `skills`, and `agent` are rejected on resume. |
 
 Single spawn:
@@ -192,7 +192,7 @@ type BackgroundResult =
 ```
 
 - Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return their full `AgentRunResult` under `{ ready: true, result }`.
-- Queued/running entries return `{ ready: false, status, elapsedMs, agent, label? }`. `elapsedMs` is measured from when the child started (running) or from when the agent was created (queued).
+- Queued/running entries return `{ ready: false, status, elapsedMs, agent, label? }`. `elapsedMs` is measured from when the child started (running) or from when the current attempt was queued (queued).
 - Unknown ids return `{ sessionId, error: "Unknown subagent session: <id>" }`. The overall response stays `isError: false` — partial-success is success.
 - `remove: true` sweeps terminal entries after their result is collected. Running entries are never removed regardless of the flag. A subsequent `results` call for a swept id returns the unknown-id error.
 - The action is not background-only: passing a retained resumable `sessionId` returns its result the same way.
@@ -290,7 +290,7 @@ Run `/subagents` to inspect and manage subagents from the UI.
 When active or retained sessions exist, `/subagents` opens the Sessions view. From there you can:
 
 - Inspect a session's status, agent metadata, prompt preview, progress counters, timestamps, usage, output/error snippets, and available actions.
-- Resume a completed resumable session. The command asks for a follow-up prompt in an editor, runs with a cancellable loader, updates the widget live, and appends a concise custom result message to the main conversation. Cancelling the loader interrupts the child run instead of hiding background work.
+- Resume a completed resumable session, or a retryable resume attempt that failed before re-attaching to its retained session. The command asks for a follow-up prompt in an editor, runs with a cancellable loader, updates the widget live, and appends a concise custom result message to the main conversation. Cancelling the loader interrupts the child run instead of hiding background work.
 - Remove a retained non-running resumable session.
 
 If no active or retained sessions exist, `/subagents` opens the read-only Agents browser instead. The browser lists discovered user/project agent definitions and lets you inspect model, thinking, tools, resumable status, and source path metadata. It does not launch agents.
@@ -330,7 +330,7 @@ Session management is intentionally process-lifetime only.
 - Restarting Pi or reloading the extension releases retained sessions; sessions are not restored from disk.
 - `sessionId` identifies a retained process-local session, not a durable record.
 - Tool results include `resumable` and include `sessionId` only when a resumable child has or had a child `AgentSession`. Check `resumable` and the status before offering follow-up behavior.
-- Only `status: "completed"` resumable sessions can be resumed. Failed, aborted, and interrupted resumable sessions are inspect/remove-only.
+- `status: "completed"` resumable sessions can be resumed. A resume attempt that fails before re-attaching to the retained session is also retryable because the retained SDK session is untouched. Post-attach failed, aborted, and interrupted resumable sessions are inspect/remove-only.
 - Command-driven resume messages include bounded metadata plus output/error snippets, not the full child transcript.
 
 ## Status meanings
@@ -340,7 +340,7 @@ Tool results and UI session rows use these terminal states:
 | Status | Meaning | Resume? |
 | --- | --- | --- |
 | `completed` | The child run finished and returned output. | Yes, if `resumable: true`. |
-| `error` | The agent was unknown, failed before running, or the child session failed without cancellation semantics. | No. |
+| `error` | The agent was unknown, failed before running, or the child session failed without cancellation semantics. | Yes only for a retained resume attempt that failed before re-attaching; otherwise no. |
 | `aborted` | A running session was explicitly aborted, such as by removing it directly through the tool API. `Agent.abort()` calls `session.abort()` on the underlying SDK session and finalizes the agent with this status. | No. |
 | `interrupted` | A running child was stopped because the parent tool/command was cancelled. | No. |
 | `skipped` | A queued task never started because the parent was cancelled before a child `AgentSession` was created. | No. |

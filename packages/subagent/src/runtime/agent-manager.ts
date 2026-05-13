@@ -9,12 +9,11 @@ import {
   interruptedRun,
   skippedRun,
   type AgentRunResult,
-  type FinalizeRunArgs,
 } from "../domain/agent-result.js";
 import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import { preflightResumeFailure, preflightSpawnFailure } from "../domain/preflight-failure.js";
-import type { ResumeRequest, TaskRequest, SessionStatus } from "../schema.js";
+import type { TaskRequest, SessionStatus } from "../schema.js";
 import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
 import { ResumeAgent, RunAgent } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
@@ -25,8 +24,8 @@ const ANIMATION_UPDATE_INTERVAL_MS = 120;
 
 export type AgentManagerUpdateListener = (update: SubagentBatchUpdate) => void;
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
-export type AgentRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
-export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, prompt: string, signal?: AbortSignal) => Promise<AgentRunResult>;
+export type AgentRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<AgentRunResult>;
+export type AgentResumeRunner = (ctx: ExtensionContext, agent: Agent, signal?: AbortSignal) => Promise<AgentRunResult>;
 
 export type BackgroundResult =
   | { sessionId: string; ready: true; result: AgentRunResult }
@@ -56,7 +55,6 @@ export class AgentManager {
   private _queue: TaskQueue;
   private _activeBatches = new Map<string, SpawnBatch>();
   private _agentBatch = new Map<string, string>();
-  private _reservedResumeSessionIds = new Set<string>();
   private _updateListeners = new Set<AgentUpdateListener>();
 
   constructor(
@@ -98,7 +96,7 @@ export class AgentManager {
         continue;
       }
       const status = agent.status;
-      if (status.kind === "done" || status.kind === "resumeFailed") {
+      if (status.kind === "done") {
         results.push({ sessionId: id, ready: true, result: status.result });
         if (remove) terminalIds.add(id);
         continue;
@@ -106,7 +104,7 @@ export class AgentManager {
       const now = Date.now();
       const elapsedMs = status.kind === "running"
         ? now - status.startedAt
-        : now - agent.createdAt;
+        : now - status.queuedAt;
       const entry: Extract<BackgroundResult, { ready: false }> = {
         sessionId: id,
         ready: false,
@@ -225,49 +223,42 @@ export class AgentManager {
           config,
           spawn,
           invocation,
-          this._agentUpdate.bind(this),
           { background: options.background },
         );
+        agent.on(this._agentUpdate.bind(this));
         entries.push({ agent, inputIndex });
         timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id });
         this._agents.push(agent);
         this._agentBatch.set(agent.id, groupId);
         touched.add(agent);
-        return this._runSpawn(ctx, childSignal, agent, task.prompt);
+        return this._runAttempt(ctx, childSignal, agent, "spawn");
       }
       // task.kind === "resume"
-      else {
-        const target = this._agents.find(a => a.id === task.sessionId && a.resumable);
-        const isValidStatus = target && (
-          (target.status.kind === "done" && target.status.result.status === "completed") ||
-          target.status.kind === "resumeFailed"
-        );
-        const isReserved = target && this._reservedResumeSessionIds.has(target.id);
-        if (!target || !isValidStatus || isReserved) {
-          let error: string;
-          if (!target) {
-            error = `Unknown resumable subagent session: ${task.sessionId}`;
-          } else if (isReserved) {
-            error = `Cannot resume subagent session ${task.sessionId} while it is already being resumed.`;
-          } else {
-            const detail = target.status.kind === "done" ? target.status.result.status : target.status.kind;
-            error = `Cannot resume subagent session ${task.sessionId} while it is ${detail}.`;
-          }
-          const { view, result } = preflightResumeFailure({
-            groupId, inputIndex, createdAt: groupCreatedAt, task, target, error,
-          });
-          entries.push({ view, inputIndex, resumed: true });
-          timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId });
-          return Promise.resolve(result);
-        }
-
-        if (options.background) target.promoteToBackground();
-        entries.push({ agent: target, inputIndex, resumed: true });
-        timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id });
-        this._agentBatch.set(target.id, groupId);
-        touched.add(target);
-        return this._runResume(ctx, childSignal, target, task);
+      const target = this._agents.find(a => a.id === task.sessionId && a.resumable);
+      const error = !target
+        ? `Unknown resumable subagent session: ${task.sessionId}`
+        : target.current
+          ? `Cannot resume subagent session ${task.sessionId}: it is already resuming.`
+          : !target.canResume
+            ? `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.result.status : target.status.kind}.`
+            : undefined;
+      if (!target || error) {
+        const { view, result } = preflightResumeFailure({
+          groupId, inputIndex, createdAt: groupCreatedAt, task, target, error: error!,
+        });
+        entries.push({ view, inputIndex, resumed: true });
+        timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId });
+        return Promise.resolve(result);
       }
+
+      const { invocation } = InvocationFromTask(task);
+      target.startResume(invocation);
+      if (options.background) target.promoteToBackground();
+      entries.push({ agent: target, inputIndex, resumed: true });
+      timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id });
+      this._agentBatch.set(target.id, groupId);
+      touched.add(target);
+      return this._runAttempt(ctx, childSignal, target, "resume");
     });
 
     timingMark("manager.initialEmit.before", { groupId, entries: entries.length });
@@ -329,109 +320,43 @@ export class AgentManager {
     this._emitBatchUpdate(groupId);
   }
 
-  private _runSpawn(
+  private _runAttempt(
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
     agent: Agent,
-    prompt: string,
+    kind: "spawn" | "resume",
   ): Promise<AgentRunResult> {
+    const resumed = kind === "resume";
     return this._queue.enqueue(async () => {
-      const end = timingStart("manager.spawnTask", { agent: agent.agentName, sessionId: agent.id });
-      if (signal?.aborted) {
-        const result = skippedRun(agent, prompt);
+      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id });
+      if (signal?.aborted || !this._agents.includes(agent)) {
+        const result = skippedRun(agent, resumed);
         end({ status: result.status });
         return result;
       }
-      const currentStatus = agent.status as Agent["status"];
-      if (currentStatus.kind === "done") {
-        end({ status: currentStatus.result.status });
-        return currentStatus.result;
+      if (agent.status.kind === "done" && !agent.current) {
+        end({ status: agent.status.result.status });
+        return agent.status.result;
       }
       try {
-        const result = await this._runAgent(ctx, agent, prompt, signal);
-        end({ status: result.status });
-        return result;
+        const runner = kind === "spawn" ? this._runAgent : this._resumeAgent;
+        const result = await runner(ctx, agent, signal);
+        const finalResult = resumed && !result.resumed ? { ...result, resumed: true } : result;
+        end({ status: finalResult.status });
+        return finalResult;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (agent.status.kind === "done") {
+        if (agent.status.kind === "done" && !agent.current) {
           end({ status: agent.status.result.status });
           return agent.status.result;
         }
-        if (signal?.aborted) {
-          const result = agent.status.kind === "queued"
-            ? skippedRun(agent, prompt)
-            : interruptedRun(agent, prompt, message);
-          end({ status: result.status, error: message });
-          return result;
-        }
-        const result = errorRun(agent, prompt, message);
+        const result = signal?.aborted
+          ? (agent.current?.state.kind === "queued" ? skippedRun(agent, resumed) : interruptedRun(agent, message, resumed))
+          : errorRun(agent, message, resumed);
         end({ status: result.status, error: message });
         return result;
       }
-    }, { agent: agent.agentName, sessionId: agent.id, kind: "spawn" });
-  }
-
-  private async _runResume(
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    target: Agent,
-    task: ResumeRequest,
-  ): Promise<AgentRunResult> {
-    this._reservedResumeSessionIds.add(target.id);
-    const { prompt } = task;
-    const { invocation } = InvocationFromTask(task);
-    const undo = target.apply(invocation);
-    const originalStatus = target.status;
-
-    const closePreAttach = (args: FinalizeRunArgs): AgentRunResult => {
-      undo();
-      const result = target.buildResult(prompt, { ...args, resumed: true });
-      target.markResumeFailed(result);
-      return result;
-    };
-
-    try {
-      return await this._queue.enqueue(async () => {
-        const end = timingStart("manager.resumeTask", { agent: target.agentName, sessionId: target.id });
-        if (signal?.aborted) {
-          const result = closePreAttach({ status: "skipped", error: "Agent skipped." });
-          end({ status: result.status });
-          return result;
-        }
-        if (!this._agents.includes(target)) {
-          const result = closePreAttach({ status: "skipped", error: "Agent skipped." });
-          end({ status: result.status });
-          return result;
-        }
-        try {
-          const result = await this._resumeAgent(ctx, target, prompt, signal);
-          const resumed = result.resumed ? result : { ...result, resumed: true };
-          end({ status: resumed.status });
-          return resumed;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (target.status === originalStatus) {
-            const result = closePreAttach({ status: "error", error: message });
-            end({ status: result.status, error: message });
-            return result;
-          }
-          if (target.status.kind === "done") {
-            end({ status: target.status.result.status });
-            return target.status.result;
-          }
-          if (signal?.aborted) {
-            const result = interruptedRun(target, prompt, message, true);
-            end({ status: result.status, error: message });
-            return result;
-          }
-          const result = errorRun(target, prompt, message, true);
-          end({ status: result.status, error: message });
-          return result;
-        }
-      }, { agent: target.agentName, sessionId: target.id, kind: "resume" });
-    } finally {
-      this._reservedResumeSessionIds.delete(target.id);
-    }
+    }, { agent: agent.agentName, sessionId: agent.id, kind });
   }
 
   private _flushPendingMessageUpdate(batch: SpawnBatch) {

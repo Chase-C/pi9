@@ -15,6 +15,7 @@ import {
   getCompletedAt,
   getSnippet,
   getSnippetLabel,
+  getQueuedAt,
   getStartedAt,
   getToolUseCount,
   isActiveStatusKind,
@@ -489,7 +490,7 @@ function plural(n: number, word: string): string {
 }
 
 function rowElapsed(row: AgentView, now: number): string {
-  return formatElapsed(getStartedAt(row.status) ?? row.createdAt, getCompletedAt(row.status) ?? now);
+  return formatElapsed(getStartedAt(row.status) ?? getQueuedAt(row.status) ?? row.createdAt, getCompletedAt(row.status) ?? now);
 }
 
 function formatAgentListLines(agents: AgentListingEntry[], expanded: boolean, bold?: Bold): string[] {

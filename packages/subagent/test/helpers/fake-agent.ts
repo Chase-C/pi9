@@ -27,7 +27,7 @@ export const TERMINAL_RESULT_KINDS = [
 type TerminalKind = (typeof TERMINAL_RESULT_KINDS)[number];
 
 type FakeStatusInput =
-  | { kind: "queued" }
+  | { kind: "queued"; queuedAt?: number }
   | { kind: "running"; startedAt?: number }
   | ({
       kind: TerminalKind;
@@ -114,7 +114,10 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentView {
   } else if (baseStatus.kind === "running") {
     viewStatus = { kind: "running", startedAt: ("startedAt" in baseStatus && baseStatus.startedAt) || 1 };
   } else if (baseStatus.kind === "queued") {
-    viewStatus = { kind: "queued" };
+    viewStatus = {
+      kind: "queued",
+      ...("queuedAt" in baseStatus && baseStatus.queuedAt !== undefined ? { queuedAt: baseStatus.queuedAt } : {}),
+    };
   } else {
     viewStatus = baseStatus as AgentViewStatus;
   }

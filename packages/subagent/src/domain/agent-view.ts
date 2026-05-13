@@ -27,7 +27,7 @@ export interface AgentViewConfig {
 }
 
 export type AgentViewStatus =
-  | { readonly kind: "queued" }
+  | { readonly kind: "queued"; readonly queuedAt?: number }
   | { readonly kind: "running"; readonly startedAt: number }
   | {
       readonly kind: "done";

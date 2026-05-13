@@ -1,0 +1,122 @@
+import { Usage } from "@earendil-works/pi-ai";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+
+import type { AgentToolUse, AgentUpdateKind } from "./agent-view.js";
+
+const DefaultUsage: Usage = {
+  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+}
+
+export interface AgentActivitySnapshot {
+  readonly message: string;
+  readonly turns: number;
+  readonly compactions: number;
+  readonly toolHistory: readonly AgentToolUse[];
+  readonly usage: Usage;
+}
+
+export type AgentActivityListener = (kind: AgentUpdateKind) => void;
+
+export class AgentActivity {
+
+  private _message: string = "";
+  private _turns: number = 0;
+  private _toolHistory = new Array<AgentToolUse>();
+  private _compactions: number = 0;
+  private _totalUsage: Usage = DefaultUsage;
+  private _nextSyntheticToolId = 0;
+
+  constructor(private readonly onChange: AgentActivityListener) {}
+
+  get message() { return this._message }
+
+  snapshot(): AgentActivitySnapshot {
+    return {
+      message: this._message,
+      turns: this._turns,
+      compactions: this._compactions,
+      toolHistory: this._toolHistory.map(tool => ({ ...tool })),
+      usage: this._totalUsage,
+    };
+  }
+
+  subscribe(session: AgentSession): () => void {
+    return session.subscribe(event => {
+      if (event.type === "compaction_end" && !event.aborted && event.result) {
+        this._compactions += 1;
+        this.onChange("compaction");
+      }
+      else if (event.type === "message_start") {
+        this._message = "";
+      }
+      else if (event.type === "message_end" && event.message.role === "assistant") {
+        this._totalUsage = CombineUsage(this._totalUsage, event.message.usage);
+        this.onChange("usage");
+      }
+      else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        this._message += event.assistantMessageEvent.delta;
+        this.onChange("message");
+      }
+      else if (event.type === "tool_execution_start") {
+        this._startToolUse(event);
+        this.onChange("tool");
+      }
+      else if (event.type === "tool_execution_end") {
+        this._finishToolUse(event);
+        this.onChange("tool");
+      }
+      else if (event.type === "turn_end") {
+        this._turns += 1;
+        this.onChange("turn");
+      }
+    });
+  }
+
+  private _startToolUse(event: { toolCallId?: string; toolName: string }) {
+    this._toolHistory.push({
+      id: event.toolCallId ?? `tool-${++this._nextSyntheticToolId}`,
+      name: event.toolName,
+      startedAt: Date.now(),
+    });
+  }
+
+  private _finishToolUse(event: { toolCallId?: string; toolName?: string; isError?: boolean }) {
+    const completedAt = Date.now();
+    const index = this._findActiveToolUseIndex(event);
+    if (index < 0) return;
+    const toolUse = this._toolHistory[index];
+    this._toolHistory[index] = { ...toolUse, completedAt, isError: Boolean(event.isError) };
+  }
+
+  private _findActiveToolUseIndex(event: { toolCallId?: string; toolName?: string }) {
+    for (let i = this._toolHistory.length - 1; i >= 0; i--) {
+      const toolUse = this._toolHistory[i];
+      if (toolUse.completedAt !== undefined) continue;
+      if (event.toolCallId && toolUse.id !== event.toolCallId) continue;
+      if (!event.toolCallId && event.toolName && toolUse.name !== event.toolName) continue;
+      return i;
+    }
+    return -1;
+  }
+}
+
+function CombineUsage(
+  a: Usage,
+  b: Usage,
+): Usage {
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
+    totalTokens: a.totalTokens + b.totalTokens,
+    cost: {
+      input: a.cost.input + b.cost.input,
+      output: a.cost.output + b.cost.output,
+      cacheRead: a.cost.cacheRead + b.cost.cacheRead,
+      cacheWrite: a.cost.cacheWrite + b.cost.cacheWrite,
+      total: a.cost.total + b.cost.total,
+    }
+  }
+}
