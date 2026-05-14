@@ -37,9 +37,7 @@ function validateTaskCount(tasks: SubagentParams["tasks"] | undefined, maxTasks 
   return undefined;
 }
 
-type RemoveScope = "background" | "retained" | "non-running";
-
-function isRemoveScope(scope: unknown): scope is RemoveScope {
+function isRemoveScope(scope: unknown): scope is "background" | "retained" | "non-running" {
   return scope === "background" || scope === "retained" || scope === "non-running";
 }
 
@@ -67,15 +65,6 @@ function errorResult(message: string, details: Record<string, unknown> = { }) {
   };
 }
 
-function applySettings(agentManager: AgentManager, settings: SubagentSettings) {
-  configureSubagentDisplay(settings.display);
-  agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
-}
-
-interface NotifierLike {
-  dispose(): void;
-}
-
 function partialToolResult(update: SubagentBatchUpdate) {
   const details = runDetails(serializeGroup(update.sessions), { active: update.active });
   return {
@@ -84,25 +73,13 @@ function partialToolResult(update: SubagentBatchUpdate) {
   };
 }
 
-function simpleTextFromToolResult(result: any) {
-  const textContent = Array.isArray(result?.content)
-    ? result.content.find((part: any) => part?.type === "text" && typeof part.text === "string")?.text
-    : undefined;
-  if (textContent) return textContent;
-  try {
-    return JSON.stringify(result?.details ?? result ?? {}, null, 2);
-  } catch {
-    return String(result ?? "");
-  }
-}
-
 export default function subagentExtension(pi: ExtensionAPI, dependencies: SubagentExtensionDependencies = {}) {
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
   const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
 
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
-  const notifier: NotifierLike = new BackgroundNotifier({
+  const notifier = new BackgroundNotifier({
     pi: pi as any,
     manager: agentManager,
     getMode: () => currentSettings.runtime.backgroundNotify,
@@ -122,34 +99,38 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   pi.registerTool(defineTool({
     name: "subagent",
     label: "Subagent",
-    description: `Delegate focused work to specialized subagents running in isolated context windows.
+    description: `Delegate focused work to a specialized subagent in an isolated context window. The subagent sees only its system prompt plus the prompt you provide — make prompts self-contained: name the objective, relevant files/dirs, constraints, and the expected output format.
 
-Use this tool when a task benefits from separation from the main conversation: code research, planning, design review, bug investigation, test analysis, or a focused implementation handoff. Each subagent receives only its configured system prompt plus the prompt you provide, so prompts must be self-contained.
+When the user names a specific agent, just call { action: "run" } with that name — unknown-agent errors already list what's available. Otherwise call { action: "agents" } to see which specialized agents are configured and pick one whose tools/skills/prompt actually fit. If nothing fits, do the work yourself rather than spawning a generic delegate.
 
-Inputs:
-- action: one of "agents", "list", "run", "results", or "remove".
-- action="agents": list configured agent definitions. Each entry carries the agent's tools and any default skills declared in its frontmatter. Takes no other parameters.
-- action="list": list active and retained subagent sessions. Optional status: an array of session statuses ("queued" | "running" | "completed" | "error" | "aborted" | "interrupted" | "skipped") that filters the result; an empty array returns no sessions. Each row carries a kind tag ("background" | "retained") describing how it was dispatched. The legacy type parameter has been removed; passing it returns a migration error. Skills listing is no longer exposed through this tool.
-- action="run": run one or more subagent tasks up to the configured maxTasksPerRun (default eight). Each task is either a new spawn (carrying agent) or a resume of a completed resumable session (carrying sessionId). agent and sessionId are mutually exclusive — providing both is rejected. A spawn task takes agent and prompt and may include cwd, model, thinking, label, resumable, and skills. A resume task takes sessionId and prompt and may re-assert label and resumable; it rejects model, thinking, cwd, agent, and skills. The optional label is a human-readable identifier shown in widgets and logs in place of the agent name; on resume it overwrites the stored label. The optional resumable override applies one-way at completion: a resumable: false decision discards the session immediately, regardless of the agent's frontmatter default. The optional skills array (spawn only) injects named skills into the subagent's system prompt — unknown skill names are a hard error and an explicit skill bypasses its disable-model-invocation flag. Per-task skills fully replace the agent's default skills declared in frontmatter (no merge); an explicit empty array opts out of those defaults. An optional batch-level background: true flag dispatches the run non-blocking; the call returns immediately with initial session views and the children continue under a manager-owned controller. Background results persist until removed or collected — call \`subagent results\` to retrieve and either pass remove: true or call \`subagent remove\` afterward. Per-task background is rejected with a migration error.
-- action="results": retrieve background results by session id. Pass sessionIds (a non-empty array of strings). The call never blocks: terminal entries return their full AgentRunResult under { ready: true, result }, queued/running entries return { ready: false, status, elapsedMs, agent, label? }, and unknown ids return per-id error entries without setting isError on the overall response. Pass remove: true to sweep terminal entries after their result is returned; running entries are never removed regardless of the flag. The action is not background-only: a retained resumable session id returns its result the same way.
-- action="remove": remove subagent sessions by id or scope. Pass exactly one of sessionIds (an array of known session ids) or scope ("background" | "retained" | "non-running"). Running sessions in the targeted set are aborted before removal. Unknown ids surface as per-id errors in the response without setting isError; the overall remove call succeeds. Bare or conflicting calls are rejected.
+Prefer doing the work yourself when:
+- You can finish it in a handful of tool calls.
+- You'd need to read the subagent's output and act on it yourself anyway — delegation just adds steps without offloading context.
+- The subagent would mostly re-do work you already have context for.
 
-Prompt guidance:
-- Name the exact objective, relevant files/directories, constraints, and expected output format.
-- Include enough context for the subagent to work without reading the parent conversation.
-- Prefer one writer task at a time. Parallel tasks should be independent and should not edit the same files unless the user explicitly requested that workflow.
+Subagents pay off for searches or reads that would otherwise crowd this conversation, long-horizon focused tasks with a clean handoff back, or work that benefits from an independent context (e.g. a reviewer).
 
-Execution notes:
-- Up to maxConcurrentSubagents run tasks execute concurrently (default four); final results preserve input order.
-- run is blocking and returns structured results when each child prompt completes. Each result carries a resumed flag distinguishing fresh spawns from resumed sessions.
-- Results include a resumable flag and a sessionId when a resumable child has or had a child AgentSession; only completed resumable sessions can be resumed.
-- Resumable sessions live for the current Pi process lifetime or until removed.
-- Unknown agents and unknown sessionIds surface as per-task error results (with resumed set accordingly) and do not prevent sibling tasks from running.
+Call shapes:
+
+  { action: "agents" }
+  { action: "list", status?: [SessionStatus, ...] }
+  { action: "run", background?: boolean, tasks: [SpawnTask | ResumeTask, ...] }
+  { action: "results", sessionIds: [string, ...], remove?: boolean }
+  { action: "remove", sessionIds: [string, ...] }
+  { action: "remove", scope: Scope }
+
+  SpawnTask     = { agent, prompt, label?, resumable?, model?, thinking?, cwd?, skills? }
+  ResumeTask    = { sessionId, prompt, label?, resumable? }
+  SessionStatus = "queued" | "running"                                            // active
+                | "completed" | "error" | "aborted" | "interrupted" | "skipped"   // terminal
+  Scope         = "background"    // background-dispatched sessions
+                | "retained"      // resumable foreground sessions kept after completion
+                | "non-running"   // everything except currently-running sessions
+
+\`resumable: true\` keeps the session alive after completion so its sessionId can be passed in a ResumeTask later. The flag is one-way at completion — \`resumable: false\` discards the session immediately, on either spawn or resume.
+
+With background: true the run dispatches non-blocking; you'll be notified automatically when children complete (no need to poll). Fetch output with { action: "results" } once notified. One writer at a time — parallel tasks should be independent and should not edit overlapping files. Results preserve input order.
 `,
-    promptSnippet: "Delegate focused tasks to specialized subagents with separate context windows",
-    promptGuidelines: [
-      "Use subagent for independent research, planning, review, or implementation tasks that would benefit from isolated context.",
-    ],
     parameters: SubagentParams,
     renderCall(args: any, theme: any) {
       const action = typeof args?.action === "string" ? args.action : "pending";
@@ -174,14 +155,16 @@ Execution notes:
         const component = createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme);
         if (component) return component;
       } catch { }
-      return new Text(simpleTextFromToolResult(result), 0, 0);
+      const text = result?.content?.find((part: any) => part?.type === "text")?.text ?? "";
+      return new Text(text, 0, 0);
     },
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       timingMark("tool.execute.start", { action: params.action, taskCount: Array.isArray(params.tasks) ? params.tasks.length : undefined, cwd: ctx.cwd });
       const settings = await timingAsync("tool.loadSettings", { hasUI: ctx.hasUI }, () => loadSubagentUiSettings(ctx, settingsStore));
       currentSettings = settings;
-      applySettings(agentManager, settings);
+      configureSubagentDisplay(settings.display);
+      agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
       await timingAsync("tool.agentRegistry.reload", { cwd: ctx.cwd }, () => agentRegistry.reload(ctx.cwd, {
         discovery: settings.agentDiscovery,
         defaultResumable: settings.runtime.defaultResumable,

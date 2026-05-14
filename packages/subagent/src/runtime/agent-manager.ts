@@ -194,12 +194,7 @@ export class AgentManager {
           return Promise.resolve(result);
         }
 
-        const agent = new Agent(
-          randomUUID(),
-          config,
-          task,
-          { background: options.background },
-        );
+        const agent = new Agent(randomUUID(), config, task, { background: options.background });
         agent.on(this._agentUpdate.bind(this));
         batch.addAgent(agent, inputIndex, false);
         timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id });
@@ -208,7 +203,7 @@ export class AgentManager {
         touched.add(agent);
         return this._runAttempt(ctx, childSignal, agent, agent.requireCurrentAttempt());
       }
-      // task.kind === "resume"
+
       const target = this._agents.find(a => a.id === task.sessionId && a.resumable);
       const error = !target
         ? `Unknown resumable subagent session: ${task.sessionId}`
