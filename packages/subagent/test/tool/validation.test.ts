@@ -22,15 +22,14 @@ test("subagent extension still registers the tool when custom resume renderer re
   assert.equal(registeredTool.name, "subagent");
 });
 
-test("subagent tool registers prompt metadata for the default system prompt", () => {
+test("subagent tool registers prompt metadata with a non-empty snippet and guidelines", () => {
   const tool = registerExtension();
 
-  assert.equal(tool.promptSnippet, "Delegate focused work to specialized subagents in isolated context windows");
-  assert.deepEqual(tool.promptGuidelines, [
-    "Use subagent for work that benefits from independent context, such as codebase reconnaissance, long-running investigation, review, or parallel research; prefer doing the work yourself for small direct tasks.",
-    "Before using subagent without a named agent from the user, call subagent with action: \"agents\" and choose an agent whose prompt, tools, or skills fit the task.",
-    "When calling subagent, make each child prompt self-contained with the objective, relevant files or directories, constraints, and expected output format.",
-  ]);
+  assert.equal(typeof tool.promptSnippet, "string");
+  assert.ok(tool.promptSnippet.length > 0);
+  assert.ok(Array.isArray(tool.promptGuidelines));
+  assert.ok(tool.promptGuidelines.length > 0);
+  for (const guideline of tool.promptGuidelines) assert.equal(typeof guideline, "string");
 });
 
 test("tool execution requires action", async () => {

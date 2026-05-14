@@ -25,15 +25,36 @@ test("TaskSchema accepts an optional skills string array and rejects non-string-
   assert.equal(Check(TaskSchema, { agent: "helper", skills: [42], prompt: "do work" }), false);
 });
 
-test("parseTask classifies a task carrying sessionId as a resume request and preserves resume fields", () => {
-  const parsed = parseTask({
+test("parseTask classifies spawn vs resume by which key is present and preserves all fields", () => {
+  const spawn = parseTask({
+    agent: "helper",
+    prompt: "do work",
+    label: "researcher",
+    skills: ["tdd"],
+    resumable: true,
+    model: "m",
+    thinking: "high",
+    cwd: "sub",
+  });
+  assert.deepEqual(spawn, {
+    kind: "spawn",
+    agent: "helper",
+    prompt: "do work",
+    label: "researcher",
+    skills: ["tdd"],
+    resumable: true,
+    model: "m",
+    thinking: "high",
+    cwd: "sub",
+  });
+
+  const resume = parseTask({
     sessionId: "sess-1",
     prompt: "follow up",
     label: "phase 2",
     resumable: false,
   });
-
-  assert.deepEqual(parsed, {
+  assert.deepEqual(resume, {
     kind: "resume",
     sessionId: "sess-1",
     prompt: "follow up",
@@ -107,27 +128,3 @@ test("SubagentParams rejects results action when remove is not a boolean", () =>
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: "yes" }), false);
 });
 
-test("parseTask classifies a task carrying agent as a spawn request and preserves spawn fields", () => {
-  const parsed = parseTask({
-    agent: "helper",
-    prompt: "do work",
-    label: "researcher",
-    skills: ["tdd"],
-    resumable: true,
-    model: "m",
-    thinking: "high",
-    cwd: "sub",
-  });
-
-  assert.deepEqual(parsed, {
-    kind: "spawn",
-    agent: "helper",
-    prompt: "do work",
-    label: "researcher",
-    skills: ["tdd"],
-    resumable: true,
-    model: "m",
-    thinking: "high",
-    cwd: "sub",
-  });
-});

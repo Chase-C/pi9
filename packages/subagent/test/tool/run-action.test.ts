@@ -292,51 +292,6 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
   assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: "belowEditor" }]);
 });
 
-test("subagent action=run dispatches a spawn-only batch through agentManager.startBatch with resumed flags", async () => {
-  let runCalls = 0;
-  let receivedTasks: any;
-  const fakeManager = {
-    listSessions(): any[] { return this.sessions; },
-    sessions: [] as any[],
-    startBatch(_ctx: any, _signal: any, tasks: any[]) {
-      runCalls += 1;
-      receivedTasks = tasks;
-      const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
-        agent: task.agent ?? "(unknown)",
-        prompt: task.prompt,
-        status: "completed",
-        output: `done:${task.prompt}`,
-        resumable: false,
-        resumed: task.kind === "resume",
-      })));
-      return { groupId: "g1", sessions: [], resultsPromise };
-    },
-  };
-  const fakeRegistry = {
-    agents: new Map([["helper", { name: "helper", description: "Helps", source: "project" }]]),
-    async reload() {},
-    summarizeAgent() { return "helper (project)"; },
-  };
-  const tool = registerExtension({
-    agentRegistry: fakeRegistry,
-    agentManager: fakeManager,
-    settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
-  });
-
-  const result = await tool.execute("tool-call", {
-    action: "run",
-    tasks: [{ agent: "helper", prompt: "work" }],
-  }, undefined, undefined, baseCtx());
-
-  assert.equal(runCalls, 1);
-  assert.equal(receivedTasks.length, 1);
-  assert.equal(receivedTasks[0].kind, "spawn");
-  assert.equal(receivedTasks[0].agent, "helper");
-  assert.equal(result.isError, false);
-  assert.equal(result.details.results[0].output, "done:work");
-  assert.equal(result.details.results[0].resumed, false);
-});
-
 test("subagent action=run accepts a heterogeneous batch of spawn and resume tasks", async () => {
   let receivedTasks: any;
   const fakeManager = {

@@ -34,29 +34,36 @@ test("subagent UI settings save and reload widget placement globally", async () 
   assert.equal(result.warning, undefined);
 });
 
-test("subagent settings reject invalid backgroundNotify value with a warning and fall back to default", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-settings-bad-notify-"));
-  const settingsPath = join(root, "subagent", "settings.json");
-  await mkdir(join(root, "subagent"), { recursive: true });
-  await writeFile(settingsPath, JSON.stringify({ runtime: { backgroundNotify: "loud" } }));
+test("subagent settings reject invalid values with a field-named warning and fall back to defaults", async () => {
+  const cases: Array<{ label: string; written: object; expectedField: string; expectedFallback: () => Promise<void> }> = [
+    {
+      label: "widgetPlacement",
+      written: { widgetPlacement: "besideEditor" },
+      expectedField: "widgetPlacement",
+      expectedFallback: async () => {},
+    },
+    {
+      label: "backgroundNotify",
+      written: { runtime: { backgroundNotify: "loud" } },
+      expectedField: "backgroundNotify",
+      expectedFallback: async () => {},
+    },
+  ];
 
-  const result = await new SubagentUiSettingsStore(settingsPath).load();
+  for (const { label, written, expectedField } of cases) {
+    const root = await mkdtemp(join(tmpdir(), `subagent-settings-invalid-${label}-`));
+    const settingsPath = join(root, "subagent", "settings.json");
+    await mkdir(join(root, "subagent"), { recursive: true });
+    await writeFile(settingsPath, JSON.stringify(written));
 
-  assert.equal(result.settings.runtime.backgroundNotify, "end-of-turn");
-  assert.match(result.warning!, /backgroundNotify/);
-});
+    const result = await new SubagentUiSettingsStore(settingsPath).load();
 
-test("subagent UI settings fall back to defaults for invalid config", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-settings-invalid-"));
-  const settingsPath = join(root, "subagent", "settings.json");
-  await mkdir(join(root, "subagent"), { recursive: true });
-  await writeFile(settingsPath, JSON.stringify({ widgetPlacement: "besideEditor" }));
-
-  const result = await new SubagentUiSettingsStore(settingsPath).load();
-
-  assert.equal(result.settings.widgetPlacement, "belowEditor");
-  assert.equal(result.settings.runtime.maxConcurrentSubagents, 4);
-  assert.match(result.warning!, /widgetPlacement/);
+    // Defaults applied: widgetPlacement always falls back to belowEditor; runtime always has the canonical defaults.
+    assert.equal(result.settings.widgetPlacement, "belowEditor", `${label}: widgetPlacement should fall back`);
+    assert.equal(result.settings.runtime.backgroundNotify, "end-of-turn", `${label}: backgroundNotify should fall back`);
+    assert.equal(result.settings.runtime.maxConcurrentSubagents, 4, `${label}: maxConcurrentSubagents should default`);
+    assert.match(result.warning!, new RegExp(expectedField));
+  }
 });
 
 test("subagent settings load runtime, discovery, and display overrides", async () => {

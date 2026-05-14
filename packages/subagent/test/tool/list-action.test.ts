@@ -16,25 +16,16 @@ function registerExtension(dependencies: any = {}) {
   return registeredTool;
 }
 
-test("tool list action with legacy type=agents returns a migration error pointing at action=agents", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-list-type-agents-"));
-  const tool = registerExtension();
-  const result = await tool.execute("tool-call", { action: "list", type: "agents" }, undefined, undefined, { cwd: root });
+test("tool list action with legacy type=agents or type=sessions returns the migration error pointing at the new action", async () => {
+  for (const [type, expectedAction] of [["agents", "agents"], ["sessions", "list"]] as const) {
+    const root = await mkdtemp(join(tmpdir(), `subagent-list-type-${type}-`));
+    const tool = registerExtension();
+    const result = await tool.execute("tool-call", { action: "list", type }, undefined, undefined, { cwd: root });
 
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /'type' parameter has been removed/);
-  assert.match(result.content[0].text, /action: 'agents'/);
-  assert.match(result.content[0].text, /Skills listing is no longer exposed/);
-});
-
-test("tool list action with legacy type=sessions returns the same migration error", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-list-type-sessions-"));
-  const tool = registerExtension();
-  const result = await tool.execute("tool-call", { action: "list", type: "sessions" }, undefined, undefined, { cwd: root });
-
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /'type' parameter has been removed/);
-  assert.match(result.content[0].text, /action: 'list'/);
+    assert.equal(result.isError, true, `type=${type}: expected error`);
+    assert.match(result.content[0].text, /'type' parameter has been removed/);
+    assert.match(result.content[0].text, new RegExp(`action: '${expectedAction}'`));
+  }
 });
 
 test("tool list action with legacy type=skills returns the migration error noting skills are no longer exposed", async () => {
@@ -47,10 +38,10 @@ test("tool list action with legacy type=skills returns the migration error notin
 });
 
 test("subagent tool action=list with status filter [completed, error] returns terminal-success and terminal-failed sessions but excludes others", async () => {
-  let nextRunner: ((agent: any, prompt: string) => any) | null = null;
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
+  let nextRunner: ((agent: any) => any) | null = null;
+  const runner = async (_ctx: any, agent: any, _attempt: any) => {
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
-    return nextRunner!(agent, prompt);
+    return nextRunner!(agent);
   };
   const fakeRegistry = {
     agents: new Map([
@@ -64,11 +55,11 @@ test("subagent tool action=list with status filter [completed, error] returns te
   const manager = new AgentManager(fakeRegistry as any, 1, runner);
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
-  nextRunner = (agent, prompt) => completedRun(agent, "ok");
+  nextRunner = (agent) => completedRun(agent, "ok");
   await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "good task" }] }, undefined, undefined, baseCtx());
-  nextRunner = (agent, prompt) => errorRun(agent, "failed");
+  nextRunner = (agent) => errorRun(agent, "failed");
   await tool.execute("tool-call", { action: "run", tasks: [{ agent: "bad", prompt: "bad task" }] }, undefined, undefined, baseCtx());
-  nextRunner = (agent, prompt) => interruptedRun(agent, "cancelled");
+  nextRunner = (agent) => interruptedRun(agent, "cancelled");
   await tool.execute("tool-call", { action: "run", tasks: [{ agent: "cut", prompt: "cut task" }] }, undefined, undefined, baseCtx());
 
   const result = await tool.execute("tool-call", { action: "list", status: ["completed", "error"] }, undefined, undefined, baseCtx());
@@ -80,7 +71,7 @@ test("subagent tool action=list with status filter [completed, error] returns te
 });
 
 test("subagent tool action=list with empty status filter returns no sessions distinct from no filter", async () => {
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
+  const runner = async (_ctx: any, agent: any, _attempt: any) => {
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "ok");
   };
@@ -112,39 +103,8 @@ test("subagent tool action=list with an unknown status value returns the unknown
   assert.match(result.content[0].text, /queued, running, completed, error, aborted, interrupted, skipped/);
 });
 
-test("subagent tool action=list with status filter [completed] returns only completed sessions", async () => {
-  let nextRunner: ((agent: any, prompt: string) => any) | null = null;
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
-    return nextRunner?.(agent, prompt) ?? completedRun(agent, "ok");
-  };
-  const fakeRegistry = {
-    agents: new Map([
-      ["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }],
-      ["bad", { name: "bad", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }],
-    ]),
-    async reload() {},
-    summarizeAgent() { return ""; },
-  };
-  const manager = new AgentManager(fakeRegistry as any, 1, runner);
-  const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
-
-  nextRunner = (agent, prompt) => completedRun(agent, "ok");
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "good task" }] }, undefined, undefined, baseCtx());
-
-  nextRunner = (agent, prompt) => errorRun(agent, "failed");
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "bad", prompt: "bad task" }] }, undefined, undefined, baseCtx());
-
-  const result = await tool.execute("tool-call", { action: "list", status: ["completed"] }, undefined, undefined, baseCtx());
-
-  assert.equal(result.isError, false);
-  assert.equal(result.details.sessions.length, 1);
-  assert.equal(result.details.sessions[0].config.name, "good");
-  assert.equal(result.details.sessions[0].status.outcome, "completed");
-});
-
 test("subagent tool action=list with no filter returns retained sessions tagged kind: retained", async () => {
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
+  const runner = async (_ctx: any, agent: any, _attempt: any) => {
     agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
     return completedRun(agent, "The final answer from the child.");
   };

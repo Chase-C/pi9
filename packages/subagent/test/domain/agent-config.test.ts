@@ -3,18 +3,86 @@ import assert from "node:assert/strict";
 
 import { BuildAgentConfig } from "../../src/domain/agent-config.js";
 
-test("BuildAgentConfig parses CSV skills frontmatter and leaves skills undefined when absent", () => {
-  const withSkills = BuildAgentConfig(
-    `---\nname: helper\ndescription: d\nskills: foo, bar\n---\nbody`,
-    "project",
-  );
-  assert.ok(!("error" in withSkills));
-  assert.deepEqual(withSkills.skills, ["foo", "bar"]);
+function ok<T>(result: T | { error: Error }): T {
+  assert.ok(!("error" in (result as any)), `expected ok result, got error: ${(result as any).error?.message}`);
+  return result as T;
+}
 
-  const withoutSkills = BuildAgentConfig(
-    `---\nname: helper\ndescription: d\n---\nbody`,
+function fail(result: unknown): Error {
+  assert.ok(result && typeof result === "object" && "error" in (result as any), "expected error result");
+  return (result as { error: Error }).error;
+}
+
+test("BuildAgentConfig parses every supported field on the happy path", () => {
+  const config = ok(BuildAgentConfig(
+    `---\nname: helper\ndescription: d\nmodel: anthropic/claude\nthinking: medium\ntools: read, bash\nskills: foo, bar\nresumable: true\n---\n  body text  `,
     "project",
-  );
-  assert.ok(!("error" in withoutSkills));
-  assert.equal(withoutSkills.skills, undefined);
+  ));
+  assert.equal(config.name, "helper");
+  assert.equal(config.description, "d");
+  assert.equal(config.model, "anthropic/claude");
+  assert.equal(config.thinking, "medium");
+  assert.deepEqual(config.tools, ["read", "bash"]);
+  assert.deepEqual(config.skills, ["foo", "bar"]);
+  assert.equal(config.resumable, true);
+  assert.equal(config.systemPrompt, "body text");
+  assert.equal(config.source, "project");
+});
+
+test("BuildAgentConfig leaves optional fields undefined when absent and defaults resumable to false", () => {
+  const config = ok(BuildAgentConfig(`---\nname: helper\ndescription: d\n---\nbody`, "project"));
+  assert.equal(config.model, undefined);
+  assert.equal(config.thinking, undefined);
+  assert.equal(config.tools, undefined);
+  assert.equal(config.skills, undefined);
+  assert.equal(config.resumable, false);
+});
+
+test("BuildAgentConfig returns error when name is missing", () => {
+  const err = fail(BuildAgentConfig(`---\ndescription: d\n---\nbody`, "project"));
+  assert.match(err.message, /Missing required fields:.*name/);
+});
+
+test("BuildAgentConfig rejects non-string scalar fields with a type error naming the field", () => {
+  const cases: Array<[string, string]> = [
+    [`---\nname: 5\ndescription: d\n---\n`, "name"],
+    [`---\nname: helper\ndescription: d\nmodel: 5\n---\n`, "model"],
+    [`---\nname: helper\ndescription: d\nthinking: 5\n---\n`, "thinking"],
+  ];
+  for (const [content, field] of cases) {
+    const err = fail(BuildAgentConfig(content, "project"));
+    assert.match(err.message, new RegExp(`Expected field "${field}"`));
+  }
+});
+
+test("BuildAgentConfig rejects non-string CSV fields with a type error naming the field", () => {
+  for (const field of ["tools", "skills"]) {
+    const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: d\n${field}: 5\n---\n`, "project"));
+    assert.match(err.message, new RegExp(`Expected field "${field}"`));
+  }
+});
+
+test("BuildAgentConfig rejects non-boolean resumable values with a type error", () => {
+  const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: d\nresumable: maybe\n---\n`, "project"));
+  assert.match(err.message, /Expected field "resumable"/);
+});
+
+test("BuildAgentConfig resumable accepts true/false strings and applies defaultResumable only when absent", () => {
+  assert.equal(ok(BuildAgentConfig(`---\nname: a\ndescription: d\nresumable: true\n---\n`, "project")).resumable, true);
+  assert.equal(ok(BuildAgentConfig(`---\nname: a\ndescription: d\nresumable: false\n---\n`, "project")).resumable, false);
+
+  assert.equal(ok(BuildAgentConfig(`---\nname: a\ndescription: d\n---\n`, "project", { defaultResumable: true })).resumable, true);
+  // explicit frontmatter wins over the default
+  assert.equal(ok(BuildAgentConfig(`---\nname: a\ndescription: d\nresumable: false\n---\n`, "project", { defaultResumable: true })).resumable, false);
+});
+
+test("BuildAgentConfig CSV parsing treats 'none' and empty values as undefined and trims items", () => {
+  const noneSkills = ok(BuildAgentConfig(`---\nname: a\ndescription: d\nskills: none\n---\n`, "project"));
+  assert.equal(noneSkills.skills, undefined);
+
+  const blankTools = ok(BuildAgentConfig(`---\nname: a\ndescription: d\ntools:   \n---\n`, "project"));
+  assert.equal(blankTools.tools, undefined);
+
+  const padded = ok(BuildAgentConfig(`---\nname: a\ndescription: d\ntools:   read  ,  bash  \n---\n`, "project"));
+  assert.deepEqual(padded.tools, ["read", "bash"]);
 });

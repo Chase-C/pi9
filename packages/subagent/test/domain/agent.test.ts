@@ -17,23 +17,14 @@ const baseConfig = {
   resumable: false,
 };
 
-test("Agent exposes the label from options and falls back to undefined when absent", () => {
+test("Agent label surfaces through both the getter and toView, including the absent case", () => {
   const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
   assert.equal(labeled.label, "researcher");
+  assert.equal(labeled.toView().label, "researcher");
 
   const unlabeled = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   assert.equal(unlabeled.label, undefined);
-});
-
-test("Agent exposes the per-task skills array as-is and preserves undefined when absent", () => {
-  const withSkills = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", skills: ["tdd"] });
-  assert.deepEqual(withSkills.spawn.skills, ["tdd"]);
-
-  const explicitlyEmpty = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", skills: [] });
-  assert.deepEqual(explicitlyEmpty.spawn.skills, []);
-
-  const without = new Agent("id3", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
-  assert.equal(without.spawn.skills, undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(unlabeled.toView(), "label"), false);
 });
 
 test("Agent constructor optional background flag controls toView kind", () => {
@@ -55,28 +46,13 @@ test("Agent.toView surfaces the default skills from the agent config", () => {
   assert.equal(noSkills.toView().config.skills, undefined);
 });
 
-test("Agent uses a per-task resumable false override before the config default", () => {
-  const config = { ...baseConfig, resumable: true };
-  const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: false });
-
-  assert.equal(agent.resumable, false);
-  assert.equal(agent.toView().config.resumable, false);
-});
-
-test("Agent uses a per-task resumable true override before the config default", () => {
-  const config = { ...baseConfig, resumable: false };
-  const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: true });
-
-  assert.equal(agent.resumable, true);
-  assert.equal(agent.toView().config.resumable, true);
-});
-
-test("Agent.toView includes label when set and omits it otherwise", () => {
-  const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
-  assert.equal(labeled.toView().label, "researcher");
-
-  const unlabeled = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
-  assert.equal(Object.prototype.hasOwnProperty.call(unlabeled.toView(), "label"), false);
+test("Agent per-task resumable beats the config default in both directions", () => {
+  for (const [configDefault, override] of [[true, false], [false, true]] as const) {
+    const config = { ...baseConfig, resumable: configDefault };
+    const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: override });
+    assert.equal(agent.resumable, override);
+    assert.equal(agent.toView().config.resumable, override);
+  }
 });
 
 test("Agent.startResume keeps the stored label when omitted and overwrites it when provided", () => {

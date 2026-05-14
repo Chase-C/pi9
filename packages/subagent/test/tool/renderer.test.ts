@@ -36,25 +36,20 @@ test("subagent tool result renderer falls back to simple text when themed render
   assert.match(component.render(120).join("\n"), /plain fallback helper output/);
 });
 
-test("subagent tool result renderer falls back to content text for shapes without sessions/agents/group", () => {
+test("subagent tool result renderer falls back to content text for unknown view shapes", () => {
   const tool = registerExtension();
-
   const passthroughTheme = { fg: (_color: string, text: string) => text };
-  const shapes = [
-    { label: "skills", details: { skills: [{ name: "tdd", description: "d", source: "project" }] }, expected: '"tdd"' },
-    { label: "errors", details: { errors: ["task[0]: bad"] }, expected: "task[0]: bad" },
-  ];
+  const details = { errors: ["task[0]: bad"] };
 
-  for (const { label, details, expected } of shapes) {
-    const component = tool.renderResult(
-      { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details },
-      { expanded: false },
-      passthroughTheme,
-    );
-    const rendered = component.render(120).join("\n");
-    assert.doesNotMatch(rendered, /No subagent sessions\./, `${label} should not render the empty-sessions fallback`);
-    assert.match(rendered, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${label} should render its content text`);
-  }
+  const component = tool.renderResult(
+    { content: [{ type: "text", text: JSON.stringify(details) }], details },
+    { expanded: false },
+    passthroughTheme,
+  );
+  const rendered = component.render(120).join("\n");
+
+  assert.doesNotMatch(rendered, /No subagent sessions\./);
+  assert.match(rendered, /task\[0\]: bad/);
 });
 
 test("subagent tool result renderer keeps the empty-sessions message for an explicit empty sessions shape", () => {

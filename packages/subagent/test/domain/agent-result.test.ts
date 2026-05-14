@@ -77,12 +77,3 @@ test("buildAgentResult throws a clear invariant error when no attempt is current
 
   assert.throws(() => buildAgentResult(agent, { status: "error", error: "late" }), /current attempt/i);
 });
-
-test("completedRun marks the result as not resumed by default", () => {
-  const session = { subscribe: () => () => {}, abort: () => {} };
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
-  agent.attach(session as any);
-
-  const result = completedRun(agent, "done");
-  assert.equal(result.resumed, false);
-});

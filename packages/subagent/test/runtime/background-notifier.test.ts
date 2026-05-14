@@ -130,7 +130,7 @@ test("BackgroundNotifier payload references subagent results, includes per-sessi
   notifier.dispose();
 });
 
-test("BackgroundNotifier drops queued completions when none mode sees a dispatch event", async () => {
+test("BackgroundNotifier in none mode drops queued completions on dispatch events and never re-emits later", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
   let mode: BackgroundNotifyMode = "end-of-turn";
@@ -138,11 +138,15 @@ test("BackgroundNotifier drops queued completions when none mode sees a dispatch
 
   await runBackgroundOne(manager);
 
+  // First dispatch in none mode drains the queue without emitting.
   mode = "none";
   pi.fireAgentEnd();
+  pi.fireToolExecutionStart();
+  assert.equal(pi.sent.length, 0);
+
+  // Switching back to end-of-turn must not resurrect the drained completion.
   mode = "end-of-turn";
   pi.fireAgentEnd();
-
   assert.equal(pi.sent.length, 0);
 
   notifier.dispose();
@@ -162,20 +166,6 @@ test("BackgroundNotifier coalesces three quick completions into a single dispatc
   const text = pi.sent[0].content ?? "";
   for (const id of [id1, id2, id3]) assert.match(text, new RegExp(id));
   assert.match(text, /3 background subagents completed/);
-
-  notifier.dispose();
-});
-
-test("BackgroundNotifier in none mode never dispatches even when completions and events occur", async () => {
-  const manager = makeManager(completingRunner);
-  const pi = fakePi();
-  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "none" });
-
-  await runBackgroundOne(manager);
-
-  pi.fireAgentEnd();
-  pi.fireToolExecutionStart();
-  assert.equal(pi.sent.length, 0);
 
   notifier.dispose();
 });

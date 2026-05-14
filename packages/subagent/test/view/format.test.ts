@@ -58,23 +58,17 @@ test("queued session elapsed uses queuedAt instead of session createdAt", () => 
   assert.doesNotMatch(lines.join("\n"), /10s/);
 });
 
-test("formatSubagentSessionSummary surfaces kind:background only for background-kind sessions", () => {
-  const retained = fakeAgent({ config: { name: "helper", resumable: true } });
-  const background = fakeAgent({ id: "s2", kind: "background", config: { name: "helper", resumable: true } });
+test("the kind:background segment surfaces in both inspect summary and inventory line formatters", () => {
+  const retained = fakeAgent({ config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+  const background = fakeAgent({ id: "s2", kind: "background", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
 
+  // formatSubagentSessionSummary (inspect view)
   assert.doesNotMatch(formatSubagentSessionSummary(retained), /kind:/);
   assert.match(formatSubagentSessionSummary(background), /kind:background/);
-});
 
-test("formatSessionLine appends kind:background segment only for background sessions and never for retained", () => {
-  const retained = fakeAgent({ config: { name: "helper" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-  const background = fakeAgent({ id: "s2", kind: "background", config: { name: "helper" }, status: { kind: "running", startedAt: 1 } });
-
-  const retainedLines = formatSubagentToolLines(inventoryDetails([retained]), false, 0);
-  assert.doesNotMatch(retainedLines.join("\n"), /kind:/);
-
-  const backgroundLines = formatSubagentToolLines(inventoryDetails([background]), false, 0);
-  assert.match(backgroundLines.join("\n"), /kind:background/);
+  // formatSubagentToolLines (inventory view)
+  assert.doesNotMatch(formatSubagentToolLines(inventoryDetails([retained]), false, 0).join("\n"), /kind:/);
+  assert.match(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /kind:background/);
 });
 
 test("background-started view collapsed line shows count summary by status", () => {

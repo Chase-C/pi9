@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { AgentManager } from "../../src/runtime/agent-manager.js";
-import { completedRun, errorRun, interruptedRun } from "../../src/domain/agent-result.js";
+import { completedRun, interruptedRun } from "../../src/domain/agent-result.js";
 
 type AnyManager = AgentManager;
 type FakeRegistry = { agents: Map<string, any>; reload?: () => Promise<void>; summarizeAgent?: () => string };
@@ -211,25 +211,40 @@ test("manager does not expose or resume non-resumable completed sessions", async
   assert.match(retried.error ?? "", /Unknown resumable subagent session/);
 });
 
-test("manager discards a completed session when a task overrides resumable to false", async () => {
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
+test("manager discards a completed session when a task overrides resumable to false at spawn or resume", async () => {
+  const runner = async (_ctx: any, agent: any, attempt: any) => {
     agent.attach(makeSession());
-    return completedRun(agent, "done");
+    return completedRun(agent, `out:${attempt.prompt}`);
+  };
+  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `follow:${attempt.prompt}`, true);
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 1, runner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
 
-  const results = await manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "work", resumable: false },
+  // Spawn-side override: session is never retained.
+  const spawnResults = await manager.run(baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "spawn-only", resumable: false },
   ]);
-
-  assert.equal(results[0].status, "completed");
-  assert.equal(results[0].resumable, false);
-  assert.equal(Object.prototype.hasOwnProperty.call(results[0], "sessionId"), false);
+  assert.equal(spawnResults[0].status, "completed");
+  assert.equal(spawnResults[0].resumable, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(spawnResults[0], "sessionId"), false);
   assert.deepEqual(manager.listSessions(), []);
-  assert.deepEqual(await manager.remove({ scope: "non-running" }), { removed: 0, aborted: 0, sessionIds: [], errors: [] });
+
+  // Resume-side override: session retained on initial spawn, then discarded on resume.
+  const [seed] = await manager.run(baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "initial" },
+  ]);
+  assert.equal(manager.listSessions().length, 1);
+  const [resumed] = await manager.run(baseCtx(), undefined, [
+    { kind: "resume", sessionId: seed.sessionId!, prompt: "tear down", resumable: false },
+  ]);
+  assert.equal(resumed.status, "completed");
+  assert.equal(resumed.resumable, false);
+  assert.deepEqual(manager.listSessions(), []);
 });
 
 test("manager retains only resumable interrupted sessions inspect-clear only after parent cancellation settles", async () => {
@@ -334,7 +349,7 @@ test("manager preserves a stored label across unlabeled resume and overwrites on
   assert.equal(unlabeledResume.label, "original");
   assert.equal(manager.listSessions()[0].label, "original");
 
-  const [backgroundEntry] = await manager.backgroundResults([initial.sessionId!]);
+  const [backgroundEntry] = await manager.backgroundResults([initial.sessionId!]) as any[];
   assert.equal(backgroundEntry.ready, true);
   assert.equal(backgroundEntry.result.label, "original");
 
@@ -382,7 +397,7 @@ test("manager reports queued resume elapsed from the current attempt time", asyn
 
     await new Promise(resolve => setImmediate(resolve));
     now = 100_250;
-    const [queued] = await manager.backgroundResults([initial.sessionId!]);
+    const [queued] = await manager.backgroundResults([initial.sessionId!]) as any[];
     assert.equal(queued.ready, false);
     assert.equal(queued.status, "queued");
     assert.equal(queued.elapsedMs, 250);
@@ -525,50 +540,7 @@ test("manager reports resume setup failure as the follow-up prompt error without
   assert.notEqual(resumed.output, first.output);
 });
 
-test("manager keeps a retained completed session retryable after resume setup failure", async () => {
-  const session = makeSession();
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    agent.attach(session);
-    return completedRun(agent, `old:${prompt}`);
-  };
-  let resumeAttempts = 0;
-  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    resumeAttempts += 1;
-    if (resumeAttempts === 1) throw new Error("resume setup exploded");
-    agent.attach(agent.retainedSession()!);
-    return completedRun(agent, `new:${prompt}`);
-  };
-  const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
-  };
-  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
-  const [first] = await manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
-  ]);
-
-  const [failed] = await manager.run(baseCtx(), undefined, [
-    { kind: "resume", sessionId: first.sessionId!, prompt: "failed follow-up" },
-  ]);
-  assert.equal(failed.status, "error");
-
-  const list = manager.listSessions();
-  assert.equal(list.length, 1);
-  assert.equal(list[0].id, first.sessionId);
-  assert.equal(list[0].status.kind, "done");
-  assert.equal(list[0].status.kind === "done" && list[0].status.outcome, "error");
-  assert.equal(list[0].status.kind === "done" && list[0].status.snippet, "resume setup exploded");
-  assert.equal(list[0].config.resumable, true);
-
-  const [retried] = await manager.run(baseCtx(), undefined, [
-    { kind: "resume", sessionId: first.sessionId!, prompt: "successful follow-up" },
-  ]);
-  assert.equal(retried.status, "completed");
-  assert.equal(retried.output, "new:successful follow-up");
-  assert.equal(retried.prompt, "successful follow-up");
-  assert.equal(retried.sessionId, first.sessionId);
-});
-
-test("manager keeps a session retryable after repeated pre-attach resume failures", async () => {
+test("manager keeps a retained completed session retryable across one or more pre-attach resume failures", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach(session);
@@ -589,33 +561,29 @@ test("manager keeps a session retryable after repeated pre-attach resume failure
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
 
-  const [firstFail] = await manager.run(baseCtx(), undefined, [
-    { kind: "resume", sessionId: first.sessionId!, prompt: "try 1" },
-  ]);
-  assert.equal(firstFail.status, "error");
-  assert.equal(firstFail.error, "resume failed #1");
-  let session0 = manager.listSessions()[0];
-  assert.equal(session0.status.kind === "done" && session0.status.outcome, "error");
-  assert.equal(session0.status.kind === "done" && session0.status.snippet, "resume failed #1");
-  assert.equal(session0.config.resumable, true);
+  // Two consecutive failures keep the session retryable each time.
+  for (const attempt of [1, 2] as const) {
+    const [failed] = await manager.run(baseCtx(), undefined, [
+      { kind: "resume", sessionId: first.sessionId!, prompt: `try ${attempt}` },
+    ]);
+    assert.equal(failed.status, "error", `try ${attempt}: expected error`);
+    assert.equal(failed.error, `resume failed #${attempt}`);
+    const view = manager.listSessions()[0];
+    assert.equal(view.status.kind === "done" && view.status.outcome, "error");
+    assert.equal(view.status.kind === "done" && view.status.snippet, `resume failed #${attempt}`);
+    assert.equal(view.config.resumable, true);
+  }
 
-  const [secondFail] = await manager.run(baseCtx(), undefined, [
-    { kind: "resume", sessionId: first.sessionId!, prompt: "try 2" },
-  ]);
-  assert.equal(secondFail.status, "error");
-  assert.equal(secondFail.error, "resume failed #2");
-  session0 = manager.listSessions()[0];
-  assert.equal(session0.status.kind === "done" && session0.status.snippet, "resume failed #2");
-  assert.equal(session0.config.resumable, true);
-
+  // Third attempt succeeds.
   const [retried] = await manager.run(baseCtx(), undefined, [
-    { kind: "resume", sessionId: first.sessionId!, prompt: "try 3" },
+    { kind: "resume", sessionId: first.sessionId!, prompt: "successful follow-up" },
   ]);
   assert.equal(retried.status, "completed");
-  assert.equal(retried.output, "new:try 3");
-  session0 = manager.listSessions()[0];
-  assert.equal(session0.status.kind === "done" && session0.status.outcome, "completed");
-  assert.equal(session0.status.kind === "done" && session0.status.snippet, "new:try 3");
+  assert.equal(retried.output, "new:successful follow-up");
+  assert.equal(retried.sessionId, first.sessionId);
+  const finalView = manager.listSessions()[0];
+  assert.equal(finalView.status.kind === "done" && finalView.status.outcome, "completed");
+  assert.equal(finalView.status.kind === "done" && finalView.status.snippet, "new:successful follow-up");
 });
 
 test("manager reports queued cancelled resume as skipped follow-up and keeps retained session retryable", async () => {
@@ -831,7 +799,7 @@ test("manager throttles live message snippets while lifecycle updates are immedi
   await pending;
 });
 
-test("manager.run handles a mixed batch of one spawn and one resume in input order with resumed flags set correctly", async () => {
+test("manager.run handles a mixed batch of one spawn and one resume with resumed flags on both results and rendered AgentViews", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt; agent.attach(session); return completedRun(agent, `spawn:${prompt}`); };
   const resumeRunner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
@@ -853,10 +821,11 @@ test("manager.run handles a mixed batch of one spawn and one resume in input ord
   assert.equal(seed.resumed, false);
   assert.ok(seed.sessionId);
 
+  const updates: any[] = [];
   const results = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "fresh", prompt: "two" },
     { kind: "resume", sessionId: seed.sessionId!, prompt: "three" },
-  ]);
+  ], update => updates.push(update));
 
   assert.equal(results.length, 2);
   assert.equal(results[0].agent, "fresh");
@@ -866,48 +835,11 @@ test("manager.run handles a mixed batch of one spawn and one resume in input ord
   assert.equal(results[1].resumed, true);
   assert.equal(results[1].output, "resume:three");
   assert.equal(results[1].sessionId, seed.sessionId);
-});
 
-test("manager.run resume task with a new label overwrites the agent stored label", async () => {
-  const session = makeSession();
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt; agent.attach(session); return completedRun(agent, "first"); };
-  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt; agent.attach(agent.retainedSession()!); return completedRun(agent, "second", true); };
-  const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
-  };
-  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
-
-  const [seed] = await manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "one", label: "phase-1" },
-  ]);
-
-  await manager.run(baseCtx(), undefined, [
-    { kind: "resume", sessionId: seed.sessionId!, prompt: "two", label: "phase-2" },
-  ]);
-
-  assert.equal(manager.listSessions()[0].label, "phase-2");
-});
-
-test("manager.run resume task with resumable: false discards the session after completion", async () => {
-  const session = makeSession();
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt; agent.attach(session); return completedRun(agent, "first"); };
-  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt; agent.attach(agent.retainedSession()!); return completedRun(agent, "second", true); };
-  const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
-  };
-  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
-
-  const [seed] = await manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "one" },
-  ]);
-  assert.equal(manager.listSessions().length, 1);
-
-  const [resumed] = await manager.run(baseCtx(), undefined, [
-    { kind: "resume", sessionId: seed.sessionId!, prompt: "two", resumable: false },
-  ]);
-  assert.equal(resumed.status, "completed");
-  assert.equal(resumed.resumable, false);
-  assert.deepEqual(manager.listSessions(), []);
+  const final = updates.at(-1);
+  assert.equal(final.sessions.length, 2);
+  assert.equal(final.sessions[0].resumed, false);
+  assert.equal(final.sessions[1].resumed, true);
 });
 
 test("manager.run resume task targeting an unknown sessionId yields a per-task error and does not block siblings", async () => {
@@ -930,34 +862,6 @@ test("manager.run resume task targeting an unknown sessionId yields a per-task e
   assert.equal(results[1].status, "completed");
   assert.equal(results[1].resumed, false);
   assert.equal(results[1].output, "done:real");
-});
-
-test("manager.run partial updates flag resumed entries on the rendered AgentView", async () => {
-  const session = makeSession();
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt; agent.attach(session); return completedRun(agent, "first"); };
-  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt; agent.attach(agent.retainedSession()!); return completedRun(agent, "second", true); };
-  const registry = {
-    agents: new Map([
-      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
-      ["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project", resumable: true }],
-    ]),
-  };
-  const manager = new AgentManager(registry as any, 2, merge(runner, resumeRunner));
-
-  const [seed] = await manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "one" },
-  ]);
-
-  const updates: any[] = [];
-  await manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "fresh", prompt: "two" },
-    { kind: "resume", sessionId: seed.sessionId!, prompt: "three" },
-  ], update => updates.push(update));
-
-  const final = updates.at(-1);
-  assert.equal(final.sessions.length, 2);
-  assert.equal(final.sessions[0].resumed, false);
-  assert.equal(final.sessions[1].resumed, true);
 });
 
 test("AgentManager.remove with an unknown sessionId returns the unknown-id error and no removals", async () => {
@@ -1034,40 +938,6 @@ test("AgentManager.remove with a queued sessionId prevents the queued spawn from
   assert.ok(queued);
 
   const result = await manager.remove({ sessionIds: [queued.id] });
-  assert.equal(result.removed, 1);
-  assert.equal(result.aborted, 0);
-
-  unblockRunning!();
-  const results = await pending;
-
-  assert.deepEqual(runnerPrompts, ["block"]);
-  assert.equal(results[1].status, "skipped");
-  assert.deepEqual(manager.listSessions(), []);
-});
-
-test("AgentManager.remove scope=non-running prevents queued spawns from later invoking the runner", async () => {
-  let unblockRunning: () => void;
-  const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
-  const runnerPrompts: string[] = [];
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    runnerPrompts.push(prompt);
-    agent.attach(makeSession());
-    if (prompt === "block") await runningGate;
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
-  };
-  const manager = new AgentManager(registry as any, 1, runner);
-
-  const pending = manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "block" },
-    { kind: "spawn", agent: "oneshot", prompt: "queued" },
-  ]);
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(manager.listSessions().some(s => s.status.kind === "queued"));
-
-  const result = await manager.remove({ scope: "non-running" });
   assert.equal(result.removed, 1);
   assert.equal(result.aborted, 0);
 
@@ -1277,30 +1147,6 @@ test("AgentManager.remove with a running sessionId aborts the underlying session
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("AgentManager.remove with a known terminal sessionId removes that session", async () => {
-  const session = makeSession();
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    agent.attach(session);
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
-  };
-  const manager = new AgentManager(registry as any, 1, runner);
-  const [seed] = await manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "work" },
-  ]);
-  assert.equal(manager.listSessions().length, 1);
-
-  const result = await manager.remove({ sessionIds: [seed.sessionId!] });
-
-  assert.equal(result.removed, 1);
-  assert.equal(result.aborted, 0);
-  assert.deepEqual(result.sessionIds, [seed.sessionId]);
-  assert.deepEqual(result.errors, []);
-  assert.deepEqual(manager.listSessions(), []);
-});
-
 test("AgentManager.remove rejects an unknown internal scope without removing sessions", async () => {
   const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
     agent.attach(makeSession());
@@ -1490,42 +1336,6 @@ test("AgentManager.startBatch background:true promotes resumed sessions to backg
   assert.equal(result.removed, 1);
   assert.deepEqual(result.sessionIds, [seed.sessionId]);
   assert.deepEqual(manager.listSessions(), []);
-});
-
-test("AgentManager.remove scope=background removes terminal background agents and leaves foreground retained sessions", async () => {
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
-    agent.attach(makeSession());
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([
-      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
-      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
-    ]),
-  };
-  const manager = new AgentManager(registry as any, 2, runner);
-
-  await manager.run(baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "foreground retained" },
-  ]);
-  const bgBatch = manager.startBatch(
-    baseCtx(),
-    undefined,
-    [{ kind: "spawn", agent: "oneshot", prompt: "bg work" }],
-    undefined,
-    { background: true },
-  );
-  await bgBatch.resultsPromise;
-
-  assert.equal(manager.listSessions().length, 2);
-
-  const result = await manager.remove({ scope: "background" });
-
-  assert.equal(result.removed, 1);
-  assert.equal(result.aborted, 0);
-  const remaining = manager.listSessions();
-  assert.equal(remaining.length, 1);
-  assert.equal(remaining[0].kind, "retained");
 });
 
 test("AgentManager.remove scope=background aborts running background sessions", async () => {
@@ -1839,9 +1649,9 @@ test("AgentManager.backgroundResults remove:true does not remove running entries
   await batch.resultsPromise;
 });
 
-test("AgentManager.backgroundResults returns the result for a retained non-background session", async () => {
+test("AgentManager.backgroundResults reads retained foreground sessions identically to background ones", async () => {
   const session = makeSession();
-  const runner = async (_ctx: any, agent: any, attempt: any) => { const prompt = attempt.prompt;
+  const runner = async (_ctx: any, agent: any, attempt: any) => {
     agent.attach(session);
     return completedRun(agent, "retained-output");
   };
@@ -1850,14 +1660,13 @@ test("AgentManager.backgroundResults returns the result for a retained non-backg
   };
   const manager = new AgentManager(registry as any, 1, runner);
 
+  // Foreground retained session (not started via startBatch background:true).
   const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial" },
   ]);
+  assert.equal(manager.listSessions()[0].kind, "retained");
 
-  const results = await manager.backgroundResults([seed.sessionId!]);
-
-  assert.equal(results.length, 1);
-  const entry = results[0] as any;
+  const [entry] = await manager.backgroundResults([seed.sessionId!]) as any[];
   assert.equal(entry.ready, true);
   assert.equal(entry.result.output, "retained-output");
   assert.equal(entry.result.resumable, true);

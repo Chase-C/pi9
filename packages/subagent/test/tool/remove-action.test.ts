@@ -153,30 +153,18 @@ test("subagent action=remove rejects an invalid scope without calling manager.re
   assert.equal(removeCalls, 0);
 });
 
-test("subagent action=remove rejects non-array sessionIds without calling manager.remove", async () => {
-  let removeCalls = 0;
-  const tool = registerExtension({
-    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
-    agentManager: { sessions: [], listSessions() { return this.sessions; }, async remove() { removeCalls += 1; throw new Error("should not remove"); } },
-  });
+test("subagent action=remove rejects malformed sessionIds (non-array or non-string entries) without calling manager.remove", async () => {
+  for (const sessionIds of ["s1", ["s1", 42]] as const) {
+    let removeCalls = 0;
+    const tool = registerExtension({
+      agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+      agentManager: { sessions: [], listSessions() { return this.sessions; }, async remove() { removeCalls += 1; throw new Error("should not remove"); } },
+    });
 
-  const result = await tool.execute("tool-call", { action: "remove", sessionIds: "s1" }, undefined, undefined, baseCtx());
+    const result = await tool.execute("tool-call", { action: "remove", sessionIds }, undefined, undefined, baseCtx());
 
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /sessionIds must be an array of strings/);
-  assert.equal(removeCalls, 0);
-});
-
-test("subagent action=remove rejects non-string sessionIds entries without calling manager.remove", async () => {
-  let removeCalls = 0;
-  const tool = registerExtension({
-    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
-    agentManager: { sessions: [], listSessions() { return this.sessions; }, async remove() { removeCalls += 1; throw new Error("should not remove"); } },
-  });
-
-  const result = await tool.execute("tool-call", { action: "remove", sessionIds: ["s1", 42] }, undefined, undefined, baseCtx());
-
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /sessionIds must be an array of strings/);
-  assert.equal(removeCalls, 0);
+    assert.equal(result.isError, true, `sessionIds=${JSON.stringify(sessionIds)}: expected error`);
+    assert.match(result.content[0].text, /sessionIds must be an array of strings/);
+    assert.equal(removeCalls, 0);
+  }
 });

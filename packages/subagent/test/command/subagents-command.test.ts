@@ -146,7 +146,7 @@ test("/subagents settings closes through injected cancel keybindings", async () 
   assert.equal(closed, true);
 });
 
-test("/subagents command no-ops without UI or notify instead of throwing", async () => {
+test("/subagents command is a silent no-op without UI, regardless of whether a notify is supplied", async () => {
   const fakeRegistry = {
     agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", resumable: false }]]),
     async reload() {},
@@ -154,20 +154,12 @@ test("/subagents command no-ops without UI or notify instead of throwing", async
   };
   const commands = registerCommand({ agentRegistry: fakeRegistry, agentManager: { listSessions: () => [], sessions: [] } });
 
+  // No UI object at all: must not throw.
   await assert.doesNotReject(() => commands.get("subagents").handler("", { cwd: process.cwd(), hasUI: false }));
-});
 
-test("/subagents command does not notify through UI when hasUI is false", async () => {
-  const fakeRegistry = {
-    agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", resumable: false }]]),
-    async reload() {},
-    summarizeAgent() { return ""; },
-  };
-  const commands = registerCommand({ agentRegistry: fakeRegistry, agentManager: { listSessions: () => [], sessions: [] } });
-
+  // notify supplied but hasUI=false: must not be called.
   let notifyCalls = 0;
   await commands.get("subagents").handler("", { cwd: process.cwd(), hasUI: false, ui: { notify() { notifyCalls += 1; } } });
-
   assert.equal(notifyCalls, 0);
 });
 
@@ -222,8 +214,8 @@ test("subagents command opens agents browser by default when sessions are empty"
   assert.doesNotMatch(inspectText, /launch|start/i);
 });
 
-test("/subagents command closes agents and sessions menus on terminal escape sequences", async () => {
-  const agentsCommands = registerCommand({
+test("/subagents agents menu closes on a terminal escape sequence", async () => {
+  const commands = registerCommand({
     agentRegistry: {
       agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", resumable: false }]]),
       async reload() {},
@@ -232,8 +224,8 @@ test("/subagents command closes agents and sessions menus on terminal escape seq
     agentManager: { sessions: [], listSessions() { return this.sessions; } },
   });
 
-  let agentsClosed = false;
-  await agentsCommands.get("subagents").handler("", {
+  let closed = false;
+  await commands.get("subagents").handler("", {
     cwd: process.cwd(),
     hasUI: true,
     ui: {
@@ -241,17 +233,21 @@ test("/subagents command closes agents and sessions menus on terminal escape seq
       custom(factory: any) {
         return new Promise<void>(resolve => {
           const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {
-            agentsClosed = true;
+            closed = true;
             resolve();
           });
           component.handleInput("\x1b[27u");
-          setImmediate(() => { if (!agentsClosed) resolve(); });
+          setImmediate(() => { if (!closed) resolve(); });
         });
       },
     },
   });
 
-  const sessionsCommands = registerCommand({
+  assert.equal(closed, true);
+});
+
+test("/subagents sessions menu closes on a terminal escape sequence", async () => {
+  const commands = registerCommand({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: {
       listSessions(): any[] { return this.sessions; },
@@ -259,8 +255,8 @@ test("/subagents command closes agents and sessions menus on terminal escape seq
     },
   });
 
-  let sessionsClosed = false;
-  await sessionsCommands.get("subagents").handler("", {
+  let closed = false;
+  await commands.get("subagents").handler("", {
     cwd: process.cwd(),
     hasUI: true,
     ui: {
@@ -268,18 +264,17 @@ test("/subagents command closes agents and sessions menus on terminal escape seq
       custom(factory: any) {
         return new Promise<void>(resolve => {
           const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {
-            sessionsClosed = true;
+            closed = true;
             resolve();
           });
           component.handleInput("\x1b[27u");
-          setImmediate(() => { if (!sessionsClosed) resolve(); });
+          setImmediate(() => { if (!closed) resolve(); });
         });
       },
     },
   });
 
-  assert.equal(agentsClosed, true);
-  assert.equal(sessionsClosed, true);
+  assert.equal(closed, true);
 });
 
 test("/subagents command reports custom UI failure without throwing", async () => {
@@ -342,65 +337,42 @@ test("subagents command opens a sessions view from serialized DTOs", async () =>
   assert.doesNotMatch(text, /"config"/);
 });
 
-test("/subagents command handles resume when editor UI is unavailable", async () => {
-  const fakeManager = {
-    listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ config: { resumable: true } })],
-    run() { throw new Error("run should not start"); },
-  };
-  const commands = registerCommand({
-    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
-    agentManager: fakeManager,
-  });
+test("/subagents resume reports an editor failure (missing or throwing) without invoking the runner", async () => {
+  const cases: Array<{ label: string; editor?: () => never; matchNotification: RegExp }> = [
+    { label: "missing", matchNotification: /Resume UI is unavailable/ },
+    { label: "throws", editor: () => { throw new Error("editor unavailable"); }, matchNotification: /editor unavailable/ },
+  ];
 
-  const notifications: any[] = [];
-  await assert.doesNotReject(() => commands.get("subagents").handler("", {
-    cwd: process.cwd(),
-    hasUI: true,
-    ui: {
-      notify: (...args: any[]) => notifications.push(args),
-      custom(factory: any) {
-        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        component.handleInput("r");
-        return Promise.resolve({ action: "resume", sessionId: "s1", agent: "helper" });
+  for (const { label, editor, matchNotification } of cases) {
+    let runCalls = 0;
+    const fakeManager = {
+      listSessions(): any[] { return this.sessions; },
+      sessions: [fakeAgent({ config: { resumable: true } })],
+      run() { runCalls += 1; throw new Error("run should not start"); },
+    };
+    const commands = registerCommand({
+      agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+      agentManager: fakeManager,
+    });
+
+    const notifications: any[] = [];
+    await assert.doesNotReject(() => commands.get("subagents").handler("", {
+      cwd: process.cwd(),
+      hasUI: true,
+      ui: {
+        notify: (...args: any[]) => notifications.push(args),
+        ...(editor ? { editor } : {}),
+        custom(factory: any) {
+          const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+          component.handleInput("r");
+          return Promise.resolve({ action: "resume", sessionId: "s1", agent: "helper" });
+        },
       },
-    },
-  }));
+    }), `${label}: handler rejected`);
 
-  assert.match(notifications.at(-1)[0], /Resume UI is unavailable/);
-});
-
-test("/subagents command handles resume when editor UI throws", async () => {
-  let runCalls = 0;
-  const fakeManager = {
-    listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ config: { resumable: true } })],
-    run() { runCalls += 1; throw new Error("run should not start"); },
-  };
-  const commands = registerCommand({
-    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
-    agentManager: fakeManager,
-  });
-
-  const notifications: any[] = [];
-  await assert.doesNotReject(() => commands.get("subagents").handler("", {
-    cwd: process.cwd(),
-    hasUI: true,
-    ui: {
-      notify: (...args: any[]) => notifications.push(args),
-      editor() { throw new Error("editor unavailable"); },
-      custom(factory: any) {
-        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        component.handleInput("r");
-        return Promise.resolve({ action: "resume", sessionId: "s1", agent: "helper" });
-      },
-    },
-  }));
-
-  assert.equal(runCalls, 0);
-  assert.match(notifications.at(-1)[0], /editor|UI/i);
-  assert.match(notifications.at(-1)[0], /editor unavailable/);
-  assert.equal(notifications.at(-1)[1], "warning");
+    assert.equal(runCalls, 0, `${label}: runner was invoked`);
+    assert.match(notifications.at(-1)[0], matchNotification, `${label}: notification did not match`);
+  }
 });
 
 test("subagents command resumes completed retained session with editor loader and visible concise message", async () => {

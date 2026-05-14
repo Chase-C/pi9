@@ -12,13 +12,13 @@ function registerExtension(dependencies: any = {}) {
   return registeredTool;
 }
 
-test("tool agents action returns the flat definition list with tools and source path", async () => {
+test("tool agents action projects each definition with tools, default skills, and source path while hiding systemPrompt", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-agents-"));
   const projectAgents = join(root, ".pi", "agents");
   await mkdir(projectAgents, { recursive: true });
   await writeFile(
     join(projectAgents, "helper.md"),
-    `---\nname: helper\ndescription: Helps\nresumable: true\nmodel: test/model\ntools: read, bash\n---\nHelp prompt`,
+    `---\nname: helper\ndescription: Helps\nresumable: true\nmodel: test/model\ntools: read, bash\nskills: foo, bar\n---\nHelp prompt`,
   );
 
   const tool = registerExtension();
@@ -29,26 +29,8 @@ test("tool agents action returns the flat definition list with tools and source 
   const helper = result.details.agents.find((a: any) => a.name === "helper");
   assert.ok(helper);
   assert.equal(helper.resumable, true);
-  assert.deepEqual(helper.tools, ["read", "bash"]);
   assert.equal(helper.sourcePath, join(projectAgents, "helper.md"));
-  assert.equal(Object.prototype.hasOwnProperty.call(helper, "systemPrompt"), false);
-});
-
-test("tool agents action returns each agent default skills alongside tools", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-agents-skills-default-"));
-  const projectAgents = join(root, ".pi", "agents");
-  await mkdir(projectAgents, { recursive: true });
-  await writeFile(
-    join(projectAgents, "helper.md"),
-    `---\nname: helper\ndescription: Helps\ntools: read\nskills: foo, bar\n---\nHelp prompt`,
-  );
-
-  const tool = registerExtension();
-  const result = await tool.execute("tool-call", { action: "agents" }, undefined, undefined, { cwd: root });
-
-  assert.equal(result.isError, false);
-  const helper = result.details.agents.find((a: any) => a.name === "helper");
-  assert.ok(helper);
+  assert.deepEqual(helper.tools, ["read", "bash"]);
   assert.deepEqual(helper.skills, ["foo", "bar"]);
-  assert.deepEqual(helper.tools, ["read"]);
+  assert.equal(Object.prototype.hasOwnProperty.call(helper, "systemPrompt"), false);
 });
