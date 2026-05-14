@@ -22,6 +22,17 @@ test("subagent extension still registers the tool when custom resume renderer re
   assert.equal(registeredTool.name, "subagent");
 });
 
+test("subagent tool registers prompt metadata for the default system prompt", () => {
+  const tool = registerExtension();
+
+  assert.equal(tool.promptSnippet, "Delegate focused work to specialized subagents in isolated context windows");
+  assert.deepEqual(tool.promptGuidelines, [
+    "Use subagent for work that benefits from independent context, such as codebase reconnaissance, long-running investigation, review, or parallel research; prefer doing the work yourself for small direct tasks.",
+    "Before using subagent without a named agent from the user, call subagent with action: \"agents\" and choose an agent whose prompt, tools, or skills fit the task.",
+    "When calling subagent, make each child prompt self-contained with the objective, relevant files or directories, constraints, and expected output format.",
+  ]);
+});
+
 test("tool execution requires action", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-action-"));
   const tool = registerExtension();
@@ -67,18 +78,3 @@ test("subagent action=resume is no longer recognized", async () => {
   assert.match(result.content[0].text, /run/);
 });
 
-test("subagent action=clear is rejected with the remove migration error", async () => {
-  const tool = registerExtension({
-    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
-    agentManager: { sessions: [], listSessions() { return this.sessions; } },
-  });
-
-  const result = await tool.execute("tool-call", {
-    action: "clear",
-    sessionId: "whatever",
-  }, undefined, undefined, { cwd: process.cwd(), hasUI: false });
-
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /'clear' action has been replaced by 'remove'/);
-  assert.match(result.content[0].text, /scope: 'background' \| 'retained' \| 'non-running'/);
-});

@@ -41,8 +41,8 @@ test("tool run action returns full output only once in JSON details for a resume
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-    run(_ctx: any, _signal: any, tasks: any[]) {
-      return Promise.resolve(tasks.map((task: any) => ({
+    startBatch(_ctx: any, _signal: any, tasks: any[]) {
+      const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
         agent: "helper",
         prompt: task.prompt,
         status: "completed",
@@ -51,6 +51,7 @@ test("tool run action returns full output only once in JSON details for a resume
         resumable: true,
         resumed: task.kind === "resume",
       })));
+      return { groupId: "g1", sessions: [], resultsPromise };
     },
   };
 
@@ -131,9 +132,10 @@ test("subagent tool notifies invalid settings fallback without breaking executio
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-    async run(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate({ sessions: [runningAgent], active: true });
-      return [{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }];
+    startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
+      onUpdate?.({ sessions: [runningAgent], active: true });
+      const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
+      return { groupId: "g1", sessions: [runningAgent], resultsPromise };
     },
   };
   const tool = registerExtension({
@@ -170,9 +172,10 @@ test("subagent tool falls back to default UI settings when settings load rejects
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-    async run(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate({ sessions: [runningAgent], active: true });
-      return [{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }];
+    startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
+      onUpdate?.({ sessions: [runningAgent], active: true });
+      const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
+      return { groupId: "g1", sessions: [runningAgent], resultsPromise };
     },
   };
   const tool = registerExtension({
@@ -209,9 +212,10 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [runningAgent],
-    async run(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate({ sessions: [runningAgent], active: true });
-      return [{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }];
+    startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
+      onUpdate?.({ sessions: [runningAgent], active: true });
+      const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
+      return { groupId: "g1", sessions: [runningAgent], resultsPromise };
     },
   };
 
@@ -254,9 +258,10 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-    async run(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate({ sessions: [runningAgent], active: true });
-      return [{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }];
+    startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
+      onUpdate?.({ sessions: [runningAgent], active: true });
+      const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
+      return { groupId: "g1", sessions: [runningAgent], resultsPromise };
     },
   };
 
@@ -287,23 +292,24 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
   assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: "belowEditor" }]);
 });
 
-test("subagent action=run dispatches a spawn-only batch through agentManager.run with resumed flags", async () => {
+test("subagent action=run dispatches a spawn-only batch through agentManager.startBatch with resumed flags", async () => {
   let runCalls = 0;
   let receivedTasks: any;
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-    async run(_ctx: any, _signal: any, tasks: any[]) {
+    startBatch(_ctx: any, _signal: any, tasks: any[]) {
       runCalls += 1;
       receivedTasks = tasks;
-      return tasks.map((task: any) => ({
+      const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
         agent: task.agent ?? "(unknown)",
         prompt: task.prompt,
         status: "completed",
         output: `done:${task.prompt}`,
         resumable: false,
         resumed: task.kind === "resume",
-      }));
+      })));
+      return { groupId: "g1", sessions: [], resultsPromise };
     },
   };
   const fakeRegistry = {
@@ -336,9 +342,9 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-    async run(_ctx: any, _signal: any, tasks: any[]) {
+    startBatch(_ctx: any, _signal: any, tasks: any[]) {
       receivedTasks = tasks;
-      return tasks.map((task: any) => ({
+      const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
         agent: task.kind === "spawn" ? task.agent : "chatty",
         prompt: task.prompt,
         status: "completed",
@@ -346,7 +352,8 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
         resumable: task.kind === "resume",
         resumed: task.kind === "resume",
         ...(task.kind === "resume" ? { sessionId: task.sessionId } : {}),
-      }));
+      })));
+      return { groupId: "g1", sessions: [], resultsPromise };
     },
   };
   const fakeRegistry = {

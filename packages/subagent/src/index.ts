@@ -131,6 +131,12 @@ Call shapes:
 
 With background: true the run dispatches non-blocking; you'll be notified automatically when children complete (no need to poll). Fetch output with { action: "results" } once notified. One writer at a time — parallel tasks should be independent and should not edit overlapping files. Results preserve input order.
 `,
+    promptSnippet: "Delegate focused work to specialized subagents in isolated context windows",
+    promptGuidelines: [
+      "Use subagent for work that benefits from independent context, such as codebase reconnaissance, long-running investigation, review, or parallel research; prefer doing the work yourself for small direct tasks.",
+      "Before using subagent without a named agent from the user, call subagent with action: \"agents\" and choose an agent whose prompt, tools, or skills fit the task.",
+      "When calling subagent, make each child prompt self-contained with the objective, relevant files or directories, constraints, and expected output format.",
+    ],
     parameters: SubagentParams,
     renderCall(args: any, theme: any) {
       const action = typeof args?.action === "string" ? args.action : "pending";
@@ -175,116 +181,105 @@ With background: true the run dispatches non-blocking; you'll be notified automa
         return errorResult(`Provide an action: "agents", "list", "run", "results", or "remove".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
       }
 
-      if (params.action === "agents") {
-        return toolResult(agentsDetails(listAgentDefinitions(agentRegistry)));
-      }
+      switch (params.action) {
+        case "agents":
+          return toolResult(agentsDetails(listAgentDefinitions(agentRegistry)));
 
-      if (params.action === "list") {
-        if ((params as { type?: unknown }).type !== undefined) {
-          return errorResult("The 'type' parameter has been removed. Use action: 'agents' to list definitions, or action: 'list' (optionally with status: [...]) for sessions. Skills listing is no longer exposed through the subagent tool.");
-        }
-        const statusFilter = params.status;
-        let filter: { status: SessionStatus[] } | undefined;
-        if (statusFilter !== undefined) {
-          if (!Array.isArray(statusFilter)) {
+        case "list": {
+          if ((params as { type?: unknown }).type !== undefined) {
+            return errorResult("The 'type' parameter has been removed. Use action: 'agents' to list definitions, or action: 'list' (optionally with status: [...]) for sessions. Skills listing is no longer exposed through the subagent tool.");
+          }
+          const statusFilter = params.status;
+          if (statusFilter !== undefined && !Array.isArray(statusFilter)) {
             return errorResult("list status must be an array of status strings.");
           }
-          for (const value of statusFilter) {
-            if (!isSessionStatus(value)) {
-              return errorResult(`Unknown status '${String(value)}'. Valid: ${SESSION_STATUSES.join(", ")}.`);
-            }
+          const invalidStatus = statusFilter?.find(value => !isSessionStatus(value));
+          if (invalidStatus !== undefined) {
+            return errorResult(`Unknown status '${String(invalidStatus)}'. Valid: ${SESSION_STATUSES.join(", ")}.`);
           }
-          filter = { status: statusFilter as SessionStatus[] };
-        }
-        return toolResult(inventoryDetails(agentManager.listSessions(filter), filter));
-      }
-
-      if (params.action === "run") {
-        const countError = validateTaskCount(params.tasks, settings.runtime.maxTasksPerRun);
-        if (countError) {
-          return errorResult(`${countError}\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
+          const filter = statusFilter !== undefined ? { status: statusFilter as SessionStatus[] } : undefined;
+          return toolResult(inventoryDetails(agentManager.listSessions(filter), filter));
         }
 
-        const parsed: TaskRequest[] = [];
-        const errors: string[] = [];
-        timingSync("tool.parseTasks", { taskCount: params.tasks?.length ?? 0 }, () => {
-          params.tasks?.forEach((raw, index) => {
-            const result = parseTask(raw);
-            if ("error" in result) errors.push(`task[${index}]: ${result.error}`);
-            else parsed.push(result);
+        case "run": {
+          const countError = validateTaskCount(params.tasks, settings.runtime.maxTasksPerRun);
+          if (countError) {
+            return errorResult(`${countError}\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
+          }
+
+          const parsed: TaskRequest[] = [];
+          const errors: string[] = [];
+          timingSync("tool.parseTasks", { taskCount: params.tasks?.length ?? 0 }, () => {
+            params.tasks?.forEach((raw, index) => {
+              const result = parseTask(raw);
+              if ("error" in result) errors.push(`task[${index}]: ${result.error}`);
+              else parsed.push(result);
+            });
           });
-        });
 
-        if (errors.length > 0) {
-          return errorResult(errors.join("\n"), { errors });
-        }
+          if (errors.length > 0) {
+            return errorResult(errors.join("\n"), { errors });
+          }
 
-        const background = params.background === true;
+          if (params.background === true) {
+            const batch = agentManager.startBatch(ctx, signal, parsed, update => {
+              updateSubagentWidget(ctx, update.sessions, settings);
+            }, { background: true });
+            batch.resultsPromise.catch(() => {});
+            updateSubagentWidget(ctx, batch.sessions, settings);
+            return toolResult(backgroundStartedDetails(batch.sessions));
+          }
 
-        if (background) {
+          const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length });
           const batch = agentManager.startBatch(ctx, signal, parsed, update => {
-            updateSubagentWidget(ctx, update.sessions, settings);
-          }, { background: true });
-          batch.resultsPromise.catch(() => {});
-          updateSubagentWidget(ctx, batch.sessions, settings);
-          return toolResult(backgroundStartedDetails(batch.sessions));
+            timingMark("tool.update.received", { sessionCount: update.sessions.length, active: update.active });
+            const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length }, () => partialToolResult(update));
+            timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
+            timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, settings));
+          }, { background: false });
+          const results = await batch.resultsPromise;
+          runEnd({ ok: true, resultCount: results.length });
+          timingSync("tool.finalWidget", { sessionCount: agentManager.listSessions().length }, () => updateSubagentWidget(ctx, agentManager.listSessions(), settings));
+          const isError = results.some(result => result.status !== "completed");
+          return toolResult(runDetails(serializeGroup(batch.sessions), { results }), isError);
         }
 
-        let lastGroup: ReturnType<typeof serializeGroup> | undefined;
-        const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length });
-        const results = await agentManager.run(ctx, signal, parsed, update => {
-          timingMark("tool.update.received", { sessionCount: update.sessions.length, active: update.active });
-          const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length }, () => partialToolResult(update));
-          lastGroup = partial.details.group;
-          timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
-          timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, settings));
-        });
-        runEnd({ ok: true, resultCount: results.length });
-        timingSync("tool.finalWidget", { sessionCount: agentManager.listSessions().length }, () => updateSubagentWidget(ctx, agentManager.listSessions(), settings));
-        const isError = results.some(result => result.status !== "completed");
-        const details = lastGroup ? runDetails(lastGroup, { results }) : { results };
-        return toolResult(details, isError);
+        case "results": {
+          const { sessionIds } = params;
+          if (!validateRemoveSessionIds(sessionIds)) {
+            return errorResult("results sessionIds must be an array of strings.");
+          }
+          if (!validateNonEmptySessionIds(sessionIds)) {
+            return errorResult("results sessionIds must be an array of non-empty strings.");
+          }
+          if (sessionIds.length === 0) {
+            return errorResult("results requires at least one sessionId.");
+          }
+          const results = await agentManager.backgroundResults(sessionIds, { remove: params.remove === true });
+          return toolResult(backgroundResultsDetails(results));
+        }
+
+        case "remove": {
+          const { sessionIds, scope } = params;
+          const hasIds = sessionIds !== undefined;
+          const hasScope = scope !== undefined;
+          if (hasIds && hasScope) return errorResult("remove requires exactly one of sessionIds or scope.");
+          if (!hasIds && !hasScope) return errorResult("remove requires either sessionIds or scope.");
+          if (hasIds && !validateRemoveSessionIds(sessionIds)) {
+            return errorResult("remove sessionIds must be an array of strings.");
+          }
+          if (hasScope && !isRemoveScope(scope)) {
+            return errorResult('remove scope must be "background", "retained", or "non-running".');
+          }
+          const summary = hasIds
+            ? await agentManager.remove({ sessionIds })
+            : await agentManager.remove({ scope: scope! });
+          return toolResult({ view: "remove-summary", summary });
+        }
+
+        default:
+          return errorResult(`Unknown action: ${String(params.action)}. Use "agents", "list", "run", "results", or "remove".`);
       }
-
-      if (params.action === "results") {
-        const { sessionIds } = params;
-        if (!validateRemoveSessionIds(sessionIds)) {
-          return errorResult("results sessionIds must be an array of strings.");
-        }
-        if (!validateNonEmptySessionIds(sessionIds)) {
-          return errorResult("results sessionIds must be an array of non-empty strings.");
-        }
-        if (sessionIds.length === 0) {
-          return errorResult("results requires at least one sessionId.");
-        }
-        const remove = params.remove === true;
-        const results = await agentManager.backgroundResults(sessionIds, { remove });
-        return toolResult(backgroundResultsDetails(results));
-      }
-
-      if (params.action === "clear") {
-        return errorResult("The 'clear' action has been replaced by 'remove'. Pass either { sessionIds: [...] } or { scope: 'background' | 'retained' | 'non-running' }.");
-      }
-
-      if (params.action === "remove") {
-        const { sessionIds, scope } = params;
-        const hasIds = sessionIds !== undefined;
-        const hasScope = scope !== undefined;
-        if (hasIds && hasScope) return errorResult("remove requires exactly one of sessionIds or scope.");
-        if (!hasIds && !hasScope) return errorResult("remove requires either sessionIds or scope.");
-        if (hasIds && !validateRemoveSessionIds(sessionIds)) {
-          return errorResult("remove sessionIds must be an array of strings.");
-        }
-        if (hasScope && !isRemoveScope(scope)) {
-          return errorResult('remove scope must be "background", "retained", or "non-running".');
-        }
-        const summary = hasIds
-          ? await agentManager.remove({ sessionIds })
-          : await agentManager.remove({ scope: scope! });
-        return toolResult({ view: "remove-summary", summary });
-      }
-
-      return errorResult(`Unknown action: ${String(params.action)}. Use "agents", "list", "run", "results", or "remove".`);
     },
   }));
 }

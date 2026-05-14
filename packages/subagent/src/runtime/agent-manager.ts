@@ -235,7 +235,6 @@ export class AgentManager {
     batch.emit();
     timingMark("manager.initialEmit.after", { groupId });
 
-    const sessions = batch.sessions();
     const resultsPromise = Promise.all(resultPromises)
       .then(results => {
         this._agents = this._agents.filter(agent => {
@@ -255,7 +254,11 @@ export class AgentManager {
         this._activeBatches.delete(groupId);
       });
 
-    return { groupId, sessions, resultsPromise };
+    return {
+      groupId,
+      get sessions(): AgentView[] { return batch.sessions(); },
+      resultsPromise,
+    };
   }
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
