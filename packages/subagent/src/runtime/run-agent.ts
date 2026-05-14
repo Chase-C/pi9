@@ -44,13 +44,22 @@ const DefaultRunAgentDependencies: RunAgentDependencies = {
   loadSkills,
 };
 
-export async function RunAgent(
+export async function RunAttempt(
   ctx: ExtensionContext,
   agent: Agent,
   attempt: Attempt,
   signal?: AbortSignal,
   dependencies: RunAgentDependencies = DefaultRunAgentDependencies,
 ): Promise<AgentRunResult> {
+  if (attempt.kind === "resume") {
+    const session = agent.retainedSession();
+    if (!session) {
+      throw new Error(`Cannot resume an agent without a retained session.`);
+    }
+    timingSync("resumeAgent.attach", { agent: agent.agentName, sessionId: agent.id }, () => agent.attach(session));
+    return PromptAgent(session, agent, attempt, signal, true);
+  }
+
   if (signal?.aborted) return skippedRun(agent);
 
   const runData = { agent: agent.agentName, sessionId: agent.id };
@@ -113,21 +122,6 @@ export async function RunAgent(
 
   timingSync("runAgent.attach", runData, () => agent.attach(session));
   return PromptAgent(session, agent, attempt, signal);
-}
-
-export async function ResumeAgent(
-  _ctx: ExtensionContext,
-  agent: Agent,
-  attempt: Attempt,
-  signal?: AbortSignal,
-): Promise<AgentRunResult> {
-  const session = agent.retainedSession();
-  if (!session) {
-    throw new Error(`Cannot resume an agent without a retained session.`);
-  }
-
-  timingSync("resumeAgent.attach", { agent: agent.agentName, sessionId: agent.id }, () => agent.attach(session));
-  return PromptAgent(session, agent, attempt, signal, true);
 }
 
 async function PromptAgent(

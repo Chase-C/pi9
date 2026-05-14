@@ -18,16 +18,16 @@ const baseConfig = {
 };
 
 test("AgentRunResult propagates label from agent through completed/error/interrupted runs", () => {
-  const labeled = new Agent("id1", baseConfig, { agent: "helper" }, { prompt: "work", label: "researcher" });
+  const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
   assert.equal(completedRun(labeled, "done").label, "researcher");
 
-  const labeledErr = new Agent("id2", baseConfig, { agent: "helper" }, { prompt: "work", label: "researcher" });
+  const labeledErr = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
   assert.equal(errorRun(labeledErr, "fail").label, "researcher");
 
-  const labeledInt = new Agent("id3", baseConfig, { agent: "helper" }, { prompt: "work", label: "researcher" });
+  const labeledInt = new Agent("id3", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
   assert.equal(interruptedRun(labeledInt, "stop").label, "researcher");
 
-  const unlabeled = new Agent("id4", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const unlabeled = new Agent("id4", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   const result = completedRun(unlabeled, "done");
   assert.equal(Object.prototype.hasOwnProperty.call(result, "label"), false);
 });
@@ -36,7 +36,7 @@ test("AgentRunResult resumable reflects the per-task override", () => {
   const config = { ...baseConfig, resumable: false };
   const session = { subscribe: () => () => {}, abort: () => {} };
 
-  const agent = new Agent("id1", config, { agent: "helper" }, { prompt: "work", resumable: true });
+  const agent = new Agent("id1", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: true });
   agent.attach(session as any);
   const result = completedRun(agent, "done");
 
@@ -46,11 +46,10 @@ test("AgentRunResult resumable reflects the per-task override", () => {
 
 test("agent transitions through start, finalize, and is idempotent on second finalize", () => {
   const config = { name: "agent", description: "desc", systemPrompt: "prompt", source: "project" as const, resumable: false };
-  const spawn = { agent: "agent" };
-  const invocation = { prompt: "do work" };
+  const spawn = { kind: "spawn" as const, agent: "agent", prompt: "do work" };
   const session = { subscribe: () => () => {}, abort: () => {} };
 
-  const running = new Agent("id", config, spawn, invocation);
+  const running = new Agent("id", config, spawn);
   running.attach(session as any);
   assert.equal(running.status.kind, "running");
   assert.throws(() => running.attach(session as any), /Cannot attach/);
@@ -64,7 +63,7 @@ test("agent transitions through start, finalize, and is idempotent on second fin
   const stillDone = doneStatus(running);
   assert.equal(stillDone.result.status, "completed", "finalize is idempotent — terminal state is sticky");
 
-  const queued = new Agent("q", config, spawn, invocation);
+  const queued = new Agent("q", config, spawn);
   errorRun(queued, "failed before start");
   const queuedDone = doneStatus(queued);
   assert.equal(queuedDone.result.status, "error");
@@ -72,7 +71,7 @@ test("agent transitions through start, finalize, and is idempotent on second fin
 });
 
 test("buildAgentResult throws a clear invariant error when no attempt is current", () => {
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   agent.attach({ subscribe: () => () => {}, abort: () => {} } as any);
   completedRun(agent, "done");
 
@@ -81,7 +80,7 @@ test("buildAgentResult throws a clear invariant error when no attempt is current
 
 test("completedRun marks the result as not resumed by default", () => {
   const session = { subscribe: () => () => {}, abort: () => {} };
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   agent.attach(session as any);
 
   const result = completedRun(agent, "done");

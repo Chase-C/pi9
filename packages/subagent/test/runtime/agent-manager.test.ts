@@ -14,6 +14,9 @@ const makeSession = () => ({
   prompt: async () => {},
   abort: () => {},
 });
+const merge = (spawn: any, resume?: any) =>
+  (ctx: any, agent: any, attempt: any, signal: any) =>
+    attempt.kind === "resume" ? (resume ?? spawn)(ctx, agent, attempt, signal) : spawn(ctx, agent, attempt, signal);
 
 test("AgentManager.run carries the input label on unknown-agent synthetic results and views", async () => {
   const registry: FakeRegistry = { agents: new Map() };
@@ -284,7 +287,7 @@ test("manager retains a completed session when a task overrides resumable to tru
   const registry = {
     agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
 
   const results = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "oneshot", prompt: "work", resumable: true },
@@ -317,7 +320,7 @@ test("manager preserves a stored label across unlabeled resume and overwrites on
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
 
   const [initial] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "one", label: "original" },
@@ -364,7 +367,7 @@ test("manager reports queued resume elapsed from the current attempt time", asyn
       agent.attach(agent.retainedSession()!);
       return completedRun(agent, `follow:${attempt.prompt}`, true);
     };
-    const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+    const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
 
     const [initial] = await manager.run(baseCtx(), undefined, [
       { kind: "spawn", agent: "chatty", prompt: "old" },
@@ -414,7 +417,7 @@ test("manager retains, resumes, lists, and clears completed resumable sessions",
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 2, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 2, merge(runner, resumeRunner));
   const results = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "one" },
   ]);
@@ -461,7 +464,7 @@ test("manager rejects duplicate resume tasks without corrupting the retained ses
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 2, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 2, merge(runner, resumeRunner));
   const [first] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
@@ -503,7 +506,7 @@ test("manager reports resume setup failure as the follow-up prompt error without
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner as any);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner) as any);
   const [first] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
@@ -538,7 +541,7 @@ test("manager keeps a retained completed session retryable after resume setup fa
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
   const [first] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
@@ -581,7 +584,7 @@ test("manager keeps a session retryable after repeated pre-attach resume failure
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
   const [first] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
@@ -633,7 +636,7 @@ test("manager reports queued cancelled resume as skipped follow-up and keeps ret
       ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
     ]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
   const [first] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
@@ -841,7 +844,7 @@ test("manager.run handles a mixed batch of one spawn and one resume in input ord
       ["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project", resumable: true }],
     ]),
   };
-  const manager = new AgentManager(registry as any, 2, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 2, merge(runner, resumeRunner));
 
   const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "first" },
@@ -872,7 +875,7 @@ test("manager.run resume task with a new label overwrites the agent stored label
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
 
   const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "one", label: "phase-1" },
@@ -892,7 +895,7 @@ test("manager.run resume task with resumable: false discards the session after c
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
 
   const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "one" },
@@ -939,7 +942,7 @@ test("manager.run partial updates flag resumed entries on the rendered AgentView
       ["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project", resumable: true }],
     ]),
   };
-  const manager = new AgentManager(registry as any, 2, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 2, merge(runner, resumeRunner));
 
   const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "one" },
@@ -1096,7 +1099,7 @@ test("AgentManager.remove with a queued resume sessionId prevents the queued res
       ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
     ]),
   };
-  const manager = new AgentManager(registry as any, 1, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 1, merge(runner, resumeRunner));
   const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "seed" },
   ]);
@@ -1457,7 +1460,7 @@ test("AgentManager.startBatch background:true promotes resumed sessions to backg
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const manager = new AgentManager(registry as any, 2, runner, resumeRunner);
+  const manager = new AgentManager(registry as any, 2, merge(runner, resumeRunner));
   const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial" },
   ]);

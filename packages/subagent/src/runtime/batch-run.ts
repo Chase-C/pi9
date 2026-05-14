@@ -1,14 +1,18 @@
+import type { Agent } from "../domain/agent.js";
 import type { AgentUpdateKind, AgentView, SubagentBatchUpdate } from "../domain/agent-view.js";
 import { timingStart, timingSync } from "./timing.js";
-import type { BatchEntry } from "./batch-entry.js";
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
 const ANIMATION_UPDATE_INTERVAL_MS = 120;
 
 export type BatchUpdateListener = (update: SubagentBatchUpdate) => void;
 
+type Entry =
+  | { kind: "agent"; inputIndex: number; resumed: boolean; agent: Agent }
+  | { kind: "static"; inputIndex: number; resumed: boolean; view: AgentView };
+
 export class BatchRun {
-  private readonly _entries: BatchEntry[] = [];
+  private readonly _entries: Entry[] = [];
   private pendingMessageTimer?: NodeJS.Timeout;
   private animationTimer?: NodeJS.Timeout;
 
@@ -19,15 +23,21 @@ export class BatchRun {
 
   get entryCount(): number { return this._entries.length }
 
-  addEntry(entry: BatchEntry): void {
-    this._entries.push(entry);
+  addAgent(agent: Agent, inputIndex: number, resumed: boolean): void {
+    this._entries.push({ kind: "agent", inputIndex, resumed, agent });
+  }
+
+  addStaticView(view: AgentView, inputIndex: number, resumed: boolean): void {
+    this._entries.push({ kind: "static", inputIndex, resumed, view });
   }
 
   sessions(): AgentView[] {
     return this._entries
       .slice()
       .sort((a, b) => a.inputIndex - b.inputIndex)
-      .map(entry => entry.toView());
+      .map(entry => entry.kind === "agent"
+        ? { ...entry.agent.toView(entry.inputIndex), resumed: entry.resumed }
+        : { ...entry.view, resumed: entry.resumed });
   }
 
   handleAgentUpdate(kind: AgentUpdateKind): void {

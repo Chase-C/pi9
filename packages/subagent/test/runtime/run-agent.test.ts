@@ -4,7 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { RunAgent } from "../../src/runtime/run-agent.js";
+import { RunAttempt } from "../../src/runtime/run-agent.js";
 import { Agent } from "../../src/domain/agent.js";
 
 const baseConfig = {
@@ -40,9 +40,9 @@ test("run-agent skips before prompting when signal aborts during setup", async (
     ResourceLoader: class { async reload() { controller.abort(); } },
     createAgentSession: async () => { createCalled = true; return { session }; },
   });
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
 
-  const result = await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), controller.signal, dependencies);
+  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), controller.signal, dependencies);
 
   assert.equal(result.status, "skipped");
   assert.match(result.error ?? "", /Agent skipped/);
@@ -66,9 +66,9 @@ test("run-agent resolves relative task cwd against context cwd", async () => {
     ResourceLoader: class { constructor(options: any) { loaderOptions = options; } async reload() {} },
     createAgentSession: async (options: any) => { createOptions = options; return { session }; },
   });
-  const agent = new Agent("id", baseConfig, { agent: "helper", cwd: "nested/project" }, { prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", cwd: "nested/project" });
 
-  await RunAgent(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  await RunAttempt(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   const expectedCwd = join(root, "nested/project");
   assert.equal(loaderOptions.cwd, expectedCwd);
@@ -88,9 +88,9 @@ test("run-agent uses frontmatter thinking when task does not override it", async
   const dependencies = makeBaseDeps({
     createAgentSession: async (options: any) => { createOptions = options; return { session }; },
   });
-  const agent = new Agent("id", { ...baseConfig, name: "thinker", thinking: "high" }, { agent: "thinker" }, { prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, name: "thinker", thinking: "high" }, { kind: "spawn", agent: "thinker", prompt: "work" });
 
-  await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(createOptions.thinkingLevel, "high");
 });
@@ -109,11 +109,10 @@ test("run-agent forwards configured tools allowlist to createAgentSession", asyn
   const agent = new Agent(
     "id",
     { ...baseConfig, name: "limited", tools: ["read", "grep"], model: "model-a" },
-    { agent: "limited" },
-    { prompt: "work" },
+    { kind: "spawn", agent: "limited", prompt: "work" },
   );
 
-  const result = await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(result.output, "final");
   assert.deepEqual(createOptions.tools, ["read", "grep"]);
@@ -134,9 +133,9 @@ test("run-agent marks running parent cancellation as interrupted", async () => {
     },
   };
   const dependencies = makeBaseDeps({ createAgentSession: async () => ({ session }) });
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
 
-  const pending = RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), controller.signal, dependencies);
+  const pending = RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), controller.signal, dependencies);
   await new Promise(resolve => setTimeout(resolve, 20));
   const midKind: string = agent.status.kind;
   assert.equal(midKind, "running");
@@ -160,9 +159,9 @@ test("run-agent treats final assistant error stop reason as failed child run", a
     abort: () => {},
   };
   const dependencies = makeBaseDeps({ createAgentSession: async () => ({ session }) });
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
 
-  const result = await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(result.status, "error");
   assert.match(result.error ?? "", /model overloaded/);
@@ -192,9 +191,9 @@ test("run-agent injects requested skills into the system prompt and disables loa
     createAgentSession: async () => ({ session }),
     loadSkills: () => ({ skills: [skill], diagnostics: [] }),
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { agent: "helper", skills: ["tdd"] }, { prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { kind: "spawn", agent: "helper", prompt: "work", skills: ["tdd"] });
 
-  const result = await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(result.status, "completed");
   assert.equal(loaderOptions.noSkills, true);
@@ -226,9 +225,9 @@ test("run-agent includes a disable-model-invocation skill when explicitly named"
     createAgentSession: async () => ({ session }),
     loadSkills: () => ({ skills: [skill], diagnostics: [] }),
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE" }, { agent: "helper", skills: ["review"] }, { prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE" }, { kind: "spawn", agent: "helper", prompt: "work", skills: ["review"] });
 
-  await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   const prompt = loaderOptions.systemPromptOverride();
   assert.match(prompt, /<name>review<\/name>/);
@@ -240,9 +239,9 @@ test("run-agent reports an unknown skill as a failed run without starting a sess
     createAgentSession: async () => { createCalled = true; return { session: { subscribe: () => () => {}, prompt: async () => {}, abort: () => {}, messages: [] } }; },
     loadSkills: () => ({ skills: [], diagnostics: [] }),
   });
-  const agent = new Agent("id", baseConfig, { agent: "helper", skills: ["missing"] }, { prompt: "work" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", skills: ["missing"] });
 
-  const result = await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(result.status, "error");
   assert.match(result.error ?? "", /missing/);
@@ -272,9 +271,9 @@ test("run-agent uses agent-frontmatter default skills when the task does not pro
     createAgentSession: async () => ({ session }),
     loadSkills: () => ({ skills: [skill], diagnostics: [] }),
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { agent: "helper" }, { prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { kind: "spawn", agent: "helper", prompt: "work" });
 
-  const result = await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(result.status, "completed");
   const prompt = loaderOptions.systemPromptOverride();
@@ -300,9 +299,9 @@ test("run-agent per-task skills fully replace agent-frontmatter default skills",
     createAgentSession: async () => ({ session }),
     loadSkills: () => ({ skills, diagnostics: [] }),
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE", skills: ["foo", "baz"] }, { agent: "helper", skills: ["bar"] }, { prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE", skills: ["foo", "baz"] }, { kind: "spawn", agent: "helper", prompt: "work", skills: ["bar"] });
 
-  await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   const prompt = loaderOptions.systemPromptOverride();
   assert.match(prompt, /<name>bar<\/name>/);
@@ -324,9 +323,9 @@ test("run-agent explicit empty per-task skills opts out of agent-frontmatter def
     createAgentSession: async () => ({ session }),
     loadSkills: () => { loadSkillsCalls += 1; return { skills: [], diagnostics: [] }; },
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { agent: "helper", skills: [] }, { prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { kind: "spawn", agent: "helper", prompt: "work", skills: [] });
 
-  await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(loaderOptions.systemPromptOverride(), "BASE PROMPT");
   assert.equal(loadSkillsCalls, 0, "should not load skills when the task explicitly opted out");
@@ -338,9 +337,9 @@ test("run-agent reports an unknown skill from agent-frontmatter defaults as a fa
     createAgentSession: async () => { createCalled = true; return { session: { subscribe: () => () => {}, prompt: async () => {}, abort: () => {}, messages: [] } }; },
     loadSkills: () => ({ skills: [], diagnostics: [] }),
   });
-  const agent = new Agent("id", { ...baseConfig, skills: ["ghost"] }, { agent: "helper" }, { prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, skills: ["ghost"] }, { kind: "spawn", agent: "helper", prompt: "work" });
 
-  const result = await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(result.status, "error");
   assert.match(result.error ?? "", /ghost/);
@@ -361,9 +360,9 @@ test("run-agent leaves the system prompt unchanged when no skills are requested"
     createAgentSession: async () => ({ session }),
     loadSkills: () => { loadSkillsCalls += 1; return { skills: [], diagnostics: [] }; },
   });
-  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { agent: "helper" }, { prompt: "work" });
+  const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { kind: "spawn", agent: "helper", prompt: "work" });
 
-  await RunAgent(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   assert.equal(loaderOptions.systemPromptOverride(), "BASE PROMPT");
   assert.equal(loadSkillsCalls, 0, "should not load skills when none are requested");

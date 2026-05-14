@@ -3,9 +3,9 @@ import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { AgentActivity } from "./agent-activity.js";
 import { AgentConfig } from "./agent-config.js";
 import { Attempt } from "./agent-attempt.js";
-import type { AgentInvocation, AgentSpawn } from "./agent-invocation.js";
 import { buildAgentResult, type AgentRunResult } from "./agent-result.js";
 import type { AgentUpdateKind, AgentView, AgentViewStatus } from "./agent-view.js";
+import type { ResumeRequest, SpawnRequest } from "../schema.js";
 import { compact, compactMultiline, getSubagentDisplaySettings } from "../view/view-helpers.js";
 
 export type AgentStatus =
@@ -33,15 +33,14 @@ export class Agent {
   constructor(
     readonly id: string,
     readonly config: AgentConfig,
-    readonly spawn: AgentSpawn,
-    invocation: AgentInvocation,
+    readonly spawn: SpawnRequest,
     options: { background?: boolean } = {},
   ) {
     this.agentName = spawn.agent;
     this._background = options.background ?? false;
-    this._appliedResumableOverride = invocation.resumable;
-    this._label = invocation.label;
-    this._current = new Attempt("spawn", invocation.prompt, invocation.resumable);
+    this._appliedResumableOverride = spawn.resumable;
+    this._label = spawn.label;
+    this._current = new Attempt("spawn", spawn.prompt, spawn.resumable);
   }
 
   on(listener: AgentUpdateListener): () => void {
@@ -114,16 +113,15 @@ export class Agent {
   }
 
   /** Begin a resume attempt. Must not be called while another attempt is in-flight. */
-  startResume(invocation: AgentInvocation): Attempt {
+  startResume(request: ResumeRequest): Attempt {
     if (this._current) {
       throw new Error(`Cannot start a new attempt while one is in-flight (${this._current.state.kind}).`);
     }
     if (!this._retainedSession) {
       throw new Error(`Cannot resume an agent without a retained session.`);
     }
-    const label = invocation.label ?? this._label;
-    if (invocation.label !== undefined) this._label = invocation.label;
-    const attempt = new Attempt("resume", invocation.prompt, invocation.resumable);
+    if (request.label !== undefined) this._label = request.label;
+    const attempt = new Attempt("resume", request.prompt, request.resumable);
     this._current = attempt;
     this._emit("status");
     return attempt;

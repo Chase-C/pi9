@@ -18,46 +18,46 @@ const baseConfig = {
 };
 
 test("Agent exposes the label from options and falls back to undefined when absent", () => {
-  const labeled = new Agent("id1", baseConfig, { agent: "helper" }, { prompt: "work", label: "researcher" });
+  const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
   assert.equal(labeled.label, "researcher");
 
-  const unlabeled = new Agent("id2", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const unlabeled = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   assert.equal(unlabeled.label, undefined);
 });
 
 test("Agent exposes the per-task skills array as-is and preserves undefined when absent", () => {
-  const withSkills = new Agent("id1", baseConfig, { agent: "helper", skills: ["tdd"] }, { prompt: "work" });
+  const withSkills = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", skills: ["tdd"] });
   assert.deepEqual(withSkills.spawn.skills, ["tdd"]);
 
-  const explicitlyEmpty = new Agent("id2", baseConfig, { agent: "helper", skills: [] }, { prompt: "work" });
+  const explicitlyEmpty = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", skills: [] });
   assert.deepEqual(explicitlyEmpty.spawn.skills, []);
 
-  const without = new Agent("id3", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const without = new Agent("id3", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   assert.equal(without.spawn.skills, undefined);
 });
 
 test("Agent constructor optional background flag controls toView kind", () => {
-  const defaultAgent = new Agent("id1", baseConfig, { agent: "helper" }, { prompt: "p" });
+  const defaultAgent = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   assert.equal(defaultAgent.background, false);
   assert.equal(defaultAgent.toView().kind, "retained");
 
-  const backgroundAgent = new Agent("id2", baseConfig, { agent: "helper" }, { prompt: "p" }, { background: true });
+  const backgroundAgent = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, { background: true });
   assert.equal(backgroundAgent.background, true);
   assert.equal(backgroundAgent.toView().kind, "background");
 });
 
 test("Agent.toView surfaces the default skills from the agent config", () => {
   const config = { ...baseConfig, skills: ["foo", "bar"] };
-  const agent = new Agent("id", config, { agent: "helper" }, { prompt: "work" });
+  const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work" });
   assert.deepEqual(agent.toView().config.skills, ["foo", "bar"]);
 
-  const noSkills = new Agent("id2", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const noSkills = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   assert.equal(noSkills.toView().config.skills, undefined);
 });
 
 test("Agent uses a per-task resumable false override before the config default", () => {
   const config = { ...baseConfig, resumable: true };
-  const agent = new Agent("id", config, { agent: "helper" }, { prompt: "work", resumable: false });
+  const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: false });
 
   assert.equal(agent.resumable, false);
   assert.equal(agent.toView().config.resumable, false);
@@ -65,23 +65,23 @@ test("Agent uses a per-task resumable false override before the config default",
 
 test("Agent uses a per-task resumable true override before the config default", () => {
   const config = { ...baseConfig, resumable: false };
-  const agent = new Agent("id", config, { agent: "helper" }, { prompt: "work", resumable: true });
+  const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: true });
 
   assert.equal(agent.resumable, true);
   assert.equal(agent.toView().config.resumable, true);
 });
 
 test("Agent.toView includes label when set and omits it otherwise", () => {
-  const labeled = new Agent("id1", baseConfig, { agent: "helper" }, { prompt: "work", label: "researcher" });
+  const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
   assert.equal(labeled.toView().label, "researcher");
 
-  const unlabeled = new Agent("id2", baseConfig, { agent: "helper" }, { prompt: "work" });
+  const unlabeled = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
   assert.equal(Object.prototype.hasOwnProperty.call(unlabeled.toView(), "label"), false);
 });
 
 test("Agent.startResume keeps the stored label when omitted and overwrites it when provided", () => {
   const session = { subscribe: () => () => {}, abort: () => {} };
-  const agent = new Agent("id", { ...baseConfig, resumable: true }, { agent: "helper" }, { prompt: "work", label: "researcher" });
+  const agent = new Agent("id", { ...baseConfig, resumable: true }, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" });
   agent.attach(session as any);
   completedRun(agent, "done");
 
@@ -89,11 +89,11 @@ test("Agent.startResume keeps the stored label when omitted and overwrites it wh
   agent.on((_a, kind) => updates.push(kind));
   assert.equal(agent.label, "researcher");
 
-  agent.startResume({ prompt: "follow-up" });
+  agent.startResume({ kind: "resume", sessionId: agent.id, prompt: "follow-up" });
   assert.equal(agent.label, "researcher");
   completedRun(agent, "done again", true);
 
-  agent.startResume({ prompt: "follow-up", label: "renamed", resumable: false });
+  agent.startResume({ kind: "resume", sessionId: agent.id, prompt: "follow-up", label: "renamed", resumable: false });
   assert.equal(agent.label, "renamed");
   assert.equal(agent.resumableOverride, false);
   assert.deepEqual(updates, ["status", "status", "status"]);
@@ -107,7 +107,7 @@ test("agent re-subscribes on resume so events during a resumed cycle update its 
     prompt: async () => {},
     abort: () => {},
   };
-  const agent = new Agent("id", { ...baseConfig, resumable: true }, { agent: "a" }, { prompt: "p" });
+  const agent = new Agent("id", { ...baseConfig, resumable: true }, { kind: "spawn", agent: "a", prompt: "p" });
 
   agent.attach(session as any);
   const firstEmit = emit;
@@ -117,7 +117,7 @@ test("agent re-subscribes on resume so events during a resumed cycle update its 
   completedRun(agent, "done");
   assert.equal(emit, undefined, "subscription should be torn down on complete");
 
-  agent.startResume({ prompt: "p2" });
+  agent.startResume({ kind: "resume", sessionId: agent.id, prompt: "p2" });
   agent.attach(session as any);
   const resumedEmit = emit as ((event: any) => void) | undefined;
   assert.ok(resumedEmit, "resume should re-subscribe");
@@ -138,7 +138,7 @@ test("agent stores tool-use history and keeps active tool correct for overlappin
     prompt: async () => {},
     abort: () => {},
   };
-  const agent = new Agent("id", baseConfig, { agent: "a" }, { prompt: "p" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "a", prompt: "p" });
 
   const activeNames = () =>
     agent.toView().activity.toolHistory.filter(t => t.completedAt === undefined).map(t => t.name);
@@ -165,7 +165,7 @@ test("agent stores tool-use history and keeps active tool correct for overlappin
 test("Agent.abort on a running agent aborts the underlying session and finalizes as aborted", async () => {
   let abortCalls = 0;
   const session = { messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => { abortCalls += 1; } };
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   agent.attach(session as any);
 
   await agent.abort();
@@ -175,7 +175,7 @@ test("Agent.abort on a running agent aborts the underlying session and finalizes
 });
 
 test("Agent.abort on a queued agent finalizes as skipped without touching a session", async () => {
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   assert.equal(agent.status.kind, "queued");
 
   await agent.abort();
@@ -186,7 +186,7 @@ test("Agent.abort on a queued agent finalizes as skipped without touching a sess
 test("Agent.abort on a terminal agent is a no-op and does not re-finalize", async () => {
   let abortCalls = 0;
   const session = { messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => { abortCalls += 1; } };
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   agent.attach(session as any);
   const firstResult = completedRun(agent, "done");
   doneStatus(agent);

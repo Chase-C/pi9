@@ -58,7 +58,9 @@ function makeManager(runner: any, resumeRunner?: any) {
       ["resumable", { name: "resumable", description: "d", systemPrompt: "s", source: "project", resumable: true }],
     ]),
   };
-  return new AgentManager(registry as any, 2, runner, resumeRunner);
+  const combined = (ctx: any, agent: any, attempt: any, signal: any) =>
+    attempt.kind === "resume" ? (resumeRunner ?? runner)(ctx, agent, attempt, signal) : runner(ctx, agent, attempt, signal);
+  return new AgentManager(registry as any, 2, combined);
 }
 
 async function runBackgroundOne(manager: AgentManager, prompt = "go") {

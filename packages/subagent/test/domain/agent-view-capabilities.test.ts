@@ -23,57 +23,57 @@ function fakeSession() {
 }
 
 test("Agent.toView capabilities: queued non-resumable agent reports neither canResume nor canClear", () => {
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   assert.deepEqual(agent.toView().capabilities, { canResume: false, canClear: false });
 });
 
 test("Agent.toView capabilities: queued resumable agent cannot resume or clear while active", () => {
-  const agent = new Agent("id", resumableConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   assert.deepEqual(agent.toView().capabilities, { canResume: false, canClear: false });
 });
 
 test("Agent.toView capabilities: running resumable agent cannot resume or clear", () => {
-  const agent = new Agent("id", resumableConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   agent.attach(fakeSession());
   assert.deepEqual(agent.toView().capabilities, { canResume: false, canClear: false });
 });
 
 test("Agent.toView capabilities: completed resumable agent can both resume and clear", () => {
-  const agent = new Agent("id", resumableConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   agent.attach(fakeSession());
   completedRun(agent, "done");
   assert.deepEqual(agent.toView().capabilities, { canResume: true, canClear: true });
 });
 
 test("Agent.toView capabilities: errored resumable agent is clearable but not resumable", () => {
-  const agent = new Agent("id", resumableConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   agent.attach(fakeSession());
   errorRun(agent, "boom");
   assert.deepEqual(agent.toView().capabilities, { canResume: false, canClear: true });
 });
 
 test("Agent.toView capabilities: completed non-resumable agent is neither resumable nor clearable", () => {
-  const agent = new Agent("id", baseConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   agent.attach(fakeSession());
   completedRun(agent, "done");
   assert.deepEqual(agent.toView().capabilities, { canResume: false, canClear: false });
 });
 
 test("Agent.toView capabilities: pre-attach failure on resumable agent remains resumable", () => {
-  const agent = new Agent("id", resumableConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   // Seed a retained session via a completed first attempt, then simulate a follow-up that fails before attach.
   agent.attach(fakeSession());
   completedRun(agent, "first");
-  agent.startResume({ prompt: "follow" });
+  agent.startResume({ kind: "resume", sessionId: agent.id, prompt: "follow" });
   errorRun(agent, "setup failed");
   assert.deepEqual(agent.toView().capabilities, { canResume: true, canClear: true });
 });
 
 test("Agent.toView capabilities: resume attempt in flight cannot resume or clear", () => {
-  const agent = new Agent("id", resumableConfig, { agent: "helper" }, { prompt: "p" });
+  const agent = new Agent("id", resumableConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   agent.attach(fakeSession());
   completedRun(agent, "first");
-  agent.startResume({ prompt: "follow" });
+  agent.startResume({ kind: "resume", sessionId: agent.id, prompt: "follow" });
   agent.attach(fakeSession());
   assert.deepEqual(agent.toView().capabilities, { canResume: false, canClear: false });
 });
