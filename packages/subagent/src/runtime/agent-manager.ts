@@ -19,7 +19,7 @@ import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../ui/settings
 import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
 import { BatchRun, type BatchUpdateListener } from "./batch-run.js";
 import { DefaultRunAgentDependencies, RunAttempt } from "./run-agent.js";
-import { TaskQueue } from "./task-queue.js";
+import { TaskQueue, type QueueLease } from "./task-queue.js";
 import { timingMark, timingStart } from "./timing.js";
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
@@ -37,6 +37,7 @@ export class AgentManager {
   private _activeBatches = new Map<string, BatchRun>();
   private _agentBatch = new Map<string, string>();
   private _updateListeners = new Set<AgentUpdateListener>();
+  private _leases = new Map<string, QueueLease>();
   private _getCurrentSettings: () => SubagentSettings = () => DEFAULT_SUBAGENT_SETTINGS;
   private readonly _runner: AgentRunner;
 
@@ -95,6 +96,18 @@ export class AgentManager {
   onAgentUpdate(listener: AgentUpdateListener): () => void {
     this._updateListeners.add(listener);
     return () => this._updateListeners.delete(listener);
+  }
+
+  /**
+   * Releases the named agent's queue slot while `fn` runs, then re-acquires it before returning.
+   * Used by the child subagent tool so a parent awaiting `batch.resultsPromise` doesn't pin the
+   * only queue slot a recursive descendant needs to start — without this, a tree deeper than
+   * maxRunning deadlocks. No-op when the session has no active lease.
+   */
+  async suspendAgentSlotDuring<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const lease = this._leases.get(sessionId);
+    if (!lease) return fn();
+    return lease.suspendDuring(fn);
   }
 
   async backgroundResults(
@@ -319,7 +332,7 @@ export class AgentManager {
   ): Promise<AgentRunResult> {
     const kind = attempt.kind;
     const resumed = kind === "resume";
-    return this._queue.enqueue(async () => {
+    return this._queue.enqueue(async lease => {
       const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id });
       if (signal?.aborted || !this._agents.includes(agent)) {
         const result = skippedRun(agent, resumed);
@@ -330,6 +343,7 @@ export class AgentManager {
         end({ status: agent.status.result.status });
         return agent.status.result;
       }
+      this._leases.set(agent.id, lease);
       try {
         const result = await this._runner(ctx, agent, attempt, signal);
         const finalResult = resumed && !result.resumed ? { ...result, resumed: true } : result;
@@ -346,6 +360,8 @@ export class AgentManager {
           : errorRun(agent, message, resumed);
         end({ status: result.status, error: message });
         return result;
+      } finally {
+        this._leases.delete(agent.id);
       }
     }, { agent: agent.agentName, sessionId: agent.id, kind });
   }

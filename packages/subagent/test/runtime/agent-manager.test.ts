@@ -1781,6 +1781,74 @@ test("child subagent tool forwards list, results, and remove actions straight to
   assert.deepEqual(manager.listSessions(), []);
 });
 
+test("recursive foreground subagent spawn completes with a single shared queue slot", async () => {
+  const runner = async (ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    if (agent.spawn.prompt === "spawn-child") {
+      const factory = manager.childFactoryFor(agent);
+      let tool: any;
+      factory({ registerTool: (t: any) => { tool = t; } } as any);
+      const result = await tool.execute(
+        "child-call",
+        { action: "run", tasks: [{ agent: "worker", prompt: "leaf" }] },
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.equal(result.isError, false);
+      return completedRun(agent, "parent-done");
+    }
+    return completedRun(agent, "leaf-done");
+  };
+
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager: AgentManager = new AgentManager(registry as any, 1, runner);
+
+  const results = await Promise.race([
+    manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-child" }]),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("recursive run timed out")), 100)),
+  ]);
+
+  assert.equal(results[0].status, "completed");
+  assert.equal(manager.listSessions().length, 2);
+});
+
+test("recursive foreground subagent chain can exceed the shared queue cap without deadlocking", async () => {
+  const runner = async (ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    if (agent.spawn.prompt.startsWith("spawn-")) {
+      const remaining = Number(agent.spawn.prompt.slice("spawn-".length));
+      const factory = manager.childFactoryFor(agent);
+      let tool: any;
+      factory({ registerTool: (t: any) => { tool = t; } } as any);
+      const result = await tool.execute(
+        `child-${remaining}`,
+        { action: "run", tasks: [{ agent: "worker", prompt: remaining > 1 ? `spawn-${remaining - 1}` : "leaf" }] },
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.equal(result.isError, false);
+    }
+    return completedRun(agent, `done:${agent.spawn.prompt}`);
+  };
+
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager: AgentManager = new AgentManager(registry as any, 1, runner);
+
+  const results = await Promise.race([
+    manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-3" }]),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("recursive chain timed out")), 100)),
+  ]);
+
+  assert.equal(results[0].status, "completed");
+  assert.equal(manager.listSessions().length, 4);
+});
+
 test("recursive subagent spawn: root → child → grandchild all live under one shared manager with correct parent links", async () => {
   // Custom runner that simulates each Agent's behavior: depending on the prompt, the agent either
   // spawns its own subagent via the child-session factory tool, or returns directly. This exercises

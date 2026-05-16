@@ -221,7 +221,9 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
             timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
             timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, getCurrentSettings()));
           }, batchOptions);
-          const results = await batch.resultsPromise;
+          const results = parentSessionId !== undefined
+            ? await agentManager.suspendAgentSlotDuring(parentSessionId, () => batch.resultsPromise)
+            : await batch.resultsPromise;
           runEnd({ ok: true, resultCount: results.length });
           timingSync("tool.finalWidget", { sessionCount: agentManager.listSessions().length }, () => updateSubagentWidget(ctx, agentManager.listSessions(), getCurrentSettings()));
           const isError = results.some(result => result.status !== "completed");
