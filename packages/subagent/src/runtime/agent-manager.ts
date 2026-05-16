@@ -10,7 +10,7 @@ import {
   skippedRun,
   type AgentRunResult,
 } from "../domain/agent-result.js";
-import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
+import type { AgentRunStatus, AgentUpdateKind, AgentView } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import { preflightResumeFailure, preflightSpawnFailure } from "../domain/preflight-failure.js";
 import type { TaskRequest, SessionStatus } from "../schema.js";
@@ -105,6 +105,20 @@ export class AgentManager {
     for (const child of directChildren) {
       await this.abortDescendantsOf(child.id);
       await child.abort();
+    }
+  }
+
+  /**
+   * Same post-order walk as `abortDescendantsOf` but skips agents currently flagged
+   * `background === true`. The check uses the live flag, so an agent promoted via
+   * `promoteToBackground` between spawn and finalize is treated as background.
+   */
+  async cancelNonBackgroundDescendantsOf(parentSessionId: string, reason: string): Promise<void> {
+    const directChildren = this._agents.filter(a => a.parentSessionId === parentSessionId);
+    for (const child of directChildren) {
+      if (child.background) continue;
+      await this.cancelNonBackgroundDescendantsOf(child.id, reason);
+      await child.abort(reason);
     }
   }
 
@@ -341,18 +355,24 @@ export class AgentManager {
       const batch = this._activeBatches.get(groupId);
       if (batch) batch.handleAgentUpdate(kind);
     }
-    // Fan out abort across the subtree whenever an agent transitions to terminal "aborted".
-    // The promise is tracked so `remove()` (or any other caller) can await its completion.
-    if (kind === "status" && this._isAbortedTerminal(agent) && !this._pendingFanouts.has(agent.id)) {
-      const promise = this.abortDescendantsOf(agent.id)
-        .finally(() => this._pendingFanouts.delete(agent.id));
-      this._pendingFanouts.set(agent.id, promise);
+    // Parent-finalize policy: when an agent reaches a terminal `aborted` or `error` outcome,
+    // cancel its still-running non-background descendants. `completed` (and any other outcome)
+    // leaves descendants alone — a completed parent has already consumed children's results,
+    // and any survivors must be background ones that the parent dispatched to outlive itself.
+    if (kind === "status" && !this._pendingFanouts.has(agent.id)) {
+      const outcome = this._terminalOutcome(agent);
+      if (outcome === "aborted" || outcome === "error") {
+        const reason = `Parent ${agent.id} finalized as ${outcome}`;
+        const promise = this.cancelNonBackgroundDescendantsOf(agent.id, reason)
+          .finally(() => this._pendingFanouts.delete(agent.id));
+        this._pendingFanouts.set(agent.id, promise);
+      }
     }
   }
 
-  private _isAbortedTerminal(agent: Agent): boolean {
+  private _terminalOutcome(agent: Agent): AgentRunStatus | undefined {
     const status = agent.status;
-    return status.kind === "done" && status.result.status === "aborted";
+    return status.kind === "done" ? status.result.status : undefined;
   }
 
   private _runAttempt(

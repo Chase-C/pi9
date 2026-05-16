@@ -183,7 +183,7 @@ export class Agent {
     };
   }
 
-  async abort(_reason?: string): Promise<void> {
+  async abort(reason?: string): Promise<void> {
     const current = this._current;
     if (!current) return;
     const resumed = current.kind === "resume";
@@ -191,11 +191,11 @@ export class Agent {
       const session = current.state.session;
       await Promise.resolve(session.abort()).catch(() => undefined);
       if (!this._current) return;
-      this.settle(buildAgentResult(this, { status: "aborted", error: "Agent aborted.", resumed }));
+      this.settle(buildAgentResult(this, { status: "aborted", error: reason ?? "Agent aborted.", resumed }));
       return;
     }
     if (current.state.kind === "queued") {
-      this.settle(buildAgentResult(this, { status: "skipped", error: "Agent skipped.", resumed }));
+      this.settle(buildAgentResult(this, { status: "skipped", error: reason ?? "Agent skipped.", resumed }));
     }
   }
 
