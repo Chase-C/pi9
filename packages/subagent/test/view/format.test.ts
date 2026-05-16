@@ -101,17 +101,24 @@ test("background-started view expanded shows one line per session with session i
   assert.match(expanded, /running/);
 });
 
-test("flat sessions (no parentSessionId) render with no indentation in widget and inventory", () => {
-  const a = fakeAgent({ id: "a", config: { name: "alpha" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
-  const b = fakeAgent({ id: "b", config: { name: "beta" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
-  const orphan = fakeAgent({ id: "c", parentSessionId: "missing-parent", config: { name: "orphan" }, createdAt: 3, status: { kind: "running", startedAt: 1 } });
+test("flat sessions (no parentSessionId) render in caller order with no indentation in widget and inventory", () => {
+  const a = fakeAgent({ id: "a", config: { name: "alpha" }, createdAt: 30, status: { kind: "running", startedAt: 1 } });
+  const b = fakeAgent({ id: "b", config: { name: "beta" }, createdAt: 10, status: { kind: "running", startedAt: 1 } });
+  const orphan = fakeAgent({ id: "c", parentSessionId: "missing-parent", config: { name: "orphan" }, createdAt: 20, status: { kind: "running", startedAt: 1 } });
 
   const widgetLines = formatWidgetLines([a, b, orphan], 1_000);
+  assert.equal(widgetLines.length, 3);
+  assert.match(widgetLines[0], /^alpha /);
+  assert.match(widgetLines[1], /^beta /);
+  assert.match(widgetLines[2], /^orphan /);
   for (const line of widgetLines) assert.doesNotMatch(line, /^ /);
 
   const inventoryLines = formatSubagentToolLines(inventoryDetails([a, b, orphan]), true, 1_000);
   const headLines = inventoryLines.filter(line => line.includes(" · running "));
   assert.equal(headLines.length, 3);
+  assert.match(headLines[0], /^alpha /);
+  assert.match(headLines[1], /^beta /);
+  assert.match(headLines[2], /^orphan /);
   for (const line of headLines) assert.doesNotMatch(line, /^ /);
 });
 

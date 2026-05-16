@@ -161,8 +161,8 @@ function orderAsTree(sessions: readonly AgentView[]): Array<{ agent: AgentView; 
     if (bucket) bucket.push(session);
     else childrenByParent.set(parentKey, [session]);
   }
-  for (const bucket of childrenByParent.values()) {
-    bucket.sort((a, b) => a.createdAt - b.createdAt);
+  for (const [parentKey, bucket] of childrenByParent) {
+    if (parentKey !== rootKey) bucket.sort((a, b) => a.createdAt - b.createdAt);
   }
 
   const out: Array<{ agent: AgentView; depth: number }> = [];
