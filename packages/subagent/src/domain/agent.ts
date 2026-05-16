@@ -19,6 +19,7 @@ export class Agent {
 
   readonly agentName: string;
   readonly createdAt = Date.now();
+  readonly parentSessionId?: string;
 
   private _current?: Attempt;
   private _lastAttempt?: Attempt;
@@ -34,10 +35,11 @@ export class Agent {
     readonly id: string,
     readonly config: AgentConfig,
     readonly spawn: SpawnRequest,
-    options: { background?: boolean } = {},
+    options: { background?: boolean; parentSessionId?: string } = {},
   ) {
     this.agentName = spawn.agent;
     this._background = options.background ?? false;
+    if (options.parentSessionId !== undefined) this.parentSessionId = options.parentSessionId;
     this._appliedResumableOverride = spawn.resumable;
     this._label = spawn.label;
     this._current = new Attempt("spawn", spawn.prompt, spawn.resumable);
@@ -150,6 +152,7 @@ export class Agent {
     return {
       id: this.id,
       ...(inputIndex !== undefined ? { inputIndex } : {}),
+      ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
       ...(label !== undefined ? { label } : {}),
       ...(prompt !== undefined ? { prompt } : {}),
       createdAt: this.createdAt,

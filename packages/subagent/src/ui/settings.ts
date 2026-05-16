@@ -14,6 +14,11 @@ export interface SubagentUiSettings {
 
 export interface SubagentRuntimeSettings {
   maxTasksPerRun: number;
+  /**
+   * Tree-wide cap on concurrently running subagents. A single shared task queue spans every
+   * parent/child level within one Pi process, so this value bounds the total in-flight count
+   * across the whole recursive tree rather than per-manager or per-parent.
+   */
   maxConcurrentSubagents: number;
   defaultResumable: boolean;
   backgroundNotify: BackgroundNotifyMode;

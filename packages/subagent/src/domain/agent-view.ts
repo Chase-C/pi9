@@ -54,6 +54,7 @@ export interface AgentViewCapabilities {
 export interface AgentView {
   readonly id: string;
   readonly inputIndex?: number;
+  readonly parentSessionId?: string;
   readonly label?: string;
   readonly resumed?: boolean;
   readonly prompt?: string;

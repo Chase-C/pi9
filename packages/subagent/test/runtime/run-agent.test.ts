@@ -458,6 +458,54 @@ test("run-agent constructs the child resource loader with cache factories and fa
   assert.deepEqual(loaderOptions.additionalExtensionPaths, [fallbackPath]);
 });
 
+test("run-agent prepends the manager-supplied child factory before cached factories on the resource loader", async () => {
+  let loaderOptions: any;
+  const cachedFactory = () => {};
+  const childFactory = () => {};
+  let childFactoryArg: any;
+  const session = {
+    messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+    subscribe: () => () => {},
+    prompt: async () => {},
+    abort: () => {},
+  };
+  const dependencies = {
+    ...makeBaseDeps({
+      ResourceLoader: class { constructor(options: any) { loaderOptions = options; } async reload() {} },
+      createAgentSession: async () => ({ session }),
+      extensionFactoryCache: { load: async () => ({ factories: [cachedFactory], fallbackPaths: [] }) },
+    }),
+    childFactoryFor: (agent: any) => { childFactoryArg = agent; return childFactory; },
+  } as any;
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+
+  assert.deepEqual(loaderOptions.extensionFactories, [childFactory, cachedFactory]);
+  assert.equal(childFactoryArg, agent, "child factory must be built for the agent under attempt");
+});
+
+test("run-agent leaves the extensionFactories list unchanged when no childFactoryFor is supplied", async () => {
+  let loaderOptions: any;
+  const cachedFactory = () => {};
+  const session = {
+    messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+    subscribe: () => () => {},
+    prompt: async () => {},
+    abort: () => {},
+  };
+  const dependencies = makeBaseDeps({
+    ResourceLoader: class { constructor(options: any) { loaderOptions = options; } async reload() {} },
+    createAgentSession: async () => ({ session }),
+    extensionFactoryCache: { load: async () => ({ factories: [cachedFactory], fallbackPaths: [] }) },
+  });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+
+  assert.deepEqual(loaderOptions.extensionFactories, [cachedFactory]);
+});
+
 test("run-agent leaves the system prompt unchanged when no skills are requested", async () => {
   let loaderOptions: any;
   const session = {

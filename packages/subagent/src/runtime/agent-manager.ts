@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ExtensionContext, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
@@ -14,9 +14,11 @@ import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import { preflightResumeFailure, preflightSpawnFailure } from "../domain/preflight-failure.js";
 import type { TaskRequest, SessionStatus } from "../schema.js";
+import { defineSubagentTool } from "../tool/define-subagent-tool.js";
+import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../ui/settings.js";
 import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
 import { BatchRun, type BatchUpdateListener } from "./batch-run.js";
-import { RunAttempt } from "./run-agent.js";
+import { DefaultRunAgentDependencies, RunAttempt } from "./run-agent.js";
 import { TaskQueue } from "./task-queue.js";
 import { timingMark, timingStart } from "./timing.js";
 
@@ -35,13 +37,29 @@ export class AgentManager {
   private _activeBatches = new Map<string, BatchRun>();
   private _agentBatch = new Map<string, string>();
   private _updateListeners = new Set<AgentUpdateListener>();
+  private _getCurrentSettings: () => SubagentSettings = () => DEFAULT_SUBAGENT_SETTINGS;
+  private readonly _runner: AgentRunner;
 
   constructor(
     readonly registry: AgentRegistry,
     maxRunning: number = 4,
-    private readonly _runner: AgentRunner = RunAttempt,
+    runner?: AgentRunner,
   ) {
     this._queue = new TaskQueue(maxRunning);
+    this._runner = runner ?? ((ctx, agent, attempt, signal) =>
+      RunAttempt(ctx, agent, attempt, signal, {
+        ...DefaultRunAgentDependencies,
+        childFactoryFor: (a: Agent) => this.childFactoryFor(a),
+      }));
+  }
+
+  /**
+   * Sets the accessor used by the default runner when building child-session subagent factories.
+   * `subagentExtension` wires this to its `currentSettings` closure so each child's `subagent` tool
+   * inherits the parent's most recent settings without reloading them.
+   */
+  setCurrentSettings(getter: () => SubagentSettings) {
+    this._getCurrentSettings = getter;
   }
 
   listSessions(filter?: { status?: SessionStatus[] }): AgentView[] {
@@ -53,6 +71,25 @@ export class AgentManager {
 
   configure(options: { maxRunning?: number }) {
     if (options.maxRunning !== undefined) this._queue.maxRunning = options.maxRunning;
+  }
+
+  /**
+   * Returns an ExtensionFactory that registers a `subagent` tool inside a child Pi session,
+   * delegating into this shared manager so the entire tree lives in one process. The child tool
+   * skips settings and registry reloads — they are already populated by the parent invocation
+   * that triggered the child — and threads `parent.id` as the new agents' `parentSessionId`.
+   */
+  childFactoryFor(parent: Agent, getCurrentSettings?: () => SubagentSettings): ExtensionFactory {
+    const getter = getCurrentSettings ?? this._getCurrentSettings;
+    return (pi) => {
+      pi.registerTool(defineSubagentTool({
+        agentManager: this,
+        agentRegistry: this.registry,
+        getCurrentSettings: getter,
+        prepareInvocation: async () => getter(),
+        parentSessionId: parent.id,
+      }));
+    };
   }
 
   onAgentUpdate(listener: AgentUpdateListener): () => void {
@@ -154,8 +191,9 @@ export class AgentManager {
     signal: AbortSignal | undefined,
     tasks: TaskRequest[],
     onUpdate?: BatchUpdateListener,
+    options: { parentSessionId?: string } = {},
   ): Promise<AgentRunResult[]> {
-    const batch = this.startBatch(ctx, signal, tasks, onUpdate, { background: false });
+    const batch = this.startBatch(ctx, signal, tasks, onUpdate, { background: false, ...options });
     return batch.resultsPromise;
   }
 
@@ -164,7 +202,7 @@ export class AgentManager {
     signal: AbortSignal | undefined,
     tasks: TaskRequest[],
     onUpdate: BatchUpdateListener | undefined,
-    options: { background: boolean },
+    options: { background: boolean; parentSessionId?: string },
   ): { groupId: string; sessions: AgentView[]; resultsPromise: Promise<AgentRunResult[]> } {
     const groupId = randomUUID();
     const groupCreatedAt = Date.now();
@@ -194,7 +232,10 @@ export class AgentManager {
           return Promise.resolve(result);
         }
 
-        const agent = new Agent(randomUUID(), config, task, { background: options.background });
+        const agent = new Agent(randomUUID(), config, task, {
+          background: options.background,
+          ...(options.parentSessionId !== undefined ? { parentSessionId: options.parentSessionId } : {}),
+        });
         agent.on(this._agentUpdate.bind(this));
         batch.addAgent(agent, inputIndex, false);
         timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id });

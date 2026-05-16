@@ -10,6 +10,7 @@ export interface AgentRunResult {
   error?: string;
   model?: string;
   sessionId?: string;
+  parentSessionId?: string;
   resumable: boolean;
   resumed: boolean;
 }
@@ -32,6 +33,7 @@ export function buildAgentResult(agent: Agent, args: FinalizeRunArgs): AgentRunR
     resumed: Boolean(args.resumed),
     status: args.status,
     ...(resumable ? { sessionId: agent.id } : {}),
+    ...(agent.parentSessionId !== undefined ? { parentSessionId: agent.parentSessionId } : {}),
     ...(args.output !== undefined ? { output: args.output } : {}),
     ...(args.error !== undefined ? { error: args.error } : {}),
   };

@@ -11,6 +11,7 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSession,
+  type ExtensionFactory,
   type ModelRegistry,
   type Skill,
 } from "@earendil-works/pi-coding-agent";
@@ -35,6 +36,12 @@ export interface RunAgentDependencies {
   settingsManager: typeof SettingsManager.create;
   loadSkills: typeof loadSkills;
   extensionFactoryCache: Pick<ExtensionFactoryCache, "load">;
+  /**
+   * Builds the child-session subagent factory for the current agent. When set, the factory it
+   * returns is prepended to the loader's `extensionFactories`, letting the spawned child see a
+   * `subagent` tool that delegates back into the parent's shared `AgentManager`.
+   */
+  childFactoryFor?: (agent: Agent) => ExtensionFactory;
 }
 
 export const DefaultRunAgentDependencies: RunAgentDependencies = {
@@ -101,11 +108,14 @@ export async function RunAttempt(
     fallbackCount: fallbackPaths.length,
   });
 
+  const childFactory = dependencies.childFactoryFor?.(agent);
+  const allFactories: ExtensionFactory[] = childFactory ? [childFactory, ...factories] : factories;
+
   const resourceLoader = timingSync("runAgent.newResourceLoader", { ...runData, cwd }, () => new dependencies.ResourceLoader({
     cwd,
     agentDir,
     noExtensions: true,
-    extensionFactories: factories,
+    extensionFactories: allFactories,
     additionalExtensionPaths: fallbackPaths,
     noSkills: true,
     noPromptTemplates: true,

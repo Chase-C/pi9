@@ -2,7 +2,9 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { AgentManager } from "../../src/runtime/agent-manager.js";
+import { Agent } from "../../src/domain/agent.js";
 import { completedRun, interruptedRun } from "../../src/domain/agent-result.js";
+import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/ui/settings.js";
 
 type AnyManager = AgentManager;
 type FakeRegistry = { agents: Map<string, any>; reload?: () => Promise<void>; summarizeAgent?: () => string };
@@ -1670,6 +1672,239 @@ test("AgentManager.backgroundResults reads retained foreground sessions identica
   assert.equal(entry.ready, true);
   assert.equal(entry.result.output, "retained-output");
   assert.equal(entry.result.resumable, true);
+});
+
+test("AgentManager.run forwards parentSessionId to every spawned agent's view and result", async () => {
+  const seenParents: Array<string | undefined> = [];
+  const runner = async (_ctx: any, agent: any) => {
+    seenParents.push(agent.parentSessionId);
+    agent.attach(makeSession());
+    return completedRun(agent, "ok");
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+
+  const results = await manager.run(
+    baseCtx(),
+    undefined,
+    [
+      { kind: "spawn", agent: "helper", prompt: "one" },
+      { kind: "spawn", agent: "helper", prompt: "two" },
+    ],
+    undefined,
+    { parentSessionId: "parent-1" },
+  );
+
+  assert.deepEqual(seenParents, ["parent-1", "parent-1"]);
+  assert.deepEqual(results.map(r => r.parentSessionId), ["parent-1", "parent-1"]);
+});
+
+const baseAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, resumable: false };
+
+test("AgentManager.childFactoryFor returns a factory that registers a 'subagent' tool", () => {
+  const registry: FakeRegistry = { agents: new Map() };
+  const manager = new AgentManager(registry as any);
+  const parent = new Agent("parent-1", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+
+  const factory = manager.childFactoryFor(parent, () => DEFAULT_SUBAGENT_SETTINGS);
+  const registered: any[] = [];
+  factory({ registerTool: (tool: any) => registered.push(tool) } as any);
+
+  assert.equal(registered.length, 1);
+  assert.equal(registered[0].name, "subagent");
+  assert.equal(typeof registered[0].execute, "function");
+});
+
+function captureChildTool(manager: AgentManager, parent: Agent): any {
+  let captured: any;
+  const factory = manager.childFactoryFor(parent, () => DEFAULT_SUBAGENT_SETTINGS);
+  factory({ registerTool: (tool: any) => { captured = tool; } } as any);
+  return captured;
+}
+
+test("child subagent tool delegates action=run to the shared manager with parentSessionId set", async () => {
+  const seenParents: Array<string | undefined> = [];
+  const runner = async (_ctx: any, agent: any) => {
+    seenParents.push(agent.parentSessionId);
+    agent.attach(makeSession());
+    return completedRun(agent, "ok");
+  };
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  const tool = captureChildTool(manager, parent);
+
+  const result = await tool.execute(
+    "call-1",
+    { action: "run", tasks: [{ agent: "worker", prompt: "delegate" }] },
+    undefined,
+    undefined,
+    baseCtx(),
+  );
+
+  assert.equal(result.isError, false, `unexpected error: ${result.content?.[0]?.text}`);
+  assert.deepEqual(seenParents, ["parent-7"]);
+});
+
+test("child subagent tool forwards list, results, and remove actions straight to the shared manager", async () => {
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    return completedRun(agent, "ok");
+  };
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+  await manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "seed" }]);
+  const seeded = manager.listSessions();
+  assert.equal(seeded.length, 1);
+  const seededId = seeded[0].id;
+
+  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  const tool = captureChildTool(manager, parent);
+
+  const list = await tool.execute("c-list", { action: "list" }, undefined, undefined, baseCtx());
+  assert.equal(list.isError, false);
+  assert.deepEqual(list.details.sessions.map((s: any) => s.id), [seededId]);
+
+  const results = await tool.execute("c-results", { action: "results", sessionIds: [seededId] }, undefined, undefined, baseCtx());
+  assert.equal(results.isError, false);
+  assert.equal(results.details.results[0].sessionId, seededId);
+
+  const removed = await tool.execute("c-remove", { action: "remove", sessionIds: [seededId] }, undefined, undefined, baseCtx());
+  assert.equal(removed.isError, false);
+  assert.equal(removed.details.summary.removed, 1);
+  assert.deepEqual(manager.listSessions(), []);
+});
+
+test("recursive subagent spawn: root → child → grandchild all live under one shared manager with correct parent links", async () => {
+  // Custom runner that simulates each Agent's behavior: depending on the prompt, the agent either
+  // spawns its own subagent via the child-session factory tool, or returns directly. This exercises
+  // the full child-factory flow without standing up a real Pi session.
+  const recordedParents: Record<string, string | undefined> = {};
+  const runner = async (ctx: any, agent: any) => {
+    recordedParents[agent.id] = agent.parentSessionId;
+    agent.attach(makeSession());
+    if (agent.spawn.prompt === "spawn-child") {
+      const factory = manager.childFactoryFor(agent);
+      let tool: any;
+      factory({ registerTool: (t: any) => { tool = t; } } as any);
+      const result = await tool.execute(
+        "c-call",
+        { action: "run", tasks: [{ agent: "worker", prompt: "spawn-grandchild" }] },
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.equal(result.isError, false);
+      return completedRun(agent, "child-done");
+    }
+    if (agent.spawn.prompt === "spawn-grandchild") {
+      const factory = manager.childFactoryFor(agent);
+      let tool: any;
+      factory({ registerTool: (t: any) => { tool = t; } } as any);
+      const result = await tool.execute(
+        "g-call",
+        { action: "run", tasks: [{ agent: "worker", prompt: "leaf" }] },
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.equal(result.isError, false);
+      return completedRun(agent, "grandchild-done");
+    }
+    return completedRun(agent, "leaf-done");
+  };
+
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager: AgentManager = new AgentManager(registry as any, 8, runner);
+
+  const results = await manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-child" }]);
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "completed");
+  assert.equal(Object.prototype.hasOwnProperty.call(results[0], "parentSessionId"), false, "root result has no parent");
+
+  // Three distinct ids should have been seen by the runner — root, child, grandchild.
+  const ids = Object.keys(recordedParents);
+  assert.equal(ids.length, 3, `expected 3 agent runs, got ${ids.length}`);
+
+  const rootIds = ids.filter(id => recordedParents[id] === undefined);
+  assert.equal(rootIds.length, 1);
+  const rootId = rootIds[0];
+
+  const childIds = ids.filter(id => recordedParents[id] === rootId);
+  assert.equal(childIds.length, 1, "exactly one child should point to root");
+  const childId = childIds[0];
+
+  const grandchildIds = ids.filter(id => recordedParents[id] === childId);
+  assert.equal(grandchildIds.length, 1, "exactly one grandchild should point to child");
+  const grandchildId = grandchildIds[0];
+
+  // All three retained sessions visible from the root manager with the expected linkage.
+  const sessions = manager.listSessions();
+  assert.equal(sessions.length, 3);
+  const sessionsById = new Map(sessions.map(s => [s.id, s]));
+  assert.equal(sessionsById.get(rootId)?.parentSessionId, undefined);
+  assert.equal(sessionsById.get(childId)?.parentSessionId, rootId);
+  assert.equal(sessionsById.get(grandchildId)?.parentSessionId, childId);
+});
+
+test("child subagent tool does not reload settings or rebuild the registry on each call", async () => {
+  let settingsCalls = 0;
+  let registryReloads = 0;
+  const registry = {
+    agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project" }]]),
+    reload: async () => { registryReloads += 1; },
+    summarizeAgent: () => "worker",
+  };
+  const manager = new AgentManager(registry as any, 2, async (_c: any, a: any) => { a.attach(makeSession()); return completedRun(a, "ok"); });
+  const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+
+  const factory = manager.childFactoryFor(parent, () => { settingsCalls += 1; return DEFAULT_SUBAGENT_SETTINGS; });
+  let captured: any;
+  factory({ registerTool: (t: any) => { captured = t; } } as any);
+
+  await captured.execute("c1", { action: "list" }, undefined, undefined, baseCtx());
+  await captured.execute("c2", { action: "agents" }, undefined, undefined, baseCtx());
+
+  assert.equal(registryReloads, 0, "child invocations must not reload the registry");
+  assert.ok(settingsCalls >= 1, "child invocations should read current settings");
+});
+
+test("AgentManager.startBatch threads parentSessionId into views surfaced through listSessions", async () => {
+  let releaseFirst!: () => void;
+  const blocker = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    await blocker;
+    return completedRun(agent, "ok");
+  };
+  const registry = {
+    agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = new AgentManager(registry as any, 2, runner);
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "helper", prompt: "go" }],
+    undefined,
+    { background: false, parentSessionId: "parent-7" },
+  );
+
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const sessions = manager.listSessions();
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].parentSessionId, "parent-7");
+
+  releaseFirst();
+  await batch.resultsPromise;
 });
 
 // Suppress unused-variable warnings for shared types.

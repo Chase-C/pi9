@@ -27,6 +27,22 @@ test("Agent label surfaces through both the getter and toView, including the abs
   assert.equal(Object.prototype.hasOwnProperty.call(unlabeled.toView(), "label"), false);
 });
 
+test("Agent stores optional parentSessionId from constructor options", () => {
+  const child = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, { parentSessionId: "root-1" });
+  assert.equal(child.parentSessionId, "root-1");
+
+  const orphan = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  assert.equal(orphan.parentSessionId, undefined);
+});
+
+test("Agent.toView surfaces parentSessionId when set and omits it when absent", () => {
+  const child = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, { parentSessionId: "root-1" });
+  assert.equal(child.toView().parentSessionId, "root-1");
+
+  const orphan = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  assert.equal(Object.prototype.hasOwnProperty.call(orphan.toView(), "parentSessionId"), false);
+});
+
 test("Agent constructor optional background flag controls toView kind", () => {
   const defaultAgent = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
   assert.equal(defaultAgent.background, false);

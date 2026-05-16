@@ -32,6 +32,20 @@ test("AgentRunResult propagates label from agent through completed/error/interru
   assert.equal(Object.prototype.hasOwnProperty.call(result, "label"), false);
 });
 
+test("AgentRunResult carries parentSessionId when the agent has one and omits it otherwise", () => {
+  const session = { subscribe: () => () => {}, abort: () => {} };
+
+  const child = new Agent("c1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, { parentSessionId: "root-1" });
+  child.attach(session as any);
+  const childResult = completedRun(child, "done");
+  assert.equal(childResult.parentSessionId, "root-1");
+
+  const root = new Agent("r1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" });
+  root.attach(session as any);
+  const rootResult = completedRun(root, "done");
+  assert.equal(Object.prototype.hasOwnProperty.call(rootResult, "parentSessionId"), false);
+});
+
 test("AgentRunResult resumable reflects the per-task override", () => {
   const config = { ...baseConfig, resumable: false };
   const session = { subscribe: () => () => {}, abort: () => {} };

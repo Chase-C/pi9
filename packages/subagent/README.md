@@ -425,7 +425,7 @@ Each result carries:
 
 - `action` is required; legacy `{ tasks: [...] }` calls and the previous `start`/`resume`/`clear` actions are rejected.
 - Maximum tasks per `run` tool call defaults to eight and can be changed with `runtime.maxTasksPerRun`.
-- Maximum concurrent child sessions defaults to four and can be changed with `runtime.maxConcurrentSubagents`.
+- Maximum concurrent child sessions defaults to four and can be changed with `runtime.maxConcurrentSubagents`. The cap applies tree-wide across all parent/child levels — a single shared queue owns the entire subagent tree.
 - A given `sessionId` cannot be resumed more than once concurrently; a second concurrent resume of the same session surfaces as a per-task error.
 - Agent discovery checks user agents and the nearest project agents for the execution `cwd` by default. It can be narrowed with `agentDiscovery` settings; there is no per-call `agentScope` parameter.
 - No per-run timeout is exposed beyond parent abort/cancellation.
