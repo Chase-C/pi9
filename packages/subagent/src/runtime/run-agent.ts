@@ -17,6 +17,7 @@ import {
 
 import { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
+import { ExtensionFactoryCache } from "./extension-factory-cache.js";
 import { timingAsync, timingMark, timingSync } from "./timing.js";
 import {
   completedRun,
@@ -33,15 +34,19 @@ export interface RunAgentDependencies {
   sessionManager: typeof SessionManager.inMemory;
   settingsManager: typeof SettingsManager.create;
   loadSkills: typeof loadSkills;
+  extensionFactoryCache: Pick<ExtensionFactoryCache, "load">;
 }
 
-const DefaultRunAgentDependencies: RunAgentDependencies = {
+export const DefaultRunAgentDependencies: RunAgentDependencies = {
   ResourceLoader: DefaultResourceLoader,
   getAgentDir,
   createAgentSession,
   sessionManager: SessionManager.inMemory,
   settingsManager: SettingsManager.create,
   loadSkills,
+  extensionFactoryCache: new ExtensionFactoryCache({
+    bypass: process.env.PI_SUBAGENT_BYPASS_EXTENSION_CACHE === "1",
+  }),
 };
 
 export async function RunAttempt(
@@ -85,10 +90,23 @@ export async function RunAttempt(
     if (skillBlock) systemPrompt = `${systemPrompt}\n\n${skillBlock}`;
   }
 
+  const { factories, fallbackPaths } = await timingAsync(
+    "runAgent.extensionFactoryCache.load",
+    { ...runData, cwd, agentDir },
+    () => dependencies.extensionFactoryCache.load(cwd, agentDir),
+  );
+  timingMark("runAgent.extensionFactoryCache.summary", {
+    ...runData,
+    factoryCount: factories.length,
+    fallbackCount: fallbackPaths.length,
+  });
+
   const resourceLoader = timingSync("runAgent.newResourceLoader", { ...runData, cwd }, () => new dependencies.ResourceLoader({
     cwd,
     agentDir,
-    noExtensions: false,
+    noExtensions: true,
+    extensionFactories: factories,
+    additionalExtensionPaths: fallbackPaths,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,

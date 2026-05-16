@@ -1,11 +1,25 @@
-import { test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
+
 import { RunAttempt } from "../../src/runtime/run-agent.js";
 import { Agent } from "../../src/domain/agent.js";
+
+const SAVED_BYPASS = process.env.PI_SUBAGENT_BYPASS_EXTENSION_CACHE;
+const SAVED_TIMING = process.env.PI_SUBAGENT_DEBUG_TIMING;
+const SAVED_TIMING_FILE = process.env.PI_SUBAGENT_DEBUG_TIMING_FILE;
+afterEach(() => {
+  if (SAVED_BYPASS === undefined) delete process.env.PI_SUBAGENT_BYPASS_EXTENSION_CACHE;
+  else process.env.PI_SUBAGENT_BYPASS_EXTENSION_CACHE = SAVED_BYPASS;
+  if (SAVED_TIMING === undefined) delete process.env.PI_SUBAGENT_DEBUG_TIMING;
+  else process.env.PI_SUBAGENT_DEBUG_TIMING = SAVED_TIMING;
+  if (SAVED_TIMING_FILE === undefined) delete process.env.PI_SUBAGENT_DEBUG_TIMING_FILE;
+  else process.env.PI_SUBAGENT_DEBUG_TIMING_FILE = SAVED_TIMING_FILE;
+});
 
 const baseConfig = {
   name: "helper",
@@ -23,6 +37,7 @@ const makeBaseDeps = (overrides: any = {}) => ({
   createAgentSession: async () => ({ session: { messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} } }),
   sessionManager: (cwd: string) => ({ cwd }),
   settingsManager: (cwd: string, agentDir: string) => ({ cwd, agentDir }),
+  extensionFactoryCache: { load: async () => ({ factories: [], fallbackPaths: [] }) },
   ...overrides,
 });
 
@@ -302,6 +317,145 @@ test("run-agent explicit empty per-task skills opts out of agent-frontmatter def
 
   assert.equal(loaderOptions.systemPromptOverride(), "BASE PROMPT");
   assert.equal(loadSkillsCalls, 0, "should not load skills when the task explicitly opted out");
+});
+
+test("emits cache-load and resource-loader timing events with factory and fallback counts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-timing-"));
+  const logFile = join(root, "timing.log");
+  process.env.PI_SUBAGENT_DEBUG_TIMING = "1";
+  process.env.PI_SUBAGENT_DEBUG_TIMING_FILE = logFile;
+
+  const factory = () => {};
+  const fallbackPath = "/tmp/cached-fallback/ext.ts";
+  const dependencies = makeBaseDeps({
+    extensionFactoryCache: {
+      load: async () => ({ factories: [factory], fallbackPaths: [fallbackPath] }),
+    },
+  });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+
+  const log = await readFile(logFile, "utf8");
+  assert.match(log, /event=runAgent\.extensionFactoryCache\.load\b/);
+  assert.match(log, /event=runAgent\.extensionFactoryCache\.summary\b[^\n]*factoryCount=1\b/);
+  assert.match(log, /event=runAgent\.extensionFactoryCache\.summary\b[^\n]*fallbackCount=1\b/);
+  assert.match(log, /event=runAgent\.resourceLoader\.reload\b/);
+  await rm(logFile, { force: true });
+});
+
+test("cache fallback paths reach DefaultResourceLoader.getExtensions() in the spawned session", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-fallback-int-"));
+  const agentDir = join(root, "agent");
+  await mkdir(join(root, ".pi", "extensions"), { recursive: true });
+  await mkdir(agentDir, { recursive: true });
+  const entry = join(root, ".pi", "extensions", "fallback.ts");
+  await writeFile(entry, "export default () => {};");
+
+  let capturedLoader: any;
+  const dependencies = makeBaseDeps({
+    ResourceLoader: DefaultResourceLoader,
+    getAgentDir: () => agentDir,
+    createAgentSession: async (options: any) => {
+      capturedLoader = options.resourceLoader;
+      return {
+        session: {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+          subscribe: () => () => {},
+          prompt: async () => {},
+          abort: () => {},
+        },
+      };
+    },
+    extensionFactoryCache: {
+      load: async () => ({ factories: [], fallbackPaths: [entry] }),
+    },
+  });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+
+  const result = await RunAttempt(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+
+  assert.equal(result.status, "completed");
+  assert.ok(capturedLoader, "createAgentSession should have received a loader");
+  const loaded = capturedLoader.getExtensions();
+  assert.equal(loaded.errors.length, 0, `loader reported errors: ${JSON.stringify(loaded.errors)}`);
+  const matched = loaded.extensions.find((ext: any) => ext.resolvedPath === entry || ext.path === entry);
+  assert.ok(matched, `expected ${entry} in loaded extensions: ${JSON.stringify(loaded.extensions.map((e: any) => e.resolvedPath))}`);
+});
+
+test("DefaultRunAgentDependencies wires PI_SUBAGENT_BYPASS_EXTENSION_CACHE=1 to cache bypass", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-bypass-env-"));
+  const agentDir = join(root, "agent");
+  await mkdir(join(agentDir, "extensions"), { recursive: true });
+  const entry = join(agentDir, "extensions", "ext.ts");
+  await writeFile(entry, "export default () => {};");
+
+  process.env.PI_SUBAGENT_BYPASS_EXTENSION_CACHE = "1";
+  vi.resetModules();
+  const { DefaultRunAgentDependencies } = await import("../../src/runtime/run-agent.js");
+
+  const result = await DefaultRunAgentDependencies.extensionFactoryCache.load(root, agentDir);
+
+  assert.deepEqual(result.factories, []);
+  assert.deepEqual(result.fallbackPaths, [entry]);
+});
+
+test("run-agent calls extensionFactoryCache.load with the resolved cwd and agent dir for every child session", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-cache-args-"));
+  const calls: Array<{ cwd: string; agentDir: string }> = [];
+  const session = {
+    messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+    subscribe: () => () => {},
+    prompt: async () => {},
+    abort: () => {},
+  };
+  const dependencies = makeBaseDeps({
+    getAgentDir: () => "/tmp/agent-dir",
+    createAgentSession: async () => ({ session }),
+    extensionFactoryCache: {
+      load: async (cwd: string, agentDir: string) => {
+        calls.push({ cwd, agentDir });
+        return { factories: [], fallbackPaths: [] };
+      },
+    },
+  });
+
+  for (let i = 0; i < 2; i++) {
+    const agent = new Agent(`id-${i}`, baseConfig, { kind: "spawn", agent: "helper", prompt: "work", cwd: "child" });
+    await RunAttempt(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  }
+
+  assert.equal(calls.length, 2, "cache should be loaded once per child session");
+  for (const call of calls) {
+    assert.equal(call.cwd, join(root, "child"));
+    assert.equal(call.agentDir, "/tmp/agent-dir");
+  }
+});
+
+test("run-agent constructs the child resource loader with cache factories and fallback paths and noExtensions: true", async () => {
+  let loaderOptions: any;
+  const factory = () => {};
+  const fallbackPath = "/tmp/cached-fallback/ext.ts";
+  const session = {
+    messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
+    subscribe: () => () => {},
+    prompt: async () => {},
+    abort: () => {},
+  };
+  const dependencies = makeBaseDeps({
+    ResourceLoader: class { constructor(options: any) { loaderOptions = options; } async reload() {} },
+    createAgentSession: async () => ({ session }),
+    extensionFactoryCache: {
+      load: async () => ({ factories: [factory], fallbackPaths: [fallbackPath] }),
+    },
+  });
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" });
+
+  await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+
+  assert.equal(loaderOptions.noExtensions, true);
+  assert.deepEqual(loaderOptions.extensionFactories, [factory]);
+  assert.deepEqual(loaderOptions.additionalExtensionPaths, [fallbackPath]);
 });
 
 test("run-agent leaves the system prompt unchanged when no skills are requested", async () => {
