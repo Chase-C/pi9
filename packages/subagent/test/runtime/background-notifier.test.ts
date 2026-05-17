@@ -91,7 +91,8 @@ test("BackgroundNotifier in end-of-turn mode fires no message until agent_end, t
 
   pi.fireAgentEnd();
   assert.equal(pi.sent.length, 1, "one message on agent_end");
-  assert.equal(pi.sent[0].options?.deliverAs, "followUp");
+  assert.equal(pi.sent[0].options?.triggerTurn, true);
+  assert.equal(pi.sent[0].options?.deliverAs, undefined);
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
 
   notifier.dispose();

@@ -102,7 +102,7 @@ export class BackgroundNotifier {
         content,
         details: { completions: entries.map(e => ({ ...e })) },
       },
-      { deliverAs: dispatchMode === "next-tool-call" ? "steer" : "followUp" },
+      dispatchMode === "next-tool-call" ? { deliverAs: "steer" } : { triggerTurn: true },
     );
   }
 }
