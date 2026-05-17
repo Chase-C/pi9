@@ -57,7 +57,7 @@ export class SubagentSettingsComponent implements Component {
         label: "Background notify",
         currentValue: settings.runtime.backgroundNotify,
         values: ["auto", "steer", "none"],
-        description: "Values: auto, steer, none. auto fires once the parent is idle; steer injects into the next tool call.",
+        description: "Values: auto, steer, none. auto fires once the parent is idle; steer injects into the active run before a future model step.",
       },
     ];
     this.settingsList = new SettingsList(

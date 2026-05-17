@@ -278,7 +278,7 @@ The settings are global for the user and stored at `${PI_AGENT_DIR ?? ~/.pi/agen
 | Value | Behavior |
 | --- | --- |
 | `auto` | Coalesce background completion metadata and deliver it as a new parent turn once the parent is idle (default; least interrupting). |
-| `steer` | Inject a steering-style notification into the parent's currently active run. Delivery happens before a future model step, not necessarily before the currently-starting tool executes. |
+| `steer` | Inject a steering-style notification into the parent's currently active run. If the parent is idle, fall back to starting a new parent turn. Delivery happens before a future model step, not necessarily before the currently-starting tool executes. |
 | `none` | Do not notify. The parent must call `subagent list` or `subagent results` to discover completions. |
 
 Notifications carry only metadata (session ids, agent, label, terminal status, elapsed time) and direct the parent to call `subagent results` for actual output. Multiple completions between dispatch events coalesce into one message.

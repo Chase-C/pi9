@@ -76,9 +76,9 @@ export class BackgroundNotifier {
     if (typeof deps.pi.on === "function") {
       deps.pi.on("session_start", ((_event: unknown, ctx?: NotifierContext) => this._onSessionStart(ctx)) as PiEventHandler);
       deps.pi.on("session_shutdown", (() => this._onSessionShutdown()) as PiEventHandler);
-      deps.pi.on("agent_end", (() => this._onDispatchEvent("auto")) as PiEventHandler);
-      deps.pi.on("turn_end", (() => this._onDispatchEvent("auto")) as PiEventHandler);
-      deps.pi.on("tool_execution_start", (() => this._onDispatchEvent("steer")) as PiEventHandler);
+      deps.pi.on("agent_end", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("auto", ctx)) as PiEventHandler);
+      deps.pi.on("turn_end", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("auto", ctx)) as PiEventHandler);
+      deps.pi.on("tool_execution_start", ((_event: unknown, ctx?: NotifierContext) => this._onDispatchEvent("steer", ctx)) as PiEventHandler);
     }
   }
 
@@ -97,7 +97,7 @@ export class BackgroundNotifier {
     this._ctx = ctx;
     this._ctxGen++;
     this._cancelRetry();
-    if (this._queue.length > 0 && this.deps.getMode() === "auto") this._tryFlushAuto();
+    this._tryFlushForCurrentMode();
   }
 
   private _onSessionShutdown(): void {
@@ -128,10 +128,12 @@ export class BackgroundNotifier {
     };
     if (agent.label !== undefined) entry.label = agent.label;
     this._queue.push(entry);
+    this._tryFlushForCurrentMode();
   };
 
-  private _onDispatchEvent(dispatchMode: BackgroundNotifyMode): void {
+  private _onDispatchEvent(dispatchMode: BackgroundNotifyMode, ctx: NotifierContext | undefined): void {
     if (this._disposed) return;
+    this._captureCtx(ctx);
     const mode = this.deps.getMode();
     if (mode === "none") {
       this._queue = [];
@@ -140,7 +142,25 @@ export class BackgroundNotifier {
     }
     if (mode !== dispatchMode) return;
     if (mode === "auto") this._tryFlushAuto();
-    else this._dispatch(dispatchMode);
+    else this._tryFlushSteer({ allowWithoutCtx: true, forceSteer: true });
+  }
+
+  private _captureCtx(ctx: NotifierContext | undefined): void {
+    if (!ctx || this._ctx === ctx) return;
+    this._ctx = ctx;
+    this._ctxGen++;
+  }
+
+  private _tryFlushForCurrentMode(): void {
+    if (this._disposed) return;
+    const mode = this.deps.getMode();
+    if (mode === "none") {
+      this._queue = [];
+      this._cancelRetry();
+      return;
+    }
+    if (mode === "auto") this._tryFlushAuto();
+    else this._tryFlushSteer();
   }
 
   private _tryFlushAuto(): void {
@@ -159,12 +179,34 @@ export class BackgroundNotifier {
       this._cancelRetry();
       return;
     }
-    if (!this._ctx || !this._ctx.isIdle()) {
+    if (!this._ctx) return;
+    if (!this._ctx.isIdle()) {
       this._scheduleAutoRetry();
       return;
     }
     this._cancelRetry();
     this._dispatch("auto");
+  }
+
+  private _tryFlushSteer(options: { allowWithoutCtx?: boolean; forceSteer?: boolean } = {}): void {
+    if (this._disposed) return;
+    const mode = this.deps.getMode();
+    if (mode === "none") {
+      this._queue = [];
+      this._cancelRetry();
+      return;
+    }
+    if (mode !== "steer") {
+      this._cancelRetry();
+      return;
+    }
+    if (this._queue.length === 0) return;
+    this._cancelRetry();
+    if (!this._ctx) {
+      if (options.allowWithoutCtx) this._dispatch("steer");
+      return;
+    }
+    this._dispatch(options.forceSteer || !this._ctx.isIdle() ? "steer" : "auto");
   }
 
   private _scheduleAutoRetry(): void {

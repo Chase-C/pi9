@@ -141,7 +141,7 @@ const completingRunner = async (_ctx: any, agent: any, _attempt: any) => {
   return completedRun(agent, "ok");
 };
 
-test("BackgroundNotifier in auto mode fires no message until agent_end, then exactly one with the completed sessionId", async () => {
+test("BackgroundNotifier in auto mode immediately starts a parent turn when a completion arrives while idle", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
   const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "auto" });
@@ -149,13 +149,13 @@ test("BackgroundNotifier in auto mode fires no message until agent_end, then exa
   pi.fireSessionStart(idleCtx);
   const sessionId = await runBackgroundOne(manager);
 
-  assert.equal(pi.sent.length, 0, "no message before agent_end");
-
-  pi.fireAgentEnd();
-  assert.equal(pi.sent.length, 1, "one message on agent_end");
+  assert.equal(pi.sent.length, 1, "one message when the idle completion arrives");
   assert.equal(pi.sent[0].options?.triggerTurn, true);
   assert.equal(pi.sent[0].options?.deliverAs, undefined);
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+
+  pi.fireAgentEnd();
+  assert.equal(pi.sent.length, 1, "agent_end does not duplicate the already-sent notification");
 
   notifier.dispose();
 });
@@ -186,7 +186,7 @@ test("BackgroundNotifier dispose() during an idle wait cancels the pending retry
   assert.equal(pi.sent.length, 0, "no delivery after dispose, even if a stray callback fires");
 });
 
-test("BackgroundNotifier in auto mode flushes on turn_end when ctx is idle", async () => {
+test("BackgroundNotifier in auto mode does not duplicate an idle completion on turn_end", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
   const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "auto" });
@@ -195,7 +195,7 @@ test("BackgroundNotifier in auto mode flushes on turn_end when ctx is idle", asy
   const sessionId = await runBackgroundOne(manager);
 
   pi.fireTurnEnd();
-  assert.equal(pi.sent.length, 1, "turn_end flushes when idle");
+  assert.equal(pi.sent.length, 1, "turn_end does not duplicate the already-sent notification");
   assert.equal(pi.sent[0].options?.triggerTurn, true);
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
 
@@ -428,19 +428,15 @@ test("BackgroundNotifier payload references subagent results, includes per-sessi
   notifier.dispose();
 });
 
-test("BackgroundNotifier in none mode drops queued completions on dispatch events and never re-emits later", async () => {
+test("BackgroundNotifier in none mode drops completions immediately and never re-emits later", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
-  let mode: BackgroundNotifyMode = "auto";
+  let mode: BackgroundNotifyMode = "none";
   const notifier = new BackgroundNotifier({ pi, manager, getMode: () => mode });
 
   pi.fireSessionStart(idleCtx);
   await runBackgroundOne(manager);
 
-  // First dispatch in none mode drains the queue without emitting.
-  mode = "none";
-  pi.fireAgentEnd();
-  pi.fireToolExecutionStart();
   assert.equal(pi.sent.length, 0);
 
   // Switching back to auto must not resurrect the drained completion.
@@ -451,17 +447,16 @@ test("BackgroundNotifier in none mode drops queued completions on dispatch event
   notifier.dispose();
 });
 
-test("BackgroundNotifier coalesces three quick completions into a single dispatched message", async () => {
+test("BackgroundNotifier coalesces queued completions into a single dispatched message on session_start", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
   const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "auto" });
 
-  pi.fireSessionStart(idleCtx);
   const id1 = await runBackgroundOne(manager, "one");
   const id2 = await runBackgroundOne(manager, "two");
   const id3 = await runBackgroundOne(manager, "three");
 
-  pi.fireAgentEnd();
+  pi.fireSessionStart(idleCtx);
   assert.equal(pi.sent.length, 1);
   const text = pi.sent[0].content ?? "";
   for (const id of [id1, id2, id3]) assert.match(text, new RegExp(id));
@@ -483,7 +478,110 @@ test("BackgroundNotifier in steer mode fires no message until tool_execution_sta
   pi.fireToolExecutionStart();
   assert.equal(pi.sent.length, 1, "one message on tool_execution_start");
   assert.equal(pi.sent[0].options?.deliverAs, "steer");
+  assert.equal(pi.sent[0].options?.triggerTurn, undefined, "steer must not use triggerTurn");
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+
+  notifier.dispose();
+});
+
+test("BackgroundNotifier in steer mode starts a parent turn when a completion arrives while idle", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "steer" });
+
+  pi.fireSessionStart(idleCtx);
+  const sessionId = await runBackgroundOne(manager);
+
+  assert.equal(pi.sent.length, 1, "one parent-turn message when the idle completion arrives");
+  assert.equal(pi.sent[0].options?.triggerTurn, true);
+  assert.equal(pi.sent[0].options?.deliverAs, undefined);
+  assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+
+  notifier.dispose();
+});
+
+test("BackgroundNotifier in steer mode coalesces multiple completions into a single steer message on tool_execution_start", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "steer" });
+
+  const id1 = await runBackgroundOne(manager, "one");
+  const id2 = await runBackgroundOne(manager, "two");
+  const id3 = await runBackgroundOne(manager, "three");
+
+  pi.fireAgentEnd();
+  pi.fireTurnEnd();
+  assert.equal(pi.sent.length, 0, "neither agent_end nor turn_end dispatches steer");
+
+  pi.fireToolExecutionStart();
+  assert.equal(pi.sent.length, 1, "single coalesced steer dispatch on tool_execution_start");
+  assert.equal(pi.sent[0].options?.deliverAs, "steer");
+  const text = pi.sent[0].content ?? "";
+  for (const id of [id1, id2, id3]) assert.match(text, new RegExp(id));
+  assert.match(text, /3 background subagents completed/);
+
+  pi.fireToolExecutionStart();
+  assert.equal(pi.sent.length, 1, "queue is drained after dispatch; no second steer fires");
+
+  notifier.dispose();
+});
+
+test("BackgroundNotifier in steer mode payload contains per-session metadata, references subagent results, and never includes child output or error", async () => {
+  const manager = makeManager(async (_ctx: any, agent: any, _attempt: any) => {
+    agent.attach(makeSession());
+    return completedRun(agent, "SUPER-SECRET-CHILD-OUTPUT");
+  });
+  const pi = fakePi();
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "steer" });
+
+  const batch = manager.startBatch(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "oneshot", prompt: "go", label: "steer-only" }],
+    undefined,
+    { background: true },
+  );
+  await batch.resultsPromise;
+  const sessionId = batch.sessions[0].id;
+
+  pi.fireToolExecutionStart();
+  assert.equal(pi.sent.length, 1);
+  const text = pi.sent[0].content ?? "";
+  const json = JSON.stringify(pi.sent[0]);
+
+  assert.match(text, new RegExp(sessionId));
+  assert.match(text, /oneshot/);
+  assert.match(text, /steer-only/);
+  assert.match(text, /completed/);
+  assert.match(text, /subagent results/);
+  assert.doesNotMatch(json, /SUPER-SECRET-CHILD-OUTPUT/);
+
+  notifier.dispose();
+});
+
+test("BackgroundNotifier in steer mode immediately steers an active parent run without scheduling auto retry", async () => {
+  const manager = makeManager(completingRunner);
+  const pi = fakePi();
+  const retry = manualRetry();
+  const notifier = new BackgroundNotifier({
+    pi,
+    manager,
+    getMode: () => "steer",
+    scheduleRetry: retry.schedule,
+  });
+
+  // With a non-idle ctx, steer should inject into the active run and must not engage the auto idle flush path.
+  pi.fireSessionStart({ isIdle: () => false });
+  const sessionId = await runBackgroundOne(manager);
+
+  assert.equal(retry.pending(), 0, "no auto idle retry scheduled while in steer mode");
+  assert.equal(pi.sent.length, 1, "one steer message when the active-run completion arrives");
+  assert.equal(pi.sent[0].options?.deliverAs, "steer");
+  assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
+
+  pi.fireAgentEnd();
+  pi.fireTurnEnd();
+  assert.equal(pi.sent.length, 1, "agent_end / turn_end do not duplicate the steer notification");
 
   notifier.dispose();
 });
