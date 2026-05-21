@@ -1,29 +1,50 @@
+import { randomUUID } from "node:crypto";
+
+import { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
 import { Agent } from "../domain/agent.js";
 import type { AgentRunResult } from "../domain/agent-result.js";
-import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
+import type { AgentRunStatus, AgentUpdateKind, AgentView } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
-import type { SessionStatus } from "../schema.js";
+import type { SessionStatus, TaskRequest } from "../schema.js";
 import { projectAgentView } from "../view/project-agent-view.js";
 import { activeOrRetainedAgents, effectiveStatus, getSubagentDisplaySettings } from "../view/view-helpers.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
-import { BatchSet } from "./batch-set.js";
-import { ParentFinalizePolicy } from "./parent-finalize-policy.js";
-import { timingMark } from "./timing.js";
+import { resolveResume, resolveSpawn } from "./preflight.js";
+import { RunGroup, type RunUpdateListener } from "./run-group.js";
+import { timingMark, timingStart } from "./timing.js";
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
 export type { AgentRunner } from "./attempt-runner.js";
+export type { RunUpdate, RunUpdateListener } from "./run-group.js";
 
 export type BackgroundResult =
   | { sessionId: string; ready: true; result: AgentRunResult }
   | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
   | { sessionId: string; error: string };
 
+export interface StartRunOptions {
+  background: boolean;
+  parentSessionId?: string;
+}
+
+export interface RunHandle {
+  readonly groupId: string;
+  /** Root sessions in input order, captured at handle creation. */
+  readonly sessions: AgentView[];
+  /** Live snapshot of the run tree (roots + descendants in pre-order). */
+  tree(): AgentView[];
+  readonly resultsPromise: Promise<AgentRunResult[]>;
+}
+
 export class AgentManager {
 
   private _agents = new Array<Agent>();
-  private readonly _batches = new BatchSet();
   private _updateListeners = new Set<AgentUpdateListener>();
   private readonly _runner: AttemptRunner;
+  private readonly _groups = new Map<string, RunGroup>();
+  /** In-flight cancellation fanouts keyed by the finalized parent's session id. */
+  private readonly _pendingFinalize = new Map<string, Promise<void>>();
 
   constructor(
     readonly registry: AgentRegistry,
@@ -45,39 +66,11 @@ export class AgentManager {
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
   }
 
-  /**
-   * Returns the union of the named roots and every descendant reachable through `parentSessionId`,
-   * as `AgentView`s. Roots appear in input order; descendants under each parent are sorted by
-   * `createdAt` ascending. Missing root ids are skipped silently. Live-view helper for the `run`
-   * tool's partial updates; callers must not assume completeness across recursive `_agents` sweeps.
-   */
-  subtreeOf(rootIds: string[]): AgentView[] {
-    const display = getSubagentDisplaySettings();
-    const byId = new Map<string, Agent>();
-    for (const agent of this._agents) byId.set(agent.id, agent);
-
-    const out: AgentView[] = [];
-    const seen = new Set<string>();
-    const visit = (id: string) => {
-      if (seen.has(id)) return;
-      const agent = byId.get(id);
-      if (!agent) return;
-      seen.add(id);
-      out.push(projectAgentView(agent, display));
-      const children = this._agents.filter(a => a.parentSessionId === id);
-      children.sort((a, b) => a.createdAt - b.createdAt);
-      for (const child of children) visit(child.id);
-    };
-    for (const id of rootIds) visit(id);
-    return out;
-  }
-
   configure(options: { maxRunning?: number }) {
     this._runner.configure(options);
   }
 
   get runner(): AttemptRunner { return this._runner; }
-  get batches(): BatchSet { return this._batches; }
 
   /** Adds a freshly-spawned agent to the catalog and subscribes the catalog's broadcast pipeline. */
   adopt(agent: Agent): void {
@@ -90,25 +83,25 @@ export class AgentManager {
     return this._agents.find(a => a.id === id && a.resumable);
   }
 
+  onAgentUpdate(listener: AgentUpdateListener): () => void {
+    this._updateListeners.add(listener);
+    return () => this._updateListeners.delete(listener);
+  }
+
   /**
-   * Post-batch pruning. Drops agents in `touched` that are done, non-background, and non-resumable.
-   * Detaches each dropped agent from its batch mapping. Survivors stay in the catalog.
+   * Releases the named agent's queue slot while `fn` runs, then re-acquires it before returning.
+   * Used by the child subagent tool so a parent awaiting `handle.resultsPromise` doesn't pin the
+   * only queue slot a recursive descendant needs to start — without this, a tree deeper than
+   * maxRunning deadlocks. No-op when the session has no active lease.
    */
-  pruneTouched(touched: ReadonlySet<string>): void {
-    this._agents = this._agents.filter(agent => {
-      if (!touched.has(agent.id)) return true;
-      if (agent.background) return true;
-      if (agent.status.kind !== "done") return true;
-      if (agent.resumable) return true;
-      this._batches.detach(agent.id);
-      return false;
-    });
+  async suspendAgentSlotDuring<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    return this._runner.suspendAgentSlotDuring(sessionId, fn);
   }
 
   /**
    * Walks the descendant subtree of `parentSessionId` post-order (grandchildren before children)
    * and awaits `abort()` on each. `Array.filter` snapshots the descendants before iterating so
-   * concurrent `remove()` / `startBatch()` mutations of `_agents` don't disturb the walk.
+   * concurrent `remove()` / `startRun()` mutations of `_agents` don't disturb the walk.
    * `Agent.abort()` is a no-op for already-terminal agents, so re-calling it is safe.
    */
   async abortDescendantsOf(parentSessionId: string): Promise<void> {
@@ -138,21 +131,6 @@ export class AgentManager {
       await this.cancelNonBackgroundDescendantsOf(child.id, reason);
       await child.abort(reason);
     }
-  }
-
-  onAgentUpdate(listener: AgentUpdateListener): () => void {
-    this._updateListeners.add(listener);
-    return () => this._updateListeners.delete(listener);
-  }
-
-  /**
-   * Releases the named agent's queue slot while `fn` runs, then re-acquires it before returning.
-   * Used by the child subagent tool so a parent awaiting `batch.resultsPromise` doesn't pin the
-   * only queue slot a recursive descendant needs to start — without this, a tree deeper than
-   * maxRunning deadlocks. No-op when the session has no active lease.
-   */
-  async suspendAgentSlotDuring<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
-    return this._runner.suspendAgentSlotDuring(sessionId, fn);
   }
 
   async backgroundResults(
@@ -215,7 +193,7 @@ export class AgentManager {
       if (status === "running" || status === "queued") {
         await agent.abort();
         if (status === "running") aborted += 1;
-        const pending = ParentFinalizePolicy.pendingFor(agent.id);
+        const pending = this._pendingFinalize.get(agent.id);
         if (pending) fanouts.push(pending);
       }
     }
@@ -224,7 +202,10 @@ export class AgentManager {
     const removedIds = new Set(targets.map(a => a.id));
     if (removedIds.size > 0) {
       this._agents = this._agents.filter(a => !removedIds.has(a.id));
-      this._batches.forgetAgents(removedIds);
+      // Tell every live group that one of its tree members vanished so it can re-emit.
+      for (const group of this._groups.values()) {
+        if (Array.from(removedIds).some(id => group.contains(id))) group.emit();
+      }
     }
 
     return {
@@ -235,6 +216,127 @@ export class AgentManager {
     };
   }
 
+  /** Convenience: start a foreground run and wait for results. */
+  async run(
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+    tasks: TaskRequest[],
+    onUpdate?: RunUpdateListener,
+    options: { parentSessionId?: string } = {},
+  ): Promise<AgentRunResult[]> {
+    const handle = this.startRun(ctx, signal, tasks, onUpdate, { background: false, ...options });
+    return handle.resultsPromise;
+  }
+
+  /**
+   * Starts a run group. Each task is resolved through pure preflight helpers; surviving spawns
+   * adopt a new Agent into the catalog, surviving resumes start a fresh attempt on the existing
+   * Agent. Every agent in the group is wired into a {@link RunGroup} so updates from
+   * {@link onAgentUpdate} route back to its listener.
+   */
+  startRun(
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+    tasks: TaskRequest[],
+    onUpdate: RunUpdateListener | undefined,
+    options: StartRunOptions,
+  ): RunHandle {
+    const groupId = randomUUID();
+    const groupCreatedAt = Date.now();
+    timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background, parentSessionId: options.parentSessionId });
+
+    const controller = options.background ? new AbortController() : undefined;
+    const group = new RunGroup({
+      groupId,
+      ...(onUpdate ? { listener: onUpdate } : {}),
+      walkTree: rootIds => this._walkTree(rootIds),
+    });
+    this._groups.set(groupId, group);
+
+    const childSignal = controller ? controller.signal : signal;
+    const touched = new Set<string>();
+
+    const resultPromises = tasks.map((task, inputIndex) => {
+      if (task.kind === "spawn") {
+        const preflight = resolveSpawn({ task, groupId, inputIndex, createdAt: groupCreatedAt, registry: this.registry, background: options.background });
+        if (preflight.kind === "failure") {
+          group.addStaticView(preflight.failure.view, inputIndex, false);
+          timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent, parentSessionId: options.parentSessionId });
+          return Promise.resolve(preflight.failure.result);
+        }
+
+        const agent = new Agent(randomUUID(), preflight.config, task, {
+          background: options.background,
+          ...(options.parentSessionId !== undefined ? { parentSessionId: options.parentSessionId } : {}),
+        });
+        this.adopt(agent);
+        group.addAgent(agent, inputIndex, false);
+        timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id, parentSessionId: options.parentSessionId, background: options.background });
+        touched.add(agent.id);
+        return this._runner.run(ctx, childSignal, agent, agent.requireCurrentAttempt());
+      }
+
+      const preflight = resolveResume({
+        task, groupId, inputIndex, createdAt: groupCreatedAt,
+        findResumable: id => this.findResumable(id),
+        background: options.background,
+      });
+      if (preflight.kind === "failure") {
+        group.addStaticView(preflight.failure.view, inputIndex, true);
+        timingMark("manager.task.resumePreflightFailure", { groupId, inputIndex, sessionId: task.sessionId, parentSessionId: options.parentSessionId });
+        return Promise.resolve(preflight.failure.result);
+      }
+
+      const target = preflight.target;
+      const attempt = target.startResume(task);
+      if (options.background) target.promoteToBackground();
+      group.addAgent(target, inputIndex, true);
+      timingMark("manager.task.resumeCreated", { groupId, inputIndex, sessionId: target.id, parentSessionId: options.parentSessionId, targetParentSessionId: target.parentSessionId, background: options.background });
+      touched.add(target.id);
+      return this._runner.run(ctx, childSignal, target, attempt);
+    });
+
+    timingMark("manager.initialEmit.before", { groupId, entries: group.entryCount });
+    group.emit();
+    timingMark("manager.initialEmit.after", { groupId });
+
+    // Capture the initial root sessions so the handle.sessions field is stable.
+    const initialSessions = group.rootSessions();
+
+    const resultsPromise = Promise.all(resultPromises)
+      .then(results => {
+        this._pruneTouched(touched);
+        timingMark("manager.run.results", { groupId, resultCount: results.length });
+        return results;
+      })
+      .finally(() => {
+        group.flush();
+        group.dispose();
+        this._groups.delete(groupId);
+      });
+
+    return {
+      groupId,
+      sessions: initialSessions,
+      tree: () => group.tree(),
+      resultsPromise,
+    };
+  }
+
+  /**
+   * Post-run pruning. Drops agents in `touched` that are done, non-background, and non-resumable.
+   * Survivors stay in the catalog.
+   */
+  private _pruneTouched(touched: ReadonlySet<string>): void {
+    this._agents = this._agents.filter(agent => {
+      if (!touched.has(agent.id)) return true;
+      if (agent.background) return true;
+      if (agent.status.kind !== "done") return true;
+      if (agent.resumable) return true;
+      return false;
+    });
+  }
+
   private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
     if (scope === "background") return this._agents.filter(a => a.background);
     if (scope === "retained") return this._agents.filter(a => !a.background && a.status.kind !== "running" && a.resumable);
@@ -242,9 +344,35 @@ export class AgentManager {
     throw new Error(`Unknown remove scope: ${String(scope)}`);
   }
 
+  /**
+   * Returns the union of the named roots and every descendant reachable through `parentSessionId`,
+   * as `AgentView`s. Roots appear in input order; descendants under each parent are sorted by
+   * `createdAt` ascending. Used by RunGroup to project the live subtree. Missing root ids are
+   * silently skipped.
+   */
+  private _walkTree(rootIds: string[]): AgentView[] {
+    const display = getSubagentDisplaySettings();
+    const byId = new Map<string, Agent>();
+    for (const agent of this._agents) byId.set(agent.id, agent);
+
+    const out: AgentView[] = [];
+    const seen = new Set<string>();
+    const visit = (id: string) => {
+      if (seen.has(id)) return;
+      const agent = byId.get(id);
+      if (!agent) return;
+      seen.add(id);
+      out.push(projectAgentView(agent, display));
+      const children = this._agents.filter(a => a.parentSessionId === id);
+      children.sort((a, b) => a.createdAt - b.createdAt);
+      for (const child of children) visit(child.id);
+    };
+    for (const id of rootIds) visit(id);
+    return out;
+  }
+
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
     const status = agent.status;
-    const groupId = this._batches.groupOf(agent.id);
     timingMark("manager.agentUpdate", {
       sessionId: agent.id,
       agent: agent.agentName,
@@ -253,9 +381,36 @@ export class AgentManager {
       statusKind: status.kind,
       ...(status.kind === "done" ? { outcome: status.result.status } : {}),
       background: agent.background,
-      ...(groupId !== undefined ? { groupId } : {}),
     });
     for (const listener of this._updateListeners) listener(agent, kind);
-    this._batches.dispatch(agent.id, kind);
+    for (const group of this._groups.values()) group.handleAgentUpdate(agent.id, kind);
+    if (kind === "status") this._maybeFinalizeFanout(agent);
+  }
+
+  /**
+   * Internal parent-finalize policy: when an agent finalizes as `aborted` or `error`, cancel
+   * its still-running non-background descendants. `completed` and other outcomes leave
+   * descendants alone — a completed parent has already consumed children's results, and any
+   * survivors must be background ones the parent dispatched to outlive itself.
+   */
+  private _maybeFinalizeFanout(agent: Agent): void {
+    if (this._pendingFinalize.has(agent.id)) return;
+    const outcome = this._terminalOutcome(agent);
+    if (outcome !== "aborted" && outcome !== "error") return;
+
+    const reason = `Parent ${agent.id} finalized as ${outcome}`;
+    const fanoutEnd = timingStart("manager.parentFinalize.fanout", { sessionId: agent.id, agent: agent.agentName, outcome });
+    const promise = this
+      .cancelNonBackgroundDescendantsOf(agent.id, reason)
+      .finally(() => {
+        this._pendingFinalize.delete(agent.id);
+        fanoutEnd({});
+      });
+    this._pendingFinalize.set(agent.id, promise);
+  }
+
+  private _terminalOutcome(agent: Agent): AgentRunStatus | undefined {
+    const status = agent.status;
+    return status.kind === "done" ? status.result.status : undefined;
   }
 }

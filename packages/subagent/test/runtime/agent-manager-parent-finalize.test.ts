@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
-import { baseCtx, makeManagerAndOrchestrator } from "../helpers/runtime.js";
+import { baseCtx, makeManager } from "../helpers/runtime.js";
 
 test("parent finalizing with error cancels its non-background child via the observer", async () => {
   const aborts: string[] = [];
@@ -25,9 +25,9 @@ test("parent finalizing with error cancels its non-background child via the obse
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 4, runner);
+  const manager = makeManager(registry as any, 4, runner);
 
-  const parentBatch = orchestrator.startBatch(
+  const parentBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "parent" }],
     undefined, { background: false },
@@ -36,7 +36,7 @@ test("parent finalizing with error cancels its non-background child via the obse
   await new Promise(r => setTimeout(r, 5));
   const parentId = manager.listSessions().find(s => s.parentSessionId === undefined)!.id;
 
-  const childBatch = orchestrator.startBatch(
+  const childBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
     undefined, { background: false, parentSessionId: parentId },
@@ -87,9 +87,9 @@ test("parent finalizing with completed leaves a running non-background child alo
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 4, runner);
+  const manager = makeManager(registry as any, 4, runner);
 
-  const parentBatch = orchestrator.startBatch(
+  const parentBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "parent" }],
     undefined, { background: false },
@@ -99,7 +99,7 @@ test("parent finalizing with completed leaves a running non-background child alo
   assert.equal(manager.listSessions()[0].status.kind, "running");
 
   // Start the child while the parent is still running.
-  const childBatch = orchestrator.startBatch(
+  const childBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
     undefined, { background: false, parentSessionId: parentId },
@@ -153,9 +153,9 @@ test("parent aborted with running background descendant: background survives and
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 4, runner);
+  const manager = makeManager(registry as any, 4, runner);
 
-  const parentBatch = orchestrator.startBatch(
+  const parentBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "parent" }],
     undefined, { background: false },
@@ -163,7 +163,7 @@ test("parent aborted with running background descendant: background survives and
   await new Promise(r => setTimeout(r, 10));
   const parentId = manager.listSessions().find(s => s.parentSessionId === undefined)!.id;
 
-  const bgBatch = orchestrator.startBatch(
+  const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
     undefined, { background: true, parentSessionId: parentId },
@@ -228,9 +228,9 @@ test("background descendants form a cancellation boundary for their own children
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 4, runner);
+  const manager = makeManager(registry as any, 4, runner);
 
-  const rootBatch = orchestrator.startBatch(
+  const rootBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "root" }],
     undefined, { background: false },
@@ -238,7 +238,7 @@ test("background descendants form a cancellation boundary for their own children
   await new Promise(r => setTimeout(r, 10));
   const rootId = manager.listSessions().find(s => s.prompt === "root")!.id;
 
-  const bgBatch = orchestrator.startBatch(
+  const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
     undefined, { background: true, parentSessionId: rootId },
@@ -246,7 +246,7 @@ test("background descendants form a cancellation boundary for their own children
   await new Promise(r => setTimeout(r, 10));
   const bgId = manager.listSessions().find(s => s.prompt === "bg")!.id;
 
-  const fgBatch = orchestrator.startBatch(
+  const fgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "fg" }],
     undefined, { background: false, parentSessionId: bgId },
@@ -307,9 +307,9 @@ test("parent errors with mix of background and non-background children: only non
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 4, runner);
+  const manager = makeManager(registry as any, 4, runner);
 
-  const parentBatch = orchestrator.startBatch(
+  const parentBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "parent" }],
     undefined, { background: false },
@@ -317,12 +317,12 @@ test("parent errors with mix of background and non-background children: only non
   await new Promise(r => setTimeout(r, 5));
   const parentId = manager.listSessions().find(s => s.parentSessionId === undefined)!.id;
 
-  const fgBatch = orchestrator.startBatch(
+  const fgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "fg" }],
     undefined, { background: false, parentSessionId: parentId },
   );
-  const bgBatch = orchestrator.startBatch(
+  const bgBatch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "bg" }],
     undefined, { background: true, parentSessionId: parentId },
@@ -363,9 +363,9 @@ test("ParentFinalizePolicy treats agents promoted via promoteToBackground as bac
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 4, runner);
+  const manager = makeManager(registry as any, 4, runner);
 
-  const batch = orchestrator.startBatch(
+  const batch = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "child" }],
     undefined, { background: false, parentSessionId: "parent-1" },

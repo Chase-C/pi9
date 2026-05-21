@@ -469,8 +469,6 @@ test("subagents command resumes completed retained session with editor loader an
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [fakeAgent({ config: { resumable: true } })],
-  };
-  const fakeOrchestrator = {
     run(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
       resumeCalls.push({ signal, sessionId: task.sessionId, prompt: task.prompt });
@@ -484,7 +482,6 @@ test("subagents command resumes completed retained session with editor loader an
   const commands = registerCommand({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
     __sentMessages: sentMessages,
   });
 
@@ -537,8 +534,6 @@ test("subagents command resume cancellation aborts the child and reports interru
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [fakeAgent({ config: { resumable: true } })],
-  };
-  const fakeOrchestrator = {
     run(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
       return new Promise<any[]>(resolve => {
@@ -561,7 +556,6 @@ test("subagents command resume cancellation aborts the child and reports interru
   } as any, {
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } } as any,
     agentManager: fakeManager as any,
-    orchestrator: fakeOrchestrator as any,
   });
 
   let customCalls = 0;

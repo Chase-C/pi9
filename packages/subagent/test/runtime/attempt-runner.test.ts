@@ -2,17 +2,17 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { baseCtx, makeManagerAndOrchestrator, makeSession, mergeRunners } from "../helpers/runtime.js";
+import { baseCtx, makeManager, makeSession, mergeRunners } from "../helpers/runtime.js";
 
 test("AttemptRunner marks runner rejections before start as terminal error in grouped progress", async () => {
   const runner = async () => { throw new Error("setup failed before start"); };
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 1, runner as any);
+  const manager = makeManager(registry as any, 1, runner as any);
   const updates: any[] = [];
 
-  const results = await orchestrator.run(
+  const results = await manager.run(
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "work" }],
@@ -43,11 +43,11 @@ test("AttemptRunner returns skipped result and final group row for queued task w
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 1, runner);
+  const manager = makeManager(registry as any, 1, runner);
   const controller = new AbortController();
   const updates: any[] = [];
 
-  const pending = orchestrator.run(
+  const pending = manager.run(
     baseCtx(),
     controller.signal,
     [
@@ -84,12 +84,12 @@ test("AttemptRunner reports resume setup failure as the follow-up prompt error w
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 1, mergeRunners(runner, resumeRunner) as any);
-  const [first] = await orchestrator.run(baseCtx(), undefined, [
+  const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner) as any);
+  const [first] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
 
-  const [resumed] = await orchestrator.run(baseCtx(), undefined, [
+  const [resumed] = await manager.run(baseCtx(), undefined, [
     { kind: "resume", sessionId: first.sessionId!, prompt: "follow-up prompt" },
   ]);
 
@@ -119,14 +119,14 @@ test("AttemptRunner keeps a retained completed session retryable across one or m
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 1, mergeRunners(runner, resumeRunner));
-  const [first] = await orchestrator.run(baseCtx(), undefined, [
+  const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
+  const [first] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
 
   // Two consecutive failures keep the session retryable each time.
   for (const attempt of [1, 2] as const) {
-    const [failed] = await orchestrator.run(baseCtx(), undefined, [
+    const [failed] = await manager.run(baseCtx(), undefined, [
       { kind: "resume", sessionId: first.sessionId!, prompt: `try ${attempt}` },
     ]);
     assert.equal(failed.status, "error", `try ${attempt}: expected error`);
@@ -138,7 +138,7 @@ test("AttemptRunner keeps a retained completed session retryable across one or m
   }
 
   // Third attempt succeeds.
-  const [retried] = await orchestrator.run(baseCtx(), undefined, [
+  const [retried] = await manager.run(baseCtx(), undefined, [
     { kind: "resume", sessionId: first.sessionId!, prompt: "successful follow-up" },
   ]);
   assert.equal(retried.status, "completed");
@@ -167,14 +167,14 @@ test("AttemptRunner reports queued cancelled resume as skipped follow-up and kee
       ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
     ]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 1, mergeRunners(runner, resumeRunner));
-  const [first] = await orchestrator.run(baseCtx(), undefined, [
+  const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
+  const [first] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
 
   const controller = new AbortController();
   const updates: any[] = [];
-  const pending = orchestrator.run(
+  const pending = manager.run(
     baseCtx(),
     controller.signal,
     [
@@ -212,7 +212,7 @@ test("AttemptRunner reports queued cancelled resume as skipped follow-up and kee
   assert.equal(list[0].status.kind === "done" && list[0].status.snippet, "Agent skipped.");
   assert.equal(list[0].config.resumable, true);
 
-  const [retried] = await orchestrator.run(baseCtx(), undefined, [
+  const [retried] = await manager.run(baseCtx(), undefined, [
     { kind: "resume", sessionId: first.sessionId!, prompt: "retry prompt" },
   ]);
   assert.equal(retried.status, "completed");

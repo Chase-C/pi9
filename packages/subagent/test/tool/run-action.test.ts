@@ -41,9 +41,7 @@ test("tool run action returns full output only once in JSON details for a resume
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, tasks: any[]) {
+    startRun(_ctx: any, _signal: any, tasks: any[]) {
       const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
         agent: "helper",
         prompt: task.prompt,
@@ -53,14 +51,13 @@ test("tool run action returns full output only once in JSON details for a resume
         resumable: true,
         resumed: task.kind === "resume",
       })));
-      return { groupId: "g1", sessions: [], resultsPromise };
+      return { groupId: "g1", sessions: [], tree: () => [], resultsPromise };
     },
   };
 
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
   });
 
   const result = await tool.execute("tool-call", {
@@ -133,18 +130,15 @@ test("subagent tool notifies invalid settings fallback without breaking executio
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate?.({ sessions: [runningAgent], active: true });
+    startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
+      onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
-      return { groupId: "g1", sessions: [runningAgent], resultsPromise };
+      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
     },
   };
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" }, warning: "Invalid subagent UI settings." }; } },
   });
 
@@ -176,18 +170,15 @@ test("subagent tool falls back to default UI settings when settings load rejects
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate?.({ sessions: [runningAgent], active: true });
+    startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
+      onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
-      return { groupId: "g1", sessions: [runningAgent], resultsPromise };
+      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
     },
   };
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { throw new Error("disk unreadable"); } },
   });
 
@@ -219,19 +210,16 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [runningAgent],
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate?.({ sessions: [runningAgent], active: true });
+    startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
+      onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
-      return { groupId: "g1", sessions: [runningAgent], resultsPromise };
+      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
     },
   };
 
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "off" } }; } },
   });
 
@@ -268,19 +256,16 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate?.({ sessions: [runningAgent], active: true });
+    startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
+      onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
-      return { groupId: "g1", sessions: [runningAgent], resultsPromise };
+      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
     },
   };
 
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; }, async save() {} },
   });
 
@@ -309,9 +294,7 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, tasks: any[]) {
+    startRun(_ctx: any, _signal: any, tasks: any[]) {
       receivedTasks = tasks;
       const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
         agent: task.kind === "spawn" ? task.agent : "chatty",
@@ -322,7 +305,7 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
         resumed: task.kind === "resume",
         ...(task.kind === "resume" ? { sessionId: task.sessionId } : {}),
       })));
-      return { groupId: "g1", sessions: [], resultsPromise };
+      return { groupId: "g1", sessions: [], tree: () => [], resultsPromise };
     },
   };
   const fakeRegistry = {
@@ -333,7 +316,6 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   const tool = registerExtension({
     agentRegistry: fakeRegistry,
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
   });
 
@@ -470,43 +452,31 @@ test("subagent action=run rejects a task carrying both agent and sessionId at pa
   assert.match(result.content[0].text, /both agent and sessionId/);
 });
 
-test("a late-arriving grandchild status change triggers a partial re-emit with the grandchild visible", async () => {
+test("a late-arriving descendant status change triggers a partial re-emit with the descendant visible", async () => {
   const partials: any[] = [];
   const rootView = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
-  let grandchildArrived = false;
-  let capturedListener: any;
+  const grandView = fakeAgent({ id: "grand", parentSessionId: "root", config: { name: "grand" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
+
   let resolveBatch!: () => void;
+  let capturedListener: any;
 
   const fakeManager = {
-    listSessions(): any[] { return grandchildArrived ? [rootView, grandView()] : [rootView]; },
-    subtreeOf(rootIds: string[]) {
-      if (!rootIds.includes("root")) return [];
-      return grandchildArrived ? [rootView, grandView()] : [rootView];
-    },
-    onAgentUpdate(listener: any) {
-      capturedListener = listener;
-      return () => { capturedListener = undefined; };
-    },
+    listSessions(): any[] { return [rootView, grandView]; },
     suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, _tasks: any[], _onUpdate: any) {
-      // Don't emit any batch updates ourselves — let the cross-batch listener be the only source.
+    startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
+      capturedListener = onUpdate;
       const resultsPromise = new Promise<any[]>(resolve => {
         resolveBatch = () => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]);
       });
-      return { groupId: "g1", sessions: [rootView], resultsPromise };
+      // Initial emit covers just the root (the descendant has not arrived yet).
+      Promise.resolve().then(() => onUpdate({ sessions: [rootView], tree: [rootView], active: true }));
+      return { groupId: "g1", sessions: [rootView], tree: () => [rootView, grandView], resultsPromise };
     },
   };
-
-  function grandView() {
-    return fakeAgent({ id: "grand", parentSessionId: "root", config: { name: "grand" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
-  }
 
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
   });
 
@@ -518,15 +488,11 @@ test("a late-arriving grandchild status change triggers a partial re-emit with t
     baseCtx(),
   );
 
-  // Wait for the tool to register its cross-batch listener.
   await new Promise(r => setTimeout(r, 10));
-  assert.ok(capturedListener, "expected the tool to register an onAgentUpdate listener");
+  // Manager simulates the run group's later re-emit once the descendant arrives.
+  capturedListener({ sessions: [rootView], tree: [rootView, grandView], active: true });
 
-  // Simulate the grandchild's first status change.
-  grandchildArrived = true;
-  capturedListener({ id: "grand", parentSessionId: "root", agentName: "grand" }, "status");
-
-  await new Promise(r => setTimeout(r, 50));
+  await new Promise(r => setTimeout(r, 20));
   resolveBatch();
   await executePromise;
 
@@ -538,69 +504,6 @@ test("a late-arriving grandchild status change triggers a partial re-emit with t
   );
 });
 
-test("cross-batch message updates are throttled for descendant partial re-emits", async () => {
-  const partials: any[] = [];
-  const rootView = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
-  const childView = fakeAgent({ id: "child", parentSessionId: "root", config: { name: "child" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
-  let capturedListener: any;
-  let resolveBatch!: () => void;
-  let subtreeCalls = 0;
-
-  const fakeManager = {
-    listSessions(): any[] { return [rootView, childView]; },
-    subtreeOf(rootIds: string[]) {
-      subtreeCalls += 1;
-      if (rootIds.includes("root")) return [rootView, childView];
-      return [];
-    },
-    onAgentUpdate(listener: any) {
-      capturedListener = listener;
-      return () => { capturedListener = undefined; };
-    },
-    suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, _tasks: any[], _onUpdate: any) {
-      const resultsPromise = new Promise<any[]>(resolve => {
-        resolveBatch = () => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]);
-      });
-      return { groupId: "g1", sessions: [rootView], resultsPromise };
-    },
-  };
-
-  const tool = registerExtension({
-    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
-    agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
-    settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
-  });
-
-  const executePromise = tool.execute(
-    "tool-call",
-    { action: "run", tasks: [{ agent: "root", prompt: "go" }] },
-    undefined,
-    (partial: any) => partials.push(partial),
-    baseCtx(),
-  );
-
-  await new Promise(r => setTimeout(r, 10));
-  assert.ok(capturedListener, "expected the tool to register an onAgentUpdate listener");
-
-  capturedListener({ id: "child", parentSessionId: "root", agentName: "child" }, "message");
-  capturedListener({ id: "child", parentSessionId: "root", agentName: "child" }, "message");
-  capturedListener({ id: "child", parentSessionId: "root", agentName: "child" }, "message");
-
-  assert.equal(partials.length, 0, "message updates should wait for the throttle window");
-  await new Promise(r => setTimeout(r, 150));
-
-  assert.equal(partials.length, 1);
-  assert.deepEqual(partials[0].details.subtree.map((s: any) => s.id), ["root", "child"]);
-  assert.equal(subtreeCalls, 2, "first message checks membership, timer reuses one later subtree for the partial");
-
-  resolveBatch();
-  await executePromise;
-});
-
 test("partial tool results carry the full descendant subtree; final tool result stays flat", async () => {
   const partials: any[] = [];
   const rootView = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
@@ -608,31 +511,20 @@ test("partial tool results carry the full descendant subtree; final tool result 
 
   const fakeManager = {
     listSessions(): any[] { return [rootView, childView]; },
-    subtreeOf(rootIds: string[]) {
-      // For any call that includes "root" as a root id, return both root and child.
-      if (rootIds.includes("root")) return [rootView, childView];
-      return [];
-    },
-    onAgentUpdate(_listener: any) { return () => {}; },
     suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
-  };
-  const fakeOrchestrator = {
-    startBatch(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
-      // Drive one partial update first, then resolve with the final flat result.
-      Promise.resolve().then(() => {
-        onUpdate({ sessions: [rootView], active: true });
-      });
+    startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
+      // Drive one partial update with the full tree, then resolve with the final flat result.
+      Promise.resolve().then(() => onUpdate({ sessions: [rootView], tree: [rootView, childView], active: true }));
       const resultsPromise = new Promise<any[]>(resolve => {
         setTimeout(() => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]), 10);
       });
-      return { groupId: "g1", sessions: [rootView], resultsPromise };
+      return { groupId: "g1", sessions: [rootView], tree: () => [rootView, childView], resultsPromise };
     },
   };
 
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: fakeManager,
-    orchestrator: fakeOrchestrator,
     settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
   });
 
@@ -644,7 +536,6 @@ test("partial tool results carry the full descendant subtree; final tool result 
     baseCtx(),
   );
 
-  // Partial(s) include the subtree (both root and child visible)
   assert.ok(partials.length >= 1, `expected at least one partial; got ${partials.length}`);
   const lastPartial = partials[partials.length - 1];
   assert.deepEqual(

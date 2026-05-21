@@ -3,22 +3,19 @@ import { Text } from "@earendil-works/pi-tui";
 
 import { AgentRegistry } from "./domain/agent-registry.js";
 import { AgentManager } from "./runtime/agent-manager.js";
-import { BatchOrchestrator } from "./runtime/batch-orchestrator.js";
-import { makeChildSubagentFactory } from "./runtime/child-factory.js";
-import { ParentFinalizePolicy } from "./runtime/parent-finalize-policy.js";
-import { timingAsync } from "./runtime/timing.js";
-import { SubagentUiSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./ui/settings.js";
 import { BackgroundNotifier } from "./runtime/background-notifier.js";
+import { timingAsync } from "./runtime/timing.js";
+import { makeChildSubagentFactory } from "./tool/child-factory.js";
+import { defineSubagentTool } from "./tool/define-subagent-tool.js";
+import { SubagentUiSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./ui/settings.js";
 import { loadSubagentUiSettings } from "./ui/widget.js";
 import { registerSubagentsCommand } from "./command/register.js";
 import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
-import { defineSubagentTool } from "./tool/define-subagent-tool.js";
 
 
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;
   agentManager?: AgentManager;
-  orchestrator?: BatchOrchestrator;
   settingsStore?: Pick<SubagentUiSettingsStore, "load" | "save">;
 }
 
@@ -26,22 +23,18 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
   const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
-  const orchestrator = dependencies.orchestrator ?? new BatchOrchestrator({ manager: agentManager, registry: agentRegistry });
 
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
   const getCurrentSettings = () => currentSettings;
   agentManager.runner?.setChildFactory?.(parent =>
-    makeChildSubagentFactory({ manager: agentManager, orchestrator, registry: agentRegistry, parent, getCurrentSettings }));
-  if (typeof agentManager.onAgentUpdate === "function" && typeof agentManager.cancelNonBackgroundDescendantsOf === "function") {
-    new ParentFinalizePolicy({ manager: agentManager });
-  }
+    makeChildSubagentFactory({ manager: agentManager, registry: agentRegistry, parent, getCurrentSettings }));
   new BackgroundNotifier({
     pi: pi as any,
     manager: agentManager,
     getMode: () => currentSettings.runtime.backgroundNotify,
   });
 
-  registerSubagentsCommand(pi, agentManager, orchestrator, settingsStore, agentRegistry, settings => {
+  registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry, settings => {
     currentSettings = settings;
   });
   try {
@@ -55,7 +48,6 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 
   pi.registerTool(defineSubagentTool({
     agentManager,
-    orchestrator,
     agentRegistry,
     getCurrentSettings,
     prepareInvocation: async (ctx: ExtensionContext) => {

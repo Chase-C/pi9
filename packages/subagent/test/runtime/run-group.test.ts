@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { baseCtx, makeManagerAndOrchestrator, makeSession } from "../helpers/runtime.js";
+import { baseCtx, makeManager, makeSession } from "../helpers/runtime.js";
 
 test("BatchRun emits grouped progress rows in input order including unknown agents", async () => {
   const runner = async (_ctx: any, agent: any, attempt: any) => {
@@ -12,10 +12,10 @@ test("BatchRun emits grouped progress rows in input order including unknown agen
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 2, runner);
+  const manager = makeManager(registry as any, 2, runner);
   const snapshots: any[] = [];
 
-  const results = await orchestrator.run(
+  const results = await manager.run(
     baseCtx(),
     undefined,
     [
@@ -49,10 +49,10 @@ test("BatchRun keeps emitting active batch updates for spinner animation even wi
     await blocker;
     return completedRun(agent, "done");
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 1, runner);
+  const manager = makeManager(registry as any, 1, runner);
   const snapshots: any[] = [];
 
-  const pending = orchestrator.run(
+  const pending = manager.run(
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "work" }],
@@ -83,10 +83,10 @@ test("BatchRun emits live agent progress with the right transitions", async () =
     emit!({ type: "tool_execution_end" });
     return completedRun(agent, "done");
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 1, runner);
+  const manager = makeManager(registry as any, 1, runner);
   const snapshots: any[] = [];
 
-  const results = await orchestrator.run(
+  const results = await manager.run(
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "Summarize the project status for the parent agent." }],
@@ -124,9 +124,9 @@ test("BatchRun throttles live message snippets while lifecycle updates are immed
     await allowFinish;
     return completedRun(agent, "done");
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 1, runner);
+  const manager = makeManager(registry as any, 1, runner);
   const snapshots: any[] = [];
-  const pending = orchestrator.run(
+  const pending = manager.run(
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "work" }],

@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { TUI } from "@earendil-works/pi-tui";
 
 import type { AgentManager } from "../runtime/agent-manager.js";
-import type { BatchOrchestrator } from "../runtime/batch-orchestrator.js";
 import { createSubagentResumeMessage } from "../view/resume-message.js";
 import type { SubagentSettings, SubagentUiSettingsStore } from "../ui/settings.js";
 import { loadSubagentUiSettings, updateSubagentWidget } from "../ui/widget.js";
@@ -18,7 +17,6 @@ import { errorMessage, notify } from "./notify.js";
 export async function resumeSessionFromCommand(
   pi: ExtensionAPI,
   agentManager: AgentManager,
-  orchestrator: BatchOrchestrator,
   action: SubagentResumeCommandResult,
   ctx: ExtensionCommandContext,
   settingsStore: Pick<SubagentUiSettingsStore, "load">,
@@ -54,7 +52,7 @@ export async function resumeSessionFromCommand(
         done(value);
       };
 
-      orchestrator.run(ctx, loader.signal, [{ kind: "resume", sessionId: action.sessionId, prompt }], update => {
+      agentManager.run(ctx, loader.signal, [{ kind: "resume", sessionId: action.sessionId, prompt }], update => {
         updateSubagentWidget(ctx, update.sessions, uiSettings);
       }).then(
         results => finish({ result: results[0] }),

@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { baseCtx, makeManagerAndOrchestrator, makeSession, mergeRunners } from "../helpers/runtime.js";
+import { baseCtx, makeManager, makeSession, mergeRunners } from "../helpers/runtime.js";
 
 test("orchestrator returns ordered per-run output and reports unknown agents and child failures", async () => {
   const calls: string[] = [];
@@ -18,8 +18,8 @@ test("orchestrator returns ordered per-run output and reports unknown agents and
       ["bad", { name: "bad", description: "d", systemPrompt: "s", source: "project" }],
     ]),
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 2, runner);
-  const results = await orchestrator.run(baseCtx(), undefined, [
+  const manager = makeManager(registry as any, 2, runner);
+  const results = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "good", prompt: "one", model: "m1" },
     { kind: "spawn", agent: "missing", prompt: "two" },
     { kind: "spawn", agent: "bad", prompt: "three" },
@@ -52,9 +52,9 @@ test("orchestrator handles a mixed batch of one spawn and one resume with resume
       ["fresh", { name: "fresh", description: "d", systemPrompt: "s", source: "project", resumable: true }],
     ]),
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 2, mergeRunners(runner, resumeRunner));
+  const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
 
-  const [seed] = await orchestrator.run(baseCtx(), undefined, [
+  const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "first" },
   ]);
   assert.equal(seed.status, "completed");
@@ -62,7 +62,7 @@ test("orchestrator handles a mixed batch of one spawn and one resume with resume
   assert.ok(seed.sessionId);
 
   const updates: any[] = [];
-  const results = await orchestrator.run(baseCtx(), undefined, [
+  const results = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "fresh", prompt: "two" },
     { kind: "resume", sessionId: seed.sessionId!, prompt: "three" },
   ], update => updates.push(update));
@@ -90,9 +90,9 @@ test("orchestrator.startBatch returns sessions synchronously and a resultsPromis
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 2, runner);
+  const manager = makeManager(registry as any, 2, runner);
 
-  const batch = orchestrator.startBatch(
+  const batch = manager.startRun(
     baseCtx(),
     undefined,
     [
@@ -125,9 +125,9 @@ test("orchestrator.startBatch with background:true returns sessions tagged dispa
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 2, runner);
+  const manager = makeManager(registry as any, 2, runner);
 
-  const batch = orchestrator.startBatch(
+  const batch = manager.startRun(
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "go" }],
@@ -148,11 +148,11 @@ test("orchestrator.startBatch with background:true returns sessions tagged dispa
 
 test("orchestrator.startBatch background:true surfaces preflight failures as transient background attempts", async () => {
   const registry = { agents: new Map() };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 2, async () => {
+  const manager = makeManager(registry as any, 2, async () => {
     throw new Error("runner should not be called");
   });
 
-  const batch = orchestrator.startBatch(
+  const batch = manager.startRun(
     baseCtx(),
     undefined,
     [
@@ -183,10 +183,10 @@ test("orchestrator.startBatch background:true ignores parent signal abort and le
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 2, runner);
+  const manager = makeManager(registry as any, 2, runner);
   const controller = new AbortController();
 
-  const batch = orchestrator.startBatch(
+  const batch = manager.startRun(
     baseCtx(),
     controller.signal,
     [{ kind: "spawn", agent: "helper", prompt: "background work" }],
@@ -219,12 +219,12 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
-  const { manager, orchestrator } = makeManagerAndOrchestrator(registry as any, 2, mergeRunners(runner, resumeRunner));
-  const [seed] = await orchestrator.run(baseCtx(), undefined, [
+  const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
+  const [seed] = await manager.run(baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial" },
   ]);
 
-  const batch = orchestrator.startBatch(
+  const batch = manager.startRun(
     baseCtx(),
     undefined,
     [{ kind: "resume", sessionId: seed.sessionId!, prompt: "follow-up" }],
@@ -261,9 +261,9 @@ test("orchestrator.run forwards parentSessionId to every spawned agent's view an
   const registry = {
     agents: new Map([["helper", { name: "helper", description: "d", systemPrompt: "s", source: "project" }]]),
   };
-  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 2, runner);
+  const manager = makeManager(registry as any, 2, runner);
 
-  const results = await orchestrator.run(
+  const results = await manager.run(
     baseCtx(),
     undefined,
     [

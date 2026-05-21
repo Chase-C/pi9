@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
-import type { BatchOrchestrator } from "../runtime/batch-orchestrator.js";
 import { formatAgentConfigSummary, formatSubagentToolLines, inventoryDetails } from "../view/format.js";
 import { SubagentUiSettingsStore, type SubagentSettings } from "../ui/settings.js";
 import { loadSubagentUiSettings } from "../ui/widget.js";
@@ -18,7 +17,6 @@ import { errorMessage, notify } from "./notify.js";
 export function registerSubagentsCommand(
   pi: ExtensionAPI,
   agentManager: AgentManager,
-  orchestrator: BatchOrchestrator,
   settingsStore: Pick<SubagentUiSettingsStore, "load" | "save"> = new SubagentUiSettingsStore(),
   agentRegistry?: AgentRegistry,
   onSettingsUpdated?: (settings: SubagentSettings) => void,
@@ -89,7 +87,7 @@ export function registerSubagentsCommand(
         return;
       }
 
-      if (action?.action === "resume") await resumeSessionFromCommand(pi, agentManager, orchestrator, action, ctx, settingsStore);
+      if (action?.action === "resume") await resumeSessionFromCommand(pi, agentManager, action, ctx, settingsStore);
     },
   });
 }
