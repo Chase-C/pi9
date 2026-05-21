@@ -22,6 +22,7 @@ interface SpawnArgs {
   inputIndex: number;
   createdAt: number;
   registry: AgentRegistry;
+  background?: boolean;
 }
 
 export function resolveSpawn(args: SpawnArgs): SpawnPreflight {
@@ -34,7 +35,14 @@ export function resolveSpawn(args: SpawnArgs): SpawnPreflight {
   const error = `Unknown agent: ${task.agent}. Available agents:\n${available}`;
   return {
     kind: "failure",
-    failure: preflightSpawnFailure({ groupId, inputIndex, createdAt, task, error }),
+    failure: preflightSpawnFailure({
+      groupId,
+      inputIndex,
+      createdAt,
+      task,
+      error,
+      ...(args.background ? { dispatch: "background" as const } : {}),
+    }),
   };
 }
 
@@ -44,6 +52,7 @@ interface ResumeArgs {
   inputIndex: number;
   createdAt: number;
   findResumable: (id: string) => Agent | undefined;
+  background?: boolean;
 }
 
 export function resolveResume(args: ResumeArgs): ResumePreflight {
@@ -59,6 +68,14 @@ export function resolveResume(args: ResumeArgs): ResumePreflight {
   if (target && !error) return { kind: "ok", target };
   return {
     kind: "failure",
-    failure: preflightResumeFailure({ groupId, inputIndex, createdAt, task, target, error: error! }),
+    failure: preflightResumeFailure({
+      groupId,
+      inputIndex,
+      createdAt,
+      task,
+      target,
+      error: error!,
+      ...(args.background ? { dispatch: "background" as const } : {}),
+    }),
   };
 }

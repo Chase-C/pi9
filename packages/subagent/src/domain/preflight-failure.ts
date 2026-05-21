@@ -1,9 +1,7 @@
 import type { Agent } from "./agent.js";
 import type { AgentRunResult } from "./agent-result.js";
-import type { AgentView } from "./agent-view.js";
+import type { AgentDispatch, AgentRetention, AgentView, AgentViewConfig } from "./agent-view.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
-import { projectAgentView } from "../view/project-agent-view.js";
-import { getSubagentDisplaySettings } from "../view/view-helpers.js";
 
 export interface PreflightFailure {
   view: AgentView;
@@ -16,10 +14,14 @@ interface PreflightSpawnFailureArgs {
   createdAt: number;
   task: SpawnRequest;
   error: string;
+  dispatch?: AgentDispatch;
+  retention?: AgentRetention;
 }
 
 export function preflightSpawnFailure(args: PreflightSpawnFailureArgs): PreflightFailure {
   const { groupId, inputIndex, createdAt, task, error } = args;
+  const dispatch = args.dispatch ?? "foreground";
+  const retention = args.retention ?? "transient";
   const labelField = task.label !== undefined ? { label: task.label } : {};
   return {
     view: {
@@ -28,8 +30,8 @@ export function preflightSpawnFailure(args: PreflightSpawnFailureArgs): Prefligh
       ...labelField,
       prompt: task.prompt,
       createdAt,
-      dispatch: "foreground",
-      retention: "transient",
+      dispatch,
+      retention,
       config: {
         name: task.agent,
         source: undefined,
@@ -63,14 +65,17 @@ interface PreflightResumeFailureArgs {
   task: ResumeRequest;
   target: Agent | undefined;
   error: string;
+  dispatch?: AgentDispatch;
+  retention?: AgentRetention;
 }
 
 export function preflightResumeFailure(args: PreflightResumeFailureArgs): PreflightFailure {
   const { groupId, inputIndex, createdAt, task, target, error } = args;
   const label = task.label ?? target?.label;
   const labelField = label !== undefined ? { label } : {};
-  const targetView = target ? projectAgentView(target, getSubagentDisplaySettings()) : undefined;
-  const targetConfig = targetView?.config;
+  const dispatch = args.dispatch ?? (target?.background ? "background" : "foreground");
+  const retention = args.retention ?? "transient";
+  const targetConfig = target ? preflightTargetConfig(target) : undefined;
   return {
     view: {
       id: target?.id ?? `${groupId}:resume-${inputIndex}`,
@@ -78,8 +83,8 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
       ...labelField,
       prompt: task.prompt,
       createdAt,
-      dispatch: targetView ? targetView.dispatch : "foreground",
-      retention: targetView ? targetView.retention : "transient",
+      dispatch,
+      retention,
       config: targetConfig ?? {
         name: "(unknown)",
         source: undefined,
@@ -104,5 +109,19 @@ export function preflightResumeFailure(args: PreflightResumeFailureArgs): Prefli
       resumed: true,
       ...(target ? { sessionId: target.id } : {}),
     },
+  };
+}
+
+function preflightTargetConfig(target: Agent): AgentViewConfig {
+  return {
+    name: target.agentName,
+    description: target.config.description,
+    source: target.config.source,
+    sourcePath: target.config.sourcePath,
+    model: target.spawn.model ?? target.config.model,
+    thinking: target.spawn.thinking ?? target.config.thinking,
+    tools: target.config.tools,
+    ...(target.config.skills !== undefined ? { skills: target.config.skills } : {}),
+    resumable: target.resumable,
   };
 }

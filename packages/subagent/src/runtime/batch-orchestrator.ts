@@ -70,7 +70,7 @@ export class BatchOrchestrator {
 
     const resultPromises = tasks.map((task, inputIndex) => {
       if (task.kind === "spawn") {
-        const preflight = resolveSpawn({ task, groupId, inputIndex, createdAt: groupCreatedAt, registry });
+        const preflight = resolveSpawn({ task, groupId, inputIndex, createdAt: groupCreatedAt, registry, background: options.background });
         if (preflight.kind === "failure") {
           batch.addStaticView(preflight.failure.view, inputIndex, false);
           timingMark("manager.task.preflightFailure", { groupId, inputIndex, agent: task.agent, parentSessionId: options.parentSessionId });
@@ -92,6 +92,7 @@ export class BatchOrchestrator {
       const preflight = resolveResume({
         task, groupId, inputIndex, createdAt: groupCreatedAt,
         findResumable: id => manager.findResumable(id),
+        background: options.background,
       });
       if (preflight.kind === "failure") {
         batch.addStaticView(preflight.failure.view, inputIndex, true);

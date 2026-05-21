@@ -93,11 +93,14 @@ export function inventoryDetails(sessions: AgentView[], filter?: InventoryFilter
 }
 
 export function backgroundStartedDetails(sessions: AgentView[]): BackgroundStartedDetails {
-  const handles: BackgroundSpawnHandle[] = sessions.map((session, index) => ({
-    sessionId: session.id,
-    inputIndex: session.inputIndex ?? index,
-    ...(session.label !== undefined ? { label: session.label } : {}),
-  }));
+  const handles: BackgroundSpawnHandle[] = sessions.flatMap((session, index) => {
+    if (session.retention !== "persistent") return [];
+    return [{
+      sessionId: session.id,
+      inputIndex: session.inputIndex ?? index,
+      ...(session.label !== undefined ? { label: session.label } : {}),
+    }];
+  });
   return { view: "background-started", handles, count: sessions.length, background: true };
 }
 
@@ -175,7 +178,7 @@ export function formatSubagentSessionInspect(agent: AgentView, now = Date.now())
 
 export function formatWidgetLines(agents: AgentView[], now = Date.now()): string[] {
   const settings = getSubagentDisplaySettings();
-  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || (settings.widgetShowRetainedSessions && a.config.resumable));
+  const visible = agents.filter(a => isActiveStatusKind(a.status.kind) || (settings.widgetShowRetainedSessions && a.retention === "persistent"));
   return orderAsTree(visible).map(({ agent, depth }) => `${"  ".repeat(depth)}${formatSessionLine(agent, now)}`);
 }
 

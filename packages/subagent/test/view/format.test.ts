@@ -138,19 +138,20 @@ test("run-results view expanded shows agent, status, snippet, and session handle
   assert.match(expanded, /Error: boom/);
 });
 
-test("background-started details project handles with sessionId, inputIndex, and optional label", () => {
+test("background-started details project collectable handles with sessionId, inputIndex, and optional label", () => {
   const sessions = [
     fakeAgent({ id: "a", dispatch: "background", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
-    fakeAgent({ id: "b", dispatch: "background", config: { name: "reviewer" }, inputIndex: 1, status: { kind: "queued" } }),
+    fakeAgent({ id: "preflight", dispatch: "background", retention: "transient", config: { name: "missing" }, inputIndex: 1, status: { kind: "error", error: "Unknown agent" } }),
+    fakeAgent({ id: "b", dispatch: "background", config: { name: "reviewer" }, inputIndex: 2, status: { kind: "queued" } }),
   ];
 
   const details = backgroundStartedDetails(sessions);
   assert.equal(details.view, "background-started");
   assert.equal(details.background, true);
-  assert.equal(details.count, 2);
+  assert.equal(details.count, 3);
   assert.deepEqual(details.handles, [
     { sessionId: "a", inputIndex: 0, label: "alpha" },
-    { sessionId: "b", inputIndex: 1 },
+    { sessionId: "b", inputIndex: 2 },
   ]);
 });
 
@@ -189,6 +190,18 @@ test("inventory expanded output orders descendants DFS under their parents with 
   assert.match(headLines[1], /^  beta /);
   assert.match(headLines[2], /^    gamma /);
   assert.match(headLines[3], /^delta /);
+});
+
+test("formatWidgetLines includes persistent terminal rows even when they are not resumable", () => {
+  const foregroundResumable = fakeAgent({ id: "fg", config: { name: "foreground", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+  const backgroundOneshot = fakeAgent({ id: "bg", dispatch: "background", retention: "persistent", config: { name: "background", resumable: false }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+  const transient = fakeAgent({ id: "tmp", retention: "transient", config: { name: "transient", resumable: false }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+
+  const lines = formatWidgetLines([foregroundResumable, backgroundOneshot, transient], 1_000);
+
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^foreground /);
+  assert.match(lines[1], /^background /);
 });
 
 test("formatWidgetLines renders a 2-level tree with depth-based indentation", () => {

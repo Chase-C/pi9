@@ -114,7 +114,7 @@ test("orchestrator.startBatch returns sessions synchronously and a resultsPromis
   assert.deepEqual(results.map(r => r.output), ["done:one", "done:two"]);
 });
 
-test("orchestrator.startBatch with background:true returns sessions tagged kind:background and surfaces them in listSessions while running", async () => {
+test("orchestrator.startBatch with background:true returns sessions tagged dispatch:background and surfaces them in listSessions while running", async () => {
   let releaseRun: () => void;
   const runGate = new Promise<void>(resolve => { releaseRun = resolve; });
   const runner = async (_ctx: any, agent: any, attempt: any) => {
@@ -144,6 +144,30 @@ test("orchestrator.startBatch with background:true returns sessions tagged kind:
 
   releaseRun!();
   await batch.resultsPromise;
+});
+
+test("orchestrator.startBatch background:true surfaces preflight failures as transient background attempts", async () => {
+  const registry = { agents: new Map() };
+  const { orchestrator } = makeManagerAndOrchestrator(registry as any, 2, async () => {
+    throw new Error("runner should not be called");
+  });
+
+  const batch = orchestrator.startBatch(
+    baseCtx(),
+    undefined,
+    [
+      { kind: "spawn", agent: "missing", prompt: "unknown agent" },
+      { kind: "resume", sessionId: "missing-session", prompt: "bad resume" },
+    ],
+    undefined,
+    { background: true },
+  );
+
+  assert.deepEqual(batch.sessions.map(s => s.dispatch), ["background", "background"]);
+  assert.deepEqual(batch.sessions.map(s => s.retention), ["transient", "transient"]);
+
+  const results = await batch.resultsPromise;
+  assert.deepEqual(results.map(r => r.status), ["error", "error"]);
 });
 
 test("orchestrator.startBatch background:true ignores parent signal abort and lets children complete", async () => {
