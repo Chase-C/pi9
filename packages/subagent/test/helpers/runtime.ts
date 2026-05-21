@@ -20,3 +20,20 @@ export function makeManagerAndOrchestrator(
   new ParentFinalizePolicy({ manager });
   return { manager, orchestrator };
 }
+
+export const baseCtx = () => ({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } } as any);
+
+export const makeSession = () => ({
+  messages: [] as any[],
+  subscribe: () => () => {},
+  prompt: async () => {},
+  abort: () => {},
+});
+
+/** Pick the resume or spawn runner based on attempt kind. */
+export const mergeRunners = (
+  spawn: (ctx: any, agent: any, attempt: any, signal: any) => Promise<any>,
+  resume?: (ctx: any, agent: any, attempt: any, signal: any) => Promise<any>,
+) =>
+  (ctx: any, agent: any, attempt: any, signal: any) =>
+    attempt.kind === "resume" ? (resume ?? spawn)(ctx, agent, attempt, signal) : spawn(ctx, agent, attempt, signal);
