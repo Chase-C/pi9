@@ -145,39 +145,25 @@ export class AgentManager {
   async remove(
     args: { sessionIds: string[] } | { scope: "background" | "retained" | "non-running" },
   ): Promise<{ removed: number; aborted: number; sessionIds: string[]; errors: Array<{ sessionId: string; error: string }> }> {
-    const errors: Array<{ sessionId: string; error: string }> = [];
-    const targets: Agent[] = [];
+    const targets = ("sessionIds" in args)
+      ? args.sessionIds.map(id => this._resolveSession(id))
+      : this._matchScope(args.scope).map(agent => ({ agent }));
 
-    if ("sessionIds" in args) {
-      for (const id of args.sessionIds) {
-        const lookup = this._resolveSession(id);
-        if ("error" in lookup) errors.push(lookup);
-        else targets.push(lookup.agent);
-      }
-    } else {
-      targets.push(...this._matchScope(args.scope));
-    }
+    const agents = targets.filter(t => "agent" in t).map(({ agent }) => agent);
+    const errors = targets.filter(t => "error" in t);
 
-    let aborted = 0;
-    const fanouts: Promise<void>[] = [];
-    for (const agent of targets) {
-      const status = agent.status.kind;
-      if (status === "running" || status === "queued") {
-        await agent.abort();
-        if (status === "running") aborted += 1;
-        const pending = this._pendingFinalize.get(agent.id);
-        if (pending) fanouts.push(pending);
-      }
-    }
-    if (fanouts.length > 0) await Promise.all(fanouts);
+    const uniqueRunning = new Set(agents.filter(a => a.status.kind === "running").map(a => a.id));
+    const aborted = uniqueRunning.size;
 
-    const removedIds = new Set(targets.map(a => a.id));
-    if (removedIds.size > 0) {
-      this._agents = this._agents.filter(a => !removedIds.has(a.id));
-      // Tell every live group that one of its tree members vanished so it can re-emit.
-      for (const group of this._groups.values()) {
-        if (Array.from(removedIds).some(id => group.contains(id))) group.emit();
-      }
+    await Promise.all(agents.map(async agent => {
+      await agent.abort();
+      await this._pendingFinalize.get(agent.id);
+    }));
+
+    const removedIds = new Set(agents.map(a => a.id));
+    this._agents = this._agents.filter(a => !removedIds.has(a.id));
+    for (const group of this._groups.values()) {
+      if (agents.some(a => group.contains(a.id))) group.emit();
     }
 
     return {

@@ -42,8 +42,6 @@ export class AttemptRunner {
       }));
   }
 
-  /** Late-bound: the orchestrator/manager need to exist before the child factory can capture them.
-   *  Wiring code in `index.ts` calls this after constructing the orchestrator. */
   setChildFactory(fn: (agent: Agent) => ExtensionFactory): void {
     this._childFactory = fn;
   }
