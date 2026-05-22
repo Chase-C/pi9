@@ -1,10 +1,4 @@
-import { beforeEach } from "vitest";
-
-import { configureSubagentDisplay } from "../../src/view/view-helpers.js";
-
-// Several source modules carry mutable state (e.g. the subagent display
-// settings). Reset to defaults before every test so files exercising the
-// extension's tool surface don't pollute later tests in the same file.
-beforeEach(() => {
-  configureSubagentDisplay(undefined);
-});
+// No process-global subagent state remains; tests pass display settings
+// explicitly when they exercise compaction. Kept as a setup entry point so
+// the vitest config still finds it.
+export {};

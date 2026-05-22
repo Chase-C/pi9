@@ -3,7 +3,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../domain/agent.js";
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
-import type { SubagentSettings } from "../ui/settings.js";
+import type { SubagentSettings } from "../config/settings.js";
 import { defineSubagentTool } from "./define-subagent-tool.js";
 
 export interface ChildFactoryDeps {

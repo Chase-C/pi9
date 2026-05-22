@@ -5,9 +5,8 @@ import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { timingMark } from "../runtime/timing.js";
 import { SubagentParams } from "../schema.js";
-import type { SubagentSettings } from "../ui/settings.js";
+import type { SubagentSettings } from "../config/settings.js";
 import { createSubagentTextComponent } from "../view/format.js";
-import { configureSubagentDisplay, getSubagentDisplaySettings } from "../view/view-helpers.js";
 import {
   agentsAction,
   errorResult,
@@ -81,7 +80,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
         .filter((label: string | undefined): label is string => Boolean(label));
       let suffix = "";
       if (labels.length > 0) {
-        const limit = getSubagentDisplaySettings().toolCallLabelMaxLength;
+        const limit = getCurrentSettings().display.toolCallLabelMaxLength;
         const joined = labels.join(", ");
         const truncated = joined.length > limit ? `${joined.slice(0, Math.max(0, limit - 3))}...` : joined;
         suffix = ` · ${truncated}`;
@@ -93,7 +92,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     },
     renderResult(result: any, options: any, theme: any) {
       try {
-        const component = createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme);
+        const component = createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme, undefined, getCurrentSettings().display);
         if (component) return component;
       } catch { }
       const text = result?.content?.find((part: any) => part?.type === "text")?.text ?? "";
@@ -103,7 +102,6 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       timingMark("tool.execute.start", { action: params.action, taskCount: Array.isArray(params.tasks) ? params.tasks.length : undefined, cwd: ctx.cwd, isChild: parentSessionId !== undefined });
       const settings = await prepareInvocation(ctx);
-      configureSubagentDisplay(settings.display);
 
       if (!params.action) {
         return errorResult(`Provide an action: "agents", "list", "run", "results", or "remove".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);

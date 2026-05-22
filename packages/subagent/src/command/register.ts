@@ -3,9 +3,8 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { formatAgentConfigSummary, formatSubagentToolLines, inventoryDetails } from "../view/format.js";
-import { SubagentUiSettingsStore, type SubagentSettings } from "../ui/settings.js";
-import { loadSubagentUiSettings } from "../ui/widget.js";
-import { configureSubagentDisplay } from "../view/view-helpers.js";
+import { SubagentSettingsStore, type SubagentSettings } from "../config/settings.js";
+import { prepareSubagentRuntime } from "../runtime/prepare-subagent-runtime.js";
 import {
   SubagentAgentsComponent,
   SubagentSessionsComponent,
@@ -17,7 +16,7 @@ import { errorMessage, notify } from "./notify.js";
 export function registerSubagentsCommand(
   pi: ExtensionAPI,
   agentManager: AgentManager,
-  settingsStore: Pick<SubagentUiSettingsStore, "load" | "save"> = new SubagentUiSettingsStore(),
+  settingsStore: Pick<SubagentSettingsStore, "load" | "save"> = new SubagentSettingsStore(),
   agentRegistry?: AgentRegistry,
   onSettingsUpdated?: (settings: SubagentSettings) => void,
 ) {
@@ -36,14 +35,7 @@ export function registerSubagentsCommand(
           return;
         }
 
-        const settings = await loadSubagentUiSettings(ctx, settingsStore);
-        configureSubagentDisplay(settings.display);
-        agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
-        await agentRegistry.reload(ctx.cwd, {
-          discovery: settings.agentDiscovery,
-          defaultResumable: settings.runtime.defaultResumable,
-          onWarning: message => notify(ctx, message, "warning"),
-        });
+        await prepareSubagentRuntime({ ctx, settingsStore, agentManager, agentRegistry });
         const agents = Array.from(agentRegistry.agents.values());
         if (!ctx.hasUI || !ctx.ui?.custom) {
           notify(ctx, agents.length

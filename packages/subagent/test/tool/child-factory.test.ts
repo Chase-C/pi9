@@ -5,7 +5,7 @@ import { Agent } from "../../src/domain/agent.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import type { AgentManager } from "../../src/runtime/agent-manager.js";
 import { makeChildSubagentFactory } from "../../src/tool/child-factory.js";
-import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/ui/settings.js";
+import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 import { baseCtx, makeManager, makeSession } from "../helpers/runtime.js";
 
 type FakeRegistry = { agents: Map<string, any>; reload?: () => Promise<void>; summarizeAgent?: () => string };

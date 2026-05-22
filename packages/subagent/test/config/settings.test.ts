@@ -4,11 +4,11 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SubagentUiSettingsStore } from "../../src/ui/settings.js";
+import { SubagentSettingsStore } from "../../src/config/settings.js";
 
 test("subagent UI settings default to below editor when file is missing", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-settings-default-"));
-  const store = new SubagentUiSettingsStore(join(root, "subagent", "settings.json"));
+  const store = new SubagentSettingsStore(join(root, "subagent", "settings.json"));
 
   const result = await store.load();
 
@@ -26,8 +26,8 @@ test("subagent UI settings save and reload widget placement globally", async () 
   const root = await mkdtemp(join(tmpdir(), "subagent-settings-save-"));
   const settingsPath = join(root, "subagent", "settings.json");
 
-  await new SubagentUiSettingsStore(settingsPath).save({ widgetPlacement: "aboveEditor" });
-  const result = await new SubagentUiSettingsStore(settingsPath).load();
+  await new SubagentSettingsStore(settingsPath).save({ widgetPlacement: "aboveEditor" });
+  const result = await new SubagentSettingsStore(settingsPath).load();
 
   assert.equal(result.settings.widgetPlacement, "aboveEditor");
   assert.equal(result.settings.runtime.maxTasksPerRun, 8);
@@ -56,7 +56,7 @@ test("subagent settings reject invalid values with a field-named warning and fal
     await mkdir(join(root, "subagent"), { recursive: true });
     await writeFile(settingsPath, JSON.stringify(written));
 
-    const result = await new SubagentUiSettingsStore(settingsPath).load();
+    const result = await new SubagentSettingsStore(settingsPath).load();
 
     // Defaults applied: widgetPlacement always falls back to belowEditor; runtime always has the canonical defaults.
     assert.equal(result.settings.widgetPlacement, "belowEditor", `${label}: widgetPlacement should fall back`);
@@ -73,7 +73,7 @@ test("subagent settings reject the legacy backgroundNotify names end-of-turn and
     await mkdir(join(root, "subagent"), { recursive: true });
     await writeFile(settingsPath, JSON.stringify({ runtime: { backgroundNotify: legacy } }));
 
-    const result = await new SubagentUiSettingsStore(settingsPath).load();
+    const result = await new SubagentSettingsStore(settingsPath).load();
 
     assert.equal(result.settings.runtime.backgroundNotify, "auto", `${legacy}: should fall back to auto`);
     assert.match(result.warning ?? "", /backgroundNotify/, `${legacy}: warning should mention backgroundNotify`);
@@ -94,7 +94,7 @@ test("subagent settings load runtime, discovery, and display overrides", async (
     }),
   );
 
-  const result = await new SubagentUiSettingsStore(settingsPath).load();
+  const result = await new SubagentSettingsStore(settingsPath).load();
 
   assert.equal(result.settings.widgetPlacement, "off");
   assert.deepEqual(result.settings.runtime, { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultResumable: true, backgroundNotify: "steer" });

@@ -8,7 +8,7 @@ import type { AgentRunStatus, AgentUpdateKind, AgentView } from "../domain/agent
 import { AgentRegistry } from "../domain/agent-registry.js";
 import type { SessionStatus, TaskRequest } from "../schema.js";
 import { projectAgentView } from "../view/project-agent-view.js";
-import { activeOrRetainedAgents, effectiveStatus, getSubagentDisplaySettings } from "../view/view-helpers.js";
+import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
 import { resolveResume, resolveSpawn } from "./preflight.js";
 import { RunGroup, type RunUpdateListener } from "./run-group.js";
@@ -59,8 +59,7 @@ export class AgentManager {
   }
 
   listSessions(filter?: { status?: SessionStatus[] }): AgentView[] {
-    const display = getSubagentDisplaySettings();
-    const views = activeOrRetainedAgents(this._agents).map(agent => projectAgentView(agent, display));
+    const views = activeOrRetainedAgents(this._agents).map(agent => projectAgentView(agent));
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
@@ -351,7 +350,6 @@ export class AgentManager {
    * silently skipped.
    */
   private _walkTree(rootIds: string[]): AgentView[] {
-    const display = getSubagentDisplaySettings();
     const byId = new Map<string, Agent>();
     for (const agent of this._agents) byId.set(agent.id, agent);
 
@@ -362,7 +360,7 @@ export class AgentManager {
       const agent = byId.get(id);
       if (!agent) return;
       seen.add(id);
-      out.push(projectAgentView(agent, display));
+      out.push(projectAgentView(agent));
       const children = this._agents.filter(a => a.parentSessionId === id);
       children.sort((a, b) => a.createdAt - b.createdAt);
       for (const child of children) visit(child.id);

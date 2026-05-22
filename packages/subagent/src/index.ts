@@ -7,8 +7,8 @@ import { BackgroundNotifier } from "./runtime/background-notifier.js";
 import { timingAsync } from "./runtime/timing.js";
 import { makeChildSubagentFactory } from "./tool/child-factory.js";
 import { defineSubagentTool } from "./tool/define-subagent-tool.js";
-import { SubagentUiSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./ui/settings.js";
-import { loadSubagentUiSettings } from "./ui/widget.js";
+import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./config/settings.js";
+import { prepareSubagentRuntime } from "./runtime/prepare-subagent-runtime.js";
 import { registerSubagentsCommand } from "./command/register.js";
 import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
 
@@ -16,13 +16,13 @@ import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;
   agentManager?: AgentManager;
-  settingsStore?: Pick<SubagentUiSettingsStore, "load" | "save">;
+  settingsStore?: Pick<SubagentSettingsStore, "load" | "save">;
 }
 
 export default function subagentExtension(pi: ExtensionAPI, dependencies: SubagentExtensionDependencies = {}) {
   const agentRegistry = dependencies.agentRegistry ?? new AgentRegistry();
   const agentManager = dependencies.agentManager ?? new AgentManager(agentRegistry);
-  const settingsStore = dependencies.settingsStore ?? new SubagentUiSettingsStore();
+  const settingsStore = dependencies.settingsStore ?? new SubagentSettingsStore();
 
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
   const getCurrentSettings = () => currentSettings;
@@ -32,6 +32,7 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
     pi: pi as any,
     manager: agentManager,
     getMode: () => currentSettings.runtime.backgroundNotify,
+    getDisplay: () => currentSettings.display,
   });
 
   registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry, settings => {
@@ -41,7 +42,7 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
     pi.registerMessageRenderer?.("subagent-resume", (message, _options, theme) => {
       const content = typeof message.content === "string"
         ? message.content
-        : formatSubagentResumeMessageContent(message.details as any);
+        : formatSubagentResumeMessageContent(message.details as any, currentSettings.display);
       return new Text(theme?.fg ? theme.fg("customMessageText", content) : content, 0, 0);
     });
   } catch { }
@@ -51,14 +52,12 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
     agentRegistry,
     getCurrentSettings,
     prepareInvocation: async (ctx: ExtensionContext) => {
-      const settings = await timingAsync("tool.loadSettings", { hasUI: ctx.hasUI }, () => loadSubagentUiSettings(ctx, settingsStore));
+      const settings = await timingAsync(
+        "tool.prepareRuntime",
+        { hasUI: ctx.hasUI, cwd: ctx.cwd },
+        () => prepareSubagentRuntime({ ctx, settingsStore, agentManager, agentRegistry }),
+      );
       currentSettings = settings;
-      agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
-      await timingAsync("tool.agentRegistry.reload", { cwd: ctx.cwd }, () => agentRegistry.reload(ctx.cwd, {
-        discovery: settings.agentDiscovery,
-        defaultResumable: settings.runtime.defaultResumable,
-        onWarning: message => ctx.ui?.notify?.(message, "warning"),
-      }));
       return settings;
     },
   }));

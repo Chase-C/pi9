@@ -1,8 +1,6 @@
 import type { Agent } from "../domain/agent.js";
 import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
 import { projectAgentView } from "../view/project-agent-view.js";
-import { getSubagentDisplaySettings } from "../view/view-helpers.js";
-import type { SubagentDisplaySettings } from "../ui/settings.js";
 import { timingStart, timingSync } from "./timing.js";
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
@@ -69,17 +67,15 @@ export class RunGroup {
 
   /** Root sessions in input order. */
   rootSessions(): AgentView[] {
-    const display = getSubagentDisplaySettings();
-    return this._sortedEntries().map(entry => this._project(entry, display));
+    return this._sortedEntries().map(entry => this._project(entry));
   }
 
   /** Roots followed by every descendant, in pre-order. */
   tree(): AgentView[] {
-    const display = getSubagentDisplaySettings();
     const out: AgentView[] = [];
     const seen = new Set<string>();
     for (const entry of this._sortedEntries()) {
-      const root = this._project(entry, display);
+      const root = this._project(entry);
       if (seen.has(root.id)) continue;
       seen.add(root.id);
       out.push(root);
@@ -98,9 +94,9 @@ export class RunGroup {
     return this._entries.slice().sort((a, b) => a.inputIndex - b.inputIndex);
   }
 
-  private _project(entry: Entry, display: SubagentDisplaySettings): AgentView {
+  private _project(entry: Entry): AgentView {
     return entry.kind === "agent"
-      ? { ...projectAgentView(entry.agent, display, { inputIndex: entry.inputIndex }), resumed: entry.resumed }
+      ? { ...projectAgentView(entry.agent, { inputIndex: entry.inputIndex }), resumed: entry.resumed }
       : { ...entry.view, resumed: entry.resumed };
   }
 

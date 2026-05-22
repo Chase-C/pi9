@@ -12,7 +12,7 @@ import {
   type SessionStatus,
   type TaskRequest,
 } from "../schema.js";
-import type { SubagentSettings } from "../ui/settings.js";
+import type { SubagentSettings } from "../config/settings.js";
 import { updateSubagentWidget } from "../ui/widget.js";
 import {
   agentsDetails,
@@ -142,7 +142,7 @@ export async function runAction(
 
   const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length, isChild: deps.parentSessionId !== undefined });
   const emitPartial = (update: RunUpdate) => {
-    const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length, treeCount: update.tree.length }, () => partialToolResult(update));
+    const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length, treeCount: update.tree.length }, () => partialToolResult(update, deps.getCurrentSettings().display));
     timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
     timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, deps.getCurrentSettings()));
   };
@@ -169,14 +169,14 @@ export async function runAction(
   return toolResult(runResultsDetails(outcomes, isError), isError);
 }
 
-function partialToolResult(update: RunUpdate): { content: { type: "text"; text: string }[]; details: unknown } {
+function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings): { content: { type: "text"; text: string }[]; details: unknown } {
   const subtree: AgentView[] = update.tree.length > update.sessions.length ? update.tree : [];
   const details = runDetails(serializeGroup(update.sessions), {
     active: update.active,
     ...(subtree.length > 0 ? { subtree: update.tree } : {}),
   });
   return {
-    content: [{ type: "text" as const, text: formatSubagentToolLines(details, true).join("\n") }],
+    content: [{ type: "text" as const, text: formatSubagentToolLines(details, true, Date.now(), display).join("\n") }],
     details,
   };
 }

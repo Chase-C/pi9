@@ -1,4 +1,5 @@
-import { compact, getSubagentDisplaySettings } from "./view-helpers.js";
+import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
+import { compact } from "./view-helpers.js";
 
 export interface SubagentResumeMessageDetails {
   sessionId: string;
@@ -17,18 +18,20 @@ export interface SubagentResumeMessage {
   details: SubagentResumeMessageDetails;
 }
 
-export function createSubagentResumeMessage(result: {
-  agent: string;
-  prompt: string;
-  status: string;
-  output?: string;
-  error?: string;
-  sessionId?: string;
-}): SubagentResumeMessage {
-  const settings = getSubagentDisplaySettings();
-  const promptPreview = compact(result.prompt, settings.promptPreviewLength);
-  const outputSnippet = result.output ? compact(result.output, settings.outputSnippetLength) : undefined;
-  const errorSnippet = result.error ? compact(result.error, settings.outputSnippetLength) : undefined;
+export function createSubagentResumeMessage(
+  result: {
+    agent: string;
+    prompt: string;
+    status: string;
+    output?: string;
+    error?: string;
+    sessionId?: string;
+  },
+  display: SubagentDisplaySettings = DEFAULT_SUBAGENT_SETTINGS.display,
+): SubagentResumeMessage {
+  const promptPreview = compact(result.prompt, display.promptPreviewLength);
+  const outputSnippet = result.output ? compact(result.output, display.outputSnippetLength) : undefined;
+  const errorSnippet = result.error ? compact(result.error, display.outputSnippetLength) : undefined;
   const sessionId = result.sessionId ?? "unknown";
   const details: SubagentResumeMessageDetails = {
     sessionId,
@@ -43,12 +46,15 @@ export function createSubagentResumeMessage(result: {
   return {
     customType: "subagent-resume",
     display: true,
-    content: formatSubagentResumeMessageContent(details),
+    content: formatSubagentResumeMessageContent(details, display),
     details,
   };
 }
 
-export function formatSubagentResumeMessageContent(details: SubagentResumeMessageDetails): string {
+export function formatSubagentResumeMessageContent(
+  details: SubagentResumeMessageDetails,
+  display: SubagentDisplaySettings = DEFAULT_SUBAGENT_SETTINGS.display,
+): string {
   const title = details.status === "completed" ? "Subagent resume completed" : `Subagent resume ${details.status}`;
   const parts = [
     title,
@@ -56,8 +62,7 @@ export function formatSubagentResumeMessageContent(details: SubagentResumeMessag
     `session: ${details.sessionId}`,
     `prompt: ${details.promptPreview}`,
   ];
-  const settings = getSubagentDisplaySettings();
-  if (details.outputSnippet) parts.push(`output: ${compact(details.outputSnippet, settings.resumeMessageSnippetLength)}`);
-  if (details.errorSnippet) parts.push(`error: ${compact(details.errorSnippet, settings.resumeMessageSnippetLength)}`);
+  if (details.outputSnippet) parts.push(`output: ${compact(details.outputSnippet, display.resumeMessageSnippetLength)}`);
+  if (details.errorSnippet) parts.push(`error: ${compact(details.errorSnippet, display.resumeMessageSnippetLength)}`);
   return parts.join(" · ");
 }

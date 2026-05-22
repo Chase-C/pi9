@@ -1,20 +1,10 @@
 import type { AgentToolUse, AgentView, AgentViewStatus } from "../domain/agent-view.js";
-import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../ui/settings.js";
+import { DEFAULT_SUBAGENT_SETTINGS } from "../config/settings.js";
 
 export const PROMPT_PREVIEW_LENGTH = DEFAULT_SUBAGENT_SETTINGS.display.promptPreviewLength;
 export const MESSAGE_SNIPPET_LENGTH = DEFAULT_SUBAGENT_SETTINGS.display.messageSnippetLength;
 export const OUTPUT_SNIPPET_LENGTH = DEFAULT_SUBAGENT_SETTINGS.display.outputSnippetLength;
 export const OUTPUT_SNIPPET_MAX_LINES = DEFAULT_SUBAGENT_SETTINGS.display.outputSnippetMaxLines;
-
-let activeDisplaySettings: SubagentDisplaySettings = { ...DEFAULT_SUBAGENT_SETTINGS.display };
-
-export function configureSubagentDisplay(settings: Partial<SubagentDisplaySettings> | undefined) {
-  activeDisplaySettings = { ...DEFAULT_SUBAGENT_SETTINGS.display, ...settings };
-}
-
-export function getSubagentDisplaySettings(): SubagentDisplaySettings {
-  return activeDisplaySettings;
-}
 
 export function activeOrRetainedAgents<T extends { status: { kind: string }; resumable: boolean; background?: boolean }>(agents: T[]): T[] {
   return agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable || a.background === true);

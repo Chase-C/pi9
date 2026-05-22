@@ -222,6 +222,7 @@ The parent remains responsible for sequencing. If later work depends on earlier 
 - Collapsed rendering shows an aggregate group line, such as task count, status counts, and overall outcome.
 - Expanded rendering shows one row per child session with agent name (or per-task `label`), status, turn/tool counts, elapsed time, active tool, live message snippet, and final outcome.
 - Multi-task runs keep input order in final results and group related child rows together.
+- Recursive subagent trees render as a depth-indented tree under their parent row, ordered by child `createdAt` within each parent.
 - Mixed child failures mark the overall tool result as `isError` while preserving successful child results.
 
 Renderer failures fall back to simple text/JSON output instead of breaking the tool call.
@@ -232,8 +233,8 @@ The extension also updates a lightweight widget outside the tool row.
 
 - The widget appears while there are active sessions or retained resumable sessions.
 - It auto-hides when there are no active or retained sessions.
-- A single visible session renders a compact session line.
-- Multiple visible sessions render a one-line summary of active and retained counts.
+- Each visible session renders as its own compact session line; nested children appear under their parent with depth-based indentation, preserving the recursive tree shape.
+- Retained sessions are included when `display.widgetShowRetainedSessions` is true (the default).
 
 Configure widget placement with `/subagents settings`:
 

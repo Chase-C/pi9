@@ -84,7 +84,7 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
   },
 };
 
-export type SubagentUiSettingsLoadResult = {
+export type SubagentSettingsLoadResult = {
   settings: SubagentSettings;
   warning?: string;
 };
@@ -94,10 +94,10 @@ const PROJECT_AGENTS_STRATEGIES = new Set<ProjectAgentsStrategy>(["nearest", "of
 const DUPLICATE_NAME_POLICIES = new Set<DuplicateNamePolicy>(["projectOverridesUser", "userOverridesProject"]);
 const BACKGROUND_NOTIFY_MODES = new Set<BackgroundNotifyMode>(["auto", "steer", "none"]);
 
-export class SubagentUiSettingsStore {
+export class SubagentSettingsStore {
   constructor(readonly settingsPath = join(getAgentDir(), "subagent", "settings.json")) { }
 
-  async load(): Promise<SubagentUiSettingsLoadResult> {
+  async load(): Promise<SubagentSettingsLoadResult> {
     try {
       const raw = await readFile(this.settingsPath, "utf8");
       const parsed = JSON.parse(raw) as unknown;
@@ -119,7 +119,7 @@ export class SubagentUiSettingsStore {
   }
 }
 
-export function normalizeSettings(value: unknown): SubagentUiSettingsLoadResult {
+export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {
       settings: cloneDefaults(),

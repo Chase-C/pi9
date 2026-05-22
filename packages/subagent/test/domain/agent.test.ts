@@ -3,11 +3,9 @@ import assert from "node:assert/strict";
 
 import { Agent, type AgentStatus } from "../../src/domain/agent.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/ui/settings.js";
 import { projectAgentView } from "../../src/view/project-agent-view.js";
 
-const display = DEFAULT_SUBAGENT_SETTINGS.display;
-const view = (agent: Agent) => projectAgentView(agent, display);
+const view = (agent: Agent) => projectAgentView(agent);
 
 function doneStatus(agent: Agent): Extract<AgentStatus, { kind: "done" }> {
   if (agent.status.kind !== "done") throw new Error(`expected done, got ${agent.status.kind}`);

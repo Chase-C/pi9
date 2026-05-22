@@ -3,9 +3,9 @@ import type { TUI } from "@earendil-works/pi-tui";
 
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { createSubagentResumeMessage } from "../view/resume-message.js";
-import type { SubagentSettings, SubagentUiSettingsStore } from "../ui/settings.js";
-import { loadSubagentUiSettings, updateSubagentWidget } from "../ui/widget.js";
-import { configureSubagentDisplay } from "../view/view-helpers.js";
+import type { SubagentSettings, SubagentSettingsStore } from "../config/settings.js";
+import { updateSubagentWidget } from "../ui/widget.js";
+import { prepareSubagentRuntime } from "../runtime/prepare-subagent-runtime.js";
 import {
   SubagentResumeLoader,
   SubagentSettingsComponent,
@@ -19,7 +19,7 @@ export async function resumeSessionFromCommand(
   agentManager: AgentManager,
   action: SubagentResumeCommandResult,
   ctx: ExtensionCommandContext,
-  settingsStore: Pick<SubagentUiSettingsStore, "load">,
+  settingsStore: Pick<SubagentSettingsStore, "load">,
 ) {
   if (!ctx.hasUI || !ctx.ui?.custom || typeof (ctx.ui as any).editor !== "function") {
     notify(ctx, "Resume UI is unavailable for subagent sessions.", "warning");
@@ -38,9 +38,7 @@ export async function resumeSessionFromCommand(
     return;
   }
 
-  const uiSettings = await loadSubagentUiSettings(ctx, settingsStore);
-  configureSubagentDisplay(uiSettings.display);
-  agentManager.configure?.({ maxRunning: uiSettings.runtime.maxConcurrentSubagents });
+  const uiSettings = await prepareSubagentRuntime({ ctx, settingsStore, agentManager });
   let outcome: { result?: unknown; error?: unknown };
   try {
     outcome = await ctx.ui.custom<{ result?: unknown; error?: unknown }>((tui, theme, keybindings, done) => {
@@ -68,7 +66,7 @@ export async function resumeSessionFromCommand(
 
   const result = normalizeResumeOutcome(action, prompt, outcome);
   updateSubagentWidget(ctx, agentManager.listSessions(), uiSettings);
-  pi.sendMessage?.(createSubagentResumeMessage(result));
+  pi.sendMessage?.(createSubagentResumeMessage(result, uiSettings.display));
   notify(ctx, result.status === "completed"
     ? `Subagent session ${action.sessionId} resumed.`
     : `Subagent session ${action.sessionId} resume ${result.status}.`,
@@ -104,12 +102,10 @@ function normalizeResumeOutcome(action: SubagentResumeCommandResult, prompt: str
 export async function openSubagentSettings(
   ctx: ExtensionCommandContext,
   agentManager: AgentManager,
-  settingsStore: Pick<SubagentUiSettingsStore, "load" | "save">,
+  settingsStore: Pick<SubagentSettingsStore, "load" | "save">,
   onSettingsUpdated?: (settings: SubagentSettings) => void,
 ) {
-  let settings = await loadSubagentUiSettings(ctx, settingsStore);
-  configureSubagentDisplay(settings.display);
-  agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
+  let settings = await prepareSubagentRuntime({ ctx, settingsStore, agentManager });
   if (!ctx.hasUI || !ctx.ui?.custom) {
     notify(ctx, `Subagent widget placement: ${settings.widgetPlacement}`, "info");
     return;

@@ -1,8 +1,8 @@
+import { DEFAULT_SUBAGENT_SETTINGS, type BackgroundNotifyMode, type SubagentDisplaySettings } from "../config/settings.js";
+
 import type { Agent } from "../domain/agent.js";
 import type { AgentUpdateKind, AgentRunStatus } from "../domain/agent-view.js";
 import type { AgentUpdateListener } from "./agent-manager.js";
-import type { BackgroundNotifyMode } from "../ui/settings.js";
-import { getSubagentDisplaySettings } from "../view/view-helpers.js";
 
 export interface NotifierManager {
   onAgentUpdate?(listener: AgentUpdateListener): () => void;
@@ -32,6 +32,8 @@ export interface BackgroundNotifierDeps {
   pi: NotifierPi;
   manager: NotifierManager;
   getMode: () => BackgroundNotifyMode;
+  /** Returns the latest display settings used when formatting notification text. */
+  getDisplay?: () => SubagentDisplaySettings;
   /**
    * Schedule a delayed retry of the idle flush. Returns a cancel function.
    * Defaults to a setTimeout-based implementation.
@@ -232,7 +234,8 @@ export class BackgroundNotifier {
     if (this._queue.length === 0) return;
     const entries = this._queue;
     this._queue = [];
-    const content = formatNotification(entries);
+    const display = this.deps.getDisplay?.() ?? DEFAULT_SUBAGENT_SETTINGS.display;
+    const content = formatNotification(entries, display);
     this.deps.pi.sendMessage(
       {
         customType: "subagent-background-completion",
@@ -244,8 +247,8 @@ export class BackgroundNotifier {
   }
 }
 
-function formatNotification(entries: CompletionEntry[]): string {
-  const limit = getSubagentDisplaySettings().toolCallLabelMaxLength;
+function formatNotification(entries: CompletionEntry[], display: SubagentDisplaySettings): string {
+  const limit = display.toolCallLabelMaxLength;
   const visible = entries.slice(0, MAX_LISTED_COMPLETIONS);
   const overflow = entries.length - visible.length;
   const header = `${entries.length} background subagent${entries.length === 1 ? "" : "s"} completed since the last notification:`;

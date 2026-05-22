@@ -7,11 +7,9 @@ import {
   preflightResumeFailure,
   preflightSpawnFailure,
 } from "../../src/domain/preflight-failure.js";
-import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/ui/settings.js";
 import { projectAgentView } from "../../src/view/project-agent-view.js";
 
-const display = DEFAULT_SUBAGENT_SETTINGS.display;
-const view = (agent: Agent) => projectAgentView(agent, display);
+const view = (agent: Agent) => projectAgentView(agent);
 
 const baseConfig = {
   name: "helper",

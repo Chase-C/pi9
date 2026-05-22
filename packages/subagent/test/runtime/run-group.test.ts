@@ -4,11 +4,9 @@ import assert from "node:assert/strict";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { Agent } from "../../src/domain/agent.js";
 import { RunGroup } from "../../src/runtime/run-group.js";
-import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/ui/settings.js";
 import { projectAgentView } from "../../src/view/project-agent-view.js";
 import { baseCtx, makeManager, makeSession } from "../helpers/runtime.js";
 
-const testDisplay = DEFAULT_SUBAGENT_SETTINGS.display;
 const testAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, resumable: false };
 
 function makeAgent(id: string, parentSessionId?: string): Agent {
@@ -21,8 +19,8 @@ test("RunGroup.tree emits a descendant root only once", () => {
   const group = new RunGroup({
     groupId: "group",
     walkTree: rootIds => rootIds.flatMap(id => {
-      if (id === "parent") return [parent, child].map(agent => projectAgentView(agent, testDisplay));
-      if (id === "child") return [projectAgentView(child, testDisplay)];
+      if (id === "parent") return [parent, child].map(agent => projectAgentView(agent));
+      if (id === "child") return [projectAgentView(child)];
       return [];
     }),
   });
