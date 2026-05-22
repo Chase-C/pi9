@@ -2,6 +2,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 
 import type { AgentView } from "../../domain/agent-view.js";
 import type { AgentManager } from "../../runtime/agent-manager.js";
+import type { SubagentDisplaySettings } from "../../config/settings.js";
 import { formatSubagentSessionInspect, formatSubagentSessionSummary } from "../../view/format.js";
 import {
   clamp,
@@ -26,6 +27,7 @@ export class SubagentSessionsComponent implements Component {
     private readonly tui: Pick<TUI, "requestRender">,
     private readonly theme: SubagentSessionsTheme,
     private readonly keybindings: SubagentKeybindings,
+    private readonly display: SubagentDisplaySettings,
     private readonly notify: (message: string, level?: string) => void,
     private readonly done: (result?: SubagentsCommandResult) => void,
   ) { }
@@ -41,7 +43,7 @@ export class SubagentSessionsComponent implements Component {
       const session = sessions[this.selected];
       return fitLinesToWidth([
         this.accent("Subagent Session"),
-        ...formatSubagentSessionInspect(session).map(line => `  ${line}`),
+        ...formatSubagentSessionInspect(session, Date.now(), this.display).map(line => `  ${line}`),
         this.dim(inspectHelp(session)),
       ], width);
     }

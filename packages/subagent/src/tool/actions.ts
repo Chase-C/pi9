@@ -133,7 +133,7 @@ export async function runAction(
 
   if (params.background === true) {
     const handle = deps.agentManager.startRun(ctx, signal, parsed, update => {
-      updateSubagentWidget(ctx, update.sessions, deps.getCurrentSettings());
+      updateSubagentWidget(ctx, widgetAgents(update), deps.getCurrentSettings());
     }, startOptions);
     handle.resultsPromise.catch(() => {});
     updateSubagentWidget(ctx, handle.sessions, deps.getCurrentSettings());
@@ -144,7 +144,7 @@ export async function runAction(
   const emitPartial = (update: RunUpdate) => {
     const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length, treeCount: update.tree.length }, () => partialToolResult(update, deps.getCurrentSettings().display));
     timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
-    timingSync("tool.update.widget", { sessionCount: update.sessions.length }, () => updateSubagentWidget(ctx, update.sessions, deps.getCurrentSettings()));
+    timingSync("tool.update.widget", { sessionCount: update.sessions.length, treeCount: update.tree.length }, () => updateSubagentWidget(ctx, widgetAgents(update), deps.getCurrentSettings()));
   };
   const handle = deps.agentManager.startRun(ctx, signal, parsed, update => {
     timingMark("tool.update.received", { sessionCount: update.sessions.length, treeCount: update.tree.length, active: update.active });
@@ -167,6 +167,10 @@ export async function runAction(
     ...(result.resumed ? { resumed: true } : {}),
   }));
   return toolResult(runResultsDetails(outcomes, isError), isError);
+}
+
+function widgetAgents(update: RunUpdate): AgentView[] {
+  return update.tree.length > 0 ? update.tree : update.sessions;
 }
 
 function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings): { content: { type: "text"; text: string }[]; details: unknown } {

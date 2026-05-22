@@ -366,6 +366,59 @@ test("/subagents sessions menu closes on a terminal escape sequence", async () =
   assert.equal(closed, true);
 });
 
+test("/subagents sessions command uses configured display lengths for notification and inspect views", async () => {
+  const session = fakeAgent({
+    config: { resumable: true },
+    status: { kind: "error", startedAt: 1, completedAt: 2, error: "abcdefghijklmnopqrstuvwxyz" },
+    message: "0123456789abcdefghijklmnopqrstuvwxyz",
+  });
+  const fakeManager = {
+    listSessions(): any[] { return this.sessions; },
+    sessions: [session],
+    configure() {},
+  };
+  const settingsStore = {
+    async load() {
+      return { settings: { display: { outputSnippetLength: 6, messageSnippetLength: 5 } } };
+    },
+  };
+  const commands = registerCommand({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore,
+  });
+
+  const notifications: any[] = [];
+  await commands.get("subagents").handler("", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: { notify: (...args: any[]) => notifications.push(args) },
+  });
+
+  assert.match(notifications.at(-1)[0], /"0123…"/);
+  assert.match(notifications.at(-1)[0], /outcome:error:abcde…/);
+  assert.doesNotMatch(notifications.at(-1)[0], /abcdefghijklmnopqrstuvwxyz/);
+
+  let inspectText = "";
+  await commands.get("subagents").handler("", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory: any) {
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        component.handleInput("\r");
+        inspectText = component.render(120).join("\n");
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.match(inspectText, /Error: abcde…/);
+  assert.match(inspectText, /Message: 0123…/);
+  assert.doesNotMatch(inspectText, /abcdefghijklmnopqrstuvwxyz/);
+});
+
 test("/subagents command reports custom UI failure without throwing", async () => {
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },

@@ -57,8 +57,11 @@ export function registerSubagentsCommand(
         return;
       }
 
+      const settings = await prepareSubagentRuntime({ ctx, settingsStore, agentManager });
+      onSettingsUpdated?.(settings);
+
       if (!ctx.hasUI || !ctx.ui?.custom) {
-        notify(ctx, formatSubagentToolLines(inventoryDetails(sessions), true).join("\n"), "info");
+        notify(ctx, formatSubagentToolLines(inventoryDetails(sessions), true, Date.now(), settings.display).join("\n"), "info");
         return;
       }
 
@@ -70,6 +73,7 @@ export function registerSubagentsCommand(
             tui,
             theme,
             keybindings,
+            settings.display,
             (message, level) => notify(ctx, message, level as any),
             result => done(result),
           );

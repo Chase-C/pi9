@@ -240,13 +240,23 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
   assert.equal(widgets.every((call: any[]) => call[0] === "subagent" && call[1] === undefined), true);
 });
 
-test("subagent tool forwards live manager updates to onUpdate and widget UI", async () => {
+test("subagent tool forwards live manager update tree to onUpdate and widget UI", async () => {
   const runningAgent = fakeAgent({
+    id: "root",
+    config: { name: "root" },
     status: { kind: "running", startedAt: 1 },
     message: "working",
     activeTools: ["read"],
     turns: 1,
     toolUses: 1,
+  });
+  const childAgent = fakeAgent({
+    id: "child",
+    parentSessionId: "root",
+    config: { name: "child" },
+    status: { kind: "running", startedAt: 1 },
+    message: "child working",
+    turns: 1,
   });
   const fakeRegistry = {
     agents: new Map([["helper", { name: "helper", description: "Helps", source: "project" }]]),
@@ -257,9 +267,9 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
-      onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
+      onUpdate?.({ sessions: [runningAgent], tree: [runningAgent, childAgent], active: true });
       const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
-      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
+      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent, childAgent], resultsPromise };
     },
   };
 
@@ -285,7 +295,8 @@ test("subagent tool forwards live manager updates to onUpdate and widget UI", as
   assert.equal(partials[0].details.group.sessions[0].activity.toolHistory.at(-1)?.name, "read");
   assert.doesNotMatch(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], "subagent");
-  assert.match(widgets[0][1][0], /helper/);
+  assert.match(widgets[0][1][0], /root/);
+  assert.match(widgets[0][1][1], /^  child/);
   assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: "belowEditor" }]);
 });
 
