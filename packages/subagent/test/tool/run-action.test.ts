@@ -473,7 +473,7 @@ test("a late-arriving descendant status change triggers a partial re-emit with t
 
   const fakeManager = {
     listSessions(): any[] { return [rootView, grandView]; },
-    suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
+    runner: { suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); } },
     startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
       capturedListener = onUpdate;
       const resultsPromise = new Promise<any[]>(resolve => {
@@ -522,7 +522,7 @@ test("partial tool results carry the full descendant subtree; final tool result 
 
   const fakeManager = {
     listSessions(): any[] { return [rootView, childView]; },
-    suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); },
+    runner: { suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); } },
     startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
       // Drive one partial update with the full tree, then resolve with the final flat result.
       Promise.resolve().then(() => onUpdate({ sessions: [rootView], tree: [rootView, childView], active: true }));

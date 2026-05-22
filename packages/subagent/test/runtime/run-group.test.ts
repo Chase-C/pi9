@@ -5,7 +5,7 @@ import { completedRun } from "../../src/domain/agent-finalize.js";
 import { Agent } from "../../src/domain/agent.js";
 import { RunGroup } from "../../src/runtime/run-group.js";
 import { projectAgentView } from "../../src/view/project-agent-view.js";
-import { baseCtx, makeManager, makeSession } from "../helpers/runtime.js";
+import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
 
 const testAgentConfig = { name: "helper", description: "d", systemPrompt: "s", source: "project" as const, resumable: false };
 
@@ -42,7 +42,7 @@ test("BatchRun emits grouped progress rows in input order including unknown agen
   const manager = makeManager(registry as any, 2, runner);
   const snapshots: any[] = [];
 
-  const results = await manager.run(
+  const results = await run(manager,
     baseCtx(),
     undefined,
     [
@@ -79,7 +79,7 @@ test("BatchRun keeps emitting active batch updates for spinner animation even wi
   const manager = makeManager(registry as any, 1, runner);
   const snapshots: any[] = [];
 
-  const pending = manager.run(
+  const pending = run(manager,
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "work" }],
@@ -113,7 +113,7 @@ test("BatchRun emits live agent progress with the right transitions", async () =
   const manager = makeManager(registry as any, 1, runner);
   const snapshots: any[] = [];
 
-  const results = await manager.run(
+  const results = await run(manager,
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "Summarize the project status for the parent agent." }],
@@ -153,7 +153,7 @@ test("BatchRun throttles live message snippets while lifecycle updates are immed
   };
   const manager = makeManager(registry as any, 1, runner);
   const snapshots: any[] = [];
-  const pending = manager.run(
+  const pending = run(manager,
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "helper", prompt: "work" }],

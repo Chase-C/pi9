@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { baseCtx, makeManager, makeSession, mergeRunners } from "../helpers/runtime.js";
+import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
 
 test("orchestrator returns ordered per-run output and reports unknown agents and child failures", async () => {
   const calls: string[] = [];
@@ -19,7 +19,7 @@ test("orchestrator returns ordered per-run output and reports unknown agents and
     ]),
   };
   const manager = makeManager(registry as any, 2, runner);
-  const results = await manager.run(baseCtx(), undefined, [
+  const results = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "good", prompt: "one", model: "m1" },
     { kind: "spawn", agent: "missing", prompt: "two" },
     { kind: "spawn", agent: "bad", prompt: "three" },
@@ -54,7 +54,7 @@ test("orchestrator handles a mixed batch of one spawn and one resume with resume
   };
   const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
 
-  const [seed] = await manager.run(baseCtx(), undefined, [
+  const [seed] = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "first" },
   ]);
   assert.equal(seed.status, "completed");
@@ -62,7 +62,7 @@ test("orchestrator handles a mixed batch of one spawn and one resume with resume
   assert.ok(seed.sessionId);
 
   const updates: any[] = [];
-  const results = await manager.run(baseCtx(), undefined, [
+  const results = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "fresh", prompt: "two" },
     { kind: "resume", sessionId: seed.sessionId!, prompt: "three" },
   ], update => updates.push(update));
@@ -220,7 +220,7 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
-  const [seed] = await manager.run(baseCtx(), undefined, [
+  const [seed] = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial" },
   ]);
 
@@ -263,7 +263,7 @@ test("orchestrator.run forwards parentSessionId to every spawned agent's view an
   };
   const manager = makeManager(registry as any, 2, runner);
 
-  const results = await manager.run(
+  const results = await run(manager,
     baseCtx(),
     undefined,
     [

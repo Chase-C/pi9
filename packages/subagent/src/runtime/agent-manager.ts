@@ -4,7 +4,7 @@ import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
 import type { AgentRunResult } from "../domain/agent-result.js";
-import type { AgentRunStatus, AgentUpdateKind, AgentView } from "../domain/agent-view.js";
+import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import type { SessionStatus, TaskRequest } from "../schema.js";
 import { projectAgentView } from "../view/project-agent-view.js";
@@ -71,64 +71,36 @@ export class AgentManager {
 
   get runner(): AttemptRunner { return this._runner; }
 
-  /** Adds a freshly-spawned agent to the catalog and subscribes the catalog's broadcast pipeline. */
-  adopt(agent: Agent): void {
-    this._agents.push(agent);
-    agent.on(this._agentUpdate.bind(this));
-  }
-
-  /** Looks up an existing agent eligible for resume by sessionId. */
-  findResumable(id: string): Agent | undefined {
-    return this._agents.find(a => a.id === id && a.resumable);
-  }
-
   onAgentUpdate(listener: AgentUpdateListener): () => void {
     this._updateListeners.add(listener);
     return () => this._updateListeners.delete(listener);
   }
 
   /**
-   * Releases the named agent's queue slot while `fn` runs, then re-acquires it before returning.
-   * Used by the child subagent tool so a parent awaiting `handle.resultsPromise` doesn't pin the
-   * only queue slot a recursive descendant needs to start — without this, a tree deeper than
-   * maxRunning deadlocks. No-op when the session has no active lease.
+   * Post-order walk of the descendant subtree of `parentSessionId` (grandchildren before
+   * children) that awaits `abort()` on each visited agent. `Array.filter` snapshots the
+   * descendants before iterating so concurrent `remove()` / `startRun()` mutations of `_agents`
+   * don't disturb the walk. `Agent.abort()` is a no-op for already-terminal agents.
+   *
+   * `skipBackground: true` skips background descendants entirely — their subtrees are not
+   * recursed into either, since the policy of letting background work outlive its parent
+   * extends to that work's own children.
    */
-  async suspendAgentSlotDuring<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
-    return this._runner.suspendAgentSlotDuring(sessionId, fn);
-  }
-
-  /**
-   * Walks the descendant subtree of `parentSessionId` post-order (grandchildren before children)
-   * and awaits `abort()` on each. `Array.filter` snapshots the descendants before iterating so
-   * concurrent `remove()` / `startRun()` mutations of `_agents` don't disturb the walk.
-   * `Agent.abort()` is a no-op for already-terminal agents, so re-calling it is safe.
-   */
-  async abortDescendantsOf(parentSessionId: string): Promise<void> {
+  async cancelDescendantsOf(
+    parentSessionId: string,
+    options: { skipBackground?: boolean; reason?: string } = {},
+  ): Promise<void> {
+    const { skipBackground = false, reason } = options;
     const directChildren = this._agents.filter(a => a.parentSessionId === parentSessionId);
-    timingMark("manager.abortDescendants.walk", { parentSessionId, directChildCount: directChildren.length });
+    timingMark("manager.cancelDescendants.walk", { parentSessionId, directChildCount: directChildren.length, skipBackground, reason });
     for (const child of directChildren) {
-      timingMark("manager.abortDescendants.child", { parentSessionId, childId: child.id, agent: child.agentName, statusKind: child.status.kind, background: child.background });
-      await this.abortDescendantsOf(child.id);
-      await child.abort();
-    }
-  }
-
-  /**
-   * Same post-order walk as `abortDescendantsOf` but skips agents currently flagged
-   * `background === true`. The check uses the live flag, so an agent promoted via
-   * `promoteToBackground` between spawn and finalize is treated as background.
-   */
-  async cancelNonBackgroundDescendantsOf(parentSessionId: string, reason: string): Promise<void> {
-    const directChildren = this._agents.filter(a => a.parentSessionId === parentSessionId);
-    timingMark("manager.cancelNonBackgroundDescendants.walk", { parentSessionId, directChildCount: directChildren.length, reason });
-    for (const child of directChildren) {
-      if (child.background) {
-        timingMark("manager.cancelNonBackgroundDescendants.skipBackground", { parentSessionId, childId: child.id, agent: child.agentName });
+      if (skipBackground && child.background) {
+        timingMark("manager.cancelDescendants.skipBackground", { parentSessionId, childId: child.id, agent: child.agentName });
         continue;
       }
-      timingMark("manager.cancelNonBackgroundDescendants.child", { parentSessionId, childId: child.id, agent: child.agentName, statusKind: child.status.kind });
-      await this.cancelNonBackgroundDescendantsOf(child.id, reason);
-      await child.abort(reason);
+      timingMark("manager.cancelDescendants.child", { parentSessionId, childId: child.id, agent: child.agentName, statusKind: child.status.kind, background: child.background });
+      await this.cancelDescendantsOf(child.id, options);
+      await (reason !== undefined ? child.abort(reason) : child.abort());
     }
   }
 
@@ -140,11 +112,12 @@ export class AgentManager {
     const results: BackgroundResult[] = [];
     const terminalIds = new Set<string>();
     for (const id of sessionIds) {
-      const agent = this._agents.find(a => a.id === id);
-      if (!agent) {
-        results.push({ sessionId: id, error: `Unknown subagent session: ${id}` });
+      const lookup = this._resolveSession(id);
+      if ("error" in lookup) {
+        results.push(lookup);
         continue;
       }
+      const agent = lookup.agent;
       const status = agent.status;
       if (status.kind === "done") {
         results.push({ sessionId: id, ready: true, result: status.result });
@@ -177,9 +150,9 @@ export class AgentManager {
 
     if ("sessionIds" in args) {
       for (const id of args.sessionIds) {
-        const agent = this._agents.find(a => a.id === id);
-        if (!agent) errors.push({ sessionId: id, error: `Unknown subagent session: ${id}` });
-        else targets.push(agent);
+        const lookup = this._resolveSession(id);
+        if ("error" in lookup) errors.push(lookup);
+        else targets.push(lookup.agent);
       }
     } else {
       targets.push(...this._matchScope(args.scope));
@@ -215,23 +188,13 @@ export class AgentManager {
     };
   }
 
-  /** Convenience: start a foreground run and wait for results. */
-  async run(
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    tasks: TaskRequest[],
-    onUpdate?: RunUpdateListener,
-    options: { parentSessionId?: string } = {},
-  ): Promise<AgentRunResult[]> {
-    const handle = this.startRun(ctx, signal, tasks, onUpdate, { background: false, ...options });
-    return handle.resultsPromise;
-  }
-
   /**
    * Starts a run group. Each task is resolved through pure preflight helpers; surviving spawns
    * adopt a new Agent into the catalog, surviving resumes start a fresh attempt on the existing
    * Agent. Every agent in the group is wired into a {@link RunGroup} so updates from
    * {@link onAgentUpdate} route back to its listener.
+   *
+   * Foreground callers can await `handle.resultsPromise` directly.
    */
   startRun(
     ctx: ExtensionContext,
@@ -268,7 +231,8 @@ export class AgentManager {
           background: options.background,
           ...(options.parentSessionId !== undefined ? { parentSessionId: options.parentSessionId } : {}),
         });
-        this.adopt(agent);
+        this._agents.push(agent);
+        agent.on(this._agentUpdate.bind(this));
         group.addAgent(agent, inputIndex, false);
         timingMark("manager.task.spawnCreated", { groupId, inputIndex, agent: task.agent, sessionId: agent.id, parentSessionId: options.parentSessionId, background: options.background });
         touched.add(agent.id);
@@ -277,7 +241,7 @@ export class AgentManager {
 
       const preflight = resolveResume({
         task, groupId, inputIndex, createdAt: groupCreatedAt,
-        findResumable: id => this.findResumable(id),
+        findResumable: id => this._agents.find(a => a.id === id && a.resumable),
         background: options.background,
       });
       if (preflight.kind === "failure") {
@@ -322,6 +286,13 @@ export class AgentManager {
     };
   }
 
+  /** Looks up an agent by sessionId or returns the standard not-found error entry. */
+  private _resolveSession(id: string): { agent: Agent } | { sessionId: string; error: string } {
+    const agent = this._agents.find(a => a.id === id);
+    if (agent) return { agent };
+    return { sessionId: id, error: `Unknown subagent session: ${id}` };
+  }
+
   /**
    * Post-run pruning. Drops agents in `touched` that are done, non-background, and non-resumable.
    * Survivors stay in the catalog.
@@ -350,14 +321,11 @@ export class AgentManager {
    * silently skipped.
    */
   private _walkTree(rootIds: string[]): AgentView[] {
-    const byId = new Map<string, Agent>();
-    for (const agent of this._agents) byId.set(agent.id, agent);
-
     const out: AgentView[] = [];
     const seen = new Set<string>();
     const visit = (id: string) => {
       if (seen.has(id)) return;
-      const agent = byId.get(id);
+      const agent = this._agents.find(a => a.id === id);
       if (!agent) return;
       seen.add(id);
       out.push(projectAgentView(agent));
@@ -393,22 +361,18 @@ export class AgentManager {
    */
   private _maybeFinalizeFanout(agent: Agent): void {
     if (this._pendingFinalize.has(agent.id)) return;
-    const outcome = this._terminalOutcome(agent);
+    const status = agent.status;
+    const outcome = status.kind === "done" ? status.result.status : undefined;
     if (outcome !== "aborted" && outcome !== "error") return;
 
     const reason = `Parent ${agent.id} finalized as ${outcome}`;
     const fanoutEnd = timingStart("manager.parentFinalize.fanout", { sessionId: agent.id, agent: agent.agentName, outcome });
     const promise = this
-      .cancelNonBackgroundDescendantsOf(agent.id, reason)
+      .cancelDescendantsOf(agent.id, { skipBackground: true, reason })
       .finally(() => {
         this._pendingFinalize.delete(agent.id);
         fanoutEnd({});
       });
     this._pendingFinalize.set(agent.id, promise);
-  }
-
-  private _terminalOutcome(agent: Agent): AgentRunStatus | undefined {
-    const status = agent.status;
-    return status.kind === "done" ? status.result.status : undefined;
   }
 }

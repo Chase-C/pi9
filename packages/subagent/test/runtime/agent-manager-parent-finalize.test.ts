@@ -372,7 +372,7 @@ test("ParentFinalizePolicy treats agents promoted via promoteToBackground as bac
   );
   await new Promise(r => setTimeout(r, 20));
 
-  await manager.cancelNonBackgroundDescendantsOf("parent-1", "Parent parent-1 finalized as error");
+  await manager.cancelDescendantsOf("parent-1", { skipBackground: true, reason: "Parent parent-1 finalized as error" });
   await new Promise(r => setTimeout(r, 10));
   assert.deepEqual(aborts, [], "promoted-to-background descendant must not be aborted");
 

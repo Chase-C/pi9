@@ -151,7 +151,7 @@ export async function runAction(
     emitPartial(update);
   }, startOptions);
   const results = deps.parentSessionId !== undefined
-    ? await deps.agentManager.suspendAgentSlotDuring(deps.parentSessionId, () => handle.resultsPromise)
+    ? await deps.agentManager.runner.suspendAgentSlotDuring(deps.parentSessionId, () => handle.resultsPromise)
     : await handle.resultsPromise;
   runEnd({ ok: true, resultCount: results.length });
   timingSync("tool.finalWidget", { sessionCount: deps.agentManager.listSessions().length }, () => updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings()));

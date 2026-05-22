@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
-import { baseCtx, makeManager, makeSession, mergeRunners } from "../helpers/runtime.js";
+import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
 
 test("AgentManager.listSessions returns all retained sessions when called with no filter", async () => {
   const session = makeSession();
@@ -14,7 +14,7 @@ test("AgentManager.listSessions returns all retained sessions when called with n
     agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: true, tools: [] }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
-  await manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "good", prompt: "go" }]);
+  await run(manager,baseCtx(), undefined, [{ kind: "spawn", agent: "good", prompt: "go" }]);
 
   const all = manager.listSessions();
   assert.equal(all.length, 1);
@@ -38,7 +38,7 @@ test("AgentManager does not expose skipped resumable tasks as sessions", async (
   const manager = makeManager(registry as any, 1, runner);
   const controller = new AbortController();
 
-  const pending = manager.run(baseCtx(), controller.signal, [
+  const pending = run(manager,baseCtx(), controller.signal, [
     { kind: "spawn", agent: "blocker", prompt: "one" },
     { kind: "spawn", agent: "chatty", prompt: "two" },
   ]);
@@ -64,14 +64,14 @@ test("AgentManager does not expose or resume non-resumable completed sessions", 
   };
   const manager = makeManager(registry as any, 1, runner);
 
-  const results = await manager.run(baseCtx(), undefined, [
+  const results = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "oneshot", prompt: "work" },
   ]);
 
   assert.equal(results[0].status, "completed");
   assert.equal(Object.prototype.hasOwnProperty.call(results[0], "sessionId"), false);
   assert.deepEqual(manager.listSessions(), []);
-  const [retried] = await manager.run(baseCtx(), undefined, [
+  const [retried] = await run(manager,baseCtx(), undefined, [
     { kind: "resume", sessionId: "anything", prompt: "follow up" },
   ]);
   assert.equal(retried.status, "error");
@@ -94,7 +94,7 @@ test("AgentManager discards a completed session when a task overrides resumable 
   const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
 
   // Spawn-side override: session is never retained.
-  const spawnResults = await manager.run(baseCtx(), undefined, [
+  const spawnResults = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "spawn-only", resumable: false },
   ]);
   assert.equal(spawnResults[0].status, "completed");
@@ -103,11 +103,11 @@ test("AgentManager discards a completed session when a task overrides resumable 
   assert.deepEqual(manager.listSessions(), []);
 
   // Resume-side override: session retained on initial spawn, then discarded on resume.
-  const [seed] = await manager.run(baseCtx(), undefined, [
+  const [seed] = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial" },
   ]);
   assert.equal(manager.listSessions().length, 1);
-  const [resumed] = await manager.run(baseCtx(), undefined, [
+  const [resumed] = await run(manager,baseCtx(), undefined, [
     { kind: "resume", sessionId: seed.sessionId!, prompt: "tear down", resumable: false },
   ]);
   assert.equal(resumed.status, "completed");
@@ -130,7 +130,7 @@ test("AgentManager retains only resumable interrupted sessions, clearing only af
   const manager = makeManager(registry as any, 2, runner as any);
   const controller = new AbortController();
 
-  const pending = manager.run(baseCtx(), controller.signal, [
+  const pending = run(manager,baseCtx(), controller.signal, [
     { kind: "spawn", agent: "oneshot", prompt: "one" },
     { kind: "spawn", agent: "chatty", prompt: "two" },
   ]);
@@ -147,7 +147,7 @@ test("AgentManager retains only resumable interrupted sessions, clearing only af
   assert.equal(sessions[0].status.kind, "done");
   assert.equal(sessions[0].status.kind === "done" && sessions[0].status.outcome, "interrupted");
 
-  const [retried] = await manager.run(baseCtx(), undefined, [
+  const [retried] = await run(manager,baseCtx(), undefined, [
     { kind: "resume", sessionId: results[1].sessionId!, prompt: "follow up" },
   ]);
   assert.equal(retried.status, "error");
@@ -172,7 +172,7 @@ test("AgentManager retains a completed session when a task overrides resumable t
   };
   const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
 
-  const results = await manager.run(baseCtx(), undefined, [
+  const results = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "oneshot", prompt: "work", resumable: true },
   ]);
 
@@ -183,7 +183,7 @@ test("AgentManager retains a completed session when a task overrides resumable t
     [[results[0].sessionId, "oneshot", true]],
   );
 
-  const [resumed] = await manager.run(baseCtx(), undefined, [
+  const [resumed] = await run(manager,baseCtx(), undefined, [
     { kind: "resume", sessionId: results[0].sessionId!, prompt: "again" },
   ]);
   assert.equal(resumed.status, "completed");
@@ -214,7 +214,7 @@ test("AgentManager.backgroundResults reports queued resume elapsed from the curr
     };
     const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
 
-    const [initial] = await manager.run(baseCtx(), undefined, [
+    const [initial] = await run(manager,baseCtx(), undefined, [
       { kind: "spawn", agent: "chatty", prompt: "old" },
     ]);
     assert.ok(initial.sessionId);
@@ -263,7 +263,7 @@ test("AgentManager retains, resumes, lists, and clears completed resumable sessi
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
-  const results = await manager.run(baseCtx(), undefined, [
+  const results = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "one" },
   ]);
 
@@ -272,7 +272,7 @@ test("AgentManager retains, resumes, lists, and clears completed resumable sessi
   assert.ok(results[0].sessionId);
   assert.deepEqual(manager.listSessions().map(s => s.id), [results[0].sessionId]);
 
-  const [resumed] = await manager.run(baseCtx(), undefined, [
+  const [resumed] = await run(manager,baseCtx(), undefined, [
     { kind: "resume", sessionId: results[0].sessionId!, prompt: "two" },
   ]);
   assert.equal(resumed.status, "completed");
@@ -319,10 +319,10 @@ test("AgentManager.remove scope=non-running removes terminal and queued sessions
     ]),
   };
   const manager = makeManager(registry as any, 1, runner);
-  await manager.run(baseCtx(), undefined, [
+  await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "retain me" },
   ]);
-  const pending = manager.run(baseCtx(), undefined, [
+  const pending = run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "oneshot", prompt: "block" },
     { kind: "spawn", agent: "oneshot", prompt: "queued" },
   ]);
@@ -355,7 +355,7 @@ test("AgentManager.remove with a queued sessionId prevents the queued spawn from
   };
   const manager = makeManager(registry as any, 1, runner);
 
-  const pending = manager.run(baseCtx(), undefined, [
+  const pending = run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "oneshot", prompt: "block" },
     { kind: "spawn", agent: "oneshot", prompt: "queued" },
   ]);
@@ -396,11 +396,11 @@ test("AgentManager.remove with a queued resume sessionId prevents the queued res
     ]),
   };
   const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
-  const [seed] = await manager.run(baseCtx(), undefined, [
+  const [seed] = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "seed" },
   ]);
 
-  const pending = manager.run(baseCtx(), undefined, [
+  const pending = run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "oneshot", prompt: "block" },
     { kind: "resume", sessionId: seed.sessionId!, prompt: "queued resume" },
   ]);
@@ -428,7 +428,7 @@ test("AgentManager.remove on a second pass of the same sessionId returns the unk
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
-  const [seed] = await manager.run(baseCtx(), undefined, [
+  const [seed] = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "work" },
   ]);
 
@@ -459,12 +459,12 @@ test("AgentManager.remove scope=retained removes retained resumable sessions and
   };
   const manager = makeManager(registry as any, 1, runner);
 
-  await manager.run(baseCtx(), undefined, [
+  await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "remember me" },
   ]);
   assert.equal(manager.listSessions().length, 1);
 
-  const pending = manager.run(baseCtx(), undefined, [
+  const pending = run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "oneshot", prompt: "block" },
     { kind: "spawn", agent: "oneshot", prompt: "queued" },
   ]);
@@ -492,7 +492,7 @@ test("AgentManager.remove scope=retained leaves resumable background sessions wh
   };
   const manager = makeManager(registry as any, 2, runner);
 
-  const [foreground] = await manager.run(baseCtx(), undefined, [
+  const [foreground] = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "foreground" },
   ]);
   const bgBatch = manager.startRun(
@@ -536,7 +536,7 @@ test("AgentManager.remove with a running sessionId aborts the underlying session
   };
   const manager = makeManager(registry as any, 2, runner);
 
-  const pending = manager.run(baseCtx(), undefined, [
+  const pending = run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "work" },
   ]);
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -562,7 +562,7 @@ test("AgentManager.remove rejects an unknown internal scope without removing ses
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 1, runner);
-  await manager.run(baseCtx(), undefined, [
+  await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "work" },
   ]);
 
@@ -922,7 +922,7 @@ test("AgentManager.backgroundResults reads retained foreground sessions identica
   const manager = makeManager(registry as any, 1, runner);
 
   // Foreground retained session (not started via startBatch background:true).
-  const [seed] = await manager.run(baseCtx(), undefined, [
+  const [seed] = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial" },
   ]);
   assert.equal(manager.listSessions()[0].dispatch, "foreground");
@@ -933,7 +933,7 @@ test("AgentManager.backgroundResults reads retained foreground sessions identica
   assert.equal(entry.result.resumable, true);
 });
 
-test("AgentManager.abortDescendantsOf aborts direct children of the given parent id", async () => {
+test("AgentManager.cancelDescendantsOfaborts direct children of the given parent id", async () => {
   const aborts: string[] = [];
   const runner = async (_ctx: any, agent: any) => {
     let resolveAbort: () => void;
@@ -964,7 +964,7 @@ test("AgentManager.abortDescendantsOf aborts direct children of the given parent
   const childId = manager.listSessions()[0].id;
   assert.equal(manager.listSessions()[0].status.kind, "running");
 
-  await manager.abortDescendantsOf("parent-1");
+  await manager.cancelDescendantsOf("parent-1");
   await batch.resultsPromise;
 
   assert.deepEqual(aborts, ["child"]);
@@ -972,7 +972,7 @@ test("AgentManager.abortDescendantsOf aborts direct children of the given parent
   assert.equal(finalChild?.status.kind, "done");
 });
 
-test("AgentManager.abortDescendantsOf walks grandchildren first (post-order)", async () => {
+test("AgentManager.cancelDescendantsOfwalks grandchildren first (post-order)", async () => {
   const abortOrder: string[] = [];
   const runner = async (_ctx: any, agent: any) => {
     let resolveAbort: () => void;
@@ -1012,23 +1012,23 @@ test("AgentManager.abortDescendantsOf walks grandchildren first (post-order)", a
   );
   await new Promise(resolve => setTimeout(resolve, 10));
 
-  await manager.abortDescendantsOf("root");
+  await manager.cancelDescendantsOf("root");
   await Promise.all([childBatch.resultsPromise, grandBatch.resultsPromise]);
 
   // Post-order: grandchild's session.abort() must run before child's.
   assert.deepEqual(abortOrder, ["grandchild", "child"]);
 });
 
-test("AgentManager.abortDescendantsOf is a no-op when the id has no descendants", async () => {
+test("AgentManager.cancelDescendantsOfis a no-op when the id has no descendants", async () => {
   const registry = { agents: new Map() };
   const manager = makeManager(registry as any, 4, async () => ({ status: "completed" }) as any);
 
-  await manager.abortDescendantsOf("nonexistent-id");
-  await manager.abortDescendantsOf("");
+  await manager.cancelDescendantsOf("nonexistent-id");
+  await manager.cancelDescendantsOf("");
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("AgentManager.abortDescendantsOf skips already-terminal descendants without re-aborting them", async () => {
+test("AgentManager.cancelDescendantsOfskips already-terminal descendants without re-aborting them", async () => {
   const abortCalls: string[] = [];
   const runner = async (_ctx: any, agent: any) => {
     agent.attach({
@@ -1045,7 +1045,7 @@ test("AgentManager.abortDescendantsOf skips already-terminal descendants without
   const manager = makeManager(registry as any, 4, runner);
 
   // Run a child under parent-1 to completion (becomes terminal "done").
-  await manager.run(
+  await run(manager,
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "completed-child" }],
@@ -1055,7 +1055,7 @@ test("AgentManager.abortDescendantsOf skips already-terminal descendants without
   assert.equal(manager.listSessions().length, 1);
   assert.equal(manager.listSessions()[0].status.kind, "done");
 
-  await manager.abortDescendantsOf("parent-1");
+  await manager.cancelDescendantsOf("parent-1");
   assert.deepEqual(abortCalls, [], "should not call abort() on already-terminal children");
   // Final status snapshot unchanged.
   const view = manager.listSessions()[0];
@@ -1125,7 +1125,7 @@ test("AgentManager.remove fans out abort across a 2-level subagent tree via Agen
   assert.equal((grandView?.status as any).outcome, "aborted", "grandchild finalizes as aborted");
 });
 
-test("AgentManager.cancelNonBackgroundDescendantsOf cancels a running non-background descendant", async () => {
+test("AgentManager.cancelDescendantsOf skipBackground=true cancels a running non-background descendant", async () => {
   const aborts: string[] = [];
   const runner = async (_ctx: any, agent: any) => {
     const flag = { aborted: false };
@@ -1153,7 +1153,7 @@ test("AgentManager.cancelNonBackgroundDescendantsOf cancels a running non-backgr
   await new Promise(r => setTimeout(r, 20));
   assert.equal(manager.listSessions()[0].status.kind, "running");
 
-  await manager.cancelNonBackgroundDescendantsOf("parent-1", "Parent parent-1 finalized as error");
+  await manager.cancelDescendantsOf("parent-1", { skipBackground: true, reason: "Parent parent-1 finalized as error" });
   await batch.resultsPromise;
 
   assert.deepEqual(aborts, ["child"]);
@@ -1161,7 +1161,7 @@ test("AgentManager.cancelNonBackgroundDescendantsOf cancels a running non-backgr
   assert.equal(final.status.kind, "done");
 });
 
-test("AgentManager.cancelNonBackgroundDescendantsOf skips background descendants", async () => {
+test("AgentManager.cancelDescendantsOf skipBackground=true skips background descendants", async () => {
   const aborts: string[] = [];
   const sessions: Record<string, { resolve: () => void; promise: Promise<void> }> = {};
   const runner = async (_ctx: any, agent: any) => {
@@ -1198,7 +1198,7 @@ test("AgentManager.cancelNonBackgroundDescendantsOf skips background descendants
   );
   await new Promise(r => setTimeout(r, 20));
 
-  await manager.cancelNonBackgroundDescendantsOf("parent-1", "Parent parent-1 finalized as error");
+  await manager.cancelDescendantsOf("parent-1", { skipBackground: true, reason: "Parent parent-1 finalized as error" });
 
   // Only the non-background child should have been aborted.
   assert.deepEqual(aborts, ["fg"]);
@@ -1208,7 +1208,7 @@ test("AgentManager.cancelNonBackgroundDescendantsOf skips background descendants
   await Promise.all([fgBatch.resultsPromise, bgBatch.resultsPromise]);
 });
 
-test("AgentManager.cancelNonBackgroundDescendantsOf stamps cancelled descendants with the reason", async () => {
+test("AgentManager.cancelDescendantsOf stamps cancelled descendants with the reason", async () => {
   const runner = async (_ctx: any, agent: any) => {
     const flag = { aborted: false };
     agent.attach({
@@ -1234,7 +1234,7 @@ test("AgentManager.cancelNonBackgroundDescendantsOf stamps cancelled descendants
   );
   await new Promise(r => setTimeout(r, 20));
 
-  await manager.cancelNonBackgroundDescendantsOf("parent-9", "Parent parent-9 finalized as error");
+  await manager.cancelDescendantsOf("parent-9", { skipBackground: true, reason: "Parent parent-9 finalized as error" });
   const [result] = await batch.resultsPromise;
 
   assert.equal(result.status, "aborted");

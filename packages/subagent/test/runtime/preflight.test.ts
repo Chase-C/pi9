@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { baseCtx, makeManager, makeSession, mergeRunners } from "../helpers/runtime.js";
+import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
 
 type FakeRegistry = { agents: Map<string, any>; reload?: () => Promise<void>; summarizeAgent?: () => string };
 
@@ -11,7 +11,7 @@ test("preflight spawn failure carries the input label on unknown-agent synthetic
   const manager = makeManager(registry as any, 2, async () => ({ status: "completed" }) as any);
 
   let lastUpdate: any;
-  const results = await manager.run(
+  const results = await run(manager,
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "missing", prompt: "do work", label: "researcher" }],
@@ -42,11 +42,11 @@ test("preflight rejects duplicate resume tasks without corrupting the retained s
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 2, mergeRunners(runner, resumeRunner));
-  const [first] = await manager.run(baseCtx(), undefined, [
+  const [first] = await run(manager,baseCtx(), undefined, [
     { kind: "spawn", agent: "chatty", prompt: "initial prompt" },
   ]);
 
-  const pending = manager.run(baseCtx(), undefined, [
+  const pending = run(manager,baseCtx(), undefined, [
     { kind: "resume", sessionId: first.sessionId!, prompt: "first follow-up" },
     { kind: "resume", sessionId: first.sessionId!, prompt: "duplicate follow-up" },
   ]);
@@ -84,7 +84,7 @@ test("preflight resume failure for an unknown sessionId yields a per-task error 
   };
   const manager = makeManager(registry as any, 2, runner);
 
-  const results = await manager.run(baseCtx(), undefined, [
+  const results = await run(manager,baseCtx(), undefined, [
     { kind: "resume", sessionId: "nonexistent", prompt: "ghost" },
     { kind: "spawn", agent: "fresh", prompt: "real" },
   ]);

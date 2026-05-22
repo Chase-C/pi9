@@ -6,7 +6,7 @@ import { completedRun } from "../../src/domain/agent-finalize.js";
 import type { AgentManager } from "../../src/runtime/agent-manager.js";
 import { makeChildSubagentFactory } from "../../src/tool/child-factory.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
-import { baseCtx, makeManager, makeSession } from "../helpers/runtime.js";
+import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
 
 type FakeRegistry = { agents: Map<string, any>; reload?: () => Promise<void>; summarizeAgent?: () => string };
 
@@ -77,7 +77,7 @@ test("child subagent tool forwards list, results, and remove actions straight to
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
-  await manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "seed" }]);
+  await run(manager,baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "seed" }]);
   const seeded = manager.listSessions();
   assert.equal(seeded.length, 1);
   const seededId = seeded[0].id;
@@ -125,7 +125,7 @@ test("recursive foreground subagent spawn completes with a single shared queue s
   const manager = makeManager(registry as any, 1, runner);
 
   const results = await Promise.race([
-    manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-child" }]),
+    run(manager,baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-child" }]),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error("recursive run timed out")), 100)),
   ]);
 
@@ -159,7 +159,7 @@ test("recursive foreground subagent chain can exceed the shared queue cap withou
   const manager = makeManager(registry as any, 1, runner);
 
   const results = await Promise.race([
-    manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-3" }]),
+    run(manager,baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-3" }]),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error("recursive chain timed out")), 100)),
   ]);
 
@@ -211,7 +211,7 @@ test("recursive subagent spawn: root → child → grandchild all live under one
 
   const manager = makeManager(registry as any, 8, runner);
 
-  const results = await manager.run(baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-child" }]);
+  const results = await run(manager,baseCtx(), undefined, [{ kind: "spawn", agent: "worker", prompt: "spawn-child" }]);
 
   assert.equal(results.length, 1);
   assert.equal(results[0].status, "completed");

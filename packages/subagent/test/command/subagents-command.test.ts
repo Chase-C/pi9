@@ -490,7 +490,7 @@ test("/subagents resume reports an editor failure (missing or throwing) without 
     const fakeManager = {
       listSessions(): any[] { return this.sessions; },
       sessions: [fakeAgent({ config: { resumable: true } })],
-      run() { runCalls += 1; throw new Error("run should not start"); },
+      startRun() { runCalls += 1; throw new Error("run should not start"); },
     };
     const commands = registerCommand({
       agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -522,13 +522,14 @@ test("subagents command resumes completed retained session with editor loader an
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [fakeAgent({ config: { resumable: true } })],
-    run(_ctx: any, signal: AbortSignal, tasks: any[]) {
+    startRun(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
       resumeCalls.push({ signal, sessionId: task.sessionId, prompt: task.prompt });
-      return Promise.resolve([{
+      const resultsPromise = Promise.resolve([{
         agent: "helper", prompt: task.prompt, status: "completed",
         output: `Result ${"z".repeat(1000)}`, sessionId: task.sessionId, resumable: true, resumed: true,
       }]);
+      return { groupId: "g", sessions: [], tree: () => [], resultsPromise };
     },
   };
   const sentMessages: any[] = [];
@@ -587,9 +588,9 @@ test("subagents command resume cancellation aborts the child and reports interru
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [fakeAgent({ config: { resumable: true } })],
-    run(_ctx: any, signal: AbortSignal, tasks: any[]) {
+    startRun(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
-      return new Promise<any[]>(resolve => {
+      const resultsPromise = new Promise<any[]>(resolve => {
         signal.addEventListener("abort", () => {
           resolve([{
             agent: "helper", prompt: task.prompt, status: "interrupted",
@@ -597,6 +598,7 @@ test("subagents command resume cancellation aborts the child and reports interru
           }]);
         }, { once: true });
       });
+      return { groupId: "g", sessions: [], tree: () => [], resultsPromise };
     },
   };
   const sentMessages: any[] = [];

@@ -1,4 +1,8 @@
-import { AgentManager, type AgentRunner } from "../../src/runtime/agent-manager.js";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+import type { AgentRunResult } from "../../src/domain/agent-result.js";
+import { AgentManager, type AgentRunner, type RunUpdateListener } from "../../src/runtime/agent-manager.js";
+import type { TaskRequest } from "../../src/schema.js";
 
 /**
  * Builds a real AgentManager with parent-finalize cancellation wired up (it's instance-owned
@@ -10,6 +14,18 @@ export function makeManager(
   runner?: AgentRunner,
 ): AgentManager {
   return new AgentManager(registry, maxRunning, runner);
+}
+
+/** Foreground convenience: starts a run and awaits the results promise. */
+export function run(
+  manager: AgentManager,
+  ctx: ExtensionContext,
+  signal: AbortSignal | undefined,
+  tasks: TaskRequest[],
+  onUpdate?: RunUpdateListener,
+  options: { parentSessionId?: string } = {},
+): Promise<AgentRunResult[]> {
+  return manager.startRun(ctx, signal, tasks, onUpdate, { background: false, ...options }).resultsPromise;
 }
 
 export const baseCtx = () => ({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } } as any);
