@@ -77,13 +77,17 @@ export class RunGroup {
   tree(): AgentView[] {
     const display = getSubagentDisplaySettings();
     const out: AgentView[] = [];
+    const seen = new Set<string>();
     for (const entry of this._sortedEntries()) {
       const root = this._project(entry, display);
+      if (seen.has(root.id)) continue;
+      seen.add(root.id);
       out.push(root);
       if (entry.kind !== "agent") continue;
       // walkTree returns [root, ...descendants]; skip the root since we just pushed our own projection.
       for (const node of this.opts.walkTree([entry.agent.id])) {
-        if (node.id === entry.agent.id) continue;
+        if (seen.has(node.id)) continue;
+        seen.add(node.id);
         out.push(node);
       }
     }
