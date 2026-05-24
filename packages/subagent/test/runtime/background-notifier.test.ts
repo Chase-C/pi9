@@ -158,33 +158,21 @@ test("BackgroundNotifier in auto mode immediately starts a parent turn when a co
   pi.fireAgentEnd();
   assert.equal(pi.sent.length, 1, "agent_end does not duplicate the already-sent notification");
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
-test("BackgroundNotifier dispose() during an idle wait cancels the pending retry and prevents later delivery", async () => {
+test("BackgroundNotifier unsubscribe() detaches from the manager so later completions are not delivered", async () => {
   const manager = makeManager(completingRunner);
   const pi = fakePi();
-  const retry = manualRetry();
-  let idle = false;
-  const ctx: FakeCtx = { isIdle: () => idle };
-  const notifier = new BackgroundNotifier({
-    pi,
-    manager,
-    getMode: () => "auto",
-    scheduleRetry: retry.schedule,
-  });
+  const notifier = new BackgroundNotifier({ pi, manager, getMode: () => "auto" });
 
-  pi.fireSessionStart(ctx);
+  pi.fireSessionStart(idleCtx);
+  notifier.unsubscribe();
+
+  // A background subagent completes after unsubscribe; the detached notifier must not react.
   await runBackgroundOne(manager);
   pi.fireAgentEnd();
-  assert.equal(retry.pending(), 1, "retry scheduled while not idle");
-
-  notifier.dispose();
-  assert.equal(retry.pending(), 0, "dispose cancels the pending retry");
-
-  idle = true;
-  retry.flush();
-  assert.equal(pi.sent.length, 0, "no delivery after dispose, even if a stray callback fires");
+  assert.equal(pi.sent.length, 0, "no delivery for completions arriving after unsubscribe");
 });
 
 test("BackgroundNotifier in auto mode does not duplicate an idle completion on turn_end", async () => {
@@ -200,7 +188,7 @@ test("BackgroundNotifier in auto mode does not duplicate an idle completion on t
   assert.equal(pi.sent[0].options?.triggerTurn, true);
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier on session_shutdown cancels the pending retry and prevents delivery through the stale context", async () => {
@@ -228,7 +216,7 @@ test("BackgroundNotifier on session_shutdown cancels the pending retry and preve
   retry.flush();
   assert.equal(pi.sent.length, 0, "stale ctx becoming idle does not trigger delivery");
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier delivers queued completions after a new session_start replaces the cleared context", async () => {
@@ -253,7 +241,7 @@ test("BackgroundNotifier delivers queued completions after a new session_start r
   assert.equal(pi.sent.length, 1, "queued completion delivered through fresh idle context");
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier coalesces completions that arrive during the idle wait into a single delivered message", async () => {
@@ -291,7 +279,7 @@ test("BackgroundNotifier coalesces completions that arrive during the idle wait 
   for (const id of [id1, id2, id3]) assert.match(text, new RegExp(id));
   assert.match(text, /3 background subagents completed/);
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier in auto mode defers send while ctx.isIdle() is false, then sends one message when a retry sees idle=true", async () => {
@@ -325,7 +313,7 @@ test("BackgroundNotifier in auto mode defers send while ctx.isIdle() is false, t
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
   assert.equal(retry.pending(), 0, "no further retries pending");
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier drops pending auto notification if mode flips to none before retry sees idle", async () => {
@@ -358,7 +346,7 @@ test("BackgroundNotifier drops pending auto notification if mode flips to none b
   pi.fireAgentEnd();
   assert.equal(pi.sent.length, 0, "dropped completion is not resurrected later");
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier leaves pending auto notification for steer delivery if mode flips to steer before retry sees idle", async () => {
@@ -392,7 +380,7 @@ test("BackgroundNotifier leaves pending auto notification for steer delivery if 
   assert.equal(pi.sent[0].options?.deliverAs, "steer");
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier payload references subagent results, includes per-session metadata, and never includes output or error from the child", async () => {
@@ -426,7 +414,7 @@ test("BackgroundNotifier payload references subagent results, includes per-sessi
   assert.match(text, /subagent results/);
   assert.doesNotMatch(json, /SUPER-SECRET-CHILD-OUTPUT/);
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier in none mode drops completions immediately and never re-emits later", async () => {
@@ -445,7 +433,7 @@ test("BackgroundNotifier in none mode drops completions immediately and never re
   pi.fireAgentEnd();
   assert.equal(pi.sent.length, 0);
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier coalesces queued completions into a single dispatched message on session_start", async () => {
@@ -463,7 +451,7 @@ test("BackgroundNotifier coalesces queued completions into a single dispatched m
   for (const id of [id1, id2, id3]) assert.match(text, new RegExp(id));
   assert.match(text, /3 background subagents completed/);
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier in steer mode fires no message until tool_execution_start, then exactly one", async () => {
@@ -482,7 +470,7 @@ test("BackgroundNotifier in steer mode fires no message until tool_execution_sta
   assert.equal(pi.sent[0].options?.triggerTurn, undefined, "steer must not use triggerTurn");
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier in steer mode starts a parent turn when a completion arrives while idle", async () => {
@@ -498,7 +486,7 @@ test("BackgroundNotifier in steer mode starts a parent turn when a completion ar
   assert.equal(pi.sent[0].options?.deliverAs, undefined);
   assert.match(pi.sent[0].content ?? "", new RegExp(sessionId));
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier in steer mode coalesces multiple completions into a single steer message on tool_execution_start", async () => {
@@ -524,7 +512,7 @@ test("BackgroundNotifier in steer mode coalesces multiple completions into a sin
   pi.fireToolExecutionStart();
   assert.equal(pi.sent.length, 1, "queue is drained after dispatch; no second steer fires");
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier in steer mode payload contains per-session metadata, references subagent results, and never includes child output or error", async () => {
@@ -557,7 +545,7 @@ test("BackgroundNotifier in steer mode payload contains per-session metadata, re
   assert.match(text, /subagent results/);
   assert.doesNotMatch(json, /SUPER-SECRET-CHILD-OUTPUT/);
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier in steer mode immediately steers an active parent run without scheduling auto retry", async () => {
@@ -584,7 +572,7 @@ test("BackgroundNotifier in steer mode immediately steers an active parent run w
   pi.fireTurnEnd();
   assert.equal(pi.sent.length, 1, "agent_end / turn_end do not duplicate the steer notification");
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });
 
 test("BackgroundNotifier notifies again when a background session resumes and completes with the same sessionId", async () => {
@@ -628,5 +616,5 @@ test("BackgroundNotifier notifies again when a background session resumes and co
   assert.equal(pi.sent.length, 2);
   assert.match(pi.sent[1].content ?? "", new RegExp(sessionId));
 
-  notifier.dispose();
+  notifier.unsubscribe();
 });

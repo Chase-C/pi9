@@ -64,7 +64,6 @@ export class BackgroundNotifier {
   private _queue: CompletionEntry[] = [];
   private _notifiedTerminalSessionIds = new Set<string>();
   private _unsubAgent: () => void = () => { };
-  private _disposed = false;
   private _ctx: NotifierContext | undefined;
   private _retryCancel: (() => void) | undefined;
   private readonly _scheduleRetry: (fn: () => void, delayMs: number) => () => void;
@@ -84,31 +83,23 @@ export class BackgroundNotifier {
     }
   }
 
-  dispose(): void {
-    if (this._disposed) return;
-    this._disposed = true;
+  /** Detach from the manager's update stream. Test-only: the pi extension API exposes no teardown hook. */
+  unsubscribe(): void {
     this._unsubAgent();
-    this._cancelRetry();
-    this._ctx = undefined;
-    this._queue = [];
-    this._notifiedTerminalSessionIds.clear();
   }
 
   private _onSessionStart(ctx: NotifierContext | undefined): void {
-    if (this._disposed) return;
     this._ctx = ctx;
     this._cancelRetry();
     this._flush("generic");
   }
 
   private _onSessionShutdown(): void {
-    if (this._disposed) return;
     this._ctx = undefined;
     this._cancelRetry();
   }
 
   private _handleAgentUpdate = (agent: Agent, kind: AgentUpdateKind): void => {
-    if (this._disposed) return;
     if (kind !== "status") return;
     if (!agent.background) return;
     const status = agent.status;
@@ -132,7 +123,6 @@ export class BackgroundNotifier {
   };
 
   private _onDispatchEvent(trigger: "auto-event" | "steer-event", ctx: NotifierContext | undefined): void {
-    if (this._disposed) return;
     if (ctx && this._ctx !== ctx) {
       this._ctx = ctx;
       this._cancelRetry();
@@ -146,7 +136,6 @@ export class BackgroundNotifier {
 
   /** Pure decision: resolve the live mode, queue and context into a single action. */
   private _decide(trigger: FlushTrigger): FlushAction {
-    if (this._disposed) return { kind: "noop" };
     const mode = this.deps.getMode();
     if (mode === "none") return { kind: "reset" };
 
