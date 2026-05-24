@@ -23,6 +23,7 @@ import {
   inventoryDetails,
   runDetails,
   runResultsDetails,
+  type SubagentDetails,
 } from "../view/format.js";
 import { listAgentDefinitions, serializeGroup } from "../view/serialize.js";
 
@@ -35,11 +36,11 @@ export interface ActionDeps {
 
 export interface ActionResult {
   content: { type: "text"; text: string }[];
-  details: unknown;
+  details: SubagentDetails;
   isError?: boolean;
 }
 
-export function toolResult(details: object, isError = false): ActionResult {
+export function toolResult(details: SubagentDetails, isError = false): ActionResult {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
     details,
@@ -47,10 +48,10 @@ export function toolResult(details: object, isError = false): ActionResult {
   };
 }
 
-export function errorResult(message: string, details: Record<string, unknown> = {}): ActionResult {
+export function errorResult(message: string, extra: { errors?: string[] } = {}): ActionResult {
   return {
     content: [{ type: "text" as const, text: message }],
-    details,
+    details: { view: "error", ...(extra.errors ? { errors: extra.errors } : {}) },
     isError: true,
   };
 }
@@ -110,7 +111,7 @@ export async function runAction(
   deps: ActionDeps,
   params: SubagentParams,
   signal: AbortSignal | undefined,
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+  onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
   ctx: ExtensionContext,
   settings: SubagentSettings,
 ): Promise<ActionResult> {
@@ -168,7 +169,7 @@ function widgetAgents(update: RunUpdate): AgentSnapshot[] {
   return update.tree.length > 0 ? update.tree : update.sessions;
 }
 
-function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings): { content: { type: "text"; text: string }[]; details: unknown } {
+function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings): { content: { type: "text"; text: string }[]; details: SubagentDetails } {
   const subtree: AgentSnapshot[] = update.tree.length > update.sessions.length ? update.tree : [];
   const details = runDetails(serializeGroup(update.sessions), {
     active: update.active,

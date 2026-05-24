@@ -1,3 +1,6 @@
+import { Type } from "typebox";
+import { Value } from "typebox/value";
+
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { AgentResultJson, BackgroundResult } from "../domain/agent-result.js";
@@ -26,7 +29,14 @@ export type SubagentDetails =
   | { view: "inventory"; sessions: AgentSnapshot[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
   | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number; background: true }
-  | { view: "background-results"; results: BackgroundResult[] };
+  | { view: "background-results"; results: BackgroundResult[] }
+  | { view: "error"; errors?: string[] };
+
+/**
+ * The renderable arms — everything except the `error` envelope, which the renderer
+ * intentionally falls back to plain text for. {@link parseDetails} only ever yields these.
+ */
+export type RenderableDetails = Exclude<SubagentDetails, { view: "error" }>;
 
 export type AgentsDetails = Extract<SubagentDetails, { view: "agents" }>;
 export type RunDetails = Extract<SubagentDetails, { view: "run" }>;
@@ -71,50 +81,28 @@ export function backgroundResultsDetails(results: BackgroundResult[]): Backgroun
   return { view: "background-results", results };
 }
 
-export function narrowDetails(details: unknown): SubagentDetails | undefined {
-  if (!details || typeof details !== "object") return undefined;
-  const record = details as { view?: unknown; agents?: unknown; group?: unknown; sessions?: unknown; summary?: unknown };
-  switch (record.view) {
-    case "agents":
-      return Array.isArray(record.agents) ? { view: "agents", agents: record.agents as AgentListingEntry[] } : undefined;
-    case "run":
-      if (!record.group || typeof record.group !== "object") return undefined;
-      return {
-        view: "run",
-        group: record.group as AgentGroupView,
-        ...(Array.isArray((record as { subtree?: unknown }).subtree)
-          ? { subtree: (record as { subtree: AgentSnapshot[] }).subtree }
-          : {}),
-      };
-    case "run-results": {
-      const outcomes = (record as { outcomes?: unknown }).outcomes;
-      const isError = (record as { isError?: unknown }).isError;
-      if (!Array.isArray(outcomes) || typeof isError !== "boolean") return undefined;
-      return { view: "run-results", outcomes: outcomes as AgentResultJson[], isError };
-    }
-    case "inventory":
-      return Array.isArray(record.sessions)
-        ? {
-            view: "inventory",
-            sessions: record.sessions as AgentSnapshot[],
-            ...((record as { filter?: InventoryFilter }).filter ? { filter: (record as { filter?: InventoryFilter }).filter } : {}),
-          }
-        : undefined;
-    case "remove-summary":
-      return record.summary && typeof record.summary === "object"
-        ? { view: "remove-summary", summary: record.summary as RemoveSummary }
-        : undefined;
-    case "background-started": {
-      const handles = (record as { handles?: unknown }).handles;
-      const count = (record as { count?: unknown }).count;
-      if (!Array.isArray(handles) || typeof count !== "number") return undefined;
-      return { view: "background-started", handles: handles as BackgroundSpawnHandle[], count, background: true };
-    }
-    case "background-results":
-      return Array.isArray((record as { results?: unknown }).results)
-        ? { view: "background-results", results: (record as { results: BackgroundResult[] }).results }
-        : undefined;
-    default:
-      return undefined;
-  }
+/**
+ * Shallow structural schema for the `details` envelope. Each arm pins the `view` tag and the
+ * top-level fields the renderer reads; nested rows stay `Unknown` so this stays a tag/shape
+ * check, not a re-derivation of the domain types. It exists only to guard the persisted /
+ * HTML-exported re-render path (the live path passes the already-typed object), backed by
+ * `renderResult`'s try/catch → plain-text fallback for anything it rejects.
+ */
+const DetailsSchema = Type.Union([
+  Type.Object({ view: Type.Literal("agents"), agents: Type.Array(Type.Unknown()) }),
+  Type.Object({ view: Type.Literal("run"), group: Type.Object({ sessions: Type.Array(Type.Unknown()) }) }),
+  Type.Object({ view: Type.Literal("run-results"), outcomes: Type.Array(Type.Unknown()), isError: Type.Boolean() }),
+  Type.Object({ view: Type.Literal("inventory"), sessions: Type.Array(Type.Unknown()) }),
+  Type.Object({ view: Type.Literal("remove-summary"), summary: Type.Object({}) }),
+  Type.Object({ view: Type.Literal("background-started"), handles: Type.Array(Type.Unknown()), count: Type.Number() }),
+  Type.Object({ view: Type.Literal("background-results"), results: Type.Array(Type.Unknown()) }),
+]);
+
+/**
+ * Validates an opaque `details` payload at the render boundary and returns it typed as a
+ * {@link RenderableDetails}, or `undefined` when the shape is unrecognized (including the
+ * `error` envelope). The check is deliberately shallow — see {@link DetailsSchema}.
+ */
+export function parseDetails(details: unknown): RenderableDetails | undefined {
+  return Value.Check(DetailsSchema, details) ? (details as RenderableDetails) : undefined;
 }

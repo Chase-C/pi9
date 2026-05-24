@@ -6,7 +6,7 @@ import type { AgentManager } from "../runtime/agent-manager.js";
 import { timingMark } from "../runtime/timing.js";
 import { SubagentParams } from "../schema.js";
 import type { SubagentSettings } from "../config/settings.js";
-import { createSubagentTextComponent } from "../view/format.js";
+import { createSubagentTextComponent, type SubagentDetails } from "../view/format.js";
 import {
   agentsAction,
   errorResult,
@@ -67,12 +67,12 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     ? { agentManager, agentRegistry, getCurrentSettings, parentSessionId }
     : { agentManager, agentRegistry, getCurrentSettings };
 
-  return defineTool({
+  return defineTool<typeof SubagentParams, SubagentDetails>({
     name: "subagent",
     label: "Subagent",
     description: TOOL_DESCRIPTION,
     parameters: SubagentParams,
-    renderCall(args: any, theme: any) {
+    renderCall(args, theme: any) {
       const action = typeof args?.action === "string" ? args.action : "pending";
       const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
       const labels = tasks
@@ -90,12 +90,13 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       const line = `subagent ${action}${suffix}`;
       return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
     },
-    renderResult(result: any, options: any, theme: any) {
+    renderResult(result, options, theme: any) {
       try {
-        const component = createSubagentTextComponent(result?.details, Boolean(options?.expanded), theme, undefined, getCurrentSettings().display);
+        const component = createSubagentTextComponent(result.details, Boolean(options.expanded), theme, undefined, getCurrentSettings().display);
         if (component) return component;
       } catch { }
-      const text = result?.content?.find((part: any) => part?.type === "text")?.text ?? "";
+      const part = result.content.find(entry => entry.type === "text");
+      const text = part && "text" in part ? part.text : "";
       return new Text(text, 0, 0);
     },
 

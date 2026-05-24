@@ -26,7 +26,7 @@ import {
 } from "./format-helpers.js";
 import { formatRunSessionLine, formatSessionLine } from "./session-lines.js";
 import {
-  narrowDetails,
+  parseDetails,
   type AgentListingEntry,
   type BackgroundSpawnHandle,
   type InventoryFilter,
@@ -83,7 +83,7 @@ function formatSubagentToolDisplayLines(
   bold: Bold | undefined,
   display: SubagentDisplaySettings,
 ): DisplayLine[] | undefined {
-  const narrowed = narrowDetails(details);
+  const narrowed = parseDetails(details);
   if (!narrowed) return undefined;
 
   switch (narrowed.view) {

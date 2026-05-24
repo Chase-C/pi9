@@ -52,6 +52,23 @@ test("subagent tool result renderer falls back to content text for unknown view 
   assert.match(rendered, /task\[0\]: bad/);
 });
 
+test("subagent tool result renderer falls back to content text for a partial persisted payload", () => {
+  const tool = registerExtension();
+  const passthroughTheme = { fg: (_color: string, text: string) => text };
+  // A stale/older-shape "run-results" envelope: right view tag, but missing the `isError` field.
+  const details = { view: "run-results", outcomes: [{ agent: "helper", status: "completed" }] };
+
+  const component = tool.renderResult(
+    { content: [{ type: "text", text: "STALE_PAYLOAD_FALLBACK" }], details },
+    { expanded: false },
+    passthroughTheme,
+  );
+  const rendered = component.render(120).join("\n");
+
+  assert.match(rendered, /STALE_PAYLOAD_FALLBACK/);
+  assert.doesNotMatch(rendered, /completed/);
+});
+
 test("subagent tool result renderer keeps the empty-sessions message for an explicit empty sessions shape", () => {
   const tool = registerExtension();
 
