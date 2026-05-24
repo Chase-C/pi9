@@ -26,7 +26,7 @@ test("AttemptRunner marks runner rejections before start as terminal error in gr
   assert.equal(final.sessions.length, 1);
   assert.equal(final.sessions[0].status.kind, "done");
   assert.equal(final.sessions[0].status.outcome, "error");
-  assert.match(final.sessions[0].status.snippet, /setup failed before start/);
+  assert.match(final.sessions[0].status.error, /setup failed before start/);
   assert.deepEqual(manager.listSessions(), []);
 });
 
@@ -133,7 +133,7 @@ test("AttemptRunner keeps a retained completed session retryable across one or m
     assert.equal(failed.error, `resume failed #${attempt}`);
     const view = manager.listSessions()[0];
     assert.equal(view.status.kind === "done" && view.status.outcome, "error");
-    assert.equal(view.status.kind === "done" && view.status.snippet, `resume failed #${attempt}`);
+    assert.equal(view.status.kind === "done" && view.status.error, `resume failed #${attempt}`);
     assert.equal(view.config.resumable, true);
   }
 
@@ -146,7 +146,7 @@ test("AttemptRunner keeps a retained completed session retryable across one or m
   assert.equal(retried.sessionId, first.sessionId);
   const finalView = manager.listSessions()[0];
   assert.equal(finalView.status.kind === "done" && finalView.status.outcome, "completed");
-  assert.equal(finalView.status.kind === "done" && finalView.status.snippet, "new:successful follow-up");
+  assert.equal(finalView.status.kind === "done" && finalView.status.output, "new:successful follow-up");
 });
 
 test("AttemptRunner reports queued cancelled resume as skipped follow-up and keeps retained session retryable", async () => {
@@ -201,7 +201,7 @@ test("AttemptRunner reports queued cancelled resume as skipped follow-up and kee
   assert.equal(finalResumeView.resumed, true);
   assert.equal(finalResumeView.status.kind, "done");
   assert.equal(finalResumeView.status.outcome, "skipped");
-  assert.equal(finalResumeView.status.snippet, "Agent skipped.");
+  assert.equal(finalResumeView.status.error, "Agent skipped.");
   assert.equal(finalResumeView.config.resumable, true);
 
   const list = manager.listSessions();
@@ -209,7 +209,7 @@ test("AttemptRunner reports queued cancelled resume as skipped follow-up and kee
   assert.equal(list[0].id, first.sessionId);
   assert.equal(list[0].status.kind, "done");
   assert.equal(list[0].status.kind === "done" && list[0].status.outcome, "skipped");
-  assert.equal(list[0].status.kind === "done" && list[0].status.snippet, "Agent skipped.");
+  assert.equal(list[0].status.kind === "done" && list[0].status.error, "Agent skipped.");
   assert.equal(list[0].config.resumable, true);
 
   const [retried] = await run(manager,baseCtx(), undefined, [

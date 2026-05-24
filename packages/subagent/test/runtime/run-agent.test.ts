@@ -8,6 +8,7 @@ import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 
 import { RunAttempt } from "../../src/runtime/run-agent.js";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
+import { toResultJson } from "../../src/domain/agent-result.js";
 
 const noop: AgentUpdateListener = () => {};
 
@@ -59,7 +60,7 @@ test("run-agent skips before prompting when signal aborts during setup", async (
   });
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
-  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), controller.signal, dependencies);
+  const result = toResultJson(await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), controller.signal, dependencies));
 
   assert.equal(result.status, "skipped");
   assert.match(result.error ?? "", /Agent skipped/);
@@ -129,7 +130,7 @@ test("run-agent forwards configured tools allowlist to createAgentSession", asyn
     { kind: "spawn", agent: "limited", prompt: "work" }, noop,
   );
 
-  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = toResultJson(await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies));
 
   assert.equal(result.output, "final");
   assert.deepEqual(createOptions.tools, ["read", "grep"]);
@@ -159,7 +160,7 @@ test("run-agent marks running parent cancellation as interrupted", async () => {
 
   controller.abort();
 
-  const result = await pending;
+  const result = toResultJson(await pending);
   assert.equal(result.status, "interrupted");
   assert.match(result.error ?? "", /user cancelled/);
   assert.equal(abortCalls, 1);
@@ -178,7 +179,7 @@ test("run-agent treats final assistant error stop reason as failed child run", a
   const dependencies = makeBaseDeps({ createAgentSession: async () => ({ session }) });
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
-  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = toResultJson(await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies));
 
   assert.equal(result.status, "error");
   assert.match(result.error ?? "", /model overloaded/);
@@ -206,7 +207,7 @@ test("run-agent injects requested skills into the system prompt and disables loa
   });
   const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT" }, { kind: "spawn", agent: "helper", prompt: "work", skills: ["tdd", "review"] }, noop);
 
-  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = toResultJson(await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies));
 
   assert.equal(result.status, "completed");
   assert.equal(loaderOptions.noSkills, true);
@@ -230,7 +231,7 @@ test("run-agent reports an unknown skill from per-task or frontmatter sources as
       ? new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", skills: ["missing"] }, noop)
       : new Agent("id", { ...baseConfig, skills: ["missing"] }, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
-    const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+    const result = toResultJson(await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies));
 
     assert.equal(result.status, "error", `${source}: expected error`);
     assert.match(result.error ?? "", /missing/);
@@ -263,7 +264,7 @@ test("run-agent uses agent-frontmatter default skills when the task does not pro
   });
   const agent = new Agent("id", { ...baseConfig, systemPrompt: "BASE PROMPT", skills: ["foo"] }, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
-  const result = await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = toResultJson(await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies));
 
   assert.equal(result.status, "completed");
   const prompt = loaderOptions.systemPromptOverride();
@@ -375,7 +376,7 @@ test("cache fallback paths reach DefaultResourceLoader.getExtensions() in the sp
   });
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
 
-  const result = await RunAttempt(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies);
+  const result = toResultJson(await RunAttempt(baseCtx(root), agent, agent.requireCurrentAttempt(), undefined, dependencies));
 
   assert.equal(result.status, "completed");
   assert.ok(capturedLoader, "createAgentSession should have received a loader");

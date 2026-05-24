@@ -62,7 +62,7 @@ test("BatchRun emits grouped progress rows in input order including unknown agen
     initial.map((row: any) => [row.config.name, row.status.kind === "done" ? row.status.outcome : row.status.kind, row.inputIndex]),
     [["helper", "queued", 0], ["missing", "error", 1], ["helper", "queued", 2]],
   );
-  assert.match(initial[1].status.snippet, /Unknown agent: missing/);
+  assert.match(initial[1].status.error, /Unknown agent: missing/);
 });
 
 test("BatchRun keeps emitting active batch updates for spinner animation even without agent events", async () => {

@@ -525,10 +525,12 @@ test("subagents command resumes completed retained session with editor loader an
     startRun(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
       resumeCalls.push({ signal, sessionId: task.sessionId, prompt: task.prompt });
-      const resultsPromise = Promise.resolve([{
-        agent: "helper", prompt: task.prompt, status: "completed",
-        output: `Result ${"z".repeat(1000)}`, sessionId: task.sessionId, resumable: true, resumed: true,
-      }]);
+      const resultsPromise = Promise.resolve([fakeAgent({
+        id: task.sessionId,
+        config: { name: "helper", resumable: true },
+        prompt: task.prompt,
+        status: { kind: "completed", response: `Result ${"z".repeat(1000)}`, resumed: true },
+      })]);
       return { groupId: "g", sessions: [], tree: () => [], resultsPromise };
     },
   };
@@ -592,10 +594,12 @@ test("subagents command resume cancellation aborts the child and reports interru
       const task = tasks[0];
       const resultsPromise = new Promise<any[]>(resolve => {
         signal.addEventListener("abort", () => {
-          resolve([{
-            agent: "helper", prompt: task.prompt, status: "interrupted",
-            error: "Agent interrupted.", sessionId: task.sessionId, resumable: true, resumed: true,
-          }]);
+          resolve([fakeAgent({
+            id: task.sessionId,
+            config: { name: "helper", resumable: true },
+            prompt: task.prompt,
+            status: { kind: "interrupted", error: "Agent interrupted.", resumed: true },
+          })]);
         }, { once: true });
       });
       return { groupId: "g", sessions: [], tree: () => [], resultsPromise };

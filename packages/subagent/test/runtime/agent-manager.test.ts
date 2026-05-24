@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
+import { toResultJson } from "../../src/domain/agent-result.js";
 import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
 
 test("AgentManager.listSessions returns all retained sessions when called with no filter", async () => {
@@ -284,7 +285,7 @@ test("AgentManager retains, resumes, lists, and clears completed resumable sessi
   assert.equal(retained.id, results[0].sessionId);
   assert.equal(retained.status.kind, "done");
   assert.equal(retained.status.kind === "done" && retained.status.outcome, "completed");
-  assert.equal(retained.status.kind === "done" && retained.status.snippet, "follow:two");
+  assert.equal(retained.status.kind === "done" && retained.status.output, "follow:two");
 
   assert.deepEqual(await manager.remove({ sessionIds: [results[0].sessionId!] }), { removed: 1, aborted: 0, sessionIds: [results[0].sessionId!], errors: [] });
   assert.deepEqual(manager.listSessions(), []);
@@ -512,7 +513,7 @@ test("AgentManager.remove scope=retained leaves resumable background sessions wh
   assert.deepEqual(result.sessionIds, [foreground.sessionId]);
   const remaining = manager.listSessions();
   assert.equal(remaining.length, 1);
-  assert.equal(remaining[0].id, background.sessionId);
+  assert.equal(remaining[0].id, background.id);
   assert.equal(remaining[0].dispatch, "background");
 });
 
@@ -638,7 +639,7 @@ test("AgentManager.remove scope=background aborts running background sessions", 
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("AgentManager.backgroundResults returns ready:true with the AgentRunResult for a completed background session", async () => {
+test("AgentManager.backgroundResults returns ready:true with the projected result for a completed background session", async () => {
   const runner = async (_ctx: any, agent: any) => {
     agent.attach(makeSession());
     return completedRun(agent, "bg-output");
@@ -667,6 +668,10 @@ test("AgentManager.backgroundResults returns ready:true with the AgentRunResult 
   assert.equal((entry as any).result.status, "completed");
   assert.equal((entry as any).result.output, "bg-output");
   assert.equal((entry as any).result.agent, "oneshot");
+  // The ready arm is the same snapshot projection as run results: it carries the run metrics.
+  assert.equal(typeof (entry as any).result.turns, "number");
+  assert.equal(typeof (entry as any).result.tokens, "number");
+  assert.equal(typeof (entry as any).result.elapsedMs, "number");
 });
 
 test("AgentManager.backgroundResults returns ready:false running with elapsedMs and agent for a running background session", async () => {
@@ -1134,7 +1139,8 @@ test("AgentManager.cancelDescendantsOf stamps cancelled descendants with the rea
   await new Promise(r => setTimeout(r, 20));
 
   await manager.cancelDescendantsOf("parent-9", { skipBackground: true, reason: "Parent parent-9 finalized as error" });
-  const [result] = await batch.resultsPromise;
+  const [snapshot] = await batch.resultsPromise;
+  const result = toResultJson(snapshot);
 
   assert.equal(result.status, "aborted");
   assert.match(result.error ?? "", /parent-9/);

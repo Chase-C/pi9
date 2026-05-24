@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
+import { toResultJson } from "../../src/domain/agent-result.js";
 import { baseCtx, makeManager } from "../helpers/runtime.js";
 
 test("parent finalizing with error cancels its non-background child via the observer", async () => {
@@ -48,8 +49,8 @@ test("parent finalizing with error cancels its non-background child via the obse
   );
 
   // Wait for parent to error and observer to fan out.
-  const [parentResult] = await parentBatch.resultsPromise;
-  const [childResult] = await childBatch.resultsPromise;
+  const [parentResult] = (await parentBatch.resultsPromise).map(toResultJson);
+  const [childResult] = (await childBatch.resultsPromise).map(toResultJson);
 
   assert.equal(parentResult.status, "error");
   assert.deepEqual(aborts, ["child"], "session.abort called for child");
@@ -112,7 +113,7 @@ test("parent finalizing with completed leaves a running non-background child alo
 
   // Now finalize the parent with completed.
   releaseParent();
-  const [parentResult] = await parentBatch.resultsPromise;
+  const [parentResult] = (await parentBatch.resultsPromise).map(toResultJson);
   assert.equal(parentResult.status, "completed");
 
   // Give the observer a chance to (incorrectly) fan out.
@@ -121,7 +122,7 @@ test("parent finalizing with completed leaves a running non-background child alo
 
   // Child still completes naturally.
   releaseChild();
-  const [childResult] = await childBatch.resultsPromise;
+  const [childResult] = (await childBatch.resultsPromise).map(toResultJson);
   assert.equal(childResult.status, "completed");
 });
 
@@ -172,7 +173,7 @@ test("parent aborted with running background descendant: background survives and
 
   // Abort the parent (via remove) — observer should NOT cancel the background child.
   await manager.remove({ sessionIds: [parentId] });
-  const [parentResult] = await parentBatch.resultsPromise;
+  const [parentResult] = (await parentBatch.resultsPromise).map(toResultJson);
   assert.equal(parentResult.status, "aborted");
 
   // Background child should still be running.
@@ -183,7 +184,7 @@ test("parent aborted with running background descendant: background survives and
 
   // It completes naturally.
   releaseBg();
-  const [bgResult] = await bgBatch.resultsPromise;
+  const [bgResult] = (await bgBatch.resultsPromise).map(toResultJson);
   assert.equal(bgResult.status, "completed");
 });
 
@@ -255,7 +256,7 @@ test("background descendants form a cancellation boundary for their own children
   assert.equal(manager.listSessions().find(s => s.prompt === "fg")?.status.kind, "running");
 
   releaseRoot();
-  const [rootResult] = await rootBatch.resultsPromise;
+  const [rootResult] = (await rootBatch.resultsPromise).map(toResultJson);
   assert.equal(rootResult.status, "error");
 
   await new Promise(r => setTimeout(r, 20));
@@ -263,9 +264,9 @@ test("background descendants form a cancellation boundary for their own children
 
   releaseFg();
   releaseBg();
-  const [[fgResult], [bgResult]] = await Promise.all([fgBatch.resultsPromise, bgBatch.resultsPromise]);
-  assert.equal(fgResult.status, "completed");
-  assert.equal(bgResult.status, "completed");
+  const [[fgSnapshot], [bgSnapshot]] = await Promise.all([fgBatch.resultsPromise, bgBatch.resultsPromise]);
+  assert.equal(toResultJson(fgSnapshot).status, "completed");
+  assert.equal(toResultJson(bgSnapshot).status, "completed");
 });
 
 test("parent errors with mix of background and non-background children: only non-background cancelled", async () => {
@@ -330,8 +331,8 @@ test("parent errors with mix of background and non-background children: only non
   await new Promise(r => setTimeout(r, 10));
 
   const [parentResult, [fgResult]] = await Promise.all([
-    parentBatch.resultsPromise.then(r => r[0]),
-    fgBatch.resultsPromise.then(rs => rs),
+    parentBatch.resultsPromise.then(r => toResultJson(r[0])),
+    fgBatch.resultsPromise.then(rs => rs.map(toResultJson)),
   ]);
 
   assert.equal(parentResult.status, "error");
@@ -340,7 +341,7 @@ test("parent errors with mix of background and non-background children: only non
   assert.deepEqual(aborts.filter(a => a === "bg"), [], "background child must not be aborted");
 
   releaseBg();
-  const [bgResult] = await bgBatch.resultsPromise;
+  const [bgResult] = (await bgBatch.resultsPromise).map(toResultJson);
   assert.equal(bgResult.status, "completed");
 });
 
@@ -377,6 +378,6 @@ test("ParentFinalizePolicy honors the background flag set at startRun time when 
   assert.deepEqual(aborts, [], "background descendant must not be aborted");
 
   releaseChild();
-  const [result] = await batch.resultsPromise;
+  const [result] = (await batch.resultsPromise).map(toResultJson);
   assert.equal(result.status, "completed");
 });

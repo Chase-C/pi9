@@ -5,11 +5,11 @@ import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { AgentActivity } from "./agent-activity.js";
 import { AgentConfig } from "./agent-config.js";
 import { Attempt } from "./agent-attempt.js";
-import { buildAgentResult, type AgentResultContext, type AgentRunResult } from "./agent-result.js";
+import type { AgentOutcome } from "./agent-result.js";
 import type { AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 import { timingMark } from "../runtime/timing.js";
-import { preflightFailure, PreflightFailure } from "./preflight-failure.js";
+import { preflightFailure } from "./preflight-failure.js";
 import { AgentRegistry } from "./agent-registry.js";
 
 export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
@@ -17,7 +17,7 @@ export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" |
 export type AgentStatus =
   | { kind: "queued"; queuedAt: number }
   | { kind: "running"; session: AgentSession; startedAt: number }
-  | { kind: "done"; result: AgentRunResult; startedAt?: number; completedAt: number };
+  | { kind: "done"; result: AgentOutcome; startedAt?: number; completedAt: number };
 
 interface ResolveArgs {
   task: SpawnRequest | ResumeRequest;
@@ -68,7 +68,7 @@ export class Agent {
   ):
     | { kind: "spawn"; agent: Agent }
     | { kind: "resume"; agent: Agent }
-    | { kind: "failure"; failure: PreflightFailure } {
+    | { kind: "failure"; failure: AgentSnapshot } {
     const { task, background, registry, findAgent, listener, parentId } = args;
     if (task.kind === "spawn") {
       const config = registry.agents.get(task.agent);
@@ -226,29 +226,15 @@ export class Agent {
     const status = this.status;
     if (status.kind === "queued") return { kind: "queued", queuedAt: status.queuedAt };
     if (status.kind === "running") return { kind: "running", startedAt: status.startedAt };
-    const result = status.result;
-    const rawSnippet = result.status === "completed" ? result.output : result.error ?? result.status;
+    const outcome = status.result;
     return {
       kind: "done",
-      outcome: result.status,
+      outcome: outcome.status,
       completedAt: status.completedAt,
+      resumed: outcome.resumed,
       ...(status.startedAt !== undefined ? { startedAt: status.startedAt } : {}),
-      ...(rawSnippet ? { snippet: rawSnippet } : {}),
-    };
-  }
-
-  /** Snapshot of the data needed to build an AgentRunResult for the current attempt. */
-  resultContext(): AgentResultContext {
-    const resumable = this.hasResumableSession();
-    const model = this.spawn.model ?? this.config.model;
-    return {
-      sessionId: this.id,
-      agentName: this.agentName,
-      ...(this._label !== undefined ? { label: this._label } : {}),
-      prompt: this.requireCurrentAttempt().prompt,
-      ...(model !== undefined ? { model } : {}),
-      ...(this.parentId !== undefined ? { parentSessionId: this.parentId } : {}),
-      resumable,
+      ...(outcome.output !== undefined ? { output: outcome.output } : {}),
+      ...(outcome.error !== undefined ? { error: outcome.error } : {}),
     };
   }
 
@@ -264,11 +250,11 @@ export class Agent {
       const session = current.state.session;
       await Promise.resolve(session.abort()).catch(() => undefined);
       if (!this._current) return;
-      this.settle(buildAgentResult(this.resultContext(), { status: "aborted", error: reason ?? "Agent aborted.", resumed }));
+      this.settle({ status: "aborted", error: reason ?? "Agent aborted.", resumed });
       return;
     }
     if (current.state.kind === "queued") {
-      this.settle(buildAgentResult(this.resultContext(), { status: "skipped", error: reason ?? "Agent skipped.", resumed }));
+      this.settle({ status: "skipped", error: reason ?? "Agent skipped.", resumed });
     }
   }
 
@@ -287,16 +273,20 @@ export class Agent {
     this._emit("status");
   }
 
-  /** Settle the current attempt with a result. Idempotent if there's no in-flight attempt. */
-  settle(result: AgentRunResult): void {
+  /**
+   * Settle the current attempt with a terminal outcome and return the resulting terminal
+   * snapshot. Idempotent if there's no in-flight attempt — returns the current snapshot.
+   */
+  settle(outcome: AgentOutcome): AgentSnapshot {
     const current = this._current;
-    if (!current) return;
-    timingMark("agent.settle", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, outcome: result.status, attemptKind: current.kind });
+    if (!current) return this.snapshot();
+    timingMark("agent.settle", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, outcome: outcome.status, attemptKind: current.kind });
     this._finishSubscription();
-    current.settle(result);
+    current.settle(outcome);
     this._lastAttempt = current;
     this._current = undefined;
     this._emit("status");
+    return this.snapshot();
   }
 
   private _describe(): string {

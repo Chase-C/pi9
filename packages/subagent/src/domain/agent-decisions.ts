@@ -23,11 +23,14 @@ export function getCompletedAt(status: AgentViewStatus): number | undefined {
 }
 
 export function getSnippet(status: AgentViewStatus): string | undefined {
-  return status.kind === "done" ? status.snippet : undefined;
+  if (status.kind !== "done") return undefined;
+  return status.outcome === "completed" ? status.output : status.error;
 }
 
 export function getSnippetLabel(status: AgentViewStatus): "Output" | "Error" | undefined {
-  if (status.kind !== "done" || !status.snippet) return undefined;
+  if (status.kind !== "done") return undefined;
+  const snippet = status.outcome === "completed" ? status.output : status.error;
+  if (!snippet) return undefined;
   return status.outcome === "completed" ? "Output" : "Error";
 }
 

@@ -42,14 +42,11 @@ test("tool run action returns full output only once in JSON details for a resume
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
     startRun(_ctx: any, _signal: any, tasks: any[]) {
-      const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
-        agent: "helper",
+      const resultsPromise = Promise.resolve(tasks.map((task: any) => fakeAgent({
+        id: task.sessionId ?? "s1",
+        config: { name: "helper", resumable: true },
         prompt: task.prompt,
-        status: "completed",
-        output: fullOutput,
-        sessionId: task.sessionId ?? "s1",
-        resumable: true,
-        resumed: task.kind === "resume",
+        status: { kind: "completed", response: fullOutput, resumed: task.kind === "resume" },
       })));
       return { groupId: "g1", sessions: [], tree: () => [], resultsPromise };
     },
@@ -116,7 +113,6 @@ test("subagent tool returns one ordered final group for mixed success, unknown, 
   assert.deepEqual(result.details.outcomes.map((run: any) => run.agent), ["helper", "missing", "flaky"]);
   assert.equal(result.details.outcomes[0].output, "done:first");
   assert.deepEqual(result.details.outcomes.map((run: any) => run.status), ["completed", "error", "error"]);
-  assert.deepEqual(result.details.outcomes.map((run: any) => run.inputIndex), [0, 1, 2]);
   assert.equal(result.details.isError, true);
 });
 
@@ -132,7 +128,7 @@ test("subagent tool notifies invalid settings fallback without breaking executio
     sessions: [] as any[],
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
-      const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
+      const resultsPromise = Promise.resolve([fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })]);
       return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
     },
   };
@@ -172,7 +168,7 @@ test("subagent tool falls back to default UI settings when settings load rejects
     sessions: [] as any[],
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
-      const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
+      const resultsPromise = Promise.resolve([fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })]);
       return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
     },
   };
@@ -212,7 +208,7 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
     sessions: [runningAgent],
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
-      const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
+      const resultsPromise = Promise.resolve([fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })]);
       return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
     },
   };
@@ -268,7 +264,7 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
     sessions: [] as any[],
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], tree: [runningAgent, childAgent], active: true });
-      const resultsPromise = Promise.resolve([{ agent: "helper", prompt: "work", status: "completed", output: "done", sessionId: "s1", resumable: false, resumed: false }]);
+      const resultsPromise = Promise.resolve([fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })]);
       return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent, childAgent], resultsPromise };
     },
   };
@@ -307,14 +303,11 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
     sessions: [] as any[],
     startRun(_ctx: any, _signal: any, tasks: any[]) {
       receivedTasks = tasks;
-      const resultsPromise = Promise.resolve(tasks.map((task: any) => ({
-        agent: task.kind === "spawn" ? task.agent : "chatty",
+      const resultsPromise = Promise.resolve(tasks.map((task: any) => fakeAgent({
+        id: task.kind === "resume" ? task.sessionId : "spawned",
+        config: { name: task.kind === "spawn" ? task.agent : "chatty", resumable: task.kind === "resume" },
         prompt: task.prompt,
-        status: "completed",
-        output: `done:${task.prompt}`,
-        resumable: task.kind === "resume",
-        resumed: task.kind === "resume",
-        ...(task.kind === "resume" ? { sessionId: task.sessionId } : {}),
+        status: { kind: "completed", response: `done:${task.prompt}`, resumed: task.kind === "resume" },
       })));
       return { groupId: "g1", sessions: [], tree: () => [], resultsPromise };
     },
@@ -341,7 +334,7 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
   assert.equal(result.isError, false);
   assert.deepEqual(receivedTasks.map((t: any) => t.kind), ["spawn", "resume"]);
   assert.equal(receivedTasks[1].sessionId, "s-1");
-  assert.equal(result.details.outcomes[0].resumed, undefined);
+  assert.equal(result.details.outcomes[0].resumed, false);
   assert.equal(result.details.outcomes[1].resumed, true);
 });
 
@@ -477,7 +470,7 @@ test("a late-arriving descendant status change triggers a partial re-emit with t
     startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
       capturedListener = onUpdate;
       const resultsPromise = new Promise<any[]>(resolve => {
-        resolveBatch = () => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]);
+        resolveBatch = () => resolve([fakeAgent({ id: "root", config: { name: "root" }, prompt: "go", status: { kind: "completed", response: "ok" } })]);
       });
       // Initial emit covers just the root (the descendant has not arrived yet).
       Promise.resolve().then(() => onUpdate({ sessions: [rootView], tree: [rootView], active: true }));
@@ -527,7 +520,7 @@ test("partial tool results carry the full descendant subtree; final tool result 
       // Drive one partial update with the full tree, then resolve with the final flat result.
       Promise.resolve().then(() => onUpdate({ sessions: [rootView], tree: [rootView, childView], active: true }));
       const resultsPromise = new Promise<any[]>(resolve => {
-        setTimeout(() => resolve([{ agent: "root", prompt: "go", status: "completed", output: "ok", sessionId: "root", resumable: false, resumed: false }]), 10);
+        setTimeout(() => resolve([fakeAgent({ id: "root", config: { name: "root" }, prompt: "go", status: { kind: "completed", response: "ok" } })]), 10);
       });
       return { groupId: "g1", sessions: [rootView], tree: () => [rootView, childView], resultsPromise };
     },

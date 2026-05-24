@@ -191,12 +191,12 @@ subagent({ action: "results", sessionIds: ["..."], remove: true })    // collect
 
 ```ts
 type BackgroundResult =
-  | { sessionId: string; ready: true; result: AgentRunResult }
+  | { sessionId: string; ready: true; result: AgentResultJson }
   | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
   | { sessionId: string; error: string };
 ```
 
-- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return their full `AgentRunResult` under `{ ready: true, result }`.
+- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return the same projected result as `action: "run"` (the `results[]` shape above, including `turns`, `tokens`, and `elapsedMs`) under `{ ready: true, result }` — both are projected from the terminal snapshot by the one `toResultJson` projection.
 - Queued/running entries return `{ ready: false, status, elapsedMs, agent, label? }`. `elapsedMs` is measured from when the child started (running) or from when the current attempt was queued (queued).
 - Unknown ids return `{ sessionId, error: "Unknown subagent session: <id>" }`. The overall response stays `isError: false` — partial-success is success.
 - `remove: true` sweeps terminal entries after their result is collected. Running entries are never removed regardless of the flag. A subsequent `results` call for a swept id returns the unknown-id error.
@@ -381,6 +381,9 @@ The core `subagent` tool works in non-interactive modes and still returns struct
 
 Tool results preserve input order and are returned in both text content (JSON) and `details.results`:
 
+Each result is projected from the task's terminal snapshot — the done-state snapshot is the
+single source of truth, and `details.results` is its model-facing view.
+
 ```ts
 {
   results: [
@@ -393,7 +396,10 @@ Tool results preserve input order and are returned in both text content (JSON) a
       model: "anthropic/claude-sonnet-4",
       resumable: true,
       resumed: false,
-      sessionId: "..."
+      sessionId: "...",
+      turns: 6,
+      tokens: 18432,
+      elapsedMs: 21044
     },
     {
       agent: "scout",
@@ -403,7 +409,10 @@ Tool results preserve input order and are returned in both text content (JSON) a
       model: "anthropic/claude-sonnet-4",
       resumable: true,
       resumed: true,
-      sessionId: "..."
+      sessionId: "...",
+      turns: 3,
+      tokens: 8120,
+      elapsedMs: 9550
     },
     {
       agent: "missing",
@@ -411,7 +420,10 @@ Tool results preserve input order and are returned in both text content (JSON) a
       status: "error",
       error: "Unknown agent: missing. Available agents: ...",
       resumable: false,
-      resumed: false
+      resumed: false,
+      turns: 0,
+      tokens: 0,
+      elapsedMs: 0
     }
   ],
   group: { /* live/final grouped UI DTO */ }
@@ -420,10 +432,15 @@ Tool results preserve input order and are returned in both text content (JSON) a
 
 Each result carries:
 
+- `output` / `error`: the child's **full, untruncated** text (`output` for `completed`, `error`
+  otherwise). Only the TUI compacts them; the structured result keeps everything.
 - `resumed`: `true` if this task continued an existing session, `false` for a fresh spawn (and for tasks that errored before attaching to a session).
 - `resumable`: `true` only when a child `AgentSession` exists or existed and the effective `resumable` flag is on.
 - `sessionId`: present only when `resumable` is true.
 - `label`: present when the task or a prior invocation supplied one.
+- `turns`: assistant turns the child took.
+- `tokens`: total tokens the child consumed.
+- `elapsedMs`: wall-clock run duration (`0` for tasks that failed before starting).
 
 `isError` is set when any run has a non-`completed` status. Unknown agents, unknown sessionIds, and child-session failures are reported as failed per-task results without discarding other scheduled results.
 

@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
-import type { AgentRunStatus, BackgroundResult } from "../domain/agent-result.js";
+import type { AgentResultJson, BackgroundResult } from "../domain/agent-result.js";
 
 export type AgentListingEntry = Omit<AgentConfig, "systemPrompt">;
 
@@ -19,21 +19,10 @@ export type BackgroundSpawnHandle = {
   label?: string;
 };
 
-export type RunOutcome = {
-  inputIndex: number;
-  agent: string;
-  status: AgentRunStatus;
-  label?: string;
-  sessionId?: string;
-  output?: string;
-  error?: string;
-  resumed?: boolean;
-};
-
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
   | { view: "run"; group: AgentGroupView; active?: boolean; subtree?: AgentSnapshot[] }
-  | { view: "run-results"; outcomes: RunOutcome[]; isError: boolean }
+  | { view: "run-results"; outcomes: AgentResultJson[]; isError: boolean }
   | { view: "inventory"; sessions: AgentSnapshot[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
   | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number; background: true }
@@ -58,7 +47,7 @@ export function runDetails(
   return { view: "run", group, ...extras };
 }
 
-export function runResultsDetails(outcomes: RunOutcome[], isError: boolean): RunResultsDetails {
+export function runResultsDetails(outcomes: AgentResultJson[], isError: boolean): RunResultsDetails {
   return { view: "run-results", outcomes, isError };
 }
 
@@ -101,7 +90,7 @@ export function narrowDetails(details: unknown): SubagentDetails | undefined {
       const outcomes = (record as { outcomes?: unknown }).outcomes;
       const isError = (record as { isError?: unknown }).isError;
       if (!Array.isArray(outcomes) || typeof isError !== "boolean") return undefined;
-      return { view: "run-results", outcomes: outcomes as RunOutcome[], isError };
+      return { view: "run-results", outcomes: outcomes as AgentResultJson[], isError };
     }
     case "inventory":
       return Array.isArray(record.sessions)

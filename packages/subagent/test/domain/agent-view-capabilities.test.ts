@@ -94,7 +94,7 @@ test("preflight failure views report capabilities false for both spawn and resum
     },
     { error: "Unknown agent" },
   );
-  assert.deepEqual(spawn.view.capabilities, { canResume: false, canClear: false });
+  assert.deepEqual(spawn.capabilities, { canResume: false, canClear: false });
 
   const resume = preflightFailure(
     {
@@ -104,5 +104,5 @@ test("preflight failure views report capabilities false for both spawn and resum
     },
     { error: "Unknown resumable subagent session" },
   );
-  assert.deepEqual(resume.view.capabilities, { canResume: false, canClear: false });
+  assert.deepEqual(resume.capabilities, { canResume: false, canClear: false });
 });

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { Agent, type AgentUpdateKind } from "../domain/agent.js";
-import type { AgentRunResult, BackgroundResult } from "../domain/agent-result.js";
+import { toResultJson, type BackgroundResult } from "../domain/agent-result.js";
 import { activeOrRetainedAgents, effectiveStatus } from "../domain/agent-decisions.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
@@ -28,7 +28,8 @@ export interface RunHandle {
   readonly sessions: AgentSnapshot[];
   /** Live snapshot of the run tree (roots + descendants in pre-order). */
   tree(): AgentSnapshot[];
-  readonly resultsPromise: Promise<AgentRunResult[]>;
+  /** Terminal snapshots in input order. The tool layer projects each via `toResultJson`. */
+  readonly resultsPromise: Promise<AgentSnapshot[]>;
 }
 
 export class AgentManager {
@@ -107,7 +108,7 @@ export class AgentManager {
       const agent = lookup.agent;
       const status = agent.status;
       if (status.kind === "done") {
-        return { sessionId: id, ready: true, result: status.result };
+        return { sessionId: id, ready: true, result: toResultJson(agent.snapshot()) };
       }
 
       const beginAt = (status.kind === "running") ? status.startedAt : status.queuedAt;
@@ -190,12 +191,12 @@ export class AgentManager {
       });
 
       if (result.kind === "failure") {
-        group.addStaticView(result.failure.view, inputIndex, resumed);
+        group.addStaticView(result.failure, inputIndex, resumed);
         timingMark("manager.task.preflightFailure", {
           groupId, inputIndex, parentId,
           ...(("agent" in task) ? { agent: task.agent } : { sessionId: task.sessionId }),
         });
-        return Promise.resolve(result.failure.result);
+        return Promise.resolve(result.failure);
       }
 
       if (result.kind === "spawn") {

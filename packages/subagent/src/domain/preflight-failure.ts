@@ -1,12 +1,7 @@
-import type { Agent } from "./agent.js";
-import type { AgentRunResult } from "./agent-result.js";
-import type { AgentSnapshot, AgentViewConfig } from "./agent-snapshot.js";
+import { Agent } from "./agent.js";
+import type { AgentConfig } from "./agent-config.js";
+import type { AgentRetention, AgentSnapshot } from "./agent-snapshot.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
-
-export interface PreflightFailure {
-  view: AgentSnapshot;
-  result: AgentRunResult;
-}
 
 interface PreflightFailureMeta {
   groupId: string;
@@ -21,64 +16,70 @@ interface PreflightFailureArgs {
   target?: Agent;
 }
 
+const NOOP_LISTENER = () => {};
+
+/**
+ * A failed preflight (unknown agent, bad or blocked resume) is represented as a synthetic
+ * terminal snapshot in `error` state, built through the one snapshot factory on a throwaway
+ * `Agent`. The throwaway never enters the catalog, so its placeholder config can't leak into
+ * agent listing or discovery. The failed row and the result both derive from this snapshot.
+ *
+ * The id reuses the live target's id when resuming a known session, else the
+ * `${groupId}:resume-${inputIndex}` scheme so run-group ordering by `inputIndex` is preserved.
+ */
 export function preflightFailure(
   meta: PreflightFailureMeta,
   args: PreflightFailureArgs,
-): PreflightFailure {
-  const { groupId, inputIndex, createdAt, task, background } = meta;
+): AgentSnapshot {
+  const { groupId, inputIndex, task, background } = meta;
   const { error, target } = args;
 
-  const labelField = task.label ? { label: task.label } : {};
-  const dispatch = background ? "background" : "foreground";
-  const retention = task.resumable ? "persistent" : "transient";
-  const anyTask = task as any;
-  return {
-    view: {
-      id: target?.id ?? `${groupId}:resume-${inputIndex}`,
-      inputIndex,
-      ...labelField,
-      prompt: task.prompt,
-      createdAt,
-      dispatch,
-      retention,
-      config: preflightTargetConfig(target) ?? {
-        name: anyTask.agent,
-        source: undefined,
-        model: anyTask.model,
-        thinking: anyTask.thinking,
-        tools: undefined,
-        resumable: false,
-      },
-      status: { kind: "done", outcome: "error", completedAt: createdAt, snippet: error },
-      activity: { turns: 0, compactions: 0, toolHistory: [] },
-      usage: undefined,
-      capabilities: { canResume: false, canClear: false },
-    },
-    result: {
-      agent: task.kind === "spawn" ? task.agent : target?.agentName ?? "(unknown)",
-      ...labelField,
-      prompt: task.prompt,
-      status: "error",
-      error,
-      model: target ? (target.spawn.model ?? target.config.model) : task.kind === "spawn" ? task.model : undefined,
-      resumable: target?.resumable ?? false,
-      resumed: task.kind === "resume",
-      ...(target ? { sessionId: target.id } : {}),
-    },
-  };
+  const id = target?.id ?? `${groupId}:resume-${inputIndex}`;
+  const { config, spawn } = preflightAgentInputs(task, target);
+  const agent = new Agent(id, config, spawn, NOOP_LISTENER, { background });
+  agent.settle({ status: "error", error, resumed: task.kind === "resume" });
+
+  // Preflight rows are per-run and never retained, even under a background batch; the factory's
+  // background-implies-persistent rule doesn't apply here.
+  const retention: AgentRetention = task.resumable ? "persistent" : "transient";
+  const snapshot: AgentSnapshot = { ...agent.snapshot({ inputIndex }), retention };
+  // A throwaway Agent has no retained session, so its `resumable` is always false; reflect the
+  // live target's resumability instead so the result/row match the session being resumed.
+  if (!target) return snapshot;
+  return { ...snapshot, config: { ...snapshot.config, resumable: target.resumable } };
 }
 
-function preflightTargetConfig(target?: Agent): AgentViewConfig | undefined {
-  if (!target) return undefined;
-  return {
-    name: target.agentName,
-    description: target.config.description,
-    source: target.config.source,
-    sourcePath: target.config.sourcePath,
-    model: target.spawn.model ?? target.config.model,
-    thinking: target.spawn.thinking ?? target.config.thinking,
-    tools: target.config.tools,
-    ...(target.config.skills !== undefined ? { skills: target.config.skills } : {}),
-    resumable: target.resumable,
+/** Config + spawn for the throwaway Agent: the live target's when known, else a placeholder. */
+function preflightAgentInputs(
+  task: SpawnRequest | ResumeRequest,
+  target?: Agent,
+): { config: AgentConfig; spawn: SpawnRequest } {
+  if (target) {
+    return {
+      config: target.config,
+      spawn: { ...target.spawn, prompt: task.prompt, ...(task.label !== undefined ? { label: task.label } : {}) },
+    };
+  }
+
+  const name = task.kind === "spawn" ? task.agent : "(unknown)";
+  const model = task.kind === "spawn" ? task.model : undefined;
+  const thinking = task.kind === "spawn" ? task.thinking : undefined;
+  const config: AgentConfig = {
+    name,
+    description: "",
+    systemPrompt: "",
+    source: "project",
+    resumable: false,
+    ...(model !== undefined ? { model } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
   };
+  const spawn: SpawnRequest = {
+    kind: "spawn",
+    agent: name,
+    prompt: task.prompt,
+    ...(task.label !== undefined ? { label: task.label } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+  };
+  return { config, spawn };
 }

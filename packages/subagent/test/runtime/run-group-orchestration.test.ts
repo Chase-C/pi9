@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
+import { toResultJson } from "../../src/domain/agent-result.js";
 import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
 
 test("orchestrator returns ordered per-run output and reports unknown agents and child failures", async () => {
@@ -109,7 +110,7 @@ test("orchestrator.startBatch returns sessions synchronously and a resultsPromis
   assert.deepEqual(batch.sessions.map(s => s.config.name), ["helper", "helper"]);
   assert.deepEqual(batch.sessions.map(s => s.dispatch), ["foreground", "foreground"]);
 
-  const results = await batch.resultsPromise;
+  const results = (await batch.resultsPromise).map(toResultJson);
   assert.deepEqual(results.map(r => r.status), ["completed", "completed"]);
   assert.deepEqual(results.map(r => r.output), ["done:one", "done:two"]);
 });
@@ -166,7 +167,7 @@ test("orchestrator.startBatch background:true surfaces preflight failures as tra
   assert.deepEqual(batch.sessions.map(s => s.dispatch), ["background", "background"]);
   assert.deepEqual(batch.sessions.map(s => s.retention), ["transient", "transient"]);
 
-  const results = await batch.resultsPromise;
+  const results = (await batch.resultsPromise).map(toResultJson);
   assert.deepEqual(results.map(r => r.status), ["error", "error"]);
 });
 
@@ -198,7 +199,7 @@ test("orchestrator.startBatch background:true ignores parent signal abort and le
   await new Promise(resolve => setTimeout(resolve, 5));
 
   releaseRun!();
-  const results = await batch.resultsPromise;
+  const results = (await batch.resultsPromise).map(toResultJson);
 
   assert.equal(results.length, 1);
   assert.equal(results[0].status, "completed");
@@ -236,7 +237,7 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
   assert.equal(batch.sessions[0].id, seed.sessionId);
   assert.equal(batch.sessions[0].dispatch, "background");
 
-  const [resumed] = await batch.resultsPromise;
+  const [resumed] = (await batch.resultsPromise).map(toResultJson);
   assert.equal(resumed.status, "completed");
   assert.equal(resumed.sessionId, seed.sessionId);
 
@@ -251,7 +252,7 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("orchestrator.run forwards parentId to every spawned agent and surfaces parentSessionId in views and results", async () => {
+test("orchestrator.run forwards parentId to every spawned agent and surfaces parentSessionId in the terminal snapshots", async () => {
   const seenParents: Array<string | undefined> = [];
   const runner = async (_ctx: any, agent: any) => {
     seenParents.push(agent.parentId);
@@ -263,7 +264,7 @@ test("orchestrator.run forwards parentId to every spawned agent and surfaces par
   };
   const manager = makeManager(registry as any, 2, runner);
 
-  const results = await run(manager,
+  const snapshots = await manager.startRun(
     baseCtx(),
     undefined,
     [
@@ -271,9 +272,9 @@ test("orchestrator.run forwards parentId to every spawned agent and surfaces par
       { kind: "spawn", agent: "helper", prompt: "two" },
     ],
     undefined,
-    { parentId: "parent-1" },
-  );
+    { background: false, parentId: "parent-1" },
+  ).resultsPromise;
 
   assert.deepEqual(seenParents, ["parent-1", "parent-1"]);
-  assert.deepEqual(results.map(r => r.parentSessionId), ["parent-1", "parent-1"]);
+  assert.deepEqual(snapshots.map(s => s.parentSessionId), ["parent-1", "parent-1"]);
 });

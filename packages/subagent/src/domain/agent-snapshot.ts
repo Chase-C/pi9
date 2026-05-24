@@ -31,7 +31,12 @@ export type AgentViewStatus =
       readonly outcome: AgentRunStatus;
       readonly completedAt: number;
       readonly startedAt?: number;
-      readonly snippet?: string;
+      /** Full, untruncated assistant output for a completed run. Presentation compacts it. */
+      readonly output?: string;
+      /** Full, untruncated failure text for a non-completed run. */
+      readonly error?: string;
+      /** Whether the settled attempt was a resume rather than a fresh spawn. */
+      readonly resumed?: boolean;
     };
 
 export interface AgentActivitySnapshot {

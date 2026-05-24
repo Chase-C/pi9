@@ -1,13 +1,13 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
-import type { AgentRunResult } from "./agent-result.js";
+import type { AgentOutcome } from "./agent-result.js";
 
 export type AttemptKind = "spawn" | "resume";
 
 export type AttemptState =
   | { kind: "queued" }
   | { kind: "running"; session: AgentSession; startedAt: number }
-  | { kind: "done"; result: AgentRunResult; startedAt?: number; completedAt: number };
+  | { kind: "done"; result: AgentOutcome; startedAt?: number; completedAt: number };
 
 /**
  * A single invocation against an Agent. Each attempt is created with immutable
@@ -33,7 +33,7 @@ export class Attempt {
     this.state = { kind: "running", session, startedAt: Date.now() };
   }
 
-  settle(result: AgentRunResult): void {
+  settle(result: AgentOutcome): void {
     if (this.state.kind === "done") return;
     const startedAt = this.state.kind === "running" ? this.state.startedAt : undefined;
     this.state = { kind: "done", result, startedAt, completedAt: Date.now() };

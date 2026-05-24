@@ -101,9 +101,9 @@ test("background-started view expanded shows one line per session with session i
 test("run-results view collapsed shows count summary by outcome status", () => {
   const details = runResultsDetails(
     [
-      { inputIndex: 0, agent: "helper", status: "completed", output: "ok" },
-      { inputIndex: 1, agent: "flaky", status: "error", error: "boom" },
-      { inputIndex: 2, agent: "stop", status: "aborted", error: "Agent aborted." },
+      { agent: "helper", prompt: "p", status: "completed", output: "ok", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 },
+      { agent: "flaky", prompt: "p", status: "error", error: "boom", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 },
+      { agent: "stop", prompt: "p", status: "aborted", error: "Agent aborted.", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 },
     ],
     true,
   );
@@ -119,10 +119,11 @@ test("run-results view expanded shows agent, status, snippet, and session handle
   const details = runResultsDetails(
     [
       {
-        inputIndex: 0, agent: "helper", label: "phase 1", status: "completed",
-        output: "all done", sessionId: "sess-1", resumed: true,
+        agent: "helper", label: "phase 1", prompt: "p", status: "completed",
+        output: "all done", sessionId: "sess-1", resumable: true, resumed: true,
+        turns: 0, tokens: 0, elapsedMs: 0,
       },
-      { inputIndex: 1, agent: "flaky", status: "error", error: "boom" },
+      { agent: "flaky", prompt: "p", status: "error", error: "boom", resumable: false, resumed: false, turns: 0, tokens: 0, elapsedMs: 0 },
     ],
     true,
   );

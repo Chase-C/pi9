@@ -2,7 +2,7 @@ import type { Component } from "@earendil-works/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView } from "../domain/agent-snapshot.js";
-import type { AgentRunStatus, BackgroundResult } from "../domain/agent-result.js";
+import type { AgentResultJson, AgentRunStatus, BackgroundResult } from "../domain/agent-result.js";
 import { effectiveStatus } from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact } from "./view-helpers.js";
@@ -31,7 +31,6 @@ import {
   type BackgroundSpawnHandle,
   type InventoryFilter,
   type RemoveSummary,
-  type RunOutcome,
 } from "./details.js";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
@@ -142,7 +141,7 @@ function formatSubagentToolDisplayLines(
   }
 }
 
-function formatRunResultsLines(outcomes: RunOutcome[], expanded: boolean, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
+function formatRunResultsLines(outcomes: AgentResultJson[], expanded: boolean, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
   const counts = new Map<AgentRunStatus, number>();
   for (const outcome of outcomes) counts.set(outcome.status, (counts.get(outcome.status) ?? 0) + 1);
   const ordered: AgentRunStatus[] = ["completed", "error", "aborted", "interrupted", "skipped"];

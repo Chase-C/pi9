@@ -48,12 +48,12 @@ test("snapshot marks a completed foreground non-resumable agent as transient", (
   assert.equal(view.retention, "transient");
 });
 
-test("snapshot preserves the raw done snippet without truncating it (compaction lives in the formatter)", () => {
+test("snapshot preserves the raw done output without truncating it (compaction lives in the formatter)", () => {
   const raw = "x".repeat(200);
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
   agent.attach(fakeSession);
   completedRun(agent, raw);
   const view = agent.snapshot();
   if (view.status.kind !== "done") throw new Error("expected done status");
-  assert.equal(view.status.snippet, raw);
+  assert.equal(view.status.output, raw);
 });

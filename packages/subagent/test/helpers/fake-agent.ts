@@ -41,6 +41,7 @@ type FakeStatusInput =
       skippedAt?: number;
       response?: string;
       error?: string;
+      resumed?: boolean;
       session?: unknown;
     })
   | AgentViewStatus;
@@ -103,16 +104,16 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
       terminal.abortedAt ??
       2;
     const startedAt = terminal.startedAt;
-    const snippet =
-      outcome === "completed"
-        ? terminal.response ?? "done"
-        : terminal.error ?? `Agent ${outcome}.`;
+    const output = outcome === "completed" ? terminal.response ?? "done" : undefined;
+    const error = outcome === "completed" ? undefined : terminal.error ?? `Agent ${outcome}.`;
     viewStatus = {
       kind: "done",
       outcome,
       completedAt,
+      resumed: terminal.resumed ?? false,
       ...(startedAt !== undefined ? { startedAt } : {}),
-      ...(snippet ? { snippet } : {}),
+      ...(output !== undefined ? { output } : {}),
+      ...(error !== undefined ? { error } : {}),
     };
     if ("session" in terminal) ranSession = terminal.session;
     else if (outcome === "completed" || outcome === "interrupted") ranSession = {};

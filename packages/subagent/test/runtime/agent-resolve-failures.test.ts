@@ -70,7 +70,7 @@ test("Agent.resolve rejects duplicate resume tasks without corrupting the retain
   assert.equal(sessions[0].id, first.sessionId);
   assert.equal(sessions[0].status.kind, "done");
   assert.equal(sessions[0].status.kind === "done" && sessions[0].status.outcome, "completed");
-  assert.equal(sessions[0].status.kind === "done" && sessions[0].status.snippet, "new:first follow-up");
+  assert.equal(sessions[0].status.kind === "done" && sessions[0].status.output, "new:first follow-up");
 });
 
 test("Agent.resolve resume failure for an unknown sessionId yields a per-task error and does not block siblings", async () => {

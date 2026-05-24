@@ -132,7 +132,7 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   assert.equal(retained.config.source, "project");
   assert.equal(retained.config.model, "test/model");
   assert.deepEqual(retained.config.tools, ["read"]);
-  assert.equal(retained.status.snippet, "The final answer from the child.");
+  assert.equal(retained.status.output, "The final answer from the child.");
   assert.equal(retained.dispatch, "foreground");
   assert.equal(retained.retention, "persistent");
 });

@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import type { AgentRunResult } from "../../src/domain/agent-result.js";
+import { toResultJson, type AgentResultJson } from "../../src/domain/agent-result.js";
 import { AgentManager, type AgentRunner, type RunUpdateListener } from "../../src/runtime/agent-manager.js";
 import type { TaskRequest } from "../../src/schema.js";
 
@@ -16,7 +16,10 @@ export function makeManager(
   return new AgentManager(registry, maxRunning, runner);
 }
 
-/** Foreground convenience: starts a run and awaits the results promise. */
+/**
+ * Foreground convenience: starts a run, awaits the terminal snapshots, and projects each
+ * through `toResultJson` — mirroring what the tool layer returns to the model.
+ */
 export function run(
   manager: AgentManager,
   ctx: ExtensionContext,
@@ -24,8 +27,9 @@ export function run(
   tasks: TaskRequest[],
   onUpdate?: RunUpdateListener,
   options: { parentId?: string } = {},
-): Promise<AgentRunResult[]> {
-  return manager.startRun(ctx, signal, tasks, onUpdate, { background: false, ...options }).resultsPromise;
+): Promise<AgentResultJson[]> {
+  return manager.startRun(ctx, signal, tasks, onUpdate, { background: false, ...options })
+    .resultsPromise.then(snapshots => snapshots.map(toResultJson));
 }
 
 export const baseCtx = () => ({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } } as any);

@@ -3,7 +3,7 @@ import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-codi
 import type { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
 import { errorRun, interruptedRun, skippedRun } from "../domain/agent-finalize.js";
-import type { AgentRunResult } from "../domain/agent-result.js";
+import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { DefaultRunAgentDependencies, RunAttempt } from "./run-agent.js";
 import { TaskQueue, type QueueLease } from "./task-queue.js";
 import { timingMark, timingStart } from "./timing.js";
@@ -13,7 +13,7 @@ export type AgentRunner = (
   agent: Agent,
   attempt: Attempt,
   signal?: AbortSignal,
-) => Promise<AgentRunResult>;
+) => Promise<AgentSnapshot>;
 
 export interface AttemptRunnerOptions {
   maxRunning: number;
@@ -79,27 +79,26 @@ export class AttemptRunner {
     signal: AbortSignal | undefined,
     agent: Agent,
     attempt: Attempt,
-  ): Promise<AgentRunResult> {
+  ): Promise<AgentSnapshot> {
     const kind = attempt.kind;
     const resumed = kind === "resume";
     return this._queue.enqueue(async lease => {
       const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId });
-      let result: AgentRunResult;
+      let result: AgentSnapshot;
       let error: string | undefined;
 
       if (signal?.aborted || !this._isTracked(agent.id)) {
         result = skippedRun(agent, resumed);
       } else if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
-        result = agent.status.result;
+        result = agent.snapshot();
       } else {
         this._leases.set(agent.id, lease);
         try {
-          const ran = await this._runner(ctx, agent, attempt, signal);
-          result = resumed && !ran.resumed ? { ...ran, resumed: true } : ran;
+          result = await this._runner(ctx, agent, attempt, signal);
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
-            result = agent.status.result;
+            result = agent.snapshot();
           } else {
             error = message;
             result = signal?.aborted
@@ -111,7 +110,7 @@ export class AttemptRunner {
         }
       }
 
-      end({ status: result.status, error });
+      end({ status: result.status.kind === "done" ? result.status.outcome : result.status.kind, error });
       return result;
     }, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId, kind });
   }

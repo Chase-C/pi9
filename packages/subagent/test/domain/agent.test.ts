@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { Agent, type AgentStatus, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
+import { toResultJson } from "../../src/domain/agent-result.js";
 
 const noop: AgentUpdateListener = () => {};
 const view = (agent: Agent) => agent.snapshot();
@@ -224,13 +225,13 @@ test("Agent.abort on a terminal agent is a no-op and does not re-finalize", asyn
   const session = { messages: [], subscribe: () => () => { }, prompt: async () => { }, abort: () => { abortCalls += 1; } };
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
   agent.attach(session as any);
-  const firstResult = completedRun(agent, "done");
-  doneStatus(agent);
+  completedRun(agent, "done");
+  const settled = doneStatus(agent).result;
 
   await agent.abort();
 
   assert.equal(abortCalls, 0);
-  assert.equal(doneStatus(agent).result, firstResult);
+  assert.equal(doneStatus(agent).result, settled);
 });
 
 test("Agent.resolve spawn for an unknown agent returns a preflight failure with a helpful error", () => {
@@ -248,8 +249,8 @@ test("Agent.resolve spawn for an unknown agent returns a preflight failure with 
 
   assert.equal(result.kind, "failure");
   if (result.kind !== "failure") return;
-  assert.match(result.failure.result.error ?? "", /Unknown agent: missing/);
-  assert.equal(result.failure.view.status.kind, "done");
+  assert.match(toResultJson(result.failure).error ?? "", /Unknown agent: missing/);
+  assert.equal(result.failure.status.kind, "done");
 });
 
 test("Agent.resolve resume rejects sessions that are mid-attempt or non-resumable, leaving the existing attempt intact", () => {
@@ -260,12 +261,12 @@ test("Agent.resolve resume rejects sessions that are mid-attempt or non-resumabl
   // Attempt resume while the original spawn is still queued (mid-attempt) — should fail.
   const midAttempt = resolve({ kind: "resume", sessionId: spawn.agent.id, prompt: "queue jump" });
   assert.equal(midAttempt.kind, "failure");
-  if (midAttempt.kind === "failure") assert.match(midAttempt.failure.result.error ?? "", /already.*resum|while it is/i);
+  if (midAttempt.kind === "failure") assert.match(toResultJson(midAttempt.failure).error ?? "", /already.*resum|while it is/i);
 
   // Unknown session id surfaces a dedicated message.
   const unknown = resolve({ kind: "resume", sessionId: "no-such-id", prompt: "ghost" });
   assert.equal(unknown.kind, "failure");
-  if (unknown.kind === "failure") assert.match(unknown.failure.result.error ?? "", /Unknown resumable subagent session/);
+  if (unknown.kind === "failure") assert.match(toResultJson(unknown.failure).error ?? "", /Unknown resumable subagent session/);
 
   // Original agent is unchanged: still has its original (queued) attempt.
   assert.equal(tracked.length, 1);

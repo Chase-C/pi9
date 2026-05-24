@@ -2,7 +2,8 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import { Agent, type AgentStatus, type AgentUpdateListener } from "../../src/domain/agent.js";
-import { buildAgentResultFor, completedRun, errorRun, interruptedRun } from "../../src/domain/agent-finalize.js";
+import { completedRun, errorRun, interruptedRun } from "../../src/domain/agent-finalize.js";
+import { toResultJson } from "../../src/domain/agent-result.js";
 
 const noop: AgentUpdateListener = () => {};
 
@@ -19,42 +20,40 @@ const baseConfig = {
   resumable: false,
 };
 
-test("AgentRunResult propagates label from agent through completed/error/interrupted runs", () => {
+test("finalize returns a terminal snapshot that projects the agent label across outcomes", () => {
   const labeled = new Agent("id1", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" }, noop);
-  assert.equal(completedRun(labeled, "done").label, "researcher");
+  assert.equal(toResultJson(completedRun(labeled, "done")).label, "researcher");
 
   const labeledErr = new Agent("id2", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" }, noop);
-  assert.equal(errorRun(labeledErr, "fail").label, "researcher");
+  assert.equal(toResultJson(errorRun(labeledErr, "fail")).label, "researcher");
 
   const labeledInt = new Agent("id3", baseConfig, { kind: "spawn", agent: "helper", prompt: "work", label: "researcher" }, noop);
-  assert.equal(interruptedRun(labeledInt, "stop").label, "researcher");
+  assert.equal(toResultJson(interruptedRun(labeledInt, "stop")).label, "researcher");
 
   const unlabeled = new Agent("id4", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
-  const result = completedRun(unlabeled, "done");
+  const result = toResultJson(completedRun(unlabeled, "done"));
   assert.equal(Object.prototype.hasOwnProperty.call(result, "label"), false);
 });
 
-test("AgentRunResult carries parentSessionId when the agent has one and omits it otherwise", () => {
+test("the terminal snapshot carries parentSessionId when the agent has one and omits it otherwise", () => {
   const session = { subscribe: () => () => {}, abort: () => {} };
 
   const child = new Agent("c1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop, { parentId: "root-1" });
   child.attach(session as any);
-  const childResult = completedRun(child, "done");
-  assert.equal(childResult.parentSessionId, "root-1");
+  assert.equal(completedRun(child, "done").parentSessionId, "root-1");
 
   const root = new Agent("r1", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
   root.attach(session as any);
-  const rootResult = completedRun(root, "done");
-  assert.equal(Object.prototype.hasOwnProperty.call(rootResult, "parentSessionId"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(completedRun(root, "done"), "parentSessionId"), false);
 });
 
-test("AgentRunResult resumable reflects the per-task override", () => {
+test("the projected result reflects the per-task resumable override and exposes the sessionId", () => {
   const config = { ...baseConfig, resumable: false };
   const session = { subscribe: () => () => {}, abort: () => {} };
 
   const agent = new Agent("id1", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: true }, noop);
   agent.attach(session as any);
-  const result = completedRun(agent, "done");
+  const result = toResultJson(completedRun(agent, "done"));
 
   assert.equal(result.resumable, true);
   assert.equal(result.sessionId, "id1");
@@ -86,35 +85,12 @@ test("agent transitions through start, finalize, and is idempotent on second fin
   assert.equal(queuedDone.result.error, "failed before start");
 });
 
-test("buildAgentResultFor throws a clear invariant error when no attempt is current", () => {
+test("finalize is idempotent and returns the existing terminal snapshot when already done", () => {
   const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
   agent.attach({ subscribe: () => () => {}, abort: () => {} } as any);
-  completedRun(agent, "done");
+  const first = completedRun(agent, "done");
 
-  assert.throws(() => buildAgentResultFor(agent, { status: "error", error: "late" }), /current attempt/i);
-});
-
-test("buildAgentResult takes a plain context with no Agent dependency", async () => {
-  const { buildAgentResult: buildFromContext } = await import("../../src/domain/agent-result.js");
-  const result = buildFromContext(
-    {
-      sessionId: "sess-1",
-      agentName: "helper",
-      label: "researcher",
-      prompt: "go",
-      model: "anthropic/claude-sonnet-4",
-      parentSessionId: "parent-1",
-      resumable: true,
-    },
-    { status: "completed", output: "yay" },
-  );
-  assert.equal(result.agent, "helper");
-  assert.equal(result.label, "researcher");
-  assert.equal(result.prompt, "go");
-  assert.equal(result.model, "anthropic/claude-sonnet-4");
-  assert.equal(result.parentSessionId, "parent-1");
-  assert.equal(result.resumable, true);
-  assert.equal(result.sessionId, "sess-1");
-  assert.equal(result.output, "yay");
-  assert.equal(result.status, "completed");
+  const second = errorRun(agent, "late");
+  assert.equal(second.status.kind === "done" && second.status.outcome, "completed");
+  assert.equal(toResultJson(second).output, toResultJson(first).output);
 });

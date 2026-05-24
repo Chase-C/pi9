@@ -15,7 +15,6 @@ export {
   type RemoveSummary,
   type RemoveSummaryDetails,
   type RunDetails,
-  type RunOutcome,
   type RunResultsDetails,
   type SubagentDetails,
 } from "./details.js";

@@ -2,6 +2,7 @@ import type { AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
+import { toResultJson } from "../domain/agent-result.js";
 import type { AgentManager, RunUpdate } from "../runtime/agent-manager.js";
 import { timingMark, timingStart, timingSync } from "../runtime/timing.js";
 import {
@@ -22,7 +23,6 @@ import {
   inventoryDetails,
   runDetails,
   runResultsDetails,
-  type RunOutcome,
 } from "../view/format.js";
 import { listAgentDefinitions, serializeGroup } from "../view/serialize.js";
 
@@ -159,17 +159,8 @@ export async function runAction(
     : await handle.resultsPromise;
   runEnd({ ok: true, resultCount: results.length });
   timingSync("tool.finalWidget", { sessionCount: deps.agentManager.listSessions().length }, () => updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings()));
-  const isError = results.some(result => result.status !== "completed");
-  const outcomes: RunOutcome[] = results.map((result, inputIndex) => ({
-    inputIndex,
-    agent: result.agent,
-    status: result.status,
-    ...(result.label !== undefined ? { label: result.label } : {}),
-    ...(result.sessionId !== undefined ? { sessionId: result.sessionId } : {}),
-    ...(result.output !== undefined ? { output: result.output } : {}),
-    ...(result.error !== undefined ? { error: result.error } : {}),
-    ...(result.resumed ? { resumed: true } : {}),
-  }));
+  const outcomes = results.map(toResultJson);
+  const isError = outcomes.some(outcome => outcome.status !== "completed");
   return toolResult(runResultsDetails(outcomes, isError), isError);
 }
 
