@@ -250,18 +250,22 @@ test("Agent.resolve spawn for an unknown agent returns a preflight failure with 
   assert.equal(result.kind, "failure");
   if (result.kind !== "failure") return;
   assert.match(toResultJson(result.failure).error ?? "", /Unknown agent: missing/);
+  assert.equal(result.failure.config.source, undefined);
   assert.equal(result.failure.status.kind, "done");
 });
 
 test("Agent.resolve resume rejects sessions that are mid-attempt or non-resumable, leaving the existing attempt intact", () => {
-  const { resolve, tracked } = resolveScenario({ config: { ...baseConfig, resumable: true } });
+  const { resolve, tracked } = resolveScenario({ config: { ...baseConfig, source: "user", resumable: true } });
   const spawn = resolve({ kind: "spawn", agent: "helper", prompt: "work" });
   if (spawn.kind !== "spawn") throw new Error("expected spawn");
 
   // Attempt resume while the original spawn is still queued (mid-attempt) — should fail.
   const midAttempt = resolve({ kind: "resume", sessionId: spawn.agent.id, prompt: "queue jump" });
   assert.equal(midAttempt.kind, "failure");
-  if (midAttempt.kind === "failure") assert.match(toResultJson(midAttempt.failure).error ?? "", /already.*resum|while it is/i);
+  if (midAttempt.kind === "failure") {
+    assert.match(toResultJson(midAttempt.failure).error ?? "", /already.*resum|while it is/i);
+    assert.equal(midAttempt.failure.config.source, "user");
+  }
 
   // Unknown session id surfaces a dedicated message.
   const unknown = resolve({ kind: "resume", sessionId: "no-such-id", prompt: "ghost" });

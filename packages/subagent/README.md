@@ -196,7 +196,7 @@ type BackgroundResult =
   | { sessionId: string; error: string };
 ```
 
-- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return the same projected result as `action: "run"` (the `results[]` shape above, including `turns`, `tokens`, and `elapsedMs`) under `{ ready: true, result }` — both are projected from the terminal snapshot by the one `toResultJson` projection.
+- Terminal entries (`completed`, `error`, `aborted`, `interrupted`, `skipped`, plus resume failures) return the same projected result as `action: "run"` (the `outcomes[]` shape below, including `turns`, `tokens`, and `elapsedMs`) under `{ ready: true, result }` — both are projected from the terminal snapshot by the one `toResultJson` projection.
 - Queued/running entries return `{ ready: false, status, elapsedMs, agent, label? }`. `elapsedMs` is measured from when the child started (running) or from when the current attempt was queued (queued).
 - Unknown ids return `{ sessionId, error: "Unknown subagent session: <id>" }`. The overall response stays `isError: false` — partial-success is success.
 - `remove: true` sweeps terminal entries after their result is collected. Running entries are never removed regardless of the flag. A subsequent `results` call for a swept id returns the unknown-id error.
@@ -379,14 +379,15 @@ The core `subagent` tool works in non-interactive modes and still returns struct
 
 ## Results
 
-Tool results preserve input order and are returned in both text content (JSON) and `details.results`:
+Tool results preserve input order and are returned in both text content (JSON) and `details.outcomes`:
 
 Each result is projected from the task's terminal snapshot — the done-state snapshot is the
-single source of truth, and `details.results` is its model-facing view.
+single source of truth, and `details.outcomes` is its model-facing view.
 
 ```ts
 {
-  results: [
+  view: "run-results",
+  outcomes: [
     {
       agent: "scout",
       label: "frontend auth",
@@ -426,7 +427,7 @@ single source of truth, and `details.results` is its model-facing view.
       elapsedMs: 0
     }
   ],
-  group: { /* live/final grouped UI DTO */ }
+  isError: false
 }
 ```
 

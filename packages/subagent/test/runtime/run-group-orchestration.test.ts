@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { toResultJson } from "../../src/domain/agent-result.js";
+import { backgroundStartedDetails } from "../../src/view/format.js";
 import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
 
 test("orchestrator returns ordered per-run output and reports unknown agents and child failures", async () => {
@@ -157,7 +158,7 @@ test("orchestrator.startBatch background:true surfaces preflight failures as tra
     baseCtx(),
     undefined,
     [
-      { kind: "spawn", agent: "missing", prompt: "unknown agent" },
+      { kind: "spawn", agent: "missing", prompt: "unknown agent", resumable: true },
       { kind: "resume", sessionId: "missing-session", prompt: "bad resume" },
     ],
     undefined,
@@ -166,6 +167,7 @@ test("orchestrator.startBatch background:true surfaces preflight failures as tra
 
   assert.deepEqual(batch.sessions.map(s => s.dispatch), ["background", "background"]);
   assert.deepEqual(batch.sessions.map(s => s.retention), ["transient", "transient"]);
+  assert.deepEqual(backgroundStartedDetails(batch.sessions).handles, []);
 
   const results = (await batch.resultsPromise).map(toResultJson);
   assert.deepEqual(results.map(r => r.status), ["error", "error"]);

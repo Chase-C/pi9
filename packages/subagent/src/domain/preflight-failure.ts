@@ -41,11 +41,11 @@ export function preflightFailure(
 
   // Preflight rows are per-run and never retained, even under a background batch; the factory's
   // background-implies-persistent rule doesn't apply here.
-  const retention: AgentRetention = task.resumable ? "persistent" : "transient";
+  const retention: AgentRetention = "transient";
   const snapshot: AgentSnapshot = { ...agent.snapshot({ inputIndex }), retention };
   // A throwaway Agent has no retained session, so its `resumable` is always false; reflect the
   // live target's resumability instead so the result/row match the session being resumed.
-  if (!target) return snapshot;
+  if (!target) return { ...snapshot, config: { ...snapshot.config, source: undefined } };
   return { ...snapshot, config: { ...snapshot.config, resumable: target.resumable } };
 }
 
