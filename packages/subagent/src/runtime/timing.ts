@@ -6,13 +6,8 @@ export type TimingData = Record<string, unknown>;
 const START = performance.now();
 const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
-export function timingEnabled(): boolean {
+function timingEnabled(): boolean {
   return ENABLED_VALUES.has((process.env.PI_SUBAGENT_DEBUG_TIMING ?? "").toLowerCase());
-}
-
-export function timingMark(event: string, data: TimingData = {}) {
-  if (!timingEnabled()) return;
-  emit(event, data);
 }
 
 export function timingStart(event: string, data: TimingData = {}) {
@@ -28,19 +23,6 @@ export async function timingAsync<T>(event: string, data: TimingData, fn: () => 
   const end = timingStart(event, data);
   try {
     const result = await fn();
-    end({ ok: true });
-    return result;
-  } catch (error) {
-    end({ ok: false, error: error instanceof Error ? error.message : String(error) });
-    throw error;
-  }
-}
-
-export function timingSync<T>(event: string, data: TimingData, fn: () => T): T {
-  if (!timingEnabled()) return fn();
-  const end = timingStart(event, data);
-  try {
-    const result = fn();
     end({ ok: true });
     return result;
   } catch (error) {

@@ -1,6 +1,6 @@
 import type { Agent, AgentUpdateKind } from "../domain/agent.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
-import { timingStart, timingSync } from "./timing.js";
+import { timingStart } from "./timing.js";
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
 const ANIMATION_UPDATE_INTERVAL_MS = 120;
@@ -135,9 +135,7 @@ export class RunGroup {
     const sessions = this.rootSessions();
     const tree = this.tree();
     const active = tree.some(s => s.status.kind === "queued" || s.status.kind === "running");
-    timingSync("manager.listener", { groupId: this.opts.groupId, sessionCount: sessions.length, treeCount: tree.length, active }, () => {
-      this.opts.onUpdate?.({ sessions, tree, active });
-    });
+    this.opts.onUpdate?.({ sessions, tree, active });
     this.scheduleAnimationUpdate(active);
     end({ active, sessionCount: sessions.length, treeCount: tree.length });
   }

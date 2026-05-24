@@ -1,5 +1,8 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
 import { toResultJson } from "../../src/domain/agent-result.js";
@@ -1280,4 +1283,38 @@ test("RunHandle.tree orders siblings by createdAt and multiple roots by input or
 
   release();
   await Promise.all([handle.resultsPromise, childA1.resultsPromise, childA2.resultsPromise]);
+});
+
+test("a foreground run emits the run-attempt, queue, and run-update spans when timing is enabled", async () => {
+  const savedTiming = process.env.PI_SUBAGENT_DEBUG_TIMING;
+  const savedTimingFile = process.env.PI_SUBAGENT_DEBUG_TIMING_FILE;
+  const root = await mkdtemp(join(tmpdir(), "subagent-manager-timing-"));
+  const logFile = join(root, "timing.log");
+  process.env.PI_SUBAGENT_DEBUG_TIMING = "1";
+  process.env.PI_SUBAGENT_DEBUG_TIMING_FILE = logFile;
+  try {
+    const runner = async (_ctx: any, agent: any) => {
+      agent.attach(makeSession());
+      return completedRun(agent, "ok");
+    };
+    const registry = {
+      agents: new Map([["good", { name: "good", description: "", systemPrompt: "", source: "project", resumable: false }]]),
+    };
+    const manager = makeManager(registry as any, 1, runner);
+
+    await manager
+      .startRun(baseCtx(), undefined, [{ kind: "spawn", agent: "good", prompt: "go" }], () => {}, { background: false })
+      .resultsPromise;
+
+    const log = await readFile(logFile, "utf8");
+    assert.match(log, /event=manager\.spawnTask\b/);
+    assert.match(log, /event=queue\.task\b/);
+    assert.match(log, /event=manager\.emitRunUpdate\b/);
+  } finally {
+    if (savedTiming === undefined) delete process.env.PI_SUBAGENT_DEBUG_TIMING;
+    else process.env.PI_SUBAGENT_DEBUG_TIMING = savedTiming;
+    if (savedTimingFile === undefined) delete process.env.PI_SUBAGENT_DEBUG_TIMING_FILE;
+    else process.env.PI_SUBAGENT_DEBUG_TIMING_FILE = savedTimingFile;
+    await rm(root, { recursive: true, force: true });
+  }
 });

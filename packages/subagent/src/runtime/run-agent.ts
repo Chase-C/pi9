@@ -19,7 +19,7 @@ import {
 import { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
 import { ExtensionFactoryCache } from "./extension-factory-cache.js";
-import { timingAsync, timingMark, timingSync } from "./timing.js";
+import { timingAsync } from "./timing.js";
 import { completedRun, errorRun, interruptedRun, skippedRun } from "../domain/agent-finalize.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 
@@ -63,50 +63,38 @@ export async function RunAttempt(
     if (!session) {
       throw new Error(`Cannot resume an agent without a retained session.`);
     }
-    timingSync("resumeAgent.attach", { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId }, () => agent.attach(session));
+    agent.attach(session);
     return PromptAgent(session, agent, attempt, signal, true);
   }
 
   if (signal?.aborted) return skippedRun(agent);
 
   const runData = { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId };
-  timingMark("runAgent.start", { ...runData, cwd: ctx.cwd, taskCwd: agent.spawn.cwd, background: agent.background });
-  const cwd = timingSync("runAgent.resolveCwd", runData, () => ResolveTaskCwd(ctx.cwd, agent.spawn.cwd));
-  const agentDir = timingSync("runAgent.getAgentDir", runData, () => dependencies.getAgentDir());
+  const cwd = ResolveTaskCwd(ctx.cwd, agent.spawn.cwd);
+  const agentDir = dependencies.getAgentDir();
 
   const requestedSkills = agent.spawn.skills ?? agent.config.skills ?? [];
   let systemPrompt = agent.config.systemPrompt;
   if (requestedSkills.length > 0) {
-    const { skills: available } = timingSync("runAgent.loadSkills", { ...runData, cwd, requestedSkillCount: requestedSkills.length }, () => dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true }));
+    const { skills: available } = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true });
     const matched: Skill[] = [];
-    const missingSkill = timingSync("runAgent.matchSkills", { ...runData, availableSkillCount: available.length, requestedSkillCount: requestedSkills.length }, () => {
-      for (const name of requestedSkills) {
-        const found = available.find(skill => skill.name === name);
-        if (!found) return name;
-        matched.push({ ...found, disableModelInvocation: false });
-      }
-      return undefined;
-    });
+    let missingSkill: string | undefined;
+    for (const name of requestedSkills) {
+      const found = available.find(skill => skill.name === name);
+      if (!found) { missingSkill = name; break; }
+      matched.push({ ...found, disableModelInvocation: false });
+    }
     if (missingSkill) return errorRun(agent, `Unknown skill: ${missingSkill}`);
-    const skillBlock = timingSync("runAgent.formatSkills", { ...runData, matchedSkillCount: matched.length }, () => formatSkillsForPrompt(matched));
+    const skillBlock = formatSkillsForPrompt(matched);
     if (skillBlock) systemPrompt = `${systemPrompt}\n\n${skillBlock}`;
   }
 
-  const { factories, fallbackPaths } = await timingAsync(
-    "runAgent.extensionFactoryCache.load",
-    { ...runData, cwd, agentDir },
-    () => dependencies.extensionFactoryCache.load(cwd, agentDir),
-  );
-  timingMark("runAgent.extensionFactoryCache.summary", {
-    ...runData,
-    factoryCount: factories.length,
-    fallbackCount: fallbackPaths.length,
-  });
+  const { factories, fallbackPaths } = await dependencies.extensionFactoryCache.load(cwd, agentDir);
 
   const childFactory = dependencies.childFactoryFor?.(agent);
   const allFactories: ExtensionFactory[] = childFactory ? [childFactory, ...factories] : factories;
 
-  const resourceLoader = timingSync("runAgent.newResourceLoader", { ...runData, cwd }, () => new dependencies.ResourceLoader({
+  const resourceLoader = new dependencies.ResourceLoader({
     cwd,
     agentDir,
     noExtensions: true,
@@ -118,14 +106,14 @@ export async function RunAttempt(
     noContextFiles: true,
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
-  }));
+  });
 
   await timingAsync("runAgent.resourceLoader.reload", { ...runData, cwd }, () => resourceLoader.reload());
   if (signal?.aborted) return skippedRun(agent);
 
-  const selectedModel = timingSync("runAgent.selectModel", { ...runData, requestedModel: agent.spawn.model ?? agent.config.model }, () => SelectModel(agent.spawn.model ?? agent.config.model, ctx.model, ctx.modelRegistry));
-  const sessionManager = timingSync("runAgent.sessionManager", { ...runData, cwd }, () => dependencies.sessionManager(cwd));
-  const settingsManager = timingSync("runAgent.settingsManager", { ...runData, cwd }, () => dependencies.settingsManager(cwd, agentDir));
+  const selectedModel = SelectModel(agent.spawn.model ?? agent.config.model, ctx.model, ctx.modelRegistry);
+  const sessionManager = dependencies.sessionManager(cwd);
+  const settingsManager = dependencies.settingsManager(cwd, agentDir);
   const { session } = await timingAsync("runAgent.createAgentSession", { ...runData, cwd, model: selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : undefined }, () => dependencies.createAgentSession({
     cwd,
     agentDir,
@@ -143,7 +131,7 @@ export async function RunAttempt(
     return skippedRun(agent);
   }
 
-  timingSync("runAgent.attach", runData, () => agent.attach(session));
+  agent.attach(session);
   return PromptAgent(session, agent, attempt, signal);
 }
 

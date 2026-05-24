@@ -8,7 +8,6 @@ import { Attempt } from "./agent-attempt.js";
 import type { AgentOutcome } from "./agent-result.js";
 import type { AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
-import { timingMark } from "../runtime/timing.js";
 import { preflightFailure } from "./preflight-failure.js";
 import { AgentRegistry } from "./agent-registry.js";
 
@@ -240,12 +239,8 @@ export class Agent {
 
   async abort(reason?: string): Promise<void> {
     const current = this._current;
-    if (!current) {
-      timingMark("agent.abort.noop", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, reason });
-      return;
-    }
+    if (!current) return;
     const resumed = current.kind === "resume";
-    timingMark("agent.abort.invoke", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, currentStateKind: current.state.kind, attemptKind: current.kind, reason });
     if (current.state.kind === "running") {
       const session = current.state.session;
       await Promise.resolve(session.abort()).catch(() => undefined);
@@ -263,7 +258,6 @@ export class Agent {
     if (!current || current.state.kind !== "queued") {
       throw new Error(`Cannot attach a session to an agent that is ${this._describe()}.`);
     }
-    timingMark("agent.attach", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, attemptKind: current.kind });
     this._unsubscribe = this._activity.subscribe(session);
     current.attach(session);
     if (current.resumableOverride !== undefined) {
@@ -280,7 +274,6 @@ export class Agent {
   settle(outcome: AgentOutcome): AgentSnapshot {
     const current = this._current;
     if (!current) return this.snapshot();
-    timingMark("agent.settle", { sessionId: this.id, agent: this.agentName, parentSessionId: this.parentId, outcome: outcome.status, attemptKind: current.kind });
     this._finishSubscription();
     current.settle(outcome);
     this._lastAttempt = current;

@@ -3,7 +3,6 @@ import { Text } from "@earendil-works/pi-tui";
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
-import { timingMark } from "../runtime/timing.js";
 import { SubagentParams } from "../schema.js";
 import type { SubagentSettings } from "../config/settings.js";
 import { createSubagentTextComponent, type SubagentDetails } from "../view/format.js";
@@ -101,7 +100,6 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     },
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      timingMark("tool.execute.start", { action: params.action, taskCount: Array.isArray(params.tasks) ? params.tasks.length : undefined, cwd: ctx.cwd, isChild: parentSessionId !== undefined });
       const settings = await prepareInvocation(ctx);
 
       if (!params.action) {

@@ -10,7 +10,7 @@ import { AgentRegistry } from "../domain/agent-registry.js";
 import type { SessionStatus, TaskRequest } from "../schema.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
 import { RunGroup, type RunUpdateListener } from "./run-group.js";
-import { timingMark, timingStart } from "./timing.js";
+import { timingStart } from "./timing.js";
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
 export type { AgentRunner } from "./attempt-runner.js";
@@ -90,9 +90,7 @@ export class AgentManager {
       .filter(a => a.parentId === parentSessionId)
       .filter(a => !(skipBackground && a.background));
 
-    timingMark("manager.cancelDescendants.walk", { parentSessionId, childrenToCancel: toCancel.length, skipBackground, reason });
     for (const child of toCancel) {
-      timingMark("manager.cancelDescendants.child", { parentSessionId, childId: child.id, agent: child.agentName, statusKind: child.status.kind, background: child.background });
       await this.cancelDescendantsOf(child.id, options);
       await child.abort(reason);
     }
@@ -172,7 +170,6 @@ export class AgentManager {
   ): RunHandle {
     const groupId = randomUUID();
     const createdAt = Date.now();
-    timingMark("manager.run.start", { groupId, taskCount: tasks.length, background: options.background, parentSessionId: options.parentId });
 
     const group = new RunGroup({ groupId, onUpdate, walkTree: ids => this._walkTree(ids) });
     this._groups.set(groupId, group);
@@ -192,10 +189,6 @@ export class AgentManager {
 
       if (result.kind === "failure") {
         group.addStaticView(result.failure, inputIndex, resumed);
-        timingMark("manager.task.preflightFailure", {
-          groupId, inputIndex, parentId,
-          ...(("agent" in task) ? { agent: task.agent } : { sessionId: task.sessionId }),
-        });
         return Promise.resolve(result.failure);
       }
 
@@ -204,22 +197,15 @@ export class AgentManager {
       }
 
       group.addAgent(result.agent, inputIndex, resumed);
-      timingMark("manager.task.agentReady", { groupId, inputIndex, task, sessionId: result.agent.id, parentId, background });
       touched.add(result.agent.id);
       return this._runner.run(ctx, childSignal, result.agent, result.agent.requireCurrentAttempt());
     });
 
-    timingMark("manager.initialEmit.before", { groupId, entries: group.entryCount });
     group.emit();
-    timingMark("manager.initialEmit.after", { groupId });
 
     // Capture the initial root sessions so the handle.sessions field is stable.
     const initialSessions = group.rootSessions();
     const resultsPromise = Promise.all(results)
-      .then(results => {
-        timingMark("manager.run.results", { groupId, resultCount: results.length });
-        return results;
-      })
       .finally(() => {
         this._agents = this._agents.filter(
           agent => !touched.has(agent.id)
@@ -280,15 +266,6 @@ export class AgentManager {
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
     const status = agent.status;
-    timingMark("manager.agentUpdate", {
-      sessionId: agent.id,
-      agent: agent.agentName,
-      parentSessionId: agent.parentId,
-      kind,
-      statusKind: status.kind,
-      ...(status.kind === "done" ? { outcome: status.result.status } : {}),
-      background: agent.background,
-    });
 
     for (const listener of this._updateListeners) listener(agent, kind);
     for (const group of this._groups.values()) group.handleAgentUpdate(agent.id, kind);

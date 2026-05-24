@@ -322,7 +322,7 @@ test("run-agent explicit empty per-task skills opts out of agent-frontmatter def
   assert.equal(loadSkillsCalls, 0, "should not load skills when the task explicitly opted out");
 });
 
-test("emits cache-load and resource-loader timing events with factory and fallback counts", async () => {
+test("emits coarse async spans for an attempt but no per-step sync narration when timing is enabled", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-timing-"));
   const logFile = join(root, "timing.log");
   process.env.PI_SUBAGENT_DEBUG_TIMING = "1";
@@ -340,10 +340,21 @@ test("emits cache-load and resource-loader timing events with factory and fallba
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   const log = await readFile(logFile, "utf8");
-  assert.match(log, /event=runAgent\.extensionFactoryCache\.load\b/);
-  assert.match(log, /event=runAgent\.extensionFactoryCache\.summary\b[^\n]*factoryCount=1\b/);
-  assert.match(log, /event=runAgent\.extensionFactoryCache\.summary\b[^\n]*fallbackCount=1\b/);
+  // The retained spans wrap the genuinely variable-cost async work of an attempt.
   assert.match(log, /event=runAgent\.resourceLoader\.reload\b/);
+  assert.match(log, /event=runAgent\.createAgentSession\b/);
+  assert.match(log, /event=runAgent\.session\.prompt\b/);
+  // The per-step sync narration and result-summary marks are dropped.
+  for (const dropped of [
+    "runAgent.start",
+    "runAgent.resolveCwd",
+    "runAgent.selectModel",
+    "runAgent.newResourceLoader",
+    "runAgent.extensionFactoryCache.load",
+    "runAgent.extensionFactoryCache.summary",
+  ]) {
+    assert.doesNotMatch(log, new RegExp(`event=${dropped.replace(/\./g, "\\.")}\\b`), `unexpected event ${dropped}`);
+  }
   await rm(logFile, { force: true });
 });
 

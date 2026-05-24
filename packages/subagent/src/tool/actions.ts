@@ -4,7 +4,7 @@ import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { toResultJson, type BackgroundResult } from "../domain/agent-result.js";
 import type { AgentManager, RunUpdate } from "../runtime/agent-manager.js";
-import { timingMark, timingStart, timingSync } from "../runtime/timing.js";
+import { timingStart } from "../runtime/timing.js";
 import {
   isSessionStatus,
   parseTask,
@@ -121,12 +121,10 @@ export async function runAction(
 
   const parsed: TaskRequest[] = [];
   const errors: string[] = [];
-  timingSync("tool.parseTasks", { taskCount: params.tasks?.length ?? 0 }, () => {
-    params.tasks?.forEach((raw, index) => {
-      const result = parseTask(raw);
-      if ("error" in result) errors.push(`task[${index}]: ${result.error}`);
-      else parsed.push(result);
-    });
+  params.tasks?.forEach((raw, index) => {
+    const result = parseTask(raw);
+    if ("error" in result) errors.push(`task[${index}]: ${result.error}`);
+    else parsed.push(result);
   });
 
   if (errors.length > 0) return errorResult(errors.join("\n"), { errors });
@@ -146,19 +144,16 @@ export async function runAction(
 
   const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length, isChild: deps.parentSessionId !== undefined });
   const emitPartial = (update: RunUpdate) => {
-    const partial = timingSync("tool.update.partialToolResult", { sessionCount: update.sessions.length, treeCount: update.tree.length }, () => partialToolResult(update, deps.getCurrentSettings().display));
-    timingSync("tool.update.onUpdate", { textLength: partial.content[0]?.text.length ?? 0 }, () => { onUpdate?.(partial); });
-    timingSync("tool.update.widget", { sessionCount: update.sessions.length, treeCount: update.tree.length }, () => updateSubagentWidget(ctx, widgetAgents(update), deps.getCurrentSettings()));
+    const partial = partialToolResult(update, deps.getCurrentSettings().display);
+    onUpdate?.(partial);
+    updateSubagentWidget(ctx, widgetAgents(update), deps.getCurrentSettings());
   };
-  const handle = deps.agentManager.startRun(ctx, signal, parsed, update => {
-    timingMark("tool.update.received", { sessionCount: update.sessions.length, treeCount: update.tree.length, active: update.active });
-    emitPartial(update);
-  }, startOptions);
+  const handle = deps.agentManager.startRun(ctx, signal, parsed, emitPartial, startOptions);
   const settled = deps.parentSessionId !== undefined
     ? await deps.agentManager.runner.suspendAgentSlotDuring(deps.parentSessionId, () => handle.resultsPromise)
     : await handle.resultsPromise;
   runEnd({ ok: true, resultCount: settled.length });
-  timingSync("tool.finalWidget", { sessionCount: deps.agentManager.listSessions().length }, () => updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings()));
+  updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
   // The terminal snapshot is the result: each settled run is a ready entry, the same shape a
   // background poll yields, so both feed the one `results` renderer.
   const entries: BackgroundResult[] = settled.map((snapshot): BackgroundResult => {

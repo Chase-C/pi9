@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { DefaultPackageManager, SettingsManager, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
 
-import { timingMark, timingStart } from "./timing.js";
+import { timingStart } from "./timing.js";
 
 export type ExtensionFactoryImport = (path: string) => Promise<ExtensionFactory | undefined>;
 export type ExtensionPathDiscovery = (cwd: string, agentDir: string) => Promise<string[]>;
@@ -60,43 +60,29 @@ export class ExtensionFactoryCache {
     const factories: ExtensionFactory[] = [];
     const fallbackPaths: string[] = [];
     if (this.bypass) {
-      for (const entry of paths) timingMark("extensionFactoryCache.fallbackOnBypass", { path: entry });
       return { factories, fallbackPaths: paths };
     }
     for (const entry of paths) {
       const meta = await statMeta(entry);
-      if (!meta) {
-        timingMark("extensionFactoryCache.skip", { path: entry, reason: "statFailed" });
-        continue;
-      }
+      if (!meta) continue;
       const cached = this.entries.get(entry);
       if (cached && cached.mtimeMs === meta.mtimeMs && cached.size === meta.size) {
-        timingMark("extensionFactoryCache.hit", { path: entry, kind: cached.kind });
         if (cached.kind === "factory") factories.push(cached.factory);
         else fallbackPaths.push(entry);
         continue;
       }
-      if (cached) timingMark("extensionFactoryCache.invalidate", { path: entry });
-      timingMark("extensionFactoryCache.miss", { path: entry });
       const endImport = timingStart("extensionFactoryCache.import", { path: entry });
       let factory: ExtensionFactory | undefined;
-      let failureReason: "threw" | "noFactory" | undefined;
       try {
         factory = await this.importFactory(entry);
         endImport({ ok: true, hasFactory: factory !== undefined });
-        if (!factory) failureReason = "noFactory";
       } catch (error) {
-        failureReason = "threw";
         endImport({ ok: false, error: error instanceof Error ? error.message : String(error) });
       }
       if (factory) {
         this.entries.set(entry, { kind: "factory", ...meta, factory });
         factories.push(factory);
       } else {
-        if (failureReason === "noFactory") {
-          timingMark("extensionFactoryCache.invalidModule", { path: entry, reason: failureReason });
-        }
-        timingMark("extensionFactoryCache.fallbackOnError", { path: entry, reason: failureReason });
         this.entries.set(entry, { kind: "fallback", ...meta });
         fallbackPaths.push(entry);
       }

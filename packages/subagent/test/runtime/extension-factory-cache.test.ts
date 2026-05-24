@@ -54,7 +54,7 @@ test("uses injected discovery paths when loading factories", async () => {
   assert.deepEqual(result.fallbackPaths, []);
 });
 
-test("emits timing instrumentation events when PI_SUBAGENT_DEBUG_TIMING is enabled", async () => {
+test("emits coarse discover and import spans but no per-entry marks when PI_SUBAGENT_DEBUG_TIMING is enabled", async () => {
   const { root, agentDir, cwd } = await makeWorkspace();
   const logFile = join(root, "timing.log");
   process.env.PI_SUBAGENT_DEBUG_TIMING = "1";
@@ -93,9 +93,11 @@ test("emits timing instrumentation events when PI_SUBAGENT_DEBUG_TIMING is enabl
   await bypassCache.load(cwd, agentDir);  // fallback-on-bypass
 
   const log = await readFile(logFile, "utf8");
-  const expected = [
-    "extensionFactoryCache.discover",
-    "extensionFactoryCache.import",
+  // The instrumentation is thinned to the two coarse, variable-cost spans.
+  assert.match(log, /event=extensionFactoryCache\.discover\b/);
+  assert.match(log, /event=extensionFactoryCache\.import\b/);
+  // The per-entry control-flow marks are dropped.
+  for (const dropped of [
     "extensionFactoryCache.hit",
     "extensionFactoryCache.miss",
     "extensionFactoryCache.fallbackOnError",
@@ -103,9 +105,8 @@ test("emits timing instrumentation events when PI_SUBAGENT_DEBUG_TIMING is enabl
     "extensionFactoryCache.invalidate",
     "extensionFactoryCache.invalidModule",
     "extensionFactoryCache.skip",
-  ];
-  for (const event of expected) {
-    assert.match(log, new RegExp(`event=${event}\\b`), `missing event ${event}`);
+  ]) {
+    assert.doesNotMatch(log, new RegExp(`event=${dropped}\\b`), `unexpected event ${dropped}`);
   }
   void calls;
   await rm(logFile, { force: true });

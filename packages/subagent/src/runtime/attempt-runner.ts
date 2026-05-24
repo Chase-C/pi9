@@ -6,7 +6,7 @@ import { errorRun, interruptedRun, skippedRun } from "../domain/agent-finalize.j
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { DefaultRunAgentDependencies, RunAttempt } from "./run-agent.js";
 import { TaskQueue, type QueueLease } from "./task-queue.js";
-import { timingMark, timingStart } from "./timing.js";
+import { timingStart } from "./timing.js";
 
 export type AgentRunner = (
   ctx: ExtensionContext,
@@ -62,10 +62,7 @@ export class AttemptRunner {
    */
   async suspendAgentSlotDuring<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
     const lease = this._leases.get(sessionId);
-    if (!lease) {
-      timingMark("manager.suspendAgentSlot.skip", { sessionId, reason: "no-active-lease" });
-      return fn();
-    }
+    if (!lease) return fn();
     const end = timingStart("manager.suspendAgentSlot", { sessionId });
     try {
       return await lease.suspendDuring(fn);
