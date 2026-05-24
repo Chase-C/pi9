@@ -1,10 +1,10 @@
 import type { Agent } from "./agent.js";
 import type { AgentRunResult } from "./agent-result.js";
-import type { AgentView, AgentViewConfig } from "./agent-view.js";
+import type { AgentSnapshot, AgentViewConfig } from "./agent-snapshot.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 
 export interface PreflightFailure {
-  view: AgentView;
+  view: AgentSnapshot;
   result: AgentRunResult;
 }
 

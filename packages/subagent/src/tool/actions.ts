@@ -1,7 +1,7 @@
 import type { AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
-import type { AgentView } from "../domain/agent-view.js";
+import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { AgentManager, RunUpdate } from "../runtime/agent-manager.js";
 import { timingMark, timingStart, timingSync } from "../runtime/timing.js";
 import {
@@ -173,12 +173,12 @@ export async function runAction(
   return toolResult(runResultsDetails(outcomes, isError), isError);
 }
 
-function widgetAgents(update: RunUpdate): AgentView[] {
+function widgetAgents(update: RunUpdate): AgentSnapshot[] {
   return update.tree.length > 0 ? update.tree : update.sessions;
 }
 
 function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings): { content: { type: "text"; text: string }[]; details: unknown } {
-  const subtree: AgentView[] = update.tree.length > update.sessions.length ? update.tree : [];
+  const subtree: AgentSnapshot[] = update.tree.length > update.sessions.length ? update.tree : [];
   const details = runDetails(serializeGroup(update.sessions), {
     active: update.active,
     ...(subtree.length > 0 ? { subtree: update.tree } : {}),

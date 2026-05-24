@@ -1,6 +1,5 @@
-import type { Agent } from "../domain/agent.js";
-import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
-import { projectAgentView } from "../view/project-agent-view.js";
+import type { Agent, AgentUpdateKind } from "../domain/agent.js";
+import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { timingStart, timingSync } from "./timing.js";
 
 const MESSAGE_UPDATE_THROTTLE_MS = 100;
@@ -8,9 +7,9 @@ const ANIMATION_UPDATE_INTERVAL_MS = 120;
 
 export interface RunUpdate {
   /** Root sessions in input order. */
-  sessions: AgentView[];
+  sessions: AgentSnapshot[];
   /** Roots followed by every descendant currently reachable from a root, in pre-order. */
-  tree: AgentView[];
+  tree: AgentSnapshot[];
   active: boolean;
 }
 
@@ -18,7 +17,7 @@ export type RunUpdateListener = (update: RunUpdate) => void;
 
 type Entry =
   | { kind: "agent"; inputIndex: number; resumed: boolean; agent: Agent }
-  | { kind: "static"; inputIndex: number; resumed: boolean; view: AgentView };
+  | { kind: "static"; inputIndex: number; resumed: boolean; view: AgentSnapshot };
 
 export interface RunGroupOptions {
   groupId: string;
@@ -28,7 +27,7 @@ export interface RunGroupOptions {
    * Provided by the manager so the group can compute progress views without owning
    * the agent catalog itself.
    */
-  walkTree: (rootIds: string[]) => AgentView[];
+  walkTree: (rootIds: string[]) => AgentSnapshot[];
 }
 
 /**
@@ -56,7 +55,7 @@ export class RunGroup {
     this._refreshTreeIds();
   }
 
-  addStaticView(view: AgentView, inputIndex: number, resumed: boolean): void {
+  addStaticView(view: AgentSnapshot, inputIndex: number, resumed: boolean): void {
     this._entries.push({ kind: "static", inputIndex, resumed, view });
   }
 
@@ -66,13 +65,13 @@ export class RunGroup {
   }
 
   /** Root sessions in input order. */
-  rootSessions(): AgentView[] {
+  rootSessions(): AgentSnapshot[] {
     return this._sortedEntries().map(entry => this._project(entry));
   }
 
   /** Roots followed by every descendant, in pre-order. */
-  tree(): AgentView[] {
-    const out: AgentView[] = [];
+  tree(): AgentSnapshot[] {
+    const out: AgentSnapshot[] = [];
     const seen = new Set<string>();
     for (const entry of this._sortedEntries()) {
       const root = this._project(entry);
@@ -94,9 +93,9 @@ export class RunGroup {
     return this._entries.slice().sort((a, b) => a.inputIndex - b.inputIndex);
   }
 
-  private _project(entry: Entry): AgentView {
+  private _project(entry: Entry): AgentSnapshot {
     return entry.kind === "agent"
-      ? { ...projectAgentView(entry.agent, { inputIndex: entry.inputIndex }), resumed: entry.resumed }
+      ? { ...entry.agent.snapshot({ inputIndex: entry.inputIndex }), resumed: entry.resumed }
       : { ...entry.view, resumed: entry.resumed };
   }
 

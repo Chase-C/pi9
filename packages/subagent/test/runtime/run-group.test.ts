@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { RunGroup } from "../../src/runtime/run-group.js";
-import { projectAgentView } from "../../src/view/project-agent-view.js";
 import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
 
 const noop: AgentUpdateListener = () => {};
@@ -20,8 +19,8 @@ test("RunGroup.tree emits a descendant root only once", () => {
   const group = new RunGroup({
     groupId: "group",
     walkTree: rootIds => rootIds.flatMap(id => {
-      if (id === "parent") return [parent, child].map(agent => projectAgentView(agent));
-      if (id === "child") return [projectAgentView(child)];
+      if (id === "parent") return [parent, child].map(agent => agent.snapshot());
+      if (id === "child") return [child.snapshot()];
       return [];
     }),
   });

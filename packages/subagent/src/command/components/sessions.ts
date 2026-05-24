@@ -1,6 +1,6 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
-import type { AgentView } from "../../domain/agent-view.js";
+import type { AgentSnapshot } from "../../domain/agent-snapshot.js";
 import type { AgentManager } from "../../runtime/agent-manager.js";
 import type { SubagentDisplaySettings } from "../../config/settings.js";
 import { formatSubagentSessionInspect, formatSubagentSessionSummary } from "../../view/format.js";
@@ -132,7 +132,7 @@ export class SubagentSessionsComponent implements Component {
     this.tui.requestRender();
   }
 
-  private get sessions(): AgentView[] {
+  private get sessions(): AgentSnapshot[] {
     return this.agentManager.listSessions();
   }
 

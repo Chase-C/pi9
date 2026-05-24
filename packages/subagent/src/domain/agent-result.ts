@@ -1,4 +1,4 @@
-import type { AgentRunStatus } from "./agent-view.js";
+export type AgentRunStatus = "completed" | "error" | "aborted" | "skipped" | "interrupted";
 
 export interface AgentRunResult {
   agent: string;
@@ -44,3 +44,8 @@ export function buildAgentResult(ctx: AgentResultContext, args: FinalizeRunArgs)
     ...(args.error !== undefined ? { error: args.error } : {}),
   };
 }
+
+export type BackgroundResult =
+  | { sessionId: string; ready: true; result: AgentRunResult }
+  | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
+  | { sessionId: string; error: string };

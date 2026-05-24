@@ -1,15 +1,15 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
-import type { AgentView, AgentViewStatus } from "../domain/agent-view.js";
-import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
+import type { AgentSnapshot, AgentViewStatus } from "../domain/agent-snapshot.js";
 import {
-  compactMultiline,
   effectiveStatus,
   getCompletedAt,
   getQueuedAt,
   getSnippet,
   getStartedAt,
-} from "./view-helpers.js";
+} from "../domain/agent-decisions.js";
+import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
+import { compactMultiline } from "./view-helpers.js";
 import type { DisplayLine, DisplayStatus } from "./text-component.js";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
@@ -46,7 +46,7 @@ export function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-export function rowElapsed(row: AgentView, now: number): string {
+export function rowElapsed(row: AgentSnapshot, now: number): string {
   return formatElapsed(getStartedAt(row.status) ?? getQueuedAt(row.status) ?? row.createdAt, getCompletedAt(row.status) ?? now);
 }
 
@@ -68,10 +68,10 @@ export function formatUsage(usage: Usage) {
   return `${tokens}${cost}`;
 }
 
-export function orderAsTree(sessions: readonly AgentView[]): Array<{ agent: AgentView; depth: number }> {
+export function orderAsTree(sessions: readonly AgentSnapshot[]): Array<{ agent: AgentSnapshot; depth: number }> {
   const presentIds = new Set(sessions.map(s => s.id));
   const rootKey = "";
-  const childrenByParent = new Map<string, AgentView[]>();
+  const childrenByParent = new Map<string, AgentSnapshot[]>();
   for (const session of sessions) {
     const parentKey = session.parentSessionId && presentIds.has(session.parentSessionId) ? session.parentSessionId : rootKey;
     const bucket = childrenByParent.get(parentKey);
@@ -82,7 +82,7 @@ export function orderAsTree(sessions: readonly AgentView[]): Array<{ agent: Agen
     if (parentKey !== rootKey) bucket.sort((a, b) => a.createdAt - b.createdAt);
   }
 
-  const out: Array<{ agent: AgentView; depth: number }> = [];
+  const out: Array<{ agent: AgentSnapshot; depth: number }> = [];
   const visit = (parentKey: string, depth: number) => {
     const children = childrenByParent.get(parentKey);
     if (!children) return;
@@ -105,7 +105,7 @@ export function snippetLines(label: string, snippet: string, leadingIndent: numb
   return [head, ...rest.map(line => ({ text: `${continuation}${line}`, status: color, hangingIndent: continuationIndent }))];
 }
 
-export function expandedLines(head: DisplayLine, row: AgentView, includeSnippet: boolean, trailingBlank: boolean, display: SubagentDisplaySettings = DEFAULT_DISPLAY): DisplayLine[] {
+export function expandedLines(head: DisplayLine, row: AgentSnapshot, includeSnippet: boolean, trailingBlank: boolean, display: SubagentDisplaySettings = DEFAULT_DISPLAY): DisplayLine[] {
   const lines = [head];
   appendPrompt(lines, row);
   if (includeSnippet) appendSnippet(lines, row, display);
@@ -114,14 +114,14 @@ export function expandedLines(head: DisplayLine, row: AgentView, includeSnippet:
   return lines;
 }
 
-function appendSnippet(lines: DisplayLine[], row: AgentView, display: SubagentDisplaySettings) {
+function appendSnippet(lines: DisplayLine[], row: AgentSnapshot, display: SubagentDisplaySettings) {
   const snippet = getSnippet(row.status);
   if (!snippet) return;
   const label = effectiveStatus(row.status) === "completed" ? "Result" : "Error";
   lines.push(...snippetLines(label, snippet, 4, statusPresentation(row.status).color, display));
 }
 
-function appendPrompt(lines: DisplayLine[], row: AgentView) {
+function appendPrompt(lines: DisplayLine[], row: AgentSnapshot) {
   if (!row.prompt) return;
   lines.push({ text: "" });
   for (const part of [...row.prompt.split(/\r?\n/), ""]) {
@@ -129,7 +129,7 @@ function appendPrompt(lines: DisplayLine[], row: AgentView) {
   }
 }
 
-function appendToolCounts(lines: DisplayLine[], row: AgentView) {
+function appendToolCounts(lines: DisplayLine[], row: AgentSnapshot) {
   const counts = aggregateToolCounts(row.activity.toolHistory);
   if (counts.length === 0) return;
   const summary = counts.map(({ name, count }) => `${name} ×${count}`).join(", ");
@@ -138,7 +138,7 @@ function appendToolCounts(lines: DisplayLine[], row: AgentView) {
 }
 
 function aggregateToolCounts(
-  history: AgentView["activity"]["toolHistory"],
+  history: AgentSnapshot["activity"]["toolHistory"],
 ): Array<{ name: string; count: number }> {
   const counts = new Map<string, number>();
   for (const tool of history) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);

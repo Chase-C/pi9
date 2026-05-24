@@ -1,19 +1,12 @@
 import { Usage } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
-import type { AgentToolUse, AgentUpdateKind } from "./agent-view.js";
+import type { AgentToolUse, AgentActivitySnapshot } from "./agent-snapshot.js";
+import type { AgentUpdateKind } from "./agent.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-}
-
-export interface AgentActivitySnapshot {
-  readonly message: string;
-  readonly turns: number;
-  readonly compactions: number;
-  readonly toolHistory: readonly AgentToolUse[];
-  readonly usage: Usage;
 }
 
 export type AgentActivityListener = (kind: AgentUpdateKind) => void;
@@ -31,13 +24,14 @@ export class AgentActivity {
 
   get message() { return this._message }
 
+  get usage(): Usage { return this._totalUsage }
+
   snapshot(): AgentActivitySnapshot {
     return {
-      message: this._message,
+      messageSnippet: this._message || undefined,
       turns: this._turns,
       compactions: this._compactions,
       toolHistory: this._toolHistory.map(tool => ({ ...tool })),
-      usage: this._totalUsage,
     };
   }
 

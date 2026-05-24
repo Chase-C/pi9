@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 
 import { Agent, type AgentStatus, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
-import { projectAgentView } from "../../src/view/project-agent-view.js";
 
 const noop: AgentUpdateListener = () => {};
-const view = (agent: Agent) => projectAgentView(agent);
+const view = (agent: Agent) => agent.snapshot();
 
 function doneStatus(agent: Agent): Extract<AgentStatus, { kind: "done" }> {
   if (agent.status.kind !== "done") throw new Error(`expected done, got ${agent.status.kind}`);

@@ -1,10 +1,11 @@
 import type { Component } from "@earendil-works/pi-tui";
 
 import type { AgentConfig } from "../domain/agent-config.js";
-import type { AgentGroupView, AgentRunStatus } from "../domain/agent-view.js";
-import type { BackgroundResult } from "../runtime/agent-manager.js";
+import type { AgentGroupView } from "../domain/agent-snapshot.js";
+import type { AgentRunStatus, BackgroundResult } from "../domain/agent-result.js";
+import { effectiveStatus } from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
-import { compact, effectiveStatus } from "./view-helpers.js";
+import { compact } from "./view-helpers.js";
 import { serializeGroup } from "./serialize.js";
 import {
   applyBold,

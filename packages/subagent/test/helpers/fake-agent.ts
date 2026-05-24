@@ -3,11 +3,11 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type {
   AgentDispatch,
   AgentRetention,
+  AgentSnapshot,
   AgentToolUse,
-  AgentView,
   AgentViewCapabilities,
   AgentViewStatus,
-} from "../../src/domain/agent-view.js";
+} from "../../src/domain/agent-snapshot.js";
 
 export const ZERO_USAGE: Usage = {
   input: 0,
@@ -54,8 +54,8 @@ export interface FakeAgentOptions {
   createdAt?: number;
   dispatch?: AgentDispatch;
   retention?: AgentRetention;
-  config?: Partial<AgentView["config"]>;
-  options?: { agent?: string; prompt?: string; model?: string; thinking?: AgentView["config"]["thinking"] };
+  config?: Partial<AgentSnapshot["config"]>;
+  options?: { agent?: string; prompt?: string; model?: string; thinking?: AgentSnapshot["config"]["thinking"] };
   status?: FakeStatusInput;
   activity?: { toolHistory?: AgentToolUse[] };
   message?: string;
@@ -69,7 +69,7 @@ export interface FakeAgentOptions {
   capabilities?: Partial<AgentViewCapabilities>;
 }
 
-export function fakeAgent(options: FakeAgentOptions = {}): AgentView {
+export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
   const {
     config: configOverrides,
     options: optionsOverrides,

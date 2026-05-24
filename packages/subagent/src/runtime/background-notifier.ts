@@ -1,7 +1,7 @@
 import { DEFAULT_SUBAGENT_SETTINGS, type BackgroundNotifyMode, type SubagentDisplaySettings } from "../config/settings.js";
 
-import type { Agent } from "../domain/agent.js";
-import type { AgentUpdateKind, AgentRunStatus } from "../domain/agent-view.js";
+import type { Agent, AgentUpdateKind } from "../domain/agent.js";
+import type { AgentRunStatus } from "../domain/agent-result.js";
 import type { AgentManager } from "./agent-manager.js";
 
 const MAX_LISTED_COMPLETIONS = 20;

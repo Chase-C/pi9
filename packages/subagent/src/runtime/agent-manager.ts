@@ -2,13 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { Agent } from "../domain/agent.js";
-import type { AgentRunResult } from "../domain/agent-result.js";
-import type { AgentUpdateKind, AgentView } from "../domain/agent-view.js";
+import { Agent, type AgentUpdateKind } from "../domain/agent.js";
+import type { AgentRunResult, BackgroundResult } from "../domain/agent-result.js";
+import { activeOrRetainedAgents, effectiveStatus } from "../domain/agent-decisions.js";
+import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import type { SessionStatus, TaskRequest } from "../schema.js";
-import { projectAgentView } from "../view/project-agent-view.js";
-import { activeOrRetainedAgents, effectiveStatus } from "../view/view-helpers.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
 import { RunGroup, type RunUpdateListener } from "./run-group.js";
 import { timingMark, timingStart } from "./timing.js";
@@ -16,11 +15,7 @@ import { timingMark, timingStart } from "./timing.js";
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
 export type { AgentRunner } from "./attempt-runner.js";
 export type { RunUpdate, RunUpdateListener } from "./run-group.js";
-
-export type BackgroundResult =
-  | { sessionId: string; ready: true; result: AgentRunResult }
-  | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
-  | { sessionId: string; error: string };
+export type { BackgroundResult } from "../domain/agent-result.js";
 
 export interface StartRunOptions {
   background: boolean;
@@ -30,9 +25,9 @@ export interface StartRunOptions {
 export interface RunHandle {
   readonly groupId: string;
   /** Root sessions in input order, captured at handle creation. */
-  readonly sessions: AgentView[];
+  readonly sessions: AgentSnapshot[];
   /** Live snapshot of the run tree (roots + descendants in pre-order). */
-  tree(): AgentView[];
+  tree(): AgentSnapshot[];
   readonly resultsPromise: Promise<AgentRunResult[]>;
 }
 
@@ -57,8 +52,8 @@ export class AgentManager {
     });
   }
 
-  listSessions(filter?: { status?: SessionStatus[] }): AgentView[] {
-    const views = activeOrRetainedAgents(this._agents).map(agent => projectAgentView(agent));
+  listSessions(filter?: { status?: SessionStatus[] }): AgentSnapshot[] {
+    const views = activeOrRetainedAgents(this._agents).map(agent => agent.snapshot());
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
@@ -261,19 +256,19 @@ export class AgentManager {
 
   /**
    * Returns the union of the named roots and every descendant reachable through `parentSessionId`,
-   * as `AgentView`s. Roots appear in input order; descendants under each parent are sorted by
+   * as `AgentSnapshot`s. Roots appear in input order; descendants under each parent are sorted by
    * `createdAt` ascending. Used by RunGroup to project the live subtree. Missing root ids are
    * silently skipped.
    */
-  private _walkTree(rootIds: string[]): AgentView[] {
-    const out: AgentView[] = [];
+  private _walkTree(rootIds: string[]): AgentSnapshot[] {
+    const out: AgentSnapshot[] = [];
     const seen = new Set<string>();
     const visit = (id: string) => {
       if (seen.has(id)) return;
       const agent = this._agents.find(a => a.id === id);
       if (!agent) return;
       seen.add(id);
-      out.push(projectAgentView(agent));
+      out.push(agent.snapshot());
       const children = this._agents.filter(a => a.parentId === id);
       children.sort((a, b) => a.createdAt - b.createdAt);
       for (const child of children) visit(child.id);

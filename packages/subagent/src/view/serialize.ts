@@ -1,9 +1,9 @@
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentRegistry } from "../domain/agent-registry.js";
-import type { AgentGroupView, AgentView } from "../domain/agent-view.js";
-import { effectiveStatus, isActiveStatusKind } from "./view-helpers.js";
+import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
+import { effectiveStatus, isActiveStatusKind } from "../domain/agent-decisions.js";
 
-export function serializeGroup(sessions: AgentView[]): AgentGroupView {
+export function serializeGroup(sessions: AgentSnapshot[]): AgentGroupView {
   const statusCounts: Record<string, number> = {};
   for (const session of sessions) {
     const status = effectiveStatus(session.status);

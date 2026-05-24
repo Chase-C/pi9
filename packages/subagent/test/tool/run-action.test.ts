@@ -554,7 +554,7 @@ test("partial tool results carry the full descendant subtree; final tool result 
     ["root", "child"],
   );
 
-  // Final result is the slim outcomes view; no subtree, no per-session AgentView dump
+  // Final result is the slim outcomes view; no subtree, no per-session AgentSnapshot dump
   assert.equal(final.details.view, "run-results");
   assert.equal(final.details.subtree, undefined);
   assert.equal(final.details.group, undefined);

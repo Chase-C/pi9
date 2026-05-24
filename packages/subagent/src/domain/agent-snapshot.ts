@@ -1,10 +1,7 @@
 import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 
 import type { AgentSource } from "./agent-config.js";
-
-export type AgentRunStatus = "completed" | "error" | "aborted" | "skipped" | "interrupted";
-
-export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
+import type { AgentRunStatus } from "./agent-result.js";
 
 export interface AgentToolUse {
   readonly id: string;
@@ -37,7 +34,7 @@ export type AgentViewStatus =
       readonly snippet?: string;
     };
 
-export interface AgentActivityView {
+export interface AgentActivitySnapshot {
   readonly messageSnippet?: string;
   readonly turns: number;
   readonly compactions: number;
@@ -53,7 +50,7 @@ export interface AgentViewCapabilities {
   readonly canClear: boolean;
 }
 
-export interface AgentView {
+export interface AgentSnapshot {
   readonly id: string;
   readonly inputIndex?: number;
   readonly parentSessionId?: string;
@@ -63,7 +60,7 @@ export interface AgentView {
   readonly createdAt: number;
   readonly config: AgentViewConfig;
   readonly status: AgentViewStatus;
-  readonly activity: AgentActivityView;
+  readonly activity: AgentActivitySnapshot;
   readonly usage: Usage | undefined;
   readonly dispatch: AgentDispatch;
   readonly retention: AgentRetention;
@@ -72,11 +69,11 @@ export interface AgentView {
 
 export interface AgentGroupView {
   statusCounts: Record<string, number>;
-  sessions: AgentView[];
+  sessions: AgentSnapshot[];
   isError: boolean;
 }
 
 export interface SubagentBatchUpdate {
-  sessions: AgentView[];
+  sessions: AgentSnapshot[];
   active: boolean;
 }

@@ -2,15 +2,17 @@ import { randomUUID } from "node:crypto";
 
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 
-import { AgentActivity, type AgentActivitySnapshot } from "./agent-activity.js";
+import { AgentActivity } from "./agent-activity.js";
 import { AgentConfig } from "./agent-config.js";
 import { Attempt } from "./agent-attempt.js";
 import { buildAgentResult, type AgentResultContext, type AgentRunResult } from "./agent-result.js";
-import type { AgentUpdateKind } from "./agent-view.js";
+import type { AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 import { timingMark } from "../runtime/timing.js";
 import { preflightFailure, PreflightFailure } from "./preflight-failure.js";
 import { AgentRegistry } from "./agent-registry.js";
+
+export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
 
 export type AgentStatus =
   | { kind: "queued"; queuedAt: number }
@@ -179,13 +181,60 @@ export class Agent {
     return this._retainedSession !== undefined;
   }
 
-  activitySnapshot(): AgentActivitySnapshot {
-    return this._activity.snapshot();
-  }
-
   /** Prompt of the current in-flight attempt, or the most recent terminal attempt. */
   get activePrompt(): string | undefined {
     return this._activeAttempt()?.prompt;
+  }
+
+  /**
+   * Canonical, domain-owned snapshot of the agent's current state. The DTO carries raw
+   * text fields (snippet, messageSnippet); presentation code compacts them when rendering.
+   */
+  snapshot(options: { inputIndex?: number } = {}): AgentSnapshot {
+    const active = this.status.kind === "queued" || this.status.kind === "running";
+    return {
+      id: this.id,
+      ...(options.inputIndex !== undefined ? { inputIndex: options.inputIndex } : {}),
+      ...(this.parentId !== undefined ? { parentSessionId: this.parentId } : {}),
+      ...(this._label !== undefined ? { label: this._label } : {}),
+      ...(this.activePrompt !== undefined ? { prompt: this.activePrompt } : {}),
+      createdAt: this.createdAt,
+      dispatch: this._background ? "background" : "foreground",
+      retention: this._background || this.resumable ? "persistent" : "transient",
+      config: {
+        name: this.agentName,
+        description: this.config.description,
+        source: this.config.source,
+        sourcePath: this.config.sourcePath,
+        model: this.spawn.model ?? this.config.model,
+        thinking: this.spawn.thinking ?? this.config.thinking,
+        tools: this.config.tools,
+        ...(this.config.skills !== undefined ? { skills: this.config.skills } : {}),
+        resumable: this.resumable,
+      },
+      status: this._snapshotStatus(),
+      activity: this._activity.snapshot(),
+      usage: this._activity.usage,
+      capabilities: {
+        canResume: this.canResume,
+        canClear: this.resumable && !active,
+      },
+    };
+  }
+
+  private _snapshotStatus(): AgentViewStatus {
+    const status = this.status;
+    if (status.kind === "queued") return { kind: "queued", queuedAt: status.queuedAt };
+    if (status.kind === "running") return { kind: "running", startedAt: status.startedAt };
+    const result = status.result;
+    const rawSnippet = result.status === "completed" ? result.output : result.error ?? result.status;
+    return {
+      kind: "done",
+      outcome: result.status,
+      completedAt: status.completedAt,
+      ...(status.startedAt !== undefined ? { startedAt: status.startedAt } : {}),
+      ...(rawSnippet ? { snippet: rawSnippet } : {}),
+    };
   }
 
   /** Snapshot of the data needed to build an AgentRunResult for the current attempt. */

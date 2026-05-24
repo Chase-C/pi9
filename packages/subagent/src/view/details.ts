@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../domain/agent-config.js";
-import type { AgentGroupView, AgentRunStatus, AgentView } from "../domain/agent-view.js";
-import type { BackgroundResult } from "../runtime/agent-manager.js";
+import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
+import type { AgentRunStatus, BackgroundResult } from "../domain/agent-result.js";
 
 export type AgentListingEntry = Omit<AgentConfig, "systemPrompt">;
 
@@ -32,9 +32,9 @@ export type RunOutcome = {
 
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
-  | { view: "run"; group: AgentGroupView; active?: boolean; subtree?: AgentView[] }
+  | { view: "run"; group: AgentGroupView; active?: boolean; subtree?: AgentSnapshot[] }
   | { view: "run-results"; outcomes: RunOutcome[]; isError: boolean }
-  | { view: "inventory"; sessions: AgentView[]; filter?: InventoryFilter }
+  | { view: "inventory"; sessions: AgentSnapshot[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
   | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number; background: true }
   | { view: "background-results"; results: BackgroundResult[] };
@@ -53,7 +53,7 @@ export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
 
 export function runDetails(
   group: AgentGroupView,
-  extras: { active?: boolean; subtree?: AgentView[] } = {},
+  extras: { active?: boolean; subtree?: AgentSnapshot[] } = {},
 ): RunDetails {
   return { view: "run", group, ...extras };
 }
@@ -62,11 +62,11 @@ export function runResultsDetails(outcomes: RunOutcome[], isError: boolean): Run
   return { view: "run-results", outcomes, isError };
 }
 
-export function inventoryDetails(sessions: AgentView[], filter?: InventoryFilter): InventoryDetails {
+export function inventoryDetails(sessions: AgentSnapshot[], filter?: InventoryFilter): InventoryDetails {
   return { view: "inventory", sessions, ...(filter ? { filter } : {}) };
 }
 
-export function backgroundStartedDetails(sessions: AgentView[]): BackgroundStartedDetails {
+export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundStartedDetails {
   const handles: BackgroundSpawnHandle[] = sessions.flatMap((session, index) => {
     if (session.retention !== "persistent") return [];
     return [{
@@ -94,7 +94,7 @@ export function narrowDetails(details: unknown): SubagentDetails | undefined {
         view: "run",
         group: record.group as AgentGroupView,
         ...(Array.isArray((record as { subtree?: unknown }).subtree)
-          ? { subtree: (record as { subtree: AgentView[] }).subtree }
+          ? { subtree: (record as { subtree: AgentSnapshot[] }).subtree }
           : {}),
       };
     case "run-results": {
@@ -107,7 +107,7 @@ export function narrowDetails(details: unknown): SubagentDetails | undefined {
       return Array.isArray(record.sessions)
         ? {
             view: "inventory",
-            sessions: record.sessions as AgentView[],
+            sessions: record.sessions as AgentSnapshot[],
             ...((record as { filter?: InventoryFilter }).filter ? { filter: (record as { filter?: InventoryFilter }).filter } : {}),
           }
         : undefined;

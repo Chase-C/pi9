@@ -4,10 +4,9 @@ import assert from "node:assert/strict";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { completedRun, errorRun } from "../../src/domain/agent-finalize.js";
 import { preflightFailure } from "../../src/domain/preflight-failure.js";
-import { projectAgentView } from "../../src/view/project-agent-view.js";
 
 const noop: AgentUpdateListener = () => {};
-const view = (agent: Agent) => projectAgentView(agent);
+const view = (agent: Agent) => agent.snapshot();
 
 const baseConfig = {
   name: "helper",

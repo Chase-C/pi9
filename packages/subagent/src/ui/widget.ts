@@ -1,4 +1,4 @@
-import type { AgentView } from "../domain/agent-view.js";
+import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { formatWidgetLines } from "../view/format.js";
 import type { SubagentSettings, SubagentUiSettings } from "../config/settings.js";
 
@@ -12,7 +12,7 @@ type SubagentWidgetContext = {
 
 export function updateSubagentWidget(
   ctx: SubagentWidgetContext,
-  agents: AgentView[],
+  agents: AgentSnapshot[],
   settings: SubagentSettings | SubagentUiSettings,
 ) {
   if (!ctx.hasUI || !ctx.ui?.setWidget) return;

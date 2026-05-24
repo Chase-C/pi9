@@ -1,7 +1,5 @@
-import type { AgentView } from "../domain/agent-view.js";
-import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
+import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import {
-  compact,
   effectiveStatus,
   getActiveTools,
   getCompletedAt,
@@ -10,7 +8,9 @@ import {
   getStartedAt,
   getToolUseCount,
   isActiveStatusKind,
-} from "./view-helpers.js";
+} from "../domain/agent-decisions.js";
+import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
+import { compact } from "./view-helpers.js";
 import { applyBold, type Bold, type DisplayLine } from "./text-component.js";
 import {
   formatTimestamp,
@@ -24,7 +24,7 @@ import {
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
 
-export function formatSubagentSessionSummary(agent: AgentView): string {
+export function formatSubagentSessionSummary(agent: AgentSnapshot): string {
   const badges = [
     agent.config.resumable ? "resumable" : undefined,
     agent.dispatch === "background" ? "dispatch:background" : undefined,
@@ -34,7 +34,7 @@ export function formatSubagentSessionSummary(agent: AgentView): string {
 }
 
 export function formatSubagentSessionInspect(
-  agent: AgentView,
+  agent: AgentSnapshot,
   now = Date.now(),
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): string[] {
@@ -78,7 +78,7 @@ export function formatSubagentSessionInspect(
 }
 
 export function formatWidgetLines(
-  agents: AgentView[],
+  agents: AgentSnapshot[],
   now = Date.now(),
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): string[] {
@@ -86,7 +86,7 @@ export function formatWidgetLines(
   return orderAsTree(visible).map(({ agent, depth }) => `${"  ".repeat(depth)}${formatSessionLine(agent, now, undefined, display)}`);
 }
 
-export function formatSessionLine(row: AgentView, now: number, bold?: Bold, display: SubagentDisplaySettings = DEFAULT_DISPLAY): string {
+export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, display: SubagentDisplaySettings = DEFAULT_DISPLAY): string {
   const status = effectiveStatus(row.status);
   const parts = [
     applyBold(bold, row.label ?? row.config.name),
@@ -112,7 +112,7 @@ export function formatSessionLine(row: AgentView, now: number, bold?: Bold, disp
   return parts.join(" · ");
 }
 
-export function formatRunSessionLine(row: AgentView, now: number, bold?: Bold): DisplayLine {
+export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold): DisplayLine {
   const { glyph, color } = statusPresentation(row.status, now);
   const parts = [
     `  ${glyph} ${applyBold(bold, row.config.name)}${(row.label) ? `  ${row.label}` : ""}`,
