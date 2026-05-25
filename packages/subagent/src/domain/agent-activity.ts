@@ -110,7 +110,7 @@ function toolInputSummary(toolName: string, args: unknown): string | undefined {
     case "edit":
       return joinParts([stringValue(input.path), countPart(input.edits, "edit")]);
     case "bash":
-      return compactOneLine(stringValue(input.command));
+      return stringValue(input.command);
     case "grep":
       return joinParts([quote(stringValue(input.pattern)), input.path ? `in ${String(input.path)}` : undefined]);
     case "find":
