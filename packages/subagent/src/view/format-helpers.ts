@@ -118,11 +118,20 @@ export function snippetLines(label: string, snippet: string, leadingIndent: numb
   return [head, ...rest.map(line => ({ text: `${continuation}${line}`, status: color, hangingIndent: continuationIndent }))];
 }
 
-export function expandedLines(head: DisplayLine, row: AgentSnapshot, includeSnippet: boolean, trailingBlank: boolean, display: SubagentDisplaySettings = DEFAULT_DISPLAY): DisplayLine[] {
+export function expandedLines(
+  head: DisplayLine,
+  row: AgentSnapshot,
+  includeSnippet: boolean,
+  trailingBlank: boolean,
+  display: SubagentDisplaySettings = DEFAULT_DISPLAY,
+  now = Date.now(),
+  richToolHistory = false,
+): DisplayLine[] {
   const lines = [head];
   appendPrompt(lines, row);
+  if (richToolHistory) appendToolHistory(lines, row, now);
+  else appendToolCounts(lines, row);
   if (includeSnippet) appendSnippet(lines, row, display);
-  appendToolCounts(lines, row);
   if (trailingBlank) lines.push({ text: "" });
   return lines;
 }
@@ -140,6 +149,14 @@ function appendPrompt(lines: DisplayLine[], row: AgentSnapshot) {
   for (const part of [...row.prompt.split(/\r?\n/), ""]) {
     lines.push({ text: `    ${part}`, hangingIndent: 4 });
   }
+}
+
+function appendToolHistory(lines: DisplayLine[], row: AgentSnapshot, now: number) {
+  const history = row.activity.toolHistory;
+  if (history.length === 0) return;
+  lines.push({ text: "" });
+  lines.push({ text: "    Tools:", hangingIndent: 4 });
+  for (const tool of history) lines.push(formatToolUseLine(tool, 6, now));
 }
 
 function appendToolCounts(lines: DisplayLine[], row: AgentSnapshot) {

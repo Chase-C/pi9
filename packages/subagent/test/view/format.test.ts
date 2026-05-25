@@ -290,6 +290,97 @@ test("collapsed subagent run row shows only the active subagent tool line when p
   ]);
 });
 
+test("expanded subagent run renders the prompt and each current-run tool as a rich line below it", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    label: "auth review",
+    prompt: "Review the auth changes and summarize risks.",
+    status: { kind: "running", startedAt: 1_000 },
+    turns: 2,
+    activity: { toolHistory: [
+      { id: "read", name: "read", inputSummary: "packages/subagent/src/view/tool-result-lines.ts", startedAt: 4_000, completedAt: 4_500 },
+      { id: "bash", name: "bash", inputSummary: "npm test --workspace=@pi9/subagent", startedAt: 7_000, completedAt: 10_000 },
+      { id: "edit", name: "edit", inputSummary: "packages/subagent/src/view/session-lines.ts", startedAt: 11_000 },
+    ] },
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), true, 15_000);
+
+  // Prompt still renders below the head row.
+  assert.match(lines.join("\n"), /Review the auth changes and summarize risks\./);
+
+  // Tools section header plus one rich line per tool, chronological with newest at the bottom.
+  const toolsIdx = lines.findIndex(line => line === "    Tools:");
+  assert.notEqual(toolsIdx, -1);
+  assert.equal(lines[toolsIdx + 1], "      ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s");
+  assert.equal(lines[toolsIdx + 2], "      ✓ bash npm test --workspace=@pi9/subagent · 3s");
+  assert.equal(lines[toolsIdx + 3], "      ⠴ edit packages/subagent/src/view/session-lines.ts · 4s");
+});
+
+test("expanded subagent run no longer renders the aggregate tool-count line", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory: [
+      { id: "r1", name: "read", inputSummary: "a.ts", startedAt: 2_000, completedAt: 2_500 },
+      { id: "r2", name: "read", inputSummary: "b.ts", startedAt: 3_000, completedAt: 3_500 },
+      { id: "r3", name: "read", inputSummary: "c.ts", startedAt: 4_000, completedAt: 4_500 },
+      { id: "b1", name: "bash", inputSummary: "ls", startedAt: 5_000, completedAt: 5_500 },
+    ] },
+  });
+
+  const joined = formatSubagentToolLines(runDetails([session]), true, 10_000).join("\n");
+
+  assert.doesNotMatch(joined, /read ×3/);
+  assert.doesNotMatch(joined, /×/);
+});
+
+test("expanded subagent run renders every tool call, not just the most recent three", () => {
+  const toolHistory = Array.from({ length: 5 }, (_, i) => ({
+    id: `t${i}`,
+    name: "read",
+    inputSummary: `file-${i}.ts`,
+    startedAt: 2_000 + i * 1_000,
+    completedAt: 2_500 + i * 1_000,
+  }));
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory },
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), true, 20_000);
+  const toolLines = lines.filter(line => /^      ✓ read file-\d\.ts/.test(line));
+
+  assert.equal(toolLines.length, 5);
+  assert.match(toolLines[0], /file-0\.ts/);
+  assert.match(toolLines[4], /file-4\.ts/);
+});
+
+test("expanded subagent run keeps the result snippet for a terminal row, after prompt and tools", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    prompt: "Summarize the risks.",
+    status: { kind: "completed", startedAt: 1_000, completedAt: 8_000, response: "Found two issues." },
+    activity: { toolHistory: [
+      { id: "read", name: "read", inputSummary: "auth.ts", startedAt: 2_000, completedAt: 2_500 },
+      { id: "bash", name: "bash", inputSummary: "npm test", startedAt: 3_000, completedAt: 5_000 },
+    ] },
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), true, 8_000);
+  const joined = lines.join("\n");
+
+  assert.match(joined, /Summarize the risks\./);
+  const toolsIdx = lines.findIndex(line => line === "    Tools:");
+  assert.notEqual(toolsIdx, -1);
+  assert.equal(lines[toolsIdx + 1], "      ✓ read auth.ts · 0s");
+  assert.equal(lines[toolsIdx + 2], "      ✓ bash npm test · 2s");
+
+  const resultIdx = lines.findIndex(line => /Result: Found two issues\./.test(line));
+  assert.ok(resultIdx > toolsIdx, "result snippet should follow the tools section");
+});
+
 test("subagent session inspect output uses remove terminology", () => {
   const retainedSession = fakeAgent({
     config: { resumable: true },

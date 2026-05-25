@@ -215,7 +215,8 @@ const inventoryRow: RowRenderer = (row, now, bold, display) => ({
 /**
  * The single per-row tree-expansion path shared by the `run` and `inventory` views. Each row is
  * rendered by {@link RowRenderer}, depth-indented, and — when expanded — followed by its prompt,
- * optional snippet, and tool counts via {@link expandedLines}.
+ * tool history, and optional snippet via {@link expandedLines}. With `richToolHistory`, rows carry
+ * per-tool lines (recent ones collapsed, the full chronology expanded) instead of aggregate counts.
  */
 function expandRows(
   ordered: Array<{ agent: AgentSnapshot; depth: number }>,
@@ -225,7 +226,7 @@ function expandRows(
   display: SubagentDisplaySettings,
   renderRow: RowRenderer,
   includeSnippet: boolean,
-  collapsedToolHistory = false,
+  richToolHistory = false,
 ): DisplayLine[] {
   const withIndent = ({ agent, depth }: { agent: AgentSnapshot; depth: number }): DisplayLine => {
     const line = renderRow(agent, now, bold, display);
@@ -234,11 +235,11 @@ function expandRows(
   if (!expanded) {
     return ordered.flatMap(entry => [
       withIndent(entry),
-      ...(collapsedToolHistory ? recentToolLines(entry.agent, entry.depth, now) : []),
+      ...(richToolHistory ? recentToolLines(entry.agent, entry.depth, now) : []),
     ]);
   }
   return ordered.flatMap((entry, index) =>
-    expandedLines(withIndent(entry), entry.agent, includeSnippet, index < ordered.length - 1, display));
+    expandedLines(withIndent(entry), entry.agent, includeSnippet, index < ordered.length - 1, display, now, richToolHistory));
 }
 
 function recentToolLines(agent: AgentSnapshot, depth: number, now: number): DisplayLine[] {
