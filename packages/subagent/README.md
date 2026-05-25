@@ -219,8 +219,90 @@ The parent remains responsible for sequencing. If later work depends on earlier 
 
 `subagent run` streams live updates into the tool result while children run, for both spawn and resume tasks.
 
-- Collapsed rendering shows an aggregate group line, such as task count, status counts, and overall outcome.
-- Expanded rendering shows one row per child session with agent name (or per-task `label`), status, turn/tool counts, elapsed time, active tool, live message snippet, and final outcome.
+### Tool call title
+
+While a foreground `run` is executing, the call title shows live run counts and elapsed time instead of task labels:
+
+```text
+subagent run · 2 running · 1 queued · 3 finished · 1m24s
+```
+
+- `running`/`queued`/`finished` count sessions by effective status; `finished` covers every terminal outcome (`completed`, `error`, `aborted`, `interrupted`, `skipped`).
+- Counts include nested child subagents: the subtree is counted when present, otherwise the flat batch.
+- `elapsed` is wall-clock time since the parent `run` started, not summed child runtime.
+- Before the first live result (and for older non-`run` call sites), the title falls back to the task count, e.g. `subagent run · 3 tasks`.
+
+### Collapsed rendering
+
+Collapsed output shows one row per child session — agent name (or per-task `label`), status, turn count, token count, and elapsed time — with up to the three most recent tool calls beneath it:
+
+```text
+  ⠋ reviewer  auth review · 2 turns · 18420 tokens · 37s
+    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s
+    ✓ grep "formatRunSessionLine" in packages/subagent/src · 1s
+    ⠋ bash npm test --workspace=@pi9/subagent · 12s
+```
+
+- The main row no longer carries a `tool:<name>` segment; recent tools render as their own lines.
+- Each tool line is `<status-glyph> <tool-name>[ <input-summary>] · <elapsed>`, where the glyph mirrors the status vocabulary (spinner for running, `✓` completed, `✗` errored) and elapsed runs from the tool's start to its completion or to now.
+- Tool lines are chronological with the newest at the bottom.
+- If a child's currently running tool is itself `subagent`, only that active `subagent` line is shown for that row; its nested child subagents still render normally as a depth-indented tree under the parent.
+
+### Expanded rendering
+
+Expanded output begins with the same main row, then the prompt, then the full chronological tool history (one line per call) instead of aggregate counts, then the result/error snippet for terminal rows:
+
+```text
+  ⠋ reviewer  auth review · 2 turns · 18420 tokens · 37s
+
+    Review the auth changes and summarize risks.
+
+    Tools:
+      ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s
+      ✓ bash npm test --workspace=@pi9/subagent · 3s
+      ⠋ edit packages/subagent/src/view/session-lines.ts · 4s
+```
+
+- Every tool call for the current run is listed, not just the three most recent, using the same line format as collapsed mode.
+
+### Resumed-run sections
+
+For a resumed subagent, expanded rendering shows each previous run as its own clearly marked section above the current run, in the same prompt/tools/output-or-error shape:
+
+```text
+  Previous run 1 · completed · 42s
+
+    Previous prompt: start the review.
+
+    Tools:
+      ✓ read packages/subagent/src/domain/agent.ts · 1s
+      ✓ bash npm test --workspace=@pi9/subagent · 12s
+
+    Result: previous output snippet
+
+  Current run …
+```
+
+- Multiple resumes accumulate multiple previous run sections in chronological order above the current run.
+- Each section keeps its own prompt, isolated tool history, and output/error snippet; the current run's tool history never mixes in previous-run tools.
+- Previous run sections render only in expanded mode — collapsed output and the final `results` view never show them.
+
+### Tool input summaries
+
+Tool lines surface useful details derived from the tool's arguments when available:
+
+| Tool | Summary |
+| --- | --- |
+| `read` | path, plus `offset`/`limit` when present |
+| `write`, `ls` | path |
+| `edit` | path and edit count |
+| `bash` | command, compacted to one line |
+| `grep`, `find` | pattern and `in <path>` when present |
+| `subagent` | action and task/session count |
+| other tools | a compact, safe fallback from scalar args, or no summary |
+
+### General
+
 - Multi-task runs keep input order in final results and group related child rows together.
 - Recursive subagent trees render as a depth-indented tree under their parent row, ordered by child `createdAt` within each parent.
 - Mixed child failures mark the overall tool result as `isError` while preserving successful child results.

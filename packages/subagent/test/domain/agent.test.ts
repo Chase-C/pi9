@@ -314,6 +314,35 @@ test("agent stores compact input summaries for known tool starts", () => {
   ]);
 });
 
+test("input summaries cover path/pattern tools and fall back to scalar args for unknown tools", () => {
+  let sessionEmit: ((event: any) => void) | undefined;
+  const session = {
+    messages: [],
+    subscribe(handler: any) { sessionEmit = handler; return () => { sessionEmit = undefined; }; },
+    prompt: async () => { },
+    abort: () => { },
+  };
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "a", prompt: "p" }, noop);
+
+  agent.attach(session as any);
+  assert.ok(sessionEmit);
+  sessionEmit({ type: "tool_execution_start", toolCallId: "write", toolName: "write", args: { path: "out.ts", content: "x" } });
+  sessionEmit({ type: "tool_execution_start", toolCallId: "ls", toolName: "ls", args: { path: "packages/subagent" } });
+  sessionEmit({ type: "tool_execution_start", toolCallId: "grep", toolName: "grep", args: { pattern: "TODO", path: "src" } });
+  sessionEmit({ type: "tool_execution_start", toolCallId: "find", toolName: "find", args: { pattern: "*.ts", path: "src" } });
+  sessionEmit({ type: "tool_execution_start", toolCallId: "custom", toolName: "weather", args: { city: "Paris", units: "metric", verbose: true } });
+  sessionEmit({ type: "tool_execution_start", toolCallId: "empty", toolName: "mystery", args: {} });
+
+  assert.deepEqual(view(agent).activity.toolHistory.map(tool => tool.inputSummary), [
+    "out.ts",
+    "packages/subagent",
+    '"TODO" in src',
+    "*.ts in src",
+    "city:Paris units:metric verbose:true",
+    undefined,
+  ]);
+});
+
 test("Agent.abort on a running agent aborts the underlying session and finalizes as aborted", async () => {
   let abortCalls = 0;
   const session = { messages: [], subscribe: () => () => { }, prompt: async () => { }, abort: () => { abortCalls += 1; } };
