@@ -2,11 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 
-import { AgentActivity } from "./agent-activity.js";
 import { AgentConfig } from "./agent-config.js";
-import { Attempt } from "./agent-attempt.js";
+import { Attempt, type AttemptKind } from "./agent-attempt.js";
 import type { AgentOutcome } from "./agent-result.js";
-import type { AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
+import type { AgentRunSection, AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 import { preflightFailure } from "./preflight-failure.js";
 import { AgentRegistry } from "./agent-registry.js";
@@ -34,13 +33,12 @@ export class Agent {
   readonly parentId?: string;
 
   private _current?: Attempt;
-  private _lastAttempt?: Attempt;
+  private _settledAttempts: Attempt[] = [];
   private _retainedSession?: AgentSession;
   private _label: string | undefined;
   private _appliedResumableOverride: boolean | undefined;
   private _unsubscribe?: () => void;
   private _background: boolean;
-  private readonly _activity = new AgentActivity(kind => this._emit(kind));
 
   constructor(
     readonly id: string,
@@ -54,7 +52,11 @@ export class Agent {
     this.parentId = options.parentId;
     this._appliedResumableOverride = spawn.resumable;
     this._label = spawn.label;
-    this._current = new Attempt("spawn", spawn.prompt, spawn.resumable);
+    this._current = this._newAttempt("spawn", spawn.prompt, spawn.resumable);
+  }
+
+  private _newAttempt(kind: AttemptKind, prompt: string, resumableOverride: boolean | undefined): Attempt {
+    return new Attempt(kind, prompt, resumableOverride, updateKind => this._emit(updateKind));
   }
 
   static resolve(
@@ -91,7 +93,7 @@ export class Agent {
       } else {
         if (task.label !== undefined) target._label = task.label;
         target._background = background;
-        target._current = new Attempt("resume", task.prompt, task.resumable);
+        target._current = target._newAttempt("resume", task.prompt, task.resumable);
         target._emit("status");
         return { kind: "resume", agent: target };
       }
@@ -112,6 +114,11 @@ export class Agent {
   /** The in-flight attempt if any, else the most recent terminal attempt. */
   private _activeAttempt(): Attempt | undefined {
     return this._current ?? this._lastAttempt;
+  }
+
+  /** The most recent settled attempt, or undefined before the first settle. */
+  private get _lastAttempt(): Attempt | undefined {
+    return this._settledAttempts.at(-1);
   }
 
   get hasCurrentAttempt(): boolean { return this._current !== undefined }
@@ -139,21 +146,25 @@ export class Agent {
       if (state.kind === "queued") return { kind: "queued", queuedAt: this._current.createdAt };
       if (state.kind === "running") return { kind: "running", startedAt: state.startedAt };
     }
-    const last = this._lastAttempt;
-    if (!last || last.state.kind !== "done") return { kind: "queued", queuedAt: this.createdAt };
-    const outcome = last.state.result;
+    return this._terminalStatus(this._lastAttempt);
+  }
+
+  /** Build the `done`/`queued` status arm for a settled (or not-yet-settled) attempt. */
+  private _terminalStatus(attempt: Attempt | undefined): AgentViewStatus {
+    if (!attempt || attempt.state.kind !== "done") return { kind: "queued", queuedAt: this.createdAt };
+    const outcome = attempt.state.result;
     return {
       kind: "done",
       outcome: outcome.status,
-      completedAt: last.state.completedAt,
+      completedAt: attempt.state.completedAt,
       resumed: outcome.resumed,
-      ...(last.state.startedAt !== undefined ? { startedAt: last.state.startedAt } : {}),
+      ...(attempt.state.startedAt !== undefined ? { startedAt: attempt.state.startedAt } : {}),
       ...(outcome.output !== undefined ? { output: outcome.output } : {}),
       ...(outcome.error !== undefined ? { error: outcome.error } : {}),
     };
   }
 
-  get message() { return this._activity.message }
+  get message() { return this._activeAttempt()?.activity.message ?? "" }
 
   /** The session retained for a possible resume. Sticky after first attach. */
   retainedSession(): AgentSession | undefined { return this._retainedSession }
@@ -190,12 +201,29 @@ export class Agent {
   }
 
   /**
+   * Completed prior attempts of a resumed agent, oldest first. The active run (`_current`, or the
+   * most recent terminal attempt when settled) is excluded so its section is never duplicated.
+   */
+  private _previousRunSections(): AgentRunSection[] {
+    const priors = this._current ? this._settledAttempts : this._settledAttempts.slice(0, -1);
+    return priors.map(attempt => ({
+      ...(attempt.prompt ? { prompt: attempt.prompt } : {}),
+      status: this._terminalStatus(attempt),
+      activity: attempt.activity.snapshot(),
+      usage: attempt.activity.usage,
+    }));
+  }
+
+  /**
    * Canonical, domain-owned snapshot of the agent's current state. The DTO carries raw
    * text fields (snippet, messageSnippet); presentation code compacts them when rendering.
+   * `activity`/`usage` describe the active run; completed prior attempts surface in `previousRuns`.
    */
   snapshot(options: { inputIndex?: number } = {}): AgentSnapshot {
     const status = this.status;
     const active = status.kind === "queued" || status.kind === "running";
+    const activeActivity = this._activeAttempt()?.activity;
+    const previousRuns = this._previousRunSections();
     return {
       id: this.id,
       ...(options.inputIndex !== undefined ? { inputIndex: options.inputIndex } : {}),
@@ -217,8 +245,9 @@ export class Agent {
         resumable: this.resumable,
       },
       status,
-      activity: this._activity.snapshot(),
-      usage: this._activity.usage,
+      activity: activeActivity ? activeActivity.snapshot() : { turns: 0, compactions: 0, toolHistory: [] },
+      ...(previousRuns.length > 0 ? { previousRuns } : {}),
+      usage: activeActivity?.usage,
       capabilities: {
         canResume: this.canResume,
         canClear: this.resumable && !active,
@@ -247,7 +276,7 @@ export class Agent {
     if (!current || current.state.kind !== "queued") {
       throw new Error(`Cannot attach a session to an agent that is ${this._describe()}.`);
     }
-    this._unsubscribe = this._activity.subscribe(session);
+    this._unsubscribe = current.activity.subscribe(session);
     current.attach(session);
     if (current.resumableOverride !== undefined) {
       this._appliedResumableOverride = current.resumableOverride;
@@ -265,7 +294,7 @@ export class Agent {
     if (!current) return this.snapshot();
     this._finishSubscription();
     current.settle(outcome);
-    this._lastAttempt = current;
+    this._settledAttempts.push(current);
     this._current = undefined;
     this._emit("status");
     return this.snapshot();

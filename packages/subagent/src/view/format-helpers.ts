@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
-import type { AgentSnapshot, AgentToolUse, AgentViewStatus } from "../domain/agent-snapshot.js";
+import type { AgentRunSection, AgentSnapshot, AgentToolUse, AgentViewStatus } from "../domain/agent-snapshot.js";
 import {
   effectiveStatus,
   getCompletedAt,
@@ -118,6 +118,12 @@ export function snippetLines(label: string, snippet: string, leadingIndent: numb
   return [head, ...rest.map(line => ({ text: `${continuation}${line}`, status: color, hangingIndent: continuationIndent }))];
 }
 
+/**
+ * The prompt/tools/output-or-error shape shared by both the current run and each previous run
+ * section of a resumed agent. {@link AgentSnapshot} and {@link AgentRunSection} both satisfy it.
+ */
+type RunBody = Pick<AgentSnapshot, "prompt" | "activity" | "status">;
+
 export function expandedLines(
   head: DisplayLine,
   row: AgentSnapshot,
@@ -128,6 +134,8 @@ export function expandedLines(
   richToolHistory = false,
 ): DisplayLine[] {
   const lines = [head];
+  // Previous runs only surface in the rich (run-view) expansion, above the current run.
+  if (richToolHistory && row.previousRuns?.length) appendPreviousRuns(lines, row.previousRuns, display, now);
   appendPrompt(lines, row);
   if (richToolHistory) appendToolHistory(lines, row, now);
   else appendToolCounts(lines, row);
@@ -136,14 +144,36 @@ export function expandedLines(
   return lines;
 }
 
-function appendSnippet(lines: DisplayLine[], row: AgentSnapshot, display: SubagentDisplaySettings) {
+function appendPreviousRuns(lines: DisplayLine[], sections: readonly AgentRunSection[], display: SubagentDisplaySettings, now: number) {
+  sections.forEach((section, index) => {
+    lines.push({ text: "" });
+    lines.push(previousRunHeader(section, index, now));
+    appendPrompt(lines, section);
+    appendToolHistory(lines, section, now);
+    appendSnippet(lines, section, display);
+  });
+}
+
+function previousRunHeader(section: AgentRunSection, index: number, now: number): DisplayLine {
+  const elapsed = sectionElapsed(section, now);
+  const parts = [`Previous run ${index + 1}`, effectiveStatus(section.status), ...(elapsed ? [elapsed] : [])];
+  return { text: `    ${parts.join(" · ")}`, status: statusPresentation(section.status, now).color, hangingIndent: 4 };
+}
+
+function sectionElapsed(section: AgentRunSection, now: number): string | undefined {
+  const startedAt = getStartedAt(section.status) ?? getQueuedAt(section.status);
+  if (startedAt === undefined) return undefined;
+  return formatElapsed(startedAt, getCompletedAt(section.status) ?? now);
+}
+
+function appendSnippet(lines: DisplayLine[], row: RunBody, display: SubagentDisplaySettings) {
   const snippet = getSnippet(row.status);
   if (!snippet) return;
   const label = effectiveStatus(row.status) === "completed" ? "Result" : "Error";
   lines.push(...snippetLines(label, snippet, 4, statusPresentation(row.status).color, display));
 }
 
-function appendPrompt(lines: DisplayLine[], row: AgentSnapshot) {
+function appendPrompt(lines: DisplayLine[], row: RunBody) {
   if (!row.prompt) return;
   lines.push({ text: "" });
   for (const part of [...row.prompt.split(/\r?\n/), ""]) {
@@ -151,7 +181,7 @@ function appendPrompt(lines: DisplayLine[], row: AgentSnapshot) {
   }
 }
 
-function appendToolHistory(lines: DisplayLine[], row: AgentSnapshot, now: number) {
+function appendToolHistory(lines: DisplayLine[], row: RunBody, now: number) {
   const history = row.activity.toolHistory;
   if (history.length === 0) return;
   lines.push({ text: "" });

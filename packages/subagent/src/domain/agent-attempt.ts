@@ -1,5 +1,6 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
+import { AgentActivity, type AgentActivityListener } from "./agent-activity.js";
 import type { AgentOutcome } from "./agent-result.js";
 
 export type AttemptKind = "spawn" | "resume";
@@ -18,13 +19,18 @@ export type AttemptState =
 export class Attempt {
 
   readonly createdAt = Date.now();
+  /** Activity captured for this attempt alone, so each run section keeps an isolated history. */
+  readonly activity: AgentActivity;
   state: AttemptState = { kind: "queued" };
 
   constructor(
     readonly kind: AttemptKind,
     readonly prompt: string,
     readonly resumableOverride: boolean | undefined,
-  ) {}
+    onActivityChange: AgentActivityListener,
+  ) {
+    this.activity = new AgentActivity(onActivityChange);
+  }
 
   attach(session: AgentSession): void {
     if (this.state.kind !== "queued") {

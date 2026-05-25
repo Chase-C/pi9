@@ -161,11 +161,100 @@ test("Agent.resolve re-subscribes the session on resume so events during a resum
   assert.ok(resumedEmit, "resume should re-subscribe");
   resumedEmit({ type: "turn_end" });
   resumedEmit({ type: "tool_execution_start", toolName: "read" });
-  const resumedActivity = view(agent).activity;
-  assert.equal(resumedActivity.turns, 2);
-  assert.equal(resumedActivity.toolHistory.length, 1);
+  // Each attempt now carries isolated activity: the resume's current activity reflects only its
+  // own events, while the completed spawn attempt is retained as a previous run section.
+  const resumedSnapshot = view(agent);
+  assert.equal(resumedSnapshot.activity.turns, 1);
+  assert.equal(resumedSnapshot.activity.toolHistory.length, 1);
+  assert.equal(resumedSnapshot.previousRuns?.length, 1);
+  assert.equal(resumedSnapshot.previousRuns?.[0].activity.turns, 1);
   completedRun(agent, "done2");
   assert.equal(emit, undefined, "subscription should be torn down on complete after resume");
+});
+
+test("snapshot exposes a completed prior attempt as an isolated previous run section after resume", () => {
+  let emit: ((event: any) => void) | undefined;
+  const session = {
+    messages: [],
+    subscribe(handler: any) { emit = handler; return () => { emit = undefined; }; },
+    prompt: async () => { },
+    abort: () => { },
+  };
+  const { resolve } = resolveScenario({ config: { ...baseConfig, resumable: true, name: "a" } });
+  const spawn = resolve({ kind: "spawn", agent: "a", prompt: "first prompt" });
+  if (spawn.kind !== "spawn") throw new Error("expected spawn");
+  const agent = spawn.agent;
+
+  agent.attach(session as any);
+  emit!({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "a.ts" } });
+  emit!({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read", isError: false });
+  completedRun(agent, "first output");
+
+  const resumed = resolve({ kind: "resume", sessionId: agent.id, prompt: "second prompt" });
+  if (resumed.kind !== "resume") throw new Error("expected resume");
+  agent.attach(session as any);
+  emit!({ type: "tool_execution_start", toolCallId: "edit-1", toolName: "edit", args: { path: "b.ts" } });
+
+  const snap = view(agent);
+  // The current run's activity is isolated to the resume attempt.
+  assert.deepEqual(snap.activity.toolHistory.map(t => t.name), ["edit"]);
+  assert.equal(snap.prompt, "second prompt");
+
+  // The completed spawn attempt is preserved as a single previous run section.
+  assert.equal(snap.previousRuns?.length, 1);
+  const prev = snap.previousRuns![0];
+  assert.equal(prev.prompt, "first prompt");
+  assert.equal(prev.status.kind, "done");
+  if (prev.status.kind === "done") {
+    assert.equal(prev.status.outcome, "completed");
+    assert.equal(prev.status.output, "first output");
+  }
+  assert.deepEqual(prev.activity.toolHistory.map(t => t.name), ["read"]);
+});
+
+test("a single-run agent omits previousRuns from its snapshot", () => {
+  const session = { messages: [], subscribe: () => () => { }, prompt: async () => { }, abort: () => { } };
+  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
+
+  // Queued, then running, then completed: none of these states should expose a previous run.
+  assert.equal(view(agent).previousRuns, undefined);
+  agent.attach(session as any);
+  assert.equal(view(agent).previousRuns, undefined);
+  completedRun(agent, "done");
+  assert.equal(Object.prototype.hasOwnProperty.call(view(agent), "previousRuns"), false);
+});
+
+test("multiple resumes accumulate previous run sections in chronological order above the current run", () => {
+  const session = {
+    messages: [],
+    subscribe: () => () => { },
+    prompt: async () => { },
+    abort: () => { },
+  };
+  const { resolve } = resolveScenario({ config: { ...baseConfig, resumable: true, name: "a" } });
+  const spawn = resolve({ kind: "spawn", agent: "a", prompt: "run one" });
+  if (spawn.kind !== "spawn") throw new Error("expected spawn");
+  const agent = spawn.agent;
+
+  agent.attach(session as any);
+  completedRun(agent, "output one");
+
+  const r1 = resolve({ kind: "resume", sessionId: agent.id, prompt: "run two" });
+  if (r1.kind !== "resume") throw new Error("expected resume");
+  agent.attach(session as any);
+  completedRun(agent, "output two", true);
+
+  const r2 = resolve({ kind: "resume", sessionId: agent.id, prompt: "run three" });
+  if (r2.kind !== "resume") throw new Error("expected resume");
+  agent.attach(session as any);
+
+  const snap = view(agent);
+  assert.equal(snap.prompt, "run three");
+  assert.deepEqual(snap.previousRuns?.map(run => run.prompt), ["run one", "run two"]);
+  assert.deepEqual(
+    snap.previousRuns?.map(run => (run.status.kind === "done" ? run.status.output : undefined)),
+    ["output one", "output two"],
+  );
 });
 
 test("agent stores tool-use history and keeps active tool correct for overlapping executions", () => {

@@ -3,6 +3,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type {
   AgentDispatch,
   AgentRetention,
+  AgentRunSection,
   AgentSnapshot,
   AgentToolUse,
   AgentViewCapabilities,
@@ -68,6 +69,7 @@ export interface FakeAgentOptions {
   usage?: Usage;
   totalUsage?: Usage;
   capabilities?: Partial<AgentViewCapabilities>;
+  previousRuns?: AgentRunSection[];
 }
 
 export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
@@ -184,8 +186,24 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
       compactions,
       toolHistory,
     },
+    ...(rest.previousRuns !== undefined ? { previousRuns: rest.previousRuns } : {}),
     usage: rest.totalUsage ?? rest.usage ?? ZERO_USAGE,
     capabilities,
+  };
+}
+
+/**
+ * Builds a single previous-run section by projecting a {@link fakeAgent} snapshot down to the
+ * prompt/status/activity/usage fields a run section carries, so tests reuse the same status and
+ * tool-history construction.
+ */
+export function fakeRunSection(options: FakeAgentOptions = {}): AgentRunSection {
+  const snapshot = fakeAgent(options);
+  return {
+    ...(snapshot.prompt !== undefined ? { prompt: snapshot.prompt } : {}),
+    status: snapshot.status,
+    activity: snapshot.activity,
+    usage: snapshot.usage,
   };
 }
 

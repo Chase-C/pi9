@@ -12,7 +12,7 @@ import {
   runDetails,
   runSummary,
 } from "../../src/view/format.js";
-import { fakeAgent } from "../helpers/fake-agent.js";
+import { fakeAgent, fakeRunSection } from "../helpers/fake-agent.js";
 
 test("subagent run display animates only the running status glyph", () => {
   const sessions = [
@@ -379,6 +379,150 @@ test("expanded subagent run keeps the result snippet for a terminal row, after p
 
   const resultIdx = lines.findIndex(line => /Result: Found two issues\./.test(line));
   assert.ok(resultIdx > toolsIdx, "result snippet should follow the tools section");
+});
+
+test("expanded subagent run renders a previous run section above the current run for a resumed agent", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    label: "auth review",
+    prompt: "Current prompt: finish the review.",
+    status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory: [
+      { id: "edit", name: "edit", inputSummary: "packages/subagent/src/domain/agent.ts", startedAt: 11_000 },
+    ] },
+    previousRuns: [
+      fakeRunSection({
+        prompt: "Previous prompt: start the review.",
+        status: { kind: "completed", startedAt: 1_000, completedAt: 43_000, response: "previous output snippet" },
+        activity: { toolHistory: [
+          { id: "read", name: "read", inputSummary: "packages/subagent/src/domain/agent.ts", startedAt: 2_000, completedAt: 3_000 },
+          { id: "bash", name: "bash", inputSummary: "npm test --workspace=@pi9/subagent", startedAt: 4_000, completedAt: 16_000 },
+        ] },
+      }),
+    ],
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), true, 19_000);
+  const joined = lines.join("\n");
+
+  // A clearly-marked previous run section with its status and elapsed time.
+  const prevIdx = lines.findIndex(line => /Previous run 1 · completed · 42s/.test(line));
+  assert.notEqual(prevIdx, -1);
+
+  // The previous run's own prompt, tool history, and result snippet.
+  assert.match(joined, /Previous prompt: start the review\./);
+  assert.match(joined, /✓ read packages\/subagent\/src\/domain\/agent\.ts · 1s/);
+  assert.match(joined, /✓ bash npm test --workspace=@pi9\/subagent · 12s/);
+  assert.match(joined, /Result: previous output snippet/);
+
+  // The current run still renders its own prompt and tool below the previous section.
+  const currentPromptIdx = lines.findIndex(line => /Current prompt: finish the review\./.test(line));
+  assert.ok(currentPromptIdx > prevIdx, "current run renders below the previous run section");
+  assert.match(joined, /edit packages\/subagent\/src\/domain\/agent\.ts/);
+});
+
+test("the current run tool history excludes previous run tools for a resumed agent", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    prompt: "Current work.",
+    status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory: [
+      { id: "edit", name: "edit", inputSummary: "current.ts", startedAt: 11_000 },
+    ] },
+    previousRuns: [
+      fakeRunSection({
+        prompt: "Earlier work.",
+        status: { kind: "completed", startedAt: 1_000, completedAt: 5_000, response: "ok" },
+        activity: { toolHistory: [
+          { id: "read", name: "read", inputSummary: "previous.ts", startedAt: 2_000, completedAt: 3_000 },
+        ] },
+      }),
+    ],
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), true, 12_000);
+  const currentPromptIdx = lines.findIndex(line => /Current work\./.test(line));
+  const currentRunLines = lines.slice(currentPromptIdx);
+
+  // The current run lists its own tool but never the previous run's tool.
+  assert.ok(currentRunLines.some(line => /edit current\.ts/.test(line)));
+  assert.ok(!currentRunLines.some(line => /read previous\.ts/.test(line)));
+  // The previous tool renders only in the previous section, above the current prompt.
+  assert.ok(lines.slice(0, currentPromptIdx).some(line => /read previous\.ts/.test(line)));
+});
+
+test("expanded subagent run renders multiple previous run sections in chronological order", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    prompt: "Third prompt.",
+    status: { kind: "running", startedAt: 1_000 },
+    previousRuns: [
+      fakeRunSection({ prompt: "First prompt.", status: { kind: "completed", startedAt: 1_000, completedAt: 2_000, response: "first" } }),
+      fakeRunSection({ prompt: "Second prompt.", status: { kind: "error", startedAt: 1_000, completedAt: 3_000, error: "boom" } }),
+    ],
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), true, 4_000);
+
+  const firstIdx = lines.findIndex(line => /Previous run 1 · completed/.test(line));
+  const secondIdx = lines.findIndex(line => /Previous run 2 · error/.test(line));
+  const currentIdx = lines.findIndex(line => /Third prompt\./.test(line));
+
+  assert.notEqual(firstIdx, -1);
+  assert.notEqual(secondIdx, -1);
+  assert.ok(firstIdx < secondIdx, "earlier run renders above the later run");
+  assert.ok(secondIdx < currentIdx, "all previous runs render above the current run");
+});
+
+test("collapsed subagent run does not render previous run sections for a resumed agent", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    prompt: "Current work.",
+    status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory: [
+      { id: "edit", name: "edit", inputSummary: "current.ts", startedAt: 11_000 },
+    ] },
+    previousRuns: [
+      fakeRunSection({
+        prompt: "Earlier work.",
+        status: { kind: "completed", startedAt: 1_000, completedAt: 5_000, response: "ok" },
+        activity: { toolHistory: [{ id: "read", name: "read", inputSummary: "previous.ts", startedAt: 2_000, completedAt: 3_000 }] },
+      }),
+    ],
+  });
+
+  const joined = formatSubagentToolLines(runDetails([session]), false, 12_000).join("\n");
+
+  assert.doesNotMatch(joined, /Previous run/);
+  assert.doesNotMatch(joined, /Earlier work\./);
+  assert.doesNotMatch(joined, /read previous\.ts/);
+  // The collapsed current row and its recent tool still render.
+  assert.match(joined, /edit current\.ts/);
+});
+
+test("results rendering stays stable for a resumed snapshot that carries previous runs", () => {
+  const details = resultsDetails([
+    { snapshot: fakeAgent({
+      id: "sess-1", label: "phase 2", config: { name: "helper", resumable: true },
+      prompt: "Final prompt.",
+      status: { kind: "completed", startedAt: 1, completedAt: 2, response: "final output", resumed: true },
+      previousRuns: [
+        fakeRunSection({ prompt: "First prompt.", status: { kind: "completed", startedAt: 1, completedAt: 2, response: "earlier output" } }),
+      ],
+    }) },
+  ]);
+  const expanded = formatSubagentToolLines(details, true, 0).join("\n");
+
+  // The final outcome block renders exactly as it does without previous runs.
+  assert.match(expanded, /helper/);
+  assert.match(expanded, /phase 2/);
+  assert.match(expanded, /completed/);
+  assert.match(expanded, /Result: final output/);
+  assert.match(expanded, /resumed/);
+  assert.match(expanded, /session:sess-1/);
+  // The results view summarizes the final outcome only — previous run sections never leak in.
+  assert.doesNotMatch(expanded, /Previous run/);
+  assert.doesNotMatch(expanded, /earlier output/);
 });
 
 test("subagent session inspect output uses remove terminology", () => {

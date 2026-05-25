@@ -47,6 +47,18 @@ export interface AgentActivitySnapshot {
   readonly toolHistory: readonly AgentToolUse[];
 }
 
+/**
+ * One completed attempt of a resumed agent, captured per-attempt so previous-run rendering keeps
+ * its own prompt, terminal status/output, isolated tool history, and timing/usage — distinct from
+ * the current run's activity.
+ */
+export interface AgentRunSection {
+  readonly prompt?: string;
+  readonly status: AgentViewStatus;
+  readonly activity: AgentActivitySnapshot;
+  readonly usage: Usage | undefined;
+}
+
 export type AgentDispatch = "foreground" | "background";
 
 export type AgentRetention = "transient" | "persistent";
@@ -67,6 +79,8 @@ export interface AgentSnapshot {
   readonly config: AgentViewConfig;
   readonly status: AgentViewStatus;
   readonly activity: AgentActivitySnapshot;
+  /** Completed prior attempts of a resumed agent, chronological. Absent for a single-run agent. */
+  readonly previousRuns?: readonly AgentRunSection[];
   readonly usage: Usage | undefined;
   readonly dispatch: AgentDispatch;
   readonly retention: AgentRetention;
