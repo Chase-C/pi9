@@ -147,9 +147,10 @@ export async function runAction(
     return toolResult(backgroundStartedDetails(handle.sessions));
   }
 
+  const runStartedAt = Date.now();
   const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length, isChild: deps.parentSessionId !== undefined });
   const emitPartial = (update: RunUpdate) => {
-    const partial = partialToolResult(update, deps.getCurrentSettings().display);
+    const partial = partialToolResult(update, deps.getCurrentSettings().display, runStartedAt);
     onUpdate?.(partial);
     updateSubagentWidget(ctx, widgetAgents(update), deps.getCurrentSettings());
   };
@@ -175,9 +176,9 @@ function widgetAgents(update: RunUpdate): AgentSnapshot[] {
   return update.tree.length > 0 ? update.tree : update.sessions;
 }
 
-function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings): { content: { type: "text"; text: string }[]; details: SubagentDetails } {
+function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings, runStartedAt: number): { content: { type: "text"; text: string }[]; details: SubagentDetails } {
   const subtree: AgentSnapshot[] = update.tree.length > update.sessions.length ? update.tree : [];
-  const details = runDetails(update.sessions, subtree.length > 0 ? { subtree: update.tree } : {});
+  const details = runDetails(update.sessions, { ...(subtree.length > 0 ? { subtree: update.tree } : {}), runStartedAt });
   return {
     content: [{ type: "text" as const, text: formatSubagentToolLines(details, true, Date.now(), display).join("\n") }],
     details,

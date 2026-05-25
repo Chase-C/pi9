@@ -73,8 +73,7 @@ export function formatSubagentToolLines(
 
 /**
  * Live summary of a `run` view, shared from the result renderer to the call-title renderer.
- * `elapsed` is wall-clock time since the run started (the earliest session start), not summed
- * child runtime.
+ * `elapsed` is wall-clock time since the parent run started, not summed child runtime.
  */
 export interface RunSummary {
   running: number;
@@ -87,6 +86,7 @@ export interface RunSummary {
  * Derives a {@link RunSummary} from opaque `run` details, or `undefined` for any other view.
  * Counts the `subtree` when present (so nested children are included), otherwise the flat
  * `sessions`. Every non-`running`/`queued` status is terminal, so it counts as finished.
+ * New live details carry `runStartedAt`; older persisted details fall back to the earliest row time.
  */
 export function runSummary(details: unknown, now = Date.now()): RunSummary | undefined {
   const narrowed = parseDetails(details);
@@ -101,10 +101,10 @@ export function runSummary(details: unknown, now = Date.now()): RunSummary | und
     if (status === "running") running++;
     else if (status === "queued") queued++;
     else finished++;
-    const start = getStartedAt(session.status) ?? getQueuedAt(session.status) ?? session.createdAt;
+    const start = getQueuedAt(session.status) ?? getStartedAt(session.status) ?? session.createdAt;
     if (start < earliest) earliest = start;
   }
-  return { running, queued, finished, elapsed: formatElapsed(earliest, now) };
+  return { running, queued, finished, elapsed: formatElapsed(narrowed.runStartedAt ?? earliest, now) };
 }
 
 export function createSubagentTextComponent(

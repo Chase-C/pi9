@@ -257,12 +257,22 @@ test("subagent session inspect output uses remove terminology", () => {
   assert.doesNotMatch(inspectLines, /clear/);
 });
 
-test("runSummary elapsed measures wall-clock from the earliest run start, not summed child runtime", () => {
+test("runSummary elapsed measures wall-clock from the parent run start, not summed child runtime", () => {
   // Two children that each ran 30s but overlapped: summed runtime is 60s, wall clock is 40s.
-  const a = fakeAgent({ id: "a", status: { kind: "completed", startedAt: 1_000, completedAt: 31_000 } });
-  const b = fakeAgent({ id: "b", status: { kind: "completed", startedAt: 5_000, completedAt: 35_000 } });
+  const a = fakeAgent({ id: "a", status: { kind: "completed", startedAt: 11_000, completedAt: 41_000 } });
+  const b = fakeAgent({ id: "b", status: { kind: "completed", startedAt: 15_000, completedAt: 45_000 } });
 
-  const summary = runSummary(runDetails([a, b]), 41_000);
+  const summary = runSummary(runDetails([a, b], { runStartedAt: 1_000 }), 41_000);
+
+  assert.equal(summary?.elapsed, "40s");
+});
+
+// Regression: queued time before the first session starts still counts toward the title elapsed.
+// The title should not reset to 0s when the first worker transitions queued -> running.
+test("runSummary elapsed includes queue time before the first session starts", () => {
+  const active = fakeAgent({ id: "a", status: { kind: "running", startedAt: 31_000 } });
+
+  const summary = runSummary(runDetails([active], { runStartedAt: 1_000 }), 41_000);
 
   assert.equal(summary?.elapsed, "40s");
 });

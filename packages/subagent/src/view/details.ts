@@ -23,7 +23,7 @@ export type BackgroundSpawnHandle = {
 
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
-  | { view: "run"; sessions: AgentSnapshot[]; subtree?: AgentSnapshot[] }
+  | { view: "run"; sessions: AgentSnapshot[]; subtree?: AgentSnapshot[]; runStartedAt?: number }
   | { view: "results"; results: ResultEntry[] }
   | { view: "inventory"; sessions: AgentSnapshot[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
@@ -47,7 +47,7 @@ export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
   return { view: "agents", agents };
 }
 
-export function runDetails(sessions: AgentSnapshot[], extras: { subtree?: AgentSnapshot[] } = {}): RunDetails {
+export function runDetails(sessions: AgentSnapshot[], extras: { subtree?: AgentSnapshot[]; runStartedAt?: number } = {}): RunDetails {
   return { view: "run", sessions, ...extras };
 }
 
@@ -79,7 +79,11 @@ export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundS
  */
 const DetailsSchema = Type.Union([
   Type.Object({ view: Type.Literal("agents"), agents: Type.Array(Type.Unknown()) }),
-  Type.Object({ view: Type.Literal("run"), sessions: Type.Array(Type.Unknown()) }),
+  Type.Object({
+    view: Type.Literal("run"),
+    sessions: Type.Array(Type.Unknown()),
+    runStartedAt: Type.Optional(Type.Number()),
+  }),
   Type.Object({ view: Type.Literal("results"), results: Type.Array(Type.Unknown()) }),
   Type.Object({ view: Type.Literal("inventory"), sessions: Type.Array(Type.Unknown()) }),
   Type.Object({
