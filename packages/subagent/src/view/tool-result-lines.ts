@@ -35,19 +35,26 @@ import {
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
 
-export function formatAgentConfigSummary(config: AgentConfig): string {
+export function formatAgentConfigSummary(config: AgentListingEntry | AgentConfig): string {
   const badges = [config.source, config.resumable ? "resumable" : undefined].filter(Boolean);
   return [config.name, ...badges, config.description].join(" · ");
 }
 
-export function formatAgentConfigInspect(config: AgentConfig): string[] {
-  const lines = [
+export function formatAgentConfigInspect(config: AgentListingEntry | AgentConfig): string[] {
+  return [
     `Name: ${config.name}`,
     `Description: ${config.description}`,
+    ...agentConfigMetadataLines(config),
+  ];
+}
+
+function agentConfigMetadataLines(config: AgentListingEntry | AgentConfig): string[] {
+  const lines = [
     `Source: ${config.source}`,
     `Model: ${config.model ?? "default"}`,
     `Thinking: ${config.thinking ?? "default"}`,
     `Tools: ${config.tools?.length ? config.tools.join(", ") : "default"}`,
+    `Skills: ${config.skills?.length ? config.skills.join(", ") : "none"}`,
     `Resumable: ${config.resumable}`,
   ];
   if (config.sourcePath) lines.push(`Path: ${config.sourcePath}`);
@@ -96,7 +103,7 @@ function formatSubagentToolDisplayLines(
     case "run": {
       const ordered = narrowed.subtree && narrowed.subtree.length > 0
         ? orderAsTree(narrowed.subtree)
-        : narrowed.group.sessions.map(agent => ({ agent, depth: 0 }));
+        : narrowed.sessions.map(agent => ({ agent, depth: 0 }));
       return expandRows(ordered, expanded, now, bold, display, runRow, true);
     }
 
@@ -331,13 +338,8 @@ function formatAgentListLines(agents: AgentListingEntry[], expanded: boolean, bo
     const lines = [
       applyBold(bold, agent.name),
       ...agent.description.split(/\r?\n/).map(line => `  ${line}`),
-      `  Model: ${agent.model ?? "default"}`,
-      `  Thinking: ${agent.thinking ?? "default"}`,
-      `  Tools: ${agent.tools?.length ? agent.tools.join(", ") : "default"}`,
-      `  Skills: ${agent.skills?.length ? agent.skills.join(", ") : "none"}`,
-      `  Resumable: ${agent.resumable}`,
+      ...agentConfigMetadataLines(agent).map(line => `  ${line}`),
     ];
-    if (agent.sourcePath) lines.push(`  Path: ${agent.sourcePath}`);
     if (index < agents.length - 1) lines.push("");
     return lines;
   });

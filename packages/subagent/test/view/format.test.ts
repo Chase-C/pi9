@@ -11,7 +11,6 @@ import {
   resultsDetails,
   runDetails,
 } from "../../src/view/format.js";
-import { serializeGroup } from "../../src/view/serialize.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
 test("subagent run display animates only the running status glyph", () => {
@@ -22,7 +21,7 @@ test("subagent run display animates only the running status glyph", () => {
     fakeAgent({ config: { name: "failed" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "bad" } }),
   ];
 
-  const details = runDetails(serializeGroup(sessions));
+  const details = runDetails(sessions);
   const first = formatSubagentToolLines(details, false, 0);
   const second = formatSubagentToolLines(details, false, 120);
 
@@ -131,7 +130,7 @@ test("results view expanded shows agent, status, snippet, and session handle whe
   assert.match(expanded, /Error: boom/);
 });
 
-test("background-started details project collectable handles with sessionId, inputIndex, and optional label", () => {
+test("background-started details project collectable handles with sessionId and optional label", () => {
   const sessions = [
     fakeAgent({ id: "a", dispatch: "background", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
     fakeAgent({ id: "preflight", dispatch: "background", retention: "transient", config: { name: "missing" }, inputIndex: 1, status: { kind: "error", error: "Unknown agent" } }),
@@ -140,11 +139,10 @@ test("background-started details project collectable handles with sessionId, inp
 
   const details = backgroundStartedDetails(sessions);
   assert.equal(details.view, "background-started");
-  assert.equal(details.background, true);
-  assert.equal(details.count, 3);
+  assert.equal(details.count, 2);
   assert.deepEqual(details.handles, [
-    { sessionId: "a", inputIndex: 0, label: "alpha" },
-    { sessionId: "b", inputIndex: 2 },
+    { sessionId: "a", label: "alpha" },
+    { sessionId: "b" },
   ]);
 });
 
@@ -227,7 +225,7 @@ test("subagent run renders the flat batch shape and ignores parentSessionId when
   // A second batch session that happens to declare a parent — should NOT be indented in run rendering.
   const sibling = fakeAgent({ id: "s", parentSessionId: "r", config: { name: "sibling" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
 
-  const details = runDetails(serializeGroup([root, sibling]));
+  const details = runDetails([root, sibling]);
   const lines = formatSubagentToolLines(details, false, 0);
 
   assert.match(lines[0], /^  ⠋ root/);
@@ -239,7 +237,7 @@ test("subagent run renders details.subtree as a depth-indented tree when present
   const child = fakeAgent({ id: "c", parentSessionId: "r", config: { name: "beta" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
   const grand = fakeAgent({ id: "g", parentSessionId: "c", config: { name: "gamma" }, createdAt: 3, status: { kind: "running", startedAt: 1 } });
 
-  const details = runDetails(serializeGroup([root]), { subtree: [root, child, grand] });
+  const details = runDetails([root], { subtree: [root, child, grand] });
   const lines = formatSubagentToolLines(details, false, 0);
 
   assert.equal(lines.length, 3);

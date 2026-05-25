@@ -3,22 +3,23 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../../domain/agent-config.js";
 import { formatAgentConfigInspect, formatAgentConfigSummary } from "../../view/format.js";
 import {
+  accent,
   agentInspectHelp,
   agentListHelp,
   clamp,
+  dim,
   fitLinesToWidth,
+  handleListInspectNavigation,
   isCancelKey,
-  isDownKey,
-  isEnterKey,
-  isUpKey,
+  selectedListLines,
+  type ListInspectState,
   type SubagentKeybindings,
   type SubagentSessionsTheme,
 } from "../input.js";
 import type { SubagentsCommandResult } from "./result-types.js";
 
 export class SubagentAgentsComponent implements Component {
-  private selected = 0;
-  private mode: "list" | "inspect" = "list";
+  private readonly state: ListInspectState = { selected: 0, mode: "list" };
 
   constructor(
     private readonly agents: AgentConfig[],
@@ -31,26 +32,24 @@ export class SubagentAgentsComponent implements Component {
   invalidate(): void { }
 
   render(width: number): string[] {
-    if (this.agents.length === 0) return fitLinesToWidth([this.accent("Subagent Agents"), "No configured subagent agents.", this.dim(agentListHelp())], width);
+    if (this.agents.length === 0) {
+      return fitLinesToWidth([accent(this.theme, "Subagent Agents"), "No configured subagent agents.", dim(this.theme, agentListHelp())], width);
+    }
 
-    this.selected = clamp(this.selected, 0, this.agents.length - 1);
-    if (this.mode === "inspect") {
-      const agent = this.agents[this.selected];
+    this.state.selected = clamp(this.state.selected, 0, this.agents.length - 1);
+    if (this.state.mode === "inspect") {
+      const agent = this.agents[this.state.selected];
       return fitLinesToWidth([
-        this.accent("Agent Definition"),
+        accent(this.theme, "Agent Definition"),
         ...formatAgentConfigInspect(agent).map(line => `  ${line}`),
-        this.dim(agentInspectHelp()),
+        dim(this.theme, agentInspectHelp()),
       ], width);
     }
 
     return fitLinesToWidth([
-      this.accent("Subagent Agents"),
-      ...this.agents.map((agent, index) => {
-        const prefix = index === this.selected ? "> " : "  ";
-        const line = `${prefix}${formatAgentConfigSummary(agent)}`;
-        return index === this.selected ? this.accent(line) : line;
-      }),
-      this.dim(agentListHelp()),
+      accent(this.theme, "Subagent Agents"),
+      ...selectedListLines(this.agents, this.state.selected, formatAgentConfigSummary, this.theme),
+      dim(this.theme, agentListHelp()),
     ], width);
   }
 
@@ -63,32 +62,6 @@ export class SubagentAgentsComponent implements Component {
       this.done({ action: "settings" });
       return;
     }
-    if (this.mode === "inspect" && (data === "b" || data === "B")) {
-      this.mode = "list";
-      this.tui.requestRender();
-      return;
-    }
-    if (isEnterKey(data, this.keybindings) && this.agents.length > 0) {
-      this.mode = "inspect";
-      this.tui.requestRender();
-      return;
-    }
-    if (this.mode === "list" && isUpKey(data, this.keybindings)) {
-      this.selected = clamp(this.selected - 1, 0, Math.max(0, this.agents.length - 1));
-      this.tui.requestRender();
-      return;
-    }
-    if (this.mode === "list" && isDownKey(data, this.keybindings)) {
-      this.selected = clamp(this.selected + 1, 0, Math.max(0, this.agents.length - 1));
-      this.tui.requestRender();
-    }
-  }
-
-  private accent(text: string) {
-    return this.theme.fg?.("accent", this.theme.bold?.(text) ?? text) ?? text;
-  }
-
-  private dim(text: string) {
-    return this.theme.fg?.("dim", text) ?? text;
+    handleListInspectNavigation(data, this.state, this.agents.length, this.keybindings, () => this.tui.requestRender());
   }
 }

@@ -1,6 +1,4 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
-
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { toResultJson } from "../domain/agent-result.js";
 import { createSubagentResumeMessage } from "../view/resume-message.js";
@@ -42,8 +40,8 @@ export async function resumeSessionFromCommand(
   const uiSettings = await prepareSubagentRuntime({ ctx, settingsStore, agentManager });
   let outcome: { result?: unknown; error?: unknown };
   try {
-    outcome = await ctx.ui.custom<{ result?: unknown; error?: unknown }>((tui, theme, keybindings, done) => {
-      const loader = createResumeLoader(tui, theme, keybindings, `Resuming subagent ${action.agent}...`);
+    outcome = await ctx.ui.custom<{ result?: unknown; error?: unknown }>((_tui, theme, keybindings, done) => {
+      const loader = new SubagentResumeLoader(theme, keybindings, `Resuming subagent ${action.agent}...`);
       let settled = false;
       const finish = (value: { result?: unknown; error?: unknown }) => {
         if (settled) return;
@@ -72,10 +70,6 @@ export async function resumeSessionFromCommand(
     ? `Subagent session ${action.sessionId} resumed.`
     : `Subagent session ${action.sessionId} resume ${result.status}.`,
     result.status === "completed" ? "info" : "warning");
-}
-
-function createResumeLoader(_tui: TUI, theme: SubagentSessionsTheme, keybindings: SubagentKeybindings, message: string) {
-  return new SubagentResumeLoader(theme, keybindings, message);
 }
 
 function normalizeResumeOutcome(action: SubagentResumeCommandResult, prompt: string, outcome: { result?: unknown; error?: unknown }) {

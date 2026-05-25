@@ -1,8 +1,5 @@
 import { DEFAULT_SUBAGENT_SETTINGS } from "../config/settings.js";
 
-export const PROMPT_PREVIEW_LENGTH = DEFAULT_SUBAGENT_SETTINGS.display.promptPreviewLength;
-export const MESSAGE_SNIPPET_LENGTH = DEFAULT_SUBAGENT_SETTINGS.display.messageSnippetLength;
-export const OUTPUT_SNIPPET_LENGTH = DEFAULT_SUBAGENT_SETTINGS.display.outputSnippetLength;
 export const OUTPUT_SNIPPET_MAX_LINES = DEFAULT_SUBAGENT_SETTINGS.display.outputSnippetMaxLines;
 
 export function compact(value: string, maxLength: number) {

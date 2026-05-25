@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 
 import type { AgentConfig } from "../domain/agent-config.js";
-import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
+import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { ResultEntry } from "../domain/agent-result.js";
 
 export type AgentListingEntry = Omit<AgentConfig, "systemPrompt">;
@@ -18,17 +18,16 @@ export type InventoryFilter = { status?: string[] };
 
 export type BackgroundSpawnHandle = {
   sessionId: string;
-  inputIndex: number;
   label?: string;
 };
 
 export type SubagentDetails =
   | { view: "agents"; agents: AgentListingEntry[] }
-  | { view: "run"; group: AgentGroupView; active?: boolean; subtree?: AgentSnapshot[] }
+  | { view: "run"; sessions: AgentSnapshot[]; subtree?: AgentSnapshot[] }
   | { view: "results"; results: ResultEntry[] }
   | { view: "inventory"; sessions: AgentSnapshot[]; filter?: InventoryFilter }
   | { view: "remove-summary"; summary: RemoveSummary }
-  | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number; background: true }
+  | { view: "background-started"; handles: BackgroundSpawnHandle[]; count: number }
   | { view: "error"; errors?: string[] };
 
 /**
@@ -48,11 +47,8 @@ export function agentsDetails(agents: AgentListingEntry[]): AgentsDetails {
   return { view: "agents", agents };
 }
 
-export function runDetails(
-  group: AgentGroupView,
-  extras: { active?: boolean; subtree?: AgentSnapshot[] } = {},
-): RunDetails {
-  return { view: "run", group, ...extras };
+export function runDetails(sessions: AgentSnapshot[], extras: { subtree?: AgentSnapshot[] } = {}): RunDetails {
+  return { view: "run", sessions, ...extras };
 }
 
 export function resultsDetails(results: ResultEntry[]): ResultsDetails {
@@ -64,15 +60,14 @@ export function inventoryDetails(sessions: AgentSnapshot[], filter?: InventoryFi
 }
 
 export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundStartedDetails {
-  const handles: BackgroundSpawnHandle[] = sessions.flatMap((session, index) => {
+  const handles: BackgroundSpawnHandle[] = sessions.flatMap(session => {
     if (session.retention !== "persistent") return [];
     return [{
       sessionId: session.id,
-      inputIndex: session.inputIndex ?? index,
       ...(session.label !== undefined ? { label: session.label } : {}),
     }];
   });
-  return { view: "background-started", handles, count: sessions.length, background: true };
+  return { view: "background-started", handles, count: handles.length };
 }
 
 /**
@@ -84,7 +79,7 @@ export function backgroundStartedDetails(sessions: AgentSnapshot[]): BackgroundS
  */
 const DetailsSchema = Type.Union([
   Type.Object({ view: Type.Literal("agents"), agents: Type.Array(Type.Unknown()) }),
-  Type.Object({ view: Type.Literal("run"), group: Type.Object({ sessions: Type.Array(Type.Unknown()) }) }),
+  Type.Object({ view: Type.Literal("run"), sessions: Type.Array(Type.Unknown()) }),
   Type.Object({ view: Type.Literal("results"), results: Type.Array(Type.Unknown()) }),
   Type.Object({ view: Type.Literal("inventory"), sessions: Type.Array(Type.Unknown()) }),
   Type.Object({

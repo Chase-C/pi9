@@ -17,6 +17,60 @@ export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+export type ListInspectMode = "list" | "inspect";
+export type ListInspectState = { selected: number; mode: ListInspectMode };
+
+export function accent(theme: SubagentSessionsTheme, text: string) {
+  return theme.fg?.("accent", theme.bold?.(text) ?? text) ?? text;
+}
+
+export function dim(theme: SubagentSessionsTheme, text: string) {
+  return theme.fg?.("dim", text) ?? text;
+}
+
+export function selectedListLines<T>(
+  items: readonly T[],
+  selected: number,
+  renderItem: (item: T, index: number) => string,
+  theme: SubagentSessionsTheme,
+) {
+  return items.map((item, index) => {
+    const prefix = index === selected ? "> " : "  ";
+    const line = `${prefix}${renderItem(item, index)}`;
+    return index === selected ? accent(theme, line) : line;
+  });
+}
+
+export function handleListInspectNavigation(
+  data: string,
+  state: ListInspectState,
+  count: number,
+  keybindings: SubagentKeybindings,
+  requestRender: () => void,
+) {
+  if (state.mode === "inspect" && (data === "b" || data === "B")) {
+    state.mode = "list";
+    requestRender();
+    return true;
+  }
+  if (isEnterKey(data, keybindings) && count > 0) {
+    state.mode = "inspect";
+    requestRender();
+    return true;
+  }
+  if (state.mode === "list" && isUpKey(data, keybindings)) {
+    state.selected = clamp(state.selected - 1, 0, Math.max(0, count - 1));
+    requestRender();
+    return true;
+  }
+  if (state.mode === "list" && isDownKey(data, keybindings)) {
+    state.selected = clamp(state.selected + 1, 0, Math.max(0, count - 1));
+    requestRender();
+    return true;
+  }
+  return false;
+}
+
 export function agentListHelp() {
   return "↑↓ select · enter inspect · s settings · esc close";
 }

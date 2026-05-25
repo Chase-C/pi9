@@ -2,7 +2,7 @@ import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type Component, type SettingItem } from "@earendil-works/pi-tui";
 
 import type { BackgroundNotifyMode, SubagentSettings, WidgetPlacement } from "../../config/settings.js";
-import { fitLinesToWidth, isCancelKey, type SubagentKeybindings, type SubagentSessionsTheme } from "../input.js";
+import { accent, fitLinesToWidth, isCancelKey, type SubagentKeybindings, type SubagentSessionsTheme } from "../input.js";
 
 export type SubagentSettingsChange =
   | { kind: "widgetPlacement"; value: WidgetPlacement }
@@ -51,7 +51,7 @@ export class SubagentSettingsComponent implements Component {
   invalidate(): void { this.settingsList.invalidate(); }
 
   render(width: number): string[] {
-    return fitLinesToWidth([this.accent("Subagent Settings"), "", ...this.settingsList.render(width)], width);
+    return fitLinesToWidth([accent(this.theme, "Subagent Settings"), "", ...this.settingsList.render(width)], width);
   }
 
   handleInput(data: string): void {
@@ -62,9 +62,6 @@ export class SubagentSettingsComponent implements Component {
     this.settingsList.handleInput(data);
   }
 
-  private accent(text: string) {
-    return this.theme.fg?.("accent", this.theme.bold?.(text) ?? text) ?? text;
-  }
 }
 
 function getSubagentSettingsListTheme(theme: SubagentSessionsTheme) {

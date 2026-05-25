@@ -25,12 +25,15 @@ import {
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
 
 export function formatSubagentSessionSummary(agent: AgentSnapshot): string {
-  const badges = [
+  return [agent.label ?? agent.config.name, effectiveStatus(agent.status), ...sessionBadges(agent)].join(" · ");
+}
+
+function sessionBadges(agent: AgentSnapshot) {
+  return [
     agent.config.resumable ? "resumable" : undefined,
     agent.dispatch === "background" ? "dispatch:background" : undefined,
     `session:${agent.id}`,
-  ].filter(Boolean);
-  return [agent.label ?? agent.config.name, effectiveStatus(agent.status), ...badges].join(" · ");
+  ].filter((badge): badge is string => Boolean(badge));
 }
 
 export function formatSubagentSessionInspect(
@@ -88,18 +91,8 @@ export function formatWidgetLines(
 
 export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, display: SubagentDisplaySettings = DEFAULT_DISPLAY): string {
   const status = effectiveStatus(row.status);
-  const parts = [
-    applyBold(bold, row.label ?? row.config.name),
-    ...(row.resumed ? ["resumed"] : []),
-    status,
-    plural(row.activity.turns, "turn"),
-    plural(getToolUseCount(row), "tool"),
-    plural(row.usage?.totalTokens ?? 0, "token"),
-    rowElapsed(row, now),
-  ];
+  const parts = sessionRowSegments(row, now, applyBold(bold, row.label ?? row.config.name), { status, toolCount: true });
 
-  const activeTool = getActiveTools(row).at(-1);
-  if (activeTool) parts.push(`tool:${activeTool}`);
   if (row.activity.messageSnippet) parts.push(`"${compact(row.activity.messageSnippet, display.messageSnippetLength)}"`);
   if (row.dispatch === "background") parts.push("dispatch:background");
 
@@ -114,15 +107,26 @@ export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, 
 
 export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold): DisplayLine {
   const { glyph, color } = statusPresentation(row.status, now);
+  const name = `  ${glyph} ${applyBold(bold, row.config.name)}${(row.label) ? `  ${row.label}` : ""}`;
+  return { text: sessionRowSegments(row, now, name, { toolCount: false }).join(" · "), status: color };
+}
+
+function sessionRowSegments(
+  row: AgentSnapshot,
+  now: number,
+  name: string,
+  options: { status?: string; toolCount: boolean },
+) {
   const parts = [
-    `  ${glyph} ${applyBold(bold, row.config.name)}${(row.label) ? `  ${row.label}` : ""}`,
+    name,
     ...(row.resumed ? ["resumed"] : []),
+    ...(options.status ? [options.status] : []),
     plural(row.activity.turns, "turn"),
+    ...(options.toolCount ? [plural(getToolUseCount(row), "tool")] : []),
     plural(row.usage?.totalTokens ?? 0, "token"),
     rowElapsed(row, now),
   ];
-
   const activeTool = getActiveTools(row).at(-1);
   if (activeTool) parts.push(`tool:${activeTool}`);
-  return { text: parts.join(" · "), status: color };
+  return parts;
 }

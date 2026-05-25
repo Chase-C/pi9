@@ -1,6 +1,6 @@
 import type { Component } from "@earendil-works/pi-tui";
 
-import { fitLinesToWidth, isCancelKey, type SubagentKeybindings, type SubagentSessionsTheme } from "../input.js";
+import { accent, dim, fitLinesToWidth, isCancelKey, type SubagentKeybindings, type SubagentSessionsTheme } from "../input.js";
 
 export class SubagentResumeLoader implements Component {
   private readonly controller = new AbortController();
@@ -11,7 +11,7 @@ export class SubagentResumeLoader implements Component {
 
   invalidate(): void { }
 
-  render(width: number) { return fitLinesToWidth([this.accent(this.message), this.dim("esc cancel")], width); }
+  render(width: number) { return fitLinesToWidth([accent(this.theme, this.message), dim(this.theme, "esc cancel")], width); }
 
   handleInput(data: string) {
     if (isCancelKey(data, this.keybindings)) this.controller.abort();
@@ -19,11 +19,4 @@ export class SubagentResumeLoader implements Component {
 
   dispose(): void { }
 
-  private accent(text: string) {
-    return this.theme.fg?.("accent", text) ?? text;
-  }
-
-  private dim(text: string) {
-    return this.theme.fg?.("dim", text) ?? text;
-  }
 }

@@ -24,7 +24,7 @@ import {
   runDetails,
   type SubagentDetails,
 } from "../view/format.js";
-import { listAgentDefinitions, serializeGroup } from "../view/serialize.js";
+import { listAgentDefinitions } from "../view/serialize.js";
 
 export interface ActionDeps {
   agentManager: AgentManager;
@@ -177,10 +177,7 @@ function widgetAgents(update: RunUpdate): AgentSnapshot[] {
 
 function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings): { content: { type: "text"; text: string }[]; details: SubagentDetails } {
   const subtree: AgentSnapshot[] = update.tree.length > update.sessions.length ? update.tree : [];
-  const details = runDetails(serializeGroup(update.sessions), {
-    active: update.active,
-    ...(subtree.length > 0 ? { subtree: update.tree } : {}),
-  });
+  const details = runDetails(update.sessions, subtree.length > 0 ? { subtree: update.tree } : {});
   return {
     content: [{ type: "text" as const, text: formatSubagentToolLines(details, true, Date.now(), display).join("\n") }],
     details,

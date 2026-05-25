@@ -5,22 +5,23 @@ import type { AgentManager } from "../../runtime/agent-manager.js";
 import type { SubagentDisplaySettings } from "../../config/settings.js";
 import { formatSubagentSessionInspect, formatSubagentSessionSummary } from "../../view/format.js";
 import {
+  accent,
   clamp,
+  dim,
   fitLinesToWidth,
+  handleListInspectNavigation,
   inspectHelp,
   isCancelKey,
-  isDownKey,
-  isEnterKey,
-  isUpKey,
   listHelp,
+  selectedListLines,
+  type ListInspectState,
   type SubagentKeybindings,
   type SubagentSessionsTheme,
 } from "../input.js";
 import type { SubagentsCommandResult } from "./result-types.js";
 
 export class SubagentSessionsComponent implements Component {
-  private selected = 0;
-  private mode: "list" | "inspect" = "list";
+  private readonly state: ListInspectState = { selected: 0, mode: "list" };
 
   constructor(
     private readonly agentManager: AgentManager,
@@ -36,26 +37,22 @@ export class SubagentSessionsComponent implements Component {
 
   render(width: number): string[] {
     const sessions = this.sessions;
-    if (sessions.length === 0) return fitLinesToWidth([this.accent("Subagent Sessions"), "No active or retained subagent sessions."], width);
+    if (sessions.length === 0) return fitLinesToWidth([accent(this.theme, "Subagent Sessions"), "No active or retained subagent sessions."], width);
 
-    this.selected = clamp(this.selected, 0, sessions.length - 1);
-    if (this.mode === "inspect") {
-      const session = sessions[this.selected];
+    this.state.selected = clamp(this.state.selected, 0, sessions.length - 1);
+    if (this.state.mode === "inspect") {
+      const session = sessions[this.state.selected];
       return fitLinesToWidth([
-        this.accent("Subagent Session"),
+        accent(this.theme, "Subagent Session"),
         ...formatSubagentSessionInspect(session, Date.now(), this.display).map(line => `  ${line}`),
-        this.dim(inspectHelp(session)),
+        dim(this.theme, inspectHelp(session)),
       ], width);
     }
 
     return fitLinesToWidth([
-      this.accent("Subagent Sessions"),
-      ...sessions.map((session, index) => {
-        const prefix = index === this.selected ? "> " : "  ";
-        const line = `${prefix}${formatSubagentSessionSummary(session)}`;
-        return index === this.selected ? this.accent(line) : line;
-      }),
-      this.dim(listHelp(sessions[this.selected])),
+      accent(this.theme, "Subagent Sessions"),
+      ...selectedListLines(sessions, this.state.selected, formatSubagentSessionSummary, this.theme),
+      dim(this.theme, listHelp(sessions[this.state.selected])),
     ], width);
   }
 
@@ -63,11 +60,6 @@ export class SubagentSessionsComponent implements Component {
     const sessions = this.sessions;
     if (isCancelKey(data, this.keybindings)) {
       this.done();
-      return;
-    }
-    if (this.mode === "inspect" && (data === "b" || data === "B")) {
-      this.mode = "list";
-      this.tui.requestRender();
       return;
     }
     if (data === "c" || data === "C") {
@@ -78,24 +70,11 @@ export class SubagentSessionsComponent implements Component {
       this.resumeSelected();
       return;
     }
-    if (isEnterKey(data, this.keybindings) && sessions.length > 0) {
-      this.mode = "inspect";
-      this.tui.requestRender();
-      return;
-    }
-    if (this.mode === "list" && isUpKey(data, this.keybindings)) {
-      this.selected = clamp(this.selected - 1, 0, Math.max(0, sessions.length - 1));
-      this.tui.requestRender();
-      return;
-    }
-    if (this.mode === "list" && isDownKey(data, this.keybindings)) {
-      this.selected = clamp(this.selected + 1, 0, Math.max(0, sessions.length - 1));
-      this.tui.requestRender();
-    }
+    handleListInspectNavigation(data, this.state, sessions.length, this.keybindings, () => this.tui.requestRender());
   }
 
   private resumeSelected() {
-    const session = this.sessions[this.selected];
+    const session = this.sessions[this.state.selected];
     if (!session) return;
     if (!session.capabilities.canResume) {
       const detail = session.status.kind === "done" ? session.status.outcome : session.status.kind;
@@ -106,7 +85,7 @@ export class SubagentSessionsComponent implements Component {
   }
 
   private clearSelected() {
-    const session = this.sessions[this.selected];
+    const session = this.sessions[this.state.selected];
     if (!session) return;
     if (!session.capabilities.canClear) {
       const detail = session.status.kind === "done" ? session.status.outcome : session.status.kind;
@@ -127,20 +106,12 @@ export class SubagentSessionsComponent implements Component {
       this.done();
       return;
     }
-    this.selected = clamp(this.selected, 0, sessions.length - 1);
-    this.mode = "list";
+    this.state.selected = clamp(this.state.selected, 0, sessions.length - 1);
+    this.state.mode = "list";
     this.tui.requestRender();
   }
 
   private get sessions(): AgentSnapshot[] {
     return this.agentManager.listSessions();
-  }
-
-  private accent(text: string) {
-    return this.theme.fg?.("accent", this.theme.bold?.(text) ?? text) ?? text;
-  }
-
-  private dim(text: string) {
-    return this.theme.fg?.("dim", text) ?? text;
   }
 }

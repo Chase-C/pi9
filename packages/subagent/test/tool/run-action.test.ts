@@ -323,7 +323,7 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
 
   assert.equal(result.isError, false);
   assert.equal(resultsJson(result)[0].result.output, "done");
-  assert.equal(partials[0].details.group.sessions[0].activity.toolHistory.at(-1)?.name, "read");
+  assert.equal(partials[0].details.sessions[0].activity.toolHistory.at(-1)?.name, "read");
   assert.doesNotMatch(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], "subagent");
   assert.match(widgets[0][1][0], /root/);
@@ -397,13 +397,11 @@ test("subagent action=run background:true returns view:background-started immedi
 
   assert.equal(result.isError, false);
   assert.equal(result.details.view, "background-started");
-  assert.equal(result.details.background, true);
   assert.equal(result.details.count, 1);
   assert.equal(result.details.handles.length, 1);
   const handle = result.details.handles[0];
   assert.equal(typeof handle.sessionId, "string");
-  assert.equal(handle.inputIndex, 0);
-  assert.deepEqual(Object.keys(handle).sort(), ["inputIndex", "sessionId"]);
+  assert.deepEqual(Object.keys(handle).sort(), ["sessionId"]);
   const liveStatus = manager.listSessions()[0].status.kind;
   assert.ok(liveStatus === "queued" || liveStatus === "running", `expected non-terminal status, got ${liveStatus}`);
 
@@ -585,6 +583,6 @@ test("partial tool results carry the full descendant subtree; final tool result 
   // Final result is the slim results view; no subtree, no per-session AgentSnapshot dump
   assert.equal(final.details.view, "results");
   assert.equal(final.details.subtree, undefined);
-  assert.equal(final.details.group, undefined);
+  assert.equal(final.details.sessions, undefined);
   assert.deepEqual(resultsJson(final).map((o: any) => o.result.agent), ["root"]);
 });
