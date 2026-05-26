@@ -1,3 +1,5 @@
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import {
   effectiveStatus,
@@ -88,6 +90,7 @@ export type WidgetSectionTitle = "Background" | "Resumable";
 
 export type WidgetRow = {
   glyph: string;
+  color: ThemeColor;
   name: string;
   elapsed: string;
   tokens?: string;
@@ -120,11 +123,15 @@ function parentDisplayName(agent: AgentSnapshot, byId: Map<string, AgentSnapshot
 export type WidgetSection = {
   title: WidgetSectionTitle;
   counts: { running: number; queued: number; ready: number; error: number };
-  rows: WidgetRow[];
+  agents: AgentSnapshot[];
   overflow: number;
 };
 
-export type WidgetModel = { sections: WidgetSection[]; footer?: string };
+export type WidgetModel = {
+  sections: WidgetSection[];
+  byId: Map<string, AgentSnapshot>;
+  footer?: string;
+};
 
 export function buildWidgetModel(
   agents: AgentSnapshot[],
@@ -142,28 +149,40 @@ export function buildWidgetModel(
   ).length;
 
   const sections: WidgetSection[] = [];
-  const backgroundSection = buildSection("Background", background, now, display, byId);
+  const backgroundSection = buildSection("Background", background, display, byId);
   if (backgroundSection) sections.push(backgroundSection);
-  const resumableSection = buildSection("Resumable", resumable, now, display, byId);
+  const resumableSection = buildSection("Resumable", resumable, display, byId);
   if (resumableSection) sections.push(resumableSection);
 
-  if (sections.length === 0) return { sections: [] };
+  if (sections.length === 0) return { sections: [], byId };
 
   const footer = display.widgetShowForeground && foregroundRunning > 0
     ? `+${foregroundRunning} foreground running`
     : undefined;
-  return { sections, ...(footer ? { footer } : {}) };
+  return { sections, byId, ...(footer ? { footer } : {}) };
 }
 
-export function stringifyWidgetModel(model: WidgetModel): string[] {
+export type WidgetRowFormatter = (row: WidgetRow) => string;
+
+export function renderWidgetModelLines(
+  model: WidgetModel,
+  now: number,
+  formatRow: WidgetRowFormatter,
+): string[] {
   const lines: string[] = [];
   for (const section of model.sections) {
     lines.push(formatSectionHeader(section));
-    for (const row of section.rows) lines.push(formatWidgetRow(row));
+    for (const agent of section.agents) {
+      lines.push(formatRow(toWidgetRow(agent, now, model.byId)));
+    }
     if (section.overflow > 0) lines.push(`  +${section.overflow} more`);
   }
   if (model.footer) lines.push(model.footer);
   return lines;
+}
+
+export function stringifyWidgetModel(model: WidgetModel, now = Date.now()): string[] {
+  return renderWidgetModelLines(model, now, formatWidgetRow);
 }
 
 export function formatWidgetLines(
@@ -171,13 +190,13 @@ export function formatWidgetLines(
   now = Date.now(),
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): string[] {
-  return stringifyWidgetModel(buildWidgetModel(agents, now, display));
+  const model = buildWidgetModel(agents, now, display);
+  return stringifyWidgetModel(model, now);
 }
 
 function buildSection(
   title: WidgetSectionTitle,
   agents: AgentSnapshot[],
-  now: number,
   display: SubagentDisplaySettings,
   byId: Map<string, AgentSnapshot>,
 ): WidgetSection | undefined {
@@ -209,7 +228,7 @@ function buildSection(
   return {
     title,
     counts,
-    rows: visible.map(agent => toWidgetRow(agent, now, byId)),
+    agents: visible,
     overflow,
   };
 }
@@ -224,12 +243,13 @@ function sortWidgetAgents(agents: AgentSnapshot[]): AgentSnapshot[] {
 }
 
 function toWidgetRow(agent: AgentSnapshot, now: number, byId: Map<string, AgentSnapshot>): WidgetRow {
-  const { glyph } = statusPresentation(agent.status, now);
+  const { glyph, color } = statusPresentation(agent.status, now);
   const tokens = abbreviateTokens(agent.usage?.totalTokens ?? 0);
   const activeTool = isActiveStatusKind(agent.status.kind) ? getActiveTools(agent).at(-1) : undefined;
   const parentName = parentDisplayName(agent, byId);
   return {
     glyph,
+    color,
     name: agent.label ?? agent.config.name,
     elapsed: rowElapsed(agent, now),
     ...(tokens ? { tokens } : {}),
@@ -238,7 +258,7 @@ function toWidgetRow(agent: AgentSnapshot, now: number, byId: Map<string, AgentS
   };
 }
 
-function formatSectionHeader(section: WidgetSection): string {
+export function formatSectionHeader(section: WidgetSection): string {
   const parts: string[] = [section.title];
   const { running, queued, ready, error } = section.counts;
   if (running) parts.push(`${running} running`);
@@ -248,12 +268,21 @@ function formatSectionHeader(section: WidgetSection): string {
   return parts.join(" · ");
 }
 
-function formatWidgetRow(row: WidgetRow): string {
+export function formatWidgetRowBody(row: WidgetRow): string {
   const parts = [row.name, row.elapsed];
   if (row.tokens) parts.push(row.tokens);
   if (row.activeTool) parts.push(`tool:${row.activeTool}`);
   if (row.parentName) parts.push(`↳ ${row.parentName}`);
-  return `  ${row.glyph} ${parts.join(" · ")}`;
+  return parts.join(" · ");
+}
+
+export function formatWidgetRow(row: WidgetRow): string {
+  return `  ${row.glyph} ${formatWidgetRowBody(row)}`;
+}
+
+export function formatThemedWidgetRow(row: WidgetRow, theme: { fg?(color: string, text: string): string } | undefined): string {
+  const glyph = theme?.fg ? theme.fg(row.color, row.glyph) : row.glyph;
+  return `  ${glyph} ${formatWidgetRowBody(row)}`;
 }
 
 export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, display: SubagentDisplaySettings = DEFAULT_DISPLAY): string {

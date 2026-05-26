@@ -1,12 +1,21 @@
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
-import { formatWidgetLines } from "../view/format.js";
+import { buildWidgetModel } from "../view/session-lines.js";
+import { SubagentWidgetComponent } from "../view/widget-component.js";
 import type { SubagentSettings, SubagentUiSettings } from "../config/settings.js";
+
+type WidgetComponentFactory = (tui: TUI, theme: Theme) => Component & { dispose?(): void };
 
 type SubagentWidgetContext = {
   hasUI?: boolean;
   ui?: {
     notify?: (message: string, level?: "info" | "warning" | "error") => void;
-    setWidget?: (id: string, lines: string[] | undefined, options?: { placement?: "belowEditor" | "aboveEditor" }) => void;
+    setWidget?: {
+      (id: string, content: string[] | undefined, options?: { placement?: "belowEditor" | "aboveEditor" }): void;
+      (id: string, content: WidgetComponentFactory | undefined, options?: { placement?: "belowEditor" | "aboveEditor" }): void;
+    };
   };
 };
 
@@ -22,8 +31,11 @@ export function updateSubagentWidget(
       return;
     }
     const display = (settings as SubagentSettings).display;
-    const lines = formatWidgetLines(agents, Date.now(), display);
-    ctx.ui.setWidget("subagent", lines.length > 0 ? lines : undefined, { placement: settings.widgetPlacement });
+    const model = buildWidgetModel(agents, Date.now(), display);
+    const factory: WidgetComponentFactory | undefined = model.sections.length > 0
+      ? (_tui, theme) => new SubagentWidgetComponent(model, theme)
+      : undefined;
+    ctx.ui.setWidget("subagent", factory, { placement: settings.widgetPlacement });
   } catch (error) {
     try {
       ctx.ui.notify?.(`Subagent UI update failed: ${error instanceof Error ? error.message : String(error)}`, "warning");

@@ -8,6 +8,7 @@ import subagentExtension from "../../src/index.js";
 import { AgentManager } from "../../src/runtime/agent-manager.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
+import { renderWidgetContent } from "../helpers/render-widget.js";
 
 const baseCtx = () => ({ cwd: process.cwd(), hasUI: false, modelRegistry: { getAll: () => [] } } as any);
 
@@ -328,9 +329,10 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
   assert.equal(partials[0].details.sessions[0].activity.toolHistory.at(-1)?.name, "read");
   assert.doesNotMatch(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], "subagent");
-  assert.equal(widgets[0][1][0], "Background · 2 running");
-  assert.match(widgets[0][1][1], /root/);
-  assert.match(widgets[0][1][2], /child/);
+  const widgetLines = renderWidgetContent(widgets[0][1]);
+  assert.equal(widgetLines[0], "Background · 2 running");
+  assert.match(widgetLines[1], /root/);
+  assert.match(widgetLines[2], /child/);
   assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: "belowEditor" }]);
 });
 
