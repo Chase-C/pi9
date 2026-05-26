@@ -17,14 +17,14 @@ export class AgentActivity {
   private _turns: number = 0;
   private _toolHistory = new Array<AgentToolUse>();
   private _compactions: number = 0;
-  private _totalUsage: Usage = DefaultUsage;
+  private _latestUsage: Usage = DefaultUsage;
   private _nextSyntheticToolId = 0;
 
   constructor(private readonly onChange: AgentActivityListener) {}
 
   get message() { return this._message }
 
-  get usage(): Usage { return this._totalUsage }
+  get usage(): Usage { return this._latestUsage }
 
   snapshot(): AgentActivitySnapshot {
     return {
@@ -45,7 +45,11 @@ export class AgentActivity {
         this._message = "";
       }
       else if (event.type === "message_end" && event.message.role === "assistant") {
-        this._totalUsage = CombineUsage(this._totalUsage, event.message.usage);
+        // Each assistant message carries the usage for that single API call, where the
+        // input/cache fields already cover the whole conversation re-sent that call. Summing
+        // across calls would re-count the growing context every round, so we take the latest
+        // call's usage as the run's current context size rather than accumulating.
+        this._latestUsage = event.message.usage;
         this.onChange("usage");
       }
       else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
@@ -159,24 +163,4 @@ function fallbackSummary(input: Record<string, unknown>): string | undefined {
     .map(([key, value]) => `${key}:${String(value).replace(/\s+/g, " ")}`)
     .join(" ");
   return safe || undefined;
-}
-
-function CombineUsage(
-  a: Usage,
-  b: Usage,
-): Usage {
-  return {
-    input: a.input + b.input,
-    output: a.output + b.output,
-    cacheRead: a.cacheRead + b.cacheRead,
-    cacheWrite: a.cacheWrite + b.cacheWrite,
-    totalTokens: a.totalTokens + b.totalTokens,
-    cost: {
-      input: a.cost.input + b.cost.input,
-      output: a.cost.output + b.cost.output,
-      cacheRead: a.cost.cacheRead + b.cost.cacheRead,
-      cacheWrite: a.cost.cacheWrite + b.cost.cacheWrite,
-      total: a.cost.total + b.cost.total,
-    }
-  }
 }
