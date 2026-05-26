@@ -1,4 +1,5 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import type { AgentSnapshot } from "../../domain/agent-snapshot.js";
 import type { AgentManager } from "../../runtime/agent-manager.js";
@@ -16,7 +17,6 @@ import {
   selectedListLines,
   type ListInspectState,
   type SubagentKeybindings,
-  type SubagentSessionsTheme,
 } from "../input.js";
 import type { SubagentsCommandResult } from "./result-types.js";
 
@@ -26,7 +26,7 @@ export class SubagentSessionsComponent implements Component {
   constructor(
     private readonly agentManager: AgentManager,
     private readonly tui: Pick<TUI, "requestRender">,
-    private readonly theme: SubagentSessionsTheme,
+    private readonly theme: Theme,
     private readonly keybindings: SubagentKeybindings,
     private readonly display: SubagentDisplaySettings,
     private readonly notify: (message: string, level?: string) => void,

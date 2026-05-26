@@ -10,35 +10,38 @@ import {
 } from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact, compactMultiline } from "./view-helpers.js";
-import type { DisplayLine, DisplayStatus } from "./text-component.js";
+import type { DisplayLine } from "./text-component.js";
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
 
 const RUNNING_GLYPHS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const RUNNING_GLYPH_INTERVAL_MS = 120;
 
-const STATUS_PRESENTATION: Record<string, { glyph: string; color: DisplayStatus }> = {
-  completed: { glyph: "✓", color: "completed" },
-  running: { glyph: RUNNING_GLYPHS[0], color: "running" },
-  queued: { glyph: "○", color: "queued" },
+type StatusPresentation = { glyph: string; color: ThemeColor };
+
+const STATUS_PRESENTATION: Record<string, StatusPresentation> = {
+  completed: { glyph: "✓", color: "success" },
+  running: { glyph: RUNNING_GLYPHS[0], color: "accent" },
+  queued: { glyph: "○", color: "muted" },
   error: { glyph: "✗", color: "error" },
 };
-const FALLBACK_STATUS_PRESENTATION = { glyph: "!", color: "warning" as DisplayStatus };
+const FALLBACK_STATUS_PRESENTATION: StatusPresentation = { glyph: "!", color: "warning" };
 
-export function statusPresentation(status: AgentViewStatus, now = Date.now()) {
+export function statusPresentation(status: AgentViewStatus, now = Date.now()): StatusPresentation {
   const effective = effectiveStatus(status);
   if (effective === "running") {
     const frame = Math.floor(now / RUNNING_GLYPH_INTERVAL_MS) % RUNNING_GLYPHS.length;
-    return { glyph: RUNNING_GLYPHS[frame], color: "running" as DisplayStatus };
+    return { glyph: RUNNING_GLYPHS[frame], color: "accent" };
   }
   return STATUS_PRESENTATION[effective] ?? FALLBACK_STATUS_PRESENTATION;
 }
 
-export function statusColorForOutcome(status: string): DisplayStatus {
-  if (status === "completed") return "completed";
+export function statusColorForOutcome(status: string): ThemeColor {
+  if (status === "completed") return "success";
   if (status === "error") return "error";
-  if (status === "running") return "running";
-  if (status === "queued") return "queued";
+  if (status === "running") return "accent";
+  if (status === "queued") return "muted";
   return "warning";
 }
 
@@ -60,13 +63,13 @@ export function formatElapsed(from: number, to: number) {
 
 export function formatToolUseLine(tool: AgentToolUse, indent: number, now = Date.now(), summaryMaxLength = DEFAULT_DISPLAY.toolInputSummaryLength): DisplayLine {
   const completed = tool.completedAt !== undefined;
-  const status = tool.isError ? "error" : completed ? "queued" : "running";
+  const color = tool.isError ? "error" : completed ? "muted" : "accent";
   const glyph = tool.isError ? "✗" : completed ? "✓" : statusPresentation({ kind: "running", startedAt: tool.startedAt }, now).glyph;
   const elapsed = formatElapsed(tool.startedAt, tool.completedAt ?? now);
   const summary = tool.inputSummary ? ` ${compact(tool.inputSummary, summaryMaxLength)}` : "";
   return {
     text: `${" ".repeat(indent)}${glyph} ${tool.name}${summary} · ${elapsed}`,
-    status,
+    color,
     hangingIndent: indent,
   };
 }
@@ -108,12 +111,12 @@ export function orderAsTree(sessions: readonly AgentSnapshot[]): Array<{ agent: 
   return out;
 }
 
-export function snippetLines(snippet: string, leadingIndent: number, color: DisplayStatus | undefined, display: SubagentDisplaySettings = DEFAULT_DISPLAY): DisplayLine[] {
+export function snippetLines(snippet: string, leadingIndent: number, color: ThemeColor | undefined, display: SubagentDisplaySettings = DEFAULT_DISPLAY): DisplayLine[] {
   const compacted = compactMultiline(snippet, display.outputSnippetLength, display.outputSnippetMaxLines);
   const lead = " ".repeat(leadingIndent);
   const [first, ...rest] = compacted.split("\n");
-  const head: DisplayLine = { text: `${lead}${first}`, status: color, hangingIndent: leadingIndent };
-  return [head, ...rest.map(line => ({ text: `${lead}${line}`, status: color, hangingIndent: leadingIndent }))];
+  const head: DisplayLine = { text: `${lead}${first}`, color, hangingIndent: leadingIndent };
+  return [head, ...rest.map(line => ({ text: `${lead}${line}`, color, hangingIndent: leadingIndent }))];
 }
 
 /**
@@ -155,7 +158,7 @@ function appendPreviousRuns(lines: DisplayLine[], sections: readonly AgentRunSec
 function previousRunHeader(section: AgentRunSection, index: number, now: number): DisplayLine {
   const elapsed = sectionElapsed(section, now);
   const parts = [`Previous run ${index + 1}`, effectiveStatus(section.status), ...(elapsed ? [elapsed] : [])];
-  return { text: `    ${parts.join(" · ")}`, status: statusPresentation(section.status, now).color, hangingIndent: 4 };
+  return { text: `    ${parts.join(" · ")}`, color: statusPresentation(section.status, now).color, hangingIndent: 4 };
 }
 
 function sectionElapsed(section: AgentRunSection, now: number): string | undefined {
@@ -175,7 +178,7 @@ function appendPrompt(lines: DisplayLine[], row: RunBody) {
   if (!row.prompt) return;
   lines.push({ text: "" });
   for (const part of [...row.prompt.split(/\r?\n/), ""]) {
-    lines.push({ text: `    ${part}`, status: "running", hangingIndent: 4 });
+    lines.push({ text: `    ${part}`, color: "accent", hangingIndent: 4 });
   }
 }
 

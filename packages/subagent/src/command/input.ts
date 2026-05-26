@@ -1,11 +1,7 @@
 import { matchesKey, truncateToWidth, visibleWidth, type KeybindingsManager } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
-
-export type SubagentSessionsTheme = {
-  fg?: (color: "accent" | "dim", text: string) => string;
-  bold?: (text: string) => string;
-};
 
 export type SubagentKeybindings = Pick<KeybindingsManager, "matches"> | undefined;
 
@@ -20,11 +16,11 @@ export function clamp(value: number, min: number, max: number) {
 export type ListInspectMode = "list" | "inspect";
 export type ListInspectState = { selected: number; mode: ListInspectMode };
 
-export function accent(theme: SubagentSessionsTheme, text: string) {
+export function accent(theme: Theme, text: string) {
   return theme.fg?.("accent", theme.bold?.(text) ?? text) ?? text;
 }
 
-export function dim(theme: SubagentSessionsTheme, text: string) {
+export function dim(theme: Theme, text: string) {
   return theme.fg?.("dim", text) ?? text;
 }
 
@@ -32,7 +28,7 @@ export function selectedListLines<T>(
   items: readonly T[],
   selected: number,
   renderItem: (item: T, index: number) => string,
-  theme: SubagentSessionsTheme,
+  theme: Theme,
 ) {
   return items.map((item, index) => {
     const prefix = index === selected ? "> " : "  ";

@@ -7,13 +7,12 @@ import { effectiveStatus, getCompletedAt, getQueuedAt, getStartedAt, isActiveSta
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact } from "./view-helpers.js";
 import { serializeGroup } from "./serialize.js";
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
   applyBold,
   SubagentTextComponent,
   type Bold,
   type DisplayLine,
-  type DisplayStatus,
-  type Theme,
 } from "./text-component.js";
 import {
   expandedLines,
@@ -21,6 +20,7 @@ import {
   formatToolUseLine,
   orderAsTree,
   plural,
+  statusColorForOutcome,
   statusPresentation,
 } from "./format-helpers.js";
 import { formatRunSessionLine, formatSessionLine } from "./session-lines.js";
@@ -137,7 +137,7 @@ function summarizeSnapshots(sessions: readonly AgentSnapshot[], runStartedAt: nu
 export function createSubagentTextComponent(
   details: unknown,
   expanded: boolean,
-  theme: Theme,
+  theme: Theme | undefined,
   now = Date.now(),
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
 ): Component | undefined {
@@ -190,7 +190,7 @@ interface CountSummarySpec<T> {
   total: string;
   counts: string[];
   trailing?: string[];
-  headStatus?: DisplayStatus;
+  headColor?: ThemeColor;
   expanded: boolean;
   entries?: readonly T[];
   renderEntry?: (entry: T) => DisplayLine[];
@@ -201,7 +201,7 @@ interface CountSummarySpec<T> {
 function renderCountSummary<T>(spec: CountSummarySpec<T>): DisplayLine[] {
   const head: DisplayLine = {
     text: [spec.total, ...spec.counts, ...(spec.trailing ?? [])].join(" · "),
-    ...(spec.headStatus ? { status: spec.headStatus } : {}),
+    ...(spec.headColor ? { color: spec.headColor } : {}),
   };
   if (!spec.expanded) return [head];
   const lines: DisplayLine[] = [head];
@@ -235,7 +235,7 @@ type RowRenderer = (row: AgentSnapshot, now: number, bold: Bold | undefined, dis
 const runRow: RowRenderer = (row, now, bold) => formatRunSessionLine(row, now, bold);
 const inventoryRow: RowRenderer = (row, now, bold, display) => ({
   text: formatSessionLine(row, now, bold, display),
-  status: statusPresentation(row.status).color,
+  color: statusPresentation(row.status).color,
 });
 
 /**
@@ -308,7 +308,7 @@ function formatResultsLines(entries: readonly ResultEntry[], expanded: boolean, 
 
 /** One collapsed result row: a bad-id error line, or the same run-style session row a live run renders. */
 function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined): DisplayLine {
-  if ("error" in entry) return { text: `${entry.sessionId} · error: ${entry.error}`, status: "error" };
+  if ("error" in entry) return { text: `${entry.sessionId} · error: ${entry.error}`, color: "error" };
   return formatRunSessionLine(entry.snapshot, now, bold);
 }
 
@@ -319,7 +319,7 @@ function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined): Dis
  */
 function resultExpanded(entry: ResultEntry, trailingBlank: boolean, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
   if ("error" in entry) {
-    const line: DisplayLine = { text: `${entry.sessionId} · error: ${entry.error}`, status: "error" };
+    const line: DisplayLine = { text: `${entry.sessionId} · error: ${entry.error}`, color: "error" };
     return trailingBlank ? [line, { text: "" }] : [line];
   }
   return expandedLines(formatRunSessionLine(entry.snapshot, now, bold), entry.snapshot, true, trailingBlank, display, now, true);
@@ -353,7 +353,7 @@ function formatRemoveSummaryLines(summary: RemoveSummary, expanded: boolean): Di
     renderEntry: id => [{ text: `  ${id}` }],
     blankBetween: false,
     trailer: errors.length > 0
-      ? [{ text: "" }, { text: "Errors:" }, ...errors.map(entry => ({ text: `  ${entry.sessionId}: ${entry.error}`, status: "error" as const }))]
+      ? [{ text: "" }, { text: "Errors:" }, ...errors.map(entry => ({ text: `  ${entry.sessionId}: ${entry.error}`, color: "error" as const }))]
       : undefined,
   });
 }
@@ -370,12 +370,12 @@ function formatViewGroupLine(group: AgentGroupView, filter?: InventoryFilter): D
       `outcome:${outcomeLabel}`,
       ...(filter?.status && filter.status.length > 0 ? [`filter:${filter.status.join(",")}`] : []),
     ],
-    headStatus: outcome,
+    headColor: statusColorForOutcome(outcome),
     expanded: false,
   });
 }
 
-function groupOutcome(group: AgentGroupView): DisplayStatus {
+function groupOutcome(group: AgentGroupView): string {
   if (group.isError) return "error";
   if (group.sessions.some(s => effectiveStatus(s.status) === "running")) return "running";
   if (group.sessions.some(s => effectiveStatus(s.status) === "queued")) return "queued";

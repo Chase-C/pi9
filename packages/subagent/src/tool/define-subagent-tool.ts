@@ -96,13 +96,13 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     label: "Subagent",
     description: TOOL_DESCRIPTION,
     parameters: SubagentParams,
-    renderCall(args, theme: any, context) {
+    renderCall(args, theme, context) {
       const action = typeof args?.action === "string" ? args.action : "pending";
       const summary = context?.state?.runSummary;
       const line = `subagent ${action}${callSuffix(summary, args)}`;
       return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
     },
-    renderResult(result, options, theme: any, context) {
+    renderResult(result, options, theme, context) {
       try {
         // Share the live run summary so renderCall can title the row with counts + elapsed. Derived
         // here because the result renderer is the only one that sees the live `run` details; kept

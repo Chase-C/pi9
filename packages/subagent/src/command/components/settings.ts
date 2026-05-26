@@ -1,8 +1,8 @@
-import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type Component, type SettingItem } from "@earendil-works/pi-tui";
 
 import type { BackgroundNotifyMode, SubagentSettings, WidgetPlacement } from "../../config/settings.js";
-import { accent, fitLinesToWidth, isCancelKey, type SubagentKeybindings, type SubagentSessionsTheme } from "../input.js";
+import { accent, fitLinesToWidth, isCancelKey, type SubagentKeybindings } from "../input.js";
 
 export type SubagentSettingsChange =
   | { kind: "widgetPlacement"; value: WidgetPlacement }
@@ -10,11 +10,11 @@ export type SubagentSettingsChange =
 
 export class SubagentSettingsComponent implements Component {
   private readonly settingsList: SettingsList;
-  private readonly theme: SubagentSessionsTheme;
+  private readonly theme: Theme;
 
   constructor(
     settings: SubagentSettings,
-    theme: SubagentSessionsTheme,
+    theme: Theme,
     private readonly keybindings: SubagentKeybindings,
     onChange: (change: SubagentSettingsChange) => void,
     private readonly done: () => void,
@@ -64,7 +64,7 @@ export class SubagentSettingsComponent implements Component {
 
 }
 
-function getSubagentSettingsListTheme(theme: SubagentSessionsTheme) {
+function getSubagentSettingsListTheme(theme: Theme) {
   try {
     return getSettingsListTheme();
   } catch {

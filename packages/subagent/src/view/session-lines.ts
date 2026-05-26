@@ -111,7 +111,7 @@ export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, 
 export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold): DisplayLine {
   const { glyph, color } = statusPresentation(row.status, now);
   const name = `  ${glyph} ${applyBold(bold, row.config.name)}${(row.label) ? `  ${row.label}` : ""}`;
-  return { text: sessionRowSegments(row, now, name, { toolCount: false, activeTool: false }).join(" · "), status: color };
+  return { text: sessionRowSegments(row, now, name, { toolCount: false, activeTool: false }).join(" · "), color };
 }
 
 function sessionRowSegments(

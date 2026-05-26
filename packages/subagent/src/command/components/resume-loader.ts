@@ -1,11 +1,12 @@
 import type { Component } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import { accent, dim, fitLinesToWidth, isCancelKey, type SubagentKeybindings, type SubagentSessionsTheme } from "../input.js";
+import { accent, dim, fitLinesToWidth, isCancelKey, type SubagentKeybindings } from "../input.js";
 
 export class SubagentResumeLoader implements Component {
   private readonly controller = new AbortController();
 
-  constructor(private readonly theme: SubagentSessionsTheme, private readonly keybindings: SubagentKeybindings, private readonly message: string) { }
+  constructor(private readonly theme: Theme, private readonly keybindings: SubagentKeybindings, private readonly message: string) { }
 
   get signal() { return this.controller.signal; }
 
