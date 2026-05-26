@@ -40,6 +40,7 @@ export interface SubagentDisplaySettings {
   outputSnippetMaxLines: number;
   resumeMessageSnippetLength: number;
   toolCallLabelMaxLength: number;
+  toolInputSummaryLength: number;
   collapsedAgentListLimit: number;
   collapsedDescriptionLength: number;
   widgetShowRetainedSessions: boolean;
@@ -78,6 +79,7 @@ export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
     outputSnippetMaxLines: 8,
     resumeMessageSnippetLength: 80,
     toolCallLabelMaxLength: 60,
+    toolInputSummaryLength: 80,
     collapsedAgentListLimit: 8,
     collapsedDescriptionLength: 100,
     widgetShowRetainedSessions: true,
@@ -170,6 +172,7 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
     assignPositiveInt(display, "outputSnippetMaxLines", value => { settings.display.outputSnippetMaxLines = value; }, warnings);
     assignPositiveInt(display, "resumeMessageSnippetLength", value => { settings.display.resumeMessageSnippetLength = value; }, warnings);
     assignPositiveInt(display, "toolCallLabelMaxLength", value => { settings.display.toolCallLabelMaxLength = value; }, warnings);
+    assignPositiveInt(display, "toolInputSummaryLength", value => { settings.display.toolInputSummaryLength = value; }, warnings);
     assignPositiveInt(display, "collapsedAgentListLimit", value => { settings.display.collapsedAgentListLimit = value; }, warnings);
     assignPositiveInt(display, "collapsedDescriptionLength", value => { settings.display.collapsedDescriptionLength = value; }, warnings);
     assignBoolean(display, "widgetShowRetainedSessions", value => { settings.display.widgetShowRetainedSessions = value; }, warnings);

@@ -9,7 +9,7 @@ import {
   getStartedAt,
 } from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
-import { compactMultiline } from "./view-helpers.js";
+import { compact, compactMultiline } from "./view-helpers.js";
 import type { DisplayLine, DisplayStatus } from "./text-component.js";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
@@ -58,12 +58,12 @@ export function formatElapsed(from: number, to: number) {
   return `${minutes}m${rest.toString().padStart(2, "0")}s`;
 }
 
-export function formatToolUseLine(tool: AgentToolUse, indent: number, now = Date.now()): DisplayLine {
+export function formatToolUseLine(tool: AgentToolUse, indent: number, now = Date.now(), summaryMaxLength = DEFAULT_DISPLAY.toolInputSummaryLength): DisplayLine {
   const completed = tool.completedAt !== undefined;
   const status = tool.isError ? "error" : completed ? "completed" : "running";
   const glyph = tool.isError ? "✗" : completed ? "✓" : statusPresentation({ kind: "running", startedAt: tool.startedAt }, now).glyph;
   const elapsed = formatElapsed(tool.startedAt, tool.completedAt ?? now);
-  const summary = tool.inputSummary ? ` ${tool.inputSummary}` : "";
+  const summary = tool.inputSummary ? ` ${compact(tool.inputSummary, summaryMaxLength)}` : "";
   return {
     text: `${" ".repeat(indent)}${glyph} ${tool.name}${summary} · ${elapsed}`,
     status,
@@ -137,7 +137,7 @@ export function expandedLines(
   // Previous runs only surface in the rich (run-view) expansion, above the current run.
   if (richToolHistory && row.previousRuns?.length) appendPreviousRuns(lines, row.previousRuns, display, now);
   appendPrompt(lines, row);
-  if (richToolHistory) appendToolHistory(lines, row, now);
+  if (richToolHistory) appendToolHistory(lines, row, now, display);
   else appendToolCounts(lines, row);
   if (includeSnippet) appendSnippet(lines, row, display);
   if (trailingBlank) lines.push({ text: "" });
@@ -149,7 +149,7 @@ function appendPreviousRuns(lines: DisplayLine[], sections: readonly AgentRunSec
     lines.push({ text: "" });
     lines.push(previousRunHeader(section, index, now));
     appendPrompt(lines, section);
-    appendToolHistory(lines, section, now);
+    appendToolHistory(lines, section, now, display);
     appendSnippet(lines, section, display);
   });
 }
@@ -181,12 +181,12 @@ function appendPrompt(lines: DisplayLine[], row: RunBody) {
   }
 }
 
-function appendToolHistory(lines: DisplayLine[], row: RunBody, now: number) {
+function appendToolHistory(lines: DisplayLine[], row: RunBody, now: number, display: SubagentDisplaySettings) {
   const history = row.activity.toolHistory;
   if (history.length === 0) return;
   lines.push({ text: "" });
   lines.push({ text: "    Tools:", hangingIndent: 4 });
-  for (const tool of history) lines.push(formatToolUseLine(tool, 6, now));
+  for (const tool of history) lines.push(formatToolUseLine(tool, 6, now, display.toolInputSummaryLength));
 }
 
 function appendToolCounts(lines: DisplayLine[], row: AgentSnapshot) {

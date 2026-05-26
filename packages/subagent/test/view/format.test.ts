@@ -98,37 +98,39 @@ test("background-started view expanded shows one line per session with session i
   assert.doesNotMatch(expanded, /running/);
 });
 
-test("results view collapsed shows count summary by outcome status", () => {
+test("results view collapsed renders one run-style row per entry, status by glyph, with no count header", () => {
   const details = resultsDetails([
     { snapshot: fakeAgent({ id: "s1", config: { name: "helper" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
     { snapshot: fakeAgent({ id: "s2", config: { name: "flaky" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "boom" } }) },
     { snapshot: fakeAgent({ id: "s3", config: { name: "stop" }, status: { kind: "aborted", startedAt: 1, completedAt: 2, error: "Agent aborted." } }) },
   ]);
-  const joined = formatSubagentToolLines(details, false, 0).join("\n");
-  assert.match(joined, /3 results/);
-  assert.match(joined, /1 completed/);
-  assert.match(joined, /1 error/);
-  assert.match(joined, /1 aborted/);
+  const lines = formatSubagentToolLines(details, false, 0);
+
+  // One row per subagent, status conveyed by glyph (✓ done, ✗ error, ! other terminal) — like the run view.
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /^  ✓ helper /);
+  assert.match(lines[1], /^  ✗ flaky /);
+  assert.match(lines[2], /^  ! stop /);
+  // The header is the tool-call title line, so the body carries no count summary.
+  assert.doesNotMatch(lines.join("\n"), /\d results?\b/);
 });
 
-test("results view expanded shows agent, status, snippet, and session handle when resumable", () => {
+test("results view expanded renders each entry as a run-style block with its result snippet", () => {
   const details = resultsDetails([
     { snapshot: fakeAgent({
-      id: "sess-1", label: "phase 1", config: { name: "helper", resumable: true },
+      id: "sess-1", label: "phase 1", resumed: true, config: { name: "helper", resumable: true },
       status: { kind: "completed", startedAt: 1, completedAt: 2, response: "all done", resumed: true },
     }) },
     { snapshot: fakeAgent({ id: "flaky-1", config: { name: "flaky" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "boom" } }) },
   ]);
   const expanded = formatSubagentToolLines(details, true, 0).join("\n");
-  assert.match(expanded, /helper/);
-  assert.match(expanded, /phase 1/);
-  assert.match(expanded, /completed/);
-  assert.match(expanded, /Result: all done/);
-  assert.match(expanded, /session:sess-1/);
+  assert.match(expanded, /✓ helper  phase 1/);
   assert.match(expanded, /resumed/);
-  assert.match(expanded, /flaky/);
-  assert.match(expanded, /error/);
+  assert.match(expanded, /Result: all done/);
+  assert.match(expanded, /✗ flaky/);
   assert.match(expanded, /Error: boom/);
+  // Status shows via glyph, not text, and the raw session handle is no longer surfaced in the view.
+  assert.doesNotMatch(expanded, /session:/);
 });
 
 test("background-started details project collectable handles with sessionId and optional label", () => {
@@ -247,7 +249,7 @@ test("subagent run renders details.subtree as a depth-indented tree when present
   assert.match(lines[2], /^      ⠋ gamma/);
 });
 
-test("collapsed subagent run rows show three recent rich tool lines below the session row", () => {
+test("collapsed subagent run rows show the three most recent tools newest-first with an additional-calls tail", () => {
   const session = fakeAgent({
     config: { name: "reviewer" },
     status: { kind: "running", startedAt: 1_000 },
@@ -262,11 +264,68 @@ test("collapsed subagent run rows show three recent rich tool lines below the se
 
   const lines = formatSubagentToolLines(runDetails([session]), false, 19_000);
 
-  assert.equal(lines.length, 4);
+  // Newest tool first, capped at three, then a tail line counting the older (4th) call.
+  assert.equal(lines.length, 5);
   assert.equal(lines[0], "  ⠇ reviewer · 2 turns · 0 tokens · 18s");
-  assert.equal(lines[1], "    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s");
+  assert.equal(lines[1], "    ⠇ bash npm test --workspace=@pi9/subagent · 12s");
   assert.equal(lines[2], '    ✓ grep "formatRunSessionLine" in packages/subagent/src · 1s');
-  assert.equal(lines[3], "    ⠇ bash npm test --workspace=@pi9/subagent · 12s");
+  assert.equal(lines[3], "    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s");
+  assert.equal(lines[4], "    +1 additional tool call");
+});
+
+test("collapsed subagent run additional-calls tail pluralizes and counts every tool beyond the recent three", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory: Array.from({ length: 6 }, (_, i) => ({
+      id: `t${i}`, name: "read", inputSummary: `file-${i}.ts`, startedAt: 2_000 + i * 1_000, completedAt: 2_500 + i * 1_000,
+    })) },
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), false, 19_000);
+
+  assert.equal(lines.length, 5);
+  assert.equal(lines[1], "    ✓ read file-5.ts · 0s");
+  assert.equal(lines[3], "    ✓ read file-3.ts · 0s");
+  assert.equal(lines[4], "    +3 additional tool calls");
+});
+
+test("collapsed run view collapses a finished subagent's tools while a sibling keeps running", () => {
+  const done = fakeAgent({
+    id: "d", config: { name: "done" }, createdAt: 1,
+    status: { kind: "completed", startedAt: 1_000, completedAt: 2_000, response: "ok" },
+    activity: { toolHistory: [{ id: "r", name: "read", inputSummary: "done.ts", startedAt: 1_000, completedAt: 1_500 }] },
+  });
+  const active = fakeAgent({
+    id: "a", config: { name: "active" }, createdAt: 2,
+    status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory: [{ id: "b", name: "bash", inputSummary: "npm test", startedAt: 1_000 }] },
+  });
+
+  const lines = formatSubagentToolLines(runDetails([done, active]), false, 5_000);
+
+  // The finished subagent shows only its row (its results state); the running sibling keeps its tools.
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /^  ✓ done /);
+  assert.match(lines[1], / active /);
+  assert.match(lines[2], /bash npm test/);
+  assert.doesNotMatch(lines.join("\n"), /read done\.ts/);
+});
+
+test("tool lines truncate a long input summary to the configured length", () => {
+  const longPath = `packages/subagent/src/view/${"a".repeat(120)}.ts`;
+  const session = fakeAgent({
+    config: { name: "reviewer" }, status: { kind: "running", startedAt: 1_000 },
+    activity: { toolHistory: [{ id: "r", name: "read", inputSummary: longPath, startedAt: 1_000, completedAt: 1_500 }] },
+  });
+
+  const lines = formatSubagentToolLines(runDetails([session]), false, 5_000);
+
+  const summary = lines[1].match(/ read (.+) · \d/)?.[1];
+  assert.ok(summary, "expected a tool line with a summary segment");
+  assert.equal(summary.length, 80); // 79 chars + the ellipsis
+  assert.ok(summary.endsWith("…"));
+  assert.doesNotMatch(lines[1], /a{100}/); // the 120-'a' run is cut well short
 });
 
 test("collapsed subagent run row shows only the active subagent tool line when present", () => {
@@ -500,10 +559,10 @@ test("collapsed subagent run does not render previous run sections for a resumed
   assert.match(joined, /edit current\.ts/);
 });
 
-test("results rendering stays stable for a resumed snapshot that carries previous runs", () => {
+test("results expanded mirrors the running view for a resumed snapshot, including its previous-run sections", () => {
   const details = resultsDetails([
     { snapshot: fakeAgent({
-      id: "sess-1", label: "phase 2", config: { name: "helper", resumable: true },
+      id: "sess-1", label: "phase 2", resumed: true, config: { name: "helper", resumable: true },
       prompt: "Final prompt.",
       status: { kind: "completed", startedAt: 1, completedAt: 2, response: "final output", resumed: true },
       previousRuns: [
@@ -513,16 +572,15 @@ test("results rendering stays stable for a resumed snapshot that carries previou
   ]);
   const expanded = formatSubagentToolLines(details, true, 0).join("\n");
 
-  // The final outcome block renders exactly as it does without previous runs.
-  assert.match(expanded, /helper/);
-  assert.match(expanded, /phase 2/);
-  assert.match(expanded, /completed/);
-  assert.match(expanded, /Result: final output/);
+  // The current run renders as a run-style row + prompt + result snippet.
+  assert.match(expanded, /✓ helper  phase 2/);
   assert.match(expanded, /resumed/);
-  assert.match(expanded, /session:sess-1/);
-  // The results view summarizes the final outcome only — previous run sections never leak in.
-  assert.doesNotMatch(expanded, /Previous run/);
-  assert.doesNotMatch(expanded, /earlier output/);
+  assert.match(expanded, /Final prompt\./);
+  assert.match(expanded, /Result: final output/);
+  // Completed expanded now matches the running expanded view, so previous-run sections render too.
+  assert.match(expanded, /Previous run 1 · completed/);
+  assert.match(expanded, /First prompt\./);
+  assert.match(expanded, /Result: earlier output/);
 });
 
 test("subagent session inspect output uses remove terminology", () => {

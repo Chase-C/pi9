@@ -228,9 +228,11 @@ subagent run · 2 running · 1 queued · 3 finished · 1m24s
 ```
 
 - `running`/`queued`/`finished` count sessions by effective status; `finished` covers every terminal outcome (`completed`, `error`, `aborted`, `interrupted`, `skipped`).
+- `running` and `queued` segments are omitted when zero, so a finished run reads `subagent run · 3 finished · 1m24s`. `finished` and elapsed are always shown.
+- The title is the view's header in both states: the same counts are derived from the completed `results` envelope, so the finished run keeps a populated header on re-render rather than reverting to the task count.
 - Counts include nested child subagents: the subtree is counted when present, otherwise the flat batch.
 - `elapsed` is wall-clock time since the parent `run` started, not summed child runtime.
-- Before the first live result (and for older non-`run` call sites), the title falls back to the task count, e.g. `subagent run · 3 tasks`.
+- Before the first live result (and for views that yield no summary), the title falls back to the task count, e.g. `subagent run · 3 tasks`.
 
 ### Collapsed rendering
 
@@ -238,15 +240,17 @@ Collapsed output shows one row per child session — agent name (or per-task `la
 
 ```text
   ⠋ reviewer  auth review · 2 turns · 18420 tokens · 37s
-    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s
-    ✓ grep "formatRunSessionLine" in packages/subagent/src · 1s
     ⠋ bash npm test --workspace=@pi9/subagent · 12s
+    ✓ grep "formatRunSessionLine" in packages/subagent/src · 1s
+    ✓ read packages/subagent/src/view/tool-result-lines.ts · 0s
+    +2 additional tool calls
 ```
 
 - The main row no longer carries a `tool:<name>` segment; recent tools render as their own lines.
 - Each tool line is `<status-glyph> <tool-name>[ <input-summary>] · <elapsed>`, where the glyph mirrors the status vocabulary (spinner for running, `✓` completed, `✗` errored) and elapsed runs from the tool's start to its completion or to now.
-- Tool lines are chronological with the newest at the bottom.
-- If a child's currently running tool is itself `subagent`, only that active `subagent` line is shown for that row; its nested child subagents still render normally as a depth-indented tree under the parent.
+- Tool lines show the most recent first (newest at the top), capped at three. When more calls have run, a trailing `+N additional tool call(s)` line counts the rest.
+- Tool lines render only for an active (running/queued) child. A finished child collapses to just its row — the same shape it has in the completed `results` view — even while sibling subagents keep running.
+- If a child's currently running tool is itself `subagent`, only that active `subagent` line is shown for that row (no recent-tool list and no additional-calls tail); its nested child subagents still render normally as a depth-indented tree under the parent.
 
 ### Expanded rendering
 
@@ -285,7 +289,16 @@ For a resumed subagent, expanded rendering shows each previous run as its own cl
 
 - Multiple resumes accumulate multiple previous run sections in chronological order above the current run.
 - Each section keeps its own prompt, isolated tool history, and output/error snippet; the current run's tool history never mixes in previous-run tools.
-- Previous run sections render only in expanded mode — collapsed output and the final `results` view never show them.
+- Previous run sections render only in expanded mode; collapsed output never shows them.
+
+### Completed (`results`) view
+
+When a foreground `run` settles it renders the `results` envelope, which mirrors the live run view rather than a separate count summary. The explicit `action: "results"` call and background-result polls share this renderer, so pending and bad-id entries can appear here too.
+
+- Collapsed shows one run-style row per entry (status by glyph, agent name/`label`, turns, tokens, elapsed) with no per-row tool lines. The count header lives on the tool-call title line, not in the body.
+- Expanded uses the same per-row format as the live run — prompt, previous-run sections, and the full tool history — and, because each entry is terminal, the trailing `Result:`/`Error:` snippet. This is the only addition over the running expanded view.
+- Status is conveyed by glyph (`✓`/`✗`/`○`/`!`), matching the run view; the raw `session:<id>` handle is no longer surfaced in the rendered view (it remains in the model-facing results JSON).
+- A bad-id entry renders as a single `<sessionId> · error: <message>` line.
 
 ### Tool input summaries
 
@@ -300,6 +313,8 @@ Tool lines surface useful details derived from the tool's arguments when availab
 | `grep`, `find` | pattern and `in <path>` when present |
 | `subagent` | action and task/session count |
 | other tools | a compact, safe fallback from scalar args, or no summary |
+
+Each summary is truncated to `display.toolInputSummaryLength` characters (default 80), with a trailing `…` when cut.
 
 ### General
 
@@ -352,6 +367,7 @@ The settings are global for the user and stored at `${PI_AGENT_DIR ?? ~/.pi/agen
     "outputSnippetMaxLines": 8,
     "resumeMessageSnippetLength": 80,
     "toolCallLabelMaxLength": 60,
+    "toolInputSummaryLength": 80,
     "collapsedAgentListLimit": 8,
     "collapsedDescriptionLength": 100,
     "widgetShowRetainedSessions": true

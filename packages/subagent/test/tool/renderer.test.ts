@@ -120,6 +120,46 @@ test("subagent run title falls back to the task count before a live result, with
   assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }, { state: {} }), /^subagent run · 3 tasks\s*$/);
 });
 
+test("subagent run title omits zero running/queued counts, keeping finished and elapsed", () => {
+  const tool = registerExtension();
+  const context: any = { state: {} };
+  const sessions = [
+    fakeAgent({ id: "a", config: { name: "alpha" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } }),
+    fakeAgent({ id: "b", config: { name: "beta" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } }),
+  ];
+
+  tool.renderResult(
+    { content: [{ type: "text", text: "" }], details: { view: "run", sessions } },
+    { expanded: false, isPartial: true },
+    passthroughTheme,
+    context,
+  );
+
+  const title = titleText(tool, { action: "run", tasks: [{}, {}] }, context);
+  assert.match(title, /^subagent run · 2 finished · \d/);
+  assert.doesNotMatch(title, /running|queued/);
+});
+
+test("subagent run title derives finished counts from a completed results envelope", () => {
+  const tool = registerExtension();
+  const context: any = { state: {} };
+  const results = [
+    { snapshot: fakeAgent({ id: "a", config: { name: "alpha" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } }) },
+    { snapshot: fakeAgent({ id: "b", config: { name: "beta" }, status: { kind: "error", startedAt: 1, completedAt: 2, error: "boom" } }) },
+  ];
+
+  tool.renderResult(
+    { content: [{ type: "text", text: "" }], details: { view: "results", results } },
+    { expanded: false },
+    passthroughTheme,
+    context,
+  );
+
+  const title = titleText(tool, { action: "run" }, context);
+  assert.match(title, /^subagent run · 2 finished · /);
+  assert.doesNotMatch(title, /running|queued/);
+});
+
 test("subagent run title counts the subtree through the shared state path when nested children are present", () => {
   const tool = registerExtension();
   const context: any = { state: {} };

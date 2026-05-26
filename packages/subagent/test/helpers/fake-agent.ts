@@ -52,6 +52,7 @@ export interface FakeAgentOptions {
   inputIndex?: number;
   parentSessionId?: string;
   label?: string;
+  resumed?: boolean;
   prompt?: string;
   createdAt?: number;
   dispatch?: AgentDispatch;
@@ -164,6 +165,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
     ...(rest.inputIndex !== undefined ? { inputIndex: rest.inputIndex } : {}),
     ...(rest.parentSessionId !== undefined ? { parentSessionId: rest.parentSessionId } : {}),
     ...(rest.label !== undefined ? { label: rest.label } : {}),
+    ...(rest.resumed !== undefined ? { resumed: rest.resumed } : {}),
     ...(rest.prompt !== undefined ? { prompt: rest.prompt } : {}),
     createdAt: rest.createdAt ?? 1,
     dispatch: rest.dispatch ?? "foreground",

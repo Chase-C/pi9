@@ -22,41 +22,42 @@ function render(details: any, expanded: boolean): string {
   return component.render(120).join("\n");
 }
 
-test("results collapsed counts ready entries by outcome and pending entries by state", () => {
+test("results collapsed renders one run-style row per entry, including pending and bad-id entries", () => {
   const details = {
     view: "results",
     results: [
-      { snapshot: fakeAgent({ id: "s1", config: { name: "a" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
-      { snapshot: fakeAgent({ id: "s2", config: { name: "a" }, status: { kind: "running", startedAt: 1 } }) },
+      { snapshot: fakeAgent({ id: "s1", config: { name: "alpha" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
+      { snapshot: fakeAgent({ id: "s2", config: { name: "beta" }, status: { kind: "running", startedAt: 1 } }) },
       { sessionId: "s3", error: "Unknown subagent session: s3" },
     ],
   };
 
-  const rendered = render(details, false);
+  const lines = render(details, false).split("\n");
 
-  assert.match(rendered, /3 results/);
-  assert.match(rendered, /1 completed/);
-  assert.match(rendered, /1 running/);
-  assert.match(rendered, /1 error/);
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /^  ✓ alpha /);
+  assert.match(lines[1], /beta /);
+  assert.equal(lines[2], "s3 · error: Unknown subagent session: s3");
+  // No count-summary header — the header is the tool-call title line.
+  assert.doesNotMatch(lines.join("\n"), /\d results?\b/);
 });
 
-test("results collapsed omits zero-count segments", () => {
+test("results collapsed renders a lone completed entry as a single row with no count header", () => {
   const details = {
     view: "results",
     results: [
-      { snapshot: fakeAgent({ id: "s1", config: { name: "a" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
+      { snapshot: fakeAgent({ id: "s1", config: { name: "alpha" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ok" } }) },
     ],
   };
 
   const rendered = render(details, false);
 
-  assert.match(rendered, /1 result/);
-  assert.match(rendered, /1 completed/);
-  assert.doesNotMatch(rendered, /running|queued/);
-  assert.doesNotMatch(rendered, /error/);
+  assert.match(rendered, /^  ✓ alpha /);
+  assert.doesNotMatch(rendered, /\d results?\b/);
+  assert.doesNotMatch(rendered, /running|queued|error/);
 });
 
-test("results expanded shows a section per entry with status, snippet, and error", () => {
+test("results expanded renders each entry as a run-style block, with pending rows and bad-id errors", () => {
   const details = {
     view: "results",
     results: [
@@ -68,14 +69,12 @@ test("results expanded shows a section per entry with status, snippet, and error
 
   const rendered = render(details, true);
 
-  assert.match(rendered, /helper/);
-  assert.match(rendered, /phase 1/);
-  assert.match(rendered, /all done/);
-  assert.match(rendered, /session:ready-id/);
-  assert.match(rendered, /queued/);
-  assert.match(rendered, /phase 2/);
-  assert.match(rendered, /err-id/);
-  assert.match(rendered, /Unknown subagent session: err-id/);
+  assert.match(rendered, /✓ helper  phase 1/);
+  assert.match(rendered, /Result: all done/);
+  assert.match(rendered, /○ helper  phase 2/);
+  assert.match(rendered, /err-id · error: Unknown subagent session: err-id/);
+  // Run-style rows convey status by glyph and no longer surface the raw session handle.
+  assert.doesNotMatch(rendered, /session:ready-id/);
 });
 
 test("results expanded omits session label for ready entries without a collectable session id", () => {

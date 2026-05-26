@@ -3,7 +3,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentGroupView, AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { ResultEntry } from "../domain/agent-result.js";
-import { effectiveStatus, getQueuedAt, getSnippet, getStartedAt } from "../domain/agent-decisions.js";
+import { effectiveStatus, getCompletedAt, getQueuedAt, getStartedAt, isActiveStatusKind } from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact } from "./view-helpers.js";
 import { serializeGroup } from "./serialize.js";
@@ -21,9 +21,6 @@ import {
   formatToolUseLine,
   orderAsTree,
   plural,
-  rowElapsed,
-  snippetLines,
-  statusColorForOutcome,
   statusPresentation,
 } from "./format-helpers.js";
 import { formatRunSessionLine, formatSessionLine } from "./session-lines.js";
@@ -84,15 +81,44 @@ export interface RunSummary {
 }
 
 /**
- * Derives a {@link RunSummary} from opaque `run` details, or `undefined` for any other view.
- * Counts the `subtree` when present (so nested children are included), otherwise the flat
- * `sessions`. Every non-`running`/`queued` status is terminal, so it counts as finished.
- * New live details carry `runStartedAt`; older persisted details fall back to the earliest row time.
+ * Derives a {@link RunSummary} from opaque `run` or `results` details, or `undefined` for any other
+ * view. The shared count powers both the live run title and the completed/results header. A `run`
+ * counts its `subtree` when present (so nested children are included), otherwise the flat
+ * `sessions`; a `results` envelope counts each entry's snapshot, plus any bad-id entries (which are
+ * terminal) among finished. Every non-`running`/`queued` status is terminal, so it counts as
+ * finished. New live `run` details carry `runStartedAt`; otherwise elapsed runs from the earliest
+ * row time.
  */
 export function runSummary(details: unknown, now = Date.now()): RunSummary | undefined {
   const narrowed = parseDetails(details);
-  if (!narrowed || narrowed.view !== "run") return undefined;
-  const sessions = narrowed.subtree && narrowed.subtree.length > 0 ? narrowed.subtree : narrowed.sessions;
+  if (!narrowed) return undefined;
+  if (narrowed.view === "run") {
+    const sessions = narrowed.subtree && narrowed.subtree.length > 0 ? narrowed.subtree : narrowed.sessions;
+    return summarizeSnapshots(sessions, narrowed.runStartedAt, now);
+  }
+  if (narrowed.view === "results") {
+    const snapshots = narrowed.results.flatMap(entry => ("snapshot" in entry ? [entry.snapshot] : []));
+    // A settled run has no more "now" to measure against, so freeze the header elapsed at the last
+    // completion; a background poll still carrying active entries keeps tracking wall-clock time.
+    const summary = summarizeSnapshots(snapshots, undefined, resultsUpperBound(snapshots, now));
+    summary.finished += narrowed.results.length - snapshots.length;
+    return summary;
+  }
+  return undefined;
+}
+
+function resultsUpperBound(snapshots: readonly AgentSnapshot[], now: number): number {
+  let latest = 0;
+  for (const snapshot of snapshots) {
+    const status = effectiveStatus(snapshot.status);
+    if (status === "running" || status === "queued") return now;
+    const completedAt = getCompletedAt(snapshot.status);
+    if (completedAt !== undefined && completedAt > latest) latest = completedAt;
+  }
+  return latest > 0 ? latest : now;
+}
+
+function summarizeSnapshots(sessions: readonly AgentSnapshot[], runStartedAt: number | undefined, now: number): RunSummary {
   let running = 0;
   let queued = 0;
   let finished = 0;
@@ -105,7 +131,7 @@ export function runSummary(details: unknown, now = Date.now()): RunSummary | und
     const start = getQueuedAt(session.status) ?? getStartedAt(session.status) ?? session.createdAt;
     if (start < earliest) earliest = start;
   }
-  return { running, queued, finished, elapsed: formatElapsed(narrowed.runStartedAt ?? earliest, now) };
+  return { running, queued, finished, elapsed: formatElapsed(runStartedAt ?? earliest, now) };
 }
 
 export function createSubagentTextComponent(
@@ -235,95 +261,68 @@ function expandRows(
   if (!expanded) {
     return ordered.flatMap(entry => [
       withIndent(entry),
-      ...(richToolHistory ? recentToolLines(entry.agent, entry.depth, now) : []),
+      ...(richToolHistory ? recentToolLines(entry.agent, entry.depth, now, display) : []),
     ]);
   }
   return ordered.flatMap((entry, index) =>
     expandedLines(withIndent(entry), entry.agent, includeSnippet, index < ordered.length - 1, display, now, richToolHistory));
 }
 
-function recentToolLines(agent: AgentSnapshot, depth: number, now: number): DisplayLine[] {
-  const activeSubagent = findLastActiveSubagentTool(agent.activity.toolHistory);
-  const tools = activeSubagent ? [activeSubagent] : agent.activity.toolHistory.slice(-3);
-  return tools.map(tool => formatToolUseLine(tool, 4 + depth * 2, now));
-}
-
-function findLastActiveSubagentTool(history: AgentSnapshot["activity"]["toolHistory"]) {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const tool = history[i];
-    if (tool.name === "subagent" && tool.completedAt === undefined) return tool;
+/**
+ * Collapsed recent-tool lines for a live run row. A finished subagent collapses to just its row —
+ * its results state — even while sibling subagents keep running, so only an active agent surfaces
+ * tools. When a nested subagent is still running, surface only the nested run(s) — not the parent's
+ * other tools — so the in-flight nested progress stays visible. Otherwise show the most recent
+ * calls newest-first, capped at three, with a trailing line counting any further calls.
+ */
+function recentToolLines(agent: AgentSnapshot, depth: number, now: number, display: SubagentDisplaySettings): DisplayLine[] {
+  if (!isActiveStatusKind(effectiveStatus(agent.status))) return [];
+  const history = agent.activity.toolHistory;
+  const indent = 4 + depth * 2;
+  const max = display.toolInputSummaryLength;
+  const runningSubagents = history.filter(tool => tool.name === "subagent" && tool.completedAt === undefined);
+  if (runningSubagents.length > 0) {
+    return runningSubagents.slice().reverse().map(tool => formatToolUseLine(tool, indent, now, max));
   }
-  return undefined;
+  const recent = history.slice(-3).reverse();
+  const lines = recent.map(tool => formatToolUseLine(tool, indent, now, max));
+  const extra = history.length - recent.length;
+  if (extra > 0) {
+    lines.push({ text: `${" ".repeat(indent)}+${extra} additional tool call${extra === 1 ? "" : "s"}`, hangingIndent: indent });
+  }
+  return lines;
 }
 
 /**
- * Count-segment order for the unified results head. Terminal outcomes and the two pending
- * states share one ordered list; a synchronous run only ever produces terminal entries, while a
- * background poll can also carry `queued`/`running` (pending) and session-error entries.
+ * The completed/`results` view, rendered to mirror the live `run` view (your changes 3 & 4): the
+ * header is the tool-call title line, and the body is one run-style row per entry — collapsed shows
+ * just the rows (no per-row tool lines), expanded reuses {@link expandedLines} so each entry adds
+ * its prompt, previous runs, tool history, and trailing result/error snippet. The same renderer
+ * serves the explicit `results` action and background polls, so pending and bad-id entries appear
+ * here too.
  */
-const RESULT_COUNT_ORDER = ["completed", "running", "queued", "error", "aborted", "interrupted", "skipped"] as const;
-
 function formatResultsLines(entries: readonly ResultEntry[], expanded: boolean, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
-  const counts = new Map<string, number>();
-  const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
-  let hasFailure = false;
-  let hasPending = false;
-  for (const entry of entries) {
-    if ("error" in entry) { bump("error"); hasFailure = true; continue; }
-    const status = effectiveStatus(entry.snapshot.status);
-    bump(status);
-    if (status === "queued" || status === "running") hasPending = true;
-    else if (status !== "completed") hasFailure = true;
-  }
-  return renderCountSummary({
-    total: plural(entries.length, "result"),
-    counts: orderedCountSegments(counts, RESULT_COUNT_ORDER),
-    headStatus: hasFailure ? "error" : hasPending ? "running" : "completed",
-    expanded,
-    entries,
-    renderEntry: entry => resultEntryLines(entry, now, bold, display),
-    blankBetween: true,
-  });
+  if (!expanded) return entries.map(entry => resultRow(entry, now, bold));
+  return entries.flatMap((entry, index) => resultExpanded(entry, index < entries.length - 1, now, bold, display));
 }
 
-/** One result entry: a terminal snapshot's block, a still-pending session row, or a bad id. */
-function resultEntryLines(entry: ResultEntry, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
+/** One collapsed result row: a bad-id error line, or the same run-style session row a live run renders. */
+function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined): DisplayLine {
+  if ("error" in entry) return { text: `${entry.sessionId} · error: ${entry.error}`, status: "error" };
+  return formatRunSessionLine(entry.snapshot, now, bold);
+}
+
+/**
+ * One expanded result entry. Snapshot entries render through the same {@link expandedLines} path as
+ * the live run — prompt, previous runs, tool history — and, because the snapshot is terminal, the
+ * trailing result/error snippet. Bad-id entries collapse to a single error line.
+ */
+function resultExpanded(entry: ResultEntry, trailingBlank: boolean, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
   if ("error" in entry) {
-    return [{ text: `${entry.sessionId} · error: ${entry.error}`, status: "error" }];
+    const line: DisplayLine = { text: `${entry.sessionId} · error: ${entry.error}`, status: "error" };
+    return trailingBlank ? [line, { text: "" }] : [line];
   }
-  const snapshot = entry.snapshot;
-  const status = effectiveStatus(snapshot.status);
-  if (status === "queued" || status === "running") {
-    const labelSegment = snapshot.label ? `  ${snapshot.label}` : "";
-    return [{
-      text: `${applyBold(bold, snapshot.config.name)}${labelSegment} · ${status} · ${rowElapsed(snapshot, now)}`,
-      status: statusColorForOutcome(status),
-    }];
-  }
-  return resultBlock(snapshot, bold, display);
-}
-
-function resultBlock(snapshot: AgentSnapshot, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
-  const status = effectiveStatus(snapshot.status);
-  const color = statusColorForOutcome(status);
-  const labelSegment = snapshot.label ? `  ${snapshot.label}` : "";
-  // Persistent sessions are retained and collectable, so surface the handle; transient ones vanish
-  // after the run. This matches the gating on the projected top-level `sessionId`.
-  const sessionId = snapshot.retention === "persistent" ? snapshot.id : undefined;
-  const resumed = snapshot.status.kind === "done" && snapshot.status.resumed === true;
-  const segments = [
-    `${applyBold(bold, snapshot.config.name)}${labelSegment}`,
-    status,
-    ...(sessionId ? [`session:${sessionId}`] : []),
-    ...(resumed ? ["resumed"] : []),
-  ];
-  const lines: DisplayLine[] = [{ text: segments.join(" · "), status: color }];
-  const raw = getSnippet(snapshot.status);
-  const snippet = status === "completed" ? raw : raw ?? status;
-  if (snippet) {
-    lines.push(...snippetLines(status === "completed" ? "Result" : "Error", snippet, 2, color, display));
-  }
-  return lines;
+  return expandedLines(formatRunSessionLine(entry.snapshot, now, bold), entry.snapshot, true, trailingBlank, display, now, true);
 }
 
 function formatBackgroundStartedLines(handles: BackgroundSpawnHandle[], count: number, expanded: boolean, bold?: Bold): DisplayLine[] {

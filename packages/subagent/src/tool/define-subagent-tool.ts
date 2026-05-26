@@ -22,13 +22,20 @@ interface SubagentRenderState {
 }
 
 /**
- * The `· …` suffix for a tool-call title. An active `run` with a live summary shows running/
- * queued/finished counts and elapsed time; otherwise (no summary yet, or a non-`run` action) it
- * falls back to the task count so the first title render stays useful before any result arrives.
+ * The `· …` suffix for a tool-call title. Whenever a live summary is present (a `run` or its
+ * completed `results`), it shows the subagent counts and elapsed time — `running`/`queued` only
+ * when above zero, `finished` and elapsed always. Otherwise (no summary yet, or a view that yields
+ * none) it falls back to the task count so the first title render stays useful before any result.
  */
-function callSuffix(action: string, summary: RunSummary | undefined, args: any): string {
-  if (action === "run" && summary) {
-    return ` · ${summary.running} running · ${summary.queued} queued · ${summary.finished} finished · ${summary.elapsed}`;
+function callSuffix(summary: RunSummary | undefined, args: any): string {
+  if (summary) {
+    const counts = [
+      ...(summary.running > 0 ? [`${summary.running} running`] : []),
+      ...(summary.queued > 0 ? [`${summary.queued} queued`] : []),
+      `${summary.finished} finished`,
+      summary.elapsed,
+    ];
+    return ` · ${counts.join(" · ")}`;
   }
   const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
   return tasks.length ? ` · ${tasks.length} task${tasks.length === 1 ? "" : "s"}` : "";
@@ -92,7 +99,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     renderCall(args, theme: any, context) {
       const action = typeof args?.action === "string" ? args.action : "pending";
       const summary = context?.state?.runSummary;
-      const line = `subagent ${action}${callSuffix(action, summary, args)}`;
+      const line = `subagent ${action}${callSuffix(summary, args)}`;
       return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
     },
     renderResult(result, options, theme: any, context) {

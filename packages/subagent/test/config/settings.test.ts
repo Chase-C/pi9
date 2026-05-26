@@ -19,6 +19,7 @@ test("subagent UI settings default to below editor when file is missing", async 
   assert.equal(result.settings.runtime.backgroundNotify, "auto");
   assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, [".md"]);
   assert.equal(result.settings.display.outputSnippetLength, 400);
+  assert.equal(result.settings.display.toolInputSummaryLength, 80);
   assert.equal(result.warning, undefined);
 });
 
@@ -90,7 +91,7 @@ test("subagent settings load runtime, discovery, and display overrides", async (
       widgetPlacement: "off",
       runtime: { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultResumable: true, backgroundNotify: "steer" },
       agentDiscovery: { includeProjectAgents: false, agentFileExtensions: [".md", ".agent.md"] },
-      display: { outputSnippetLength: 42, widgetShowRetainedSessions: false },
+      display: { outputSnippetLength: 42, toolInputSummaryLength: 50, widgetShowRetainedSessions: false },
     }),
   );
 
@@ -101,5 +102,6 @@ test("subagent settings load runtime, discovery, and display overrides", async (
   assert.equal(result.settings.agentDiscovery.includeProjectAgents, false);
   assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, [".md", ".agent.md"]);
   assert.equal(result.settings.display.outputSnippetLength, 42);
+  assert.equal(result.settings.display.toolInputSummaryLength, 50);
   assert.equal(result.settings.display.widgetShowRetainedSessions, false);
 });
