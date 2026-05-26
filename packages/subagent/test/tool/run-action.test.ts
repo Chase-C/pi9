@@ -329,7 +329,7 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
   assert.equal(partials[0].details.sessions[0].activity.toolHistory.at(-1)?.name, "read");
   assert.doesNotMatch(partials[0].content[0].text, /working/);
   assert.equal(widgets[0][0], "subagent");
-  const widgetLines = renderWidgetContent(widgets[0][1]);
+  const widgetLines = renderWidgetContent(widgets[0][1], undefined, 60);
   assert.equal(widgetLines[0], "Background · 2 running");
   assert.match(widgetLines[1], /root/);
   assert.match(widgetLines[2], /child/);

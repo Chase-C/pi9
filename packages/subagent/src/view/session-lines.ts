@@ -1,4 +1,5 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import {
@@ -10,7 +11,7 @@ import {
   getToolUseCount,
   isActiveStatusKind,
 } from "../domain/agent-decisions.js";
-import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
+import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings, type WidgetLayout } from "../config/settings.js";
 import { compact } from "./view-helpers.js";
 import { applyBold, type Bold, type DisplayLine } from "./text-component.js";
 import {
@@ -23,6 +24,13 @@ import {
   snippetLines,
   statusPresentation,
 } from "./format-helpers.js";
+import {
+  hasBothColumnSections,
+  resolveWidgetLayout,
+  WIDGET_COLUMN_GUTTER,
+  widgetColumnWidths,
+  zipWidgetColumns,
+} from "./widget-layout.js";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
 
@@ -164,20 +172,70 @@ export function buildWidgetModel(
 
 export type WidgetRowFormatter = (row: WidgetRow) => string;
 
+export type RenderWidgetOptions = {
+  layout: WidgetLayout;
+  width: number;
+};
+
 export function renderWidgetModelLines(
+  model: WidgetModel,
+  now: number,
+  formatRow: WidgetRowFormatter,
+  options?: RenderWidgetOptions,
+): string[] {
+  if (options && resolveWidgetLayout(options.layout, options.width, hasBothColumnSections(model.sections)) === "columns") {
+    return renderWidgetModelColumns(model, now, formatRow, options.width);
+  }
+  return renderWidgetModelStacked(model, now, formatRow);
+}
+
+function renderWidgetModelStacked(
   model: WidgetModel,
   now: number,
   formatRow: WidgetRowFormatter,
 ): string[] {
   const lines: string[] = [];
   for (const section of model.sections) {
-    lines.push(formatSectionHeader(section));
-    for (const agent of section.agents) {
-      lines.push(formatRow(toWidgetRow(agent, now, model.byId)));
-    }
-    if (section.overflow > 0) lines.push(`  +${section.overflow} more`);
+    lines.push(...renderWidgetSectionLines(section, model, now, formatRow));
   }
   if (model.footer) lines.push(model.footer);
+  return lines;
+}
+
+function renderWidgetModelColumns(
+  model: WidgetModel,
+  now: number,
+  formatRow: WidgetRowFormatter,
+  width: number,
+): string[] {
+  const { left, right } = widgetColumnWidths(width);
+  const background = model.sections.find(section => section.title === "Background");
+  const resumable = model.sections.find(section => section.title === "Resumable");
+  const leftLines = background ? renderWidgetSectionLines(background, model, now, formatRow, left) : [];
+  const rightLines = resumable ? renderWidgetSectionLines(resumable, model, now, formatRow, right) : [];
+  const lines = zipWidgetColumns(leftLines, rightLines, left, WIDGET_COLUMN_GUTTER, right);
+  if (model.footer) lines.push(truncateToWidth(model.footer, width, "", true));
+  return lines;
+}
+
+function renderWidgetSectionLines(
+  section: WidgetSection,
+  model: WidgetModel,
+  now: number,
+  formatRow: WidgetRowFormatter,
+  maxWidth?: number,
+): string[] {
+  const lines: string[] = [];
+  const header = formatSectionHeader(section);
+  lines.push(maxWidth ? truncateToWidth(header, maxWidth) : header);
+  for (const agent of section.agents) {
+    const row = formatRow(toWidgetRow(agent, now, model.byId));
+    lines.push(maxWidth ? truncateToWidth(row, maxWidth) : row);
+  }
+  if (section.overflow > 0) {
+    const overflow = `  +${section.overflow} more`;
+    lines.push(maxWidth ? truncateToWidth(overflow, maxWidth) : overflow);
+  }
   return lines;
 }
 

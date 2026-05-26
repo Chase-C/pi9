@@ -64,7 +64,7 @@ test("updateSubagentWidget factory renders stacked content with theme-colored st
       DEFAULT_SUBAGENT_SETTINGS,
     );
 
-    const lines = renderWidgetContent(widgets[0][1], mockTheme());
+    const lines = renderWidgetContent(widgets[0][1], mockTheme(), 60);
     assert.equal(lines[0], "Background · 1 running · 1 ready");
     assert.match(lines[1], /\[accent\][⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\[\/\] scout · 1s/);
     assert.match(lines[2], /\[success\]✓\[\/\] reviewer · 4s/);

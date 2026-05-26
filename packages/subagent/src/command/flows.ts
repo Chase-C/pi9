@@ -117,6 +117,10 @@ export async function openSubagentSettings(
           settings = { ...settings, widgetPlacement: change.value };
           updateSubagentWidget(ctx, agentManager.listSessions(), settings);
           confirmation = `Subagent widget placement set to ${change.value}.`;
+        } else if (change.kind === "widgetLayout") {
+          settings = { ...settings, widgetLayout: change.value };
+          updateSubagentWidget(ctx, agentManager.listSessions(), settings);
+          confirmation = `Subagent widget layout set to ${change.value}.`;
         } else {
           settings = { ...settings, runtime: { ...settings.runtime, backgroundNotify: change.value } };
           onSettingsUpdated?.(settings);

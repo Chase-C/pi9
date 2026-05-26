@@ -88,7 +88,8 @@ test("/subagents settings exposes backgroundNotify with auto, steer, none and pe
       custom(factory: any) {
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
         renderedInitial = component.render(120).join("\n");
-        component.handleInput("\x1b[B"); // down arrow to select backgroundNotify
+        component.handleInput("\x1b[B"); // down to widgetLayout
+        component.handleInput("\x1b[B"); // down to backgroundNotify
         renderedOnBackgroundNotify = component.render(120).join("\n");
         component.handleInput("\r"); // cycle auto -> steer
         return Promise.resolve(undefined);
@@ -101,6 +102,49 @@ test("/subagents settings exposes backgroundNotify with auto, steer, none and pe
   const last = saved.at(-1);
   assert.ok(last, "expected at least one save");
   assert.equal(last.runtime.backgroundNotify, "steer");
+});
+
+test("/subagents settings exposes widgetLayout with auto, columns, stacked and persists the chosen value", async () => {
+  const runningSession = fakeAgent({ status: { kind: "running", startedAt: 1 }, turns: 1 });
+  const fakeManager = {
+    listSessions(): any[] { return this.sessions; },
+    sessions: [runningSession],
+  };
+  const saved: any[] = [];
+  const fakeSettingsStore = {
+    async load() { return { settings: { widgetPlacement: "belowEditor", widgetLayout: "auto" } }; },
+    async save(settings: any) { saved.push(settings); },
+  };
+  const commands = registerCommand({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: fakeSettingsStore,
+  });
+
+  let renderedInitial = "";
+  let renderedOnWidgetLayout = "";
+  await commands.get("subagents").handler("settings", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      custom(factory: any) {
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        renderedInitial = component.render(120).join("\n");
+        component.handleInput("\x1b[B"); // down to widgetLayout
+        renderedOnWidgetLayout = component.render(120).join("\n");
+        component.handleInput("\r"); // cycle auto -> columns
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.match(renderedInitial, /Widget layout/);
+  assert.match(renderedOnWidgetLayout, /Values: auto, columns, stacked/);
+  const last = saved.at(-1);
+  assert.ok(last, "expected at least one save");
+  assert.equal(last.widgetLayout, "columns");
 });
 
 test("/subagents settings backgroundNotify changes update live notifier mode immediately", async () => {
@@ -131,7 +175,8 @@ test("/subagents settings backgroundNotify changes update live notifier mode imm
       setWidget() {},
       custom(factory: any) {
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        component.handleInput("\x1b[B"); // select backgroundNotify
+        component.handleInput("\x1b[B"); // down to widgetLayout
+        component.handleInput("\x1b[B"); // down to backgroundNotify
         component.handleInput("\r"); // auto -> steer
         component.handleInput("\r"); // steer -> none
         return Promise.resolve(undefined);

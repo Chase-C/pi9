@@ -4,7 +4,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { buildWidgetModel } from "../view/session-lines.js";
 import { SubagentWidgetComponent } from "../view/widget-component.js";
-import type { SubagentSettings, SubagentUiSettings } from "../config/settings.js";
+import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentSettings, type SubagentUiSettings } from "../config/settings.js";
 
 type WidgetComponentFactory = (tui: TUI, theme: Theme) => Component & { dispose?(): void };
 
@@ -32,8 +32,9 @@ export function updateSubagentWidget(
     }
     const display = (settings as SubagentSettings).display;
     const model = buildWidgetModel(agents, Date.now(), display);
+    const widgetLayout = settings.widgetLayout ?? DEFAULT_SUBAGENT_UI_SETTINGS.widgetLayout;
     const factory: WidgetComponentFactory | undefined = model.sections.length > 0
-      ? (_tui, theme) => new SubagentWidgetComponent(model, theme)
+      ? (_tui, theme) => new SubagentWidgetComponent(model, theme, widgetLayout)
       : undefined;
     ctx.ui.setWidget("subagent", factory, { placement: settings.widgetPlacement });
   } catch (error) {

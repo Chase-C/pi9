@@ -1,11 +1,12 @@
 import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type Component, type SettingItem } from "@earendil-works/pi-tui";
 
-import type { BackgroundNotifyMode, SubagentSettings, WidgetPlacement } from "../../config/settings.js";
+import type { BackgroundNotifyMode, SubagentSettings, WidgetLayout, WidgetPlacement } from "../../config/settings.js";
 import { accent, fitLinesToWidth, isCancelKey, type SubagentKeybindings } from "../input.js";
 
 export type SubagentSettingsChange =
   | { kind: "widgetPlacement"; value: WidgetPlacement }
+  | { kind: "widgetLayout"; value: WidgetLayout }
   | { kind: "backgroundNotify"; value: BackgroundNotifyMode };
 
 export class SubagentSettingsComponent implements Component {
@@ -28,6 +29,13 @@ export class SubagentSettingsComponent implements Component {
         description: "Values: belowEditor, aboveEditor, off. off hides only the progress widget.",
       },
       {
+        id: "widgetLayout",
+        label: "Widget layout",
+        currentValue: settings.widgetLayout,
+        values: ["auto", "columns", "stacked"],
+        description: "Values: auto, columns, stacked. auto uses side-by-side columns at width >= ~71 when both sections are present.",
+      },
+      {
         id: "backgroundNotify",
         label: "Background notify",
         currentValue: settings.runtime.backgroundNotify,
@@ -41,6 +49,7 @@ export class SubagentSettingsComponent implements Component {
       getSubagentSettingsListTheme(theme),
       (id, newValue) => {
         if (id === "widgetPlacement") onChange({ kind: "widgetPlacement", value: newValue as WidgetPlacement });
+        else if (id === "widgetLayout") onChange({ kind: "widgetLayout", value: newValue as WidgetLayout });
         else if (id === "backgroundNotify") onChange({ kind: "backgroundNotify", value: newValue as BackgroundNotifyMode });
       },
       done,

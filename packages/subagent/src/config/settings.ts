@@ -4,12 +4,14 @@ import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type WidgetPlacement = "belowEditor" | "aboveEditor" | "off";
+export type WidgetLayout = "auto" | "columns" | "stacked";
 export type ProjectAgentsStrategy = "nearest" | "off";
 export type DuplicateNamePolicy = "projectOverridesUser" | "userOverridesProject";
 export type BackgroundNotifyMode = "auto" | "steer" | "none";
 
 export interface SubagentUiSettings {
   widgetPlacement: WidgetPlacement;
+  widgetLayout: WidgetLayout;
 }
 
 export interface SubagentRuntimeSettings {
@@ -59,6 +61,7 @@ export interface SubagentSettings extends SubagentUiSettings {
 
 export const DEFAULT_SUBAGENT_UI_SETTINGS: SubagentUiSettings = {
   widgetPlacement: "belowEditor",
+  widgetLayout: "auto",
 };
 
 export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
@@ -98,7 +101,10 @@ export type SubagentSettingsLoadResult = {
   warning?: string;
 };
 
+export type SubagentSettingsSaveInput = Partial<SubagentUiSettings> | SubagentSettings;
+
 const WIDGET_PLACEMENTS = new Set<WidgetPlacement>(["belowEditor", "aboveEditor", "off"]);
+const WIDGET_LAYOUTS = new Set<WidgetLayout>(["auto", "columns", "stacked"]);
 const PROJECT_AGENTS_STRATEGIES = new Set<ProjectAgentsStrategy>(["nearest", "off"]);
 const DUPLICATE_NAME_POLICIES = new Set<DuplicateNamePolicy>(["projectOverridesUser", "userOverridesProject"]);
 const BACKGROUND_NOTIFY_MODES = new Set<BackgroundNotifyMode>(["auto", "steer", "none"]);
@@ -122,7 +128,7 @@ export class SubagentSettingsStore {
     }
   }
 
-  async save(settings: SubagentSettings | SubagentUiSettings): Promise<void> {
+  async save(settings: SubagentSettingsSaveInput): Promise<void> {
     await mkdir(dirname(this.settingsPath), { recursive: true });
     await writeFile(this.settingsPath, `${JSON.stringify(normalizeSettings(settings).settings, null, 2)}\n`, "utf8");
   }
@@ -145,6 +151,8 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
     if (WIDGET_PLACEMENTS.has(widgetPlacement as WidgetPlacement)) settings.widgetPlacement = widgetPlacement as WidgetPlacement;
     else warnings.push("Invalid subagent widgetPlacement; using belowEditor.");
   }
+
+  assignEnum(record, "widgetLayout", WIDGET_LAYOUTS, value => { settings.widgetLayout = value; }, warnings);
 
   const runtime = objectValue(record.runtime);
   if (runtime) {
@@ -193,6 +201,7 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
 function cloneDefaults(): SubagentSettings {
   return {
     widgetPlacement: DEFAULT_SUBAGENT_SETTINGS.widgetPlacement,
+    widgetLayout: DEFAULT_SUBAGENT_SETTINGS.widgetLayout,
     runtime: { ...DEFAULT_SUBAGENT_SETTINGS.runtime },
     agentDiscovery: {
       ...DEFAULT_SUBAGENT_SETTINGS.agentDiscovery,
