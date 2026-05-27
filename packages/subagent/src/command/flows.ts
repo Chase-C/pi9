@@ -48,8 +48,8 @@ export async function resumeSessionFromCommand(
         done(value);
       };
 
-      agentManager.startRun(ctx, loader.signal, [{ kind: "resume", sessionId: action.sessionId, prompt }], update => {
-        updateSubagentWidget(ctx, update.sessions, uiSettings);
+      agentManager.startRun(ctx, loader.signal, [{ kind: "resume", sessionId: action.sessionId, prompt }], () => {
+        updateSubagentWidget(ctx, agentManager.listSessions(), uiSettings);
       }, { background: false }).resultsPromise.then(
         results => finish({ result: results[0] ? toResult(results[0]) : undefined }),
         error => finish({ error }),

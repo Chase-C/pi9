@@ -9,6 +9,7 @@ import { AgentManager } from "../../src/runtime/agent-manager.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 import { renderWidgetContent } from "../helpers/render-widget.js";
+import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 
 const baseCtx = () => ({ cwd: process.cwd(), hasUI: false, modelRegistry: { getAll: () => [] } } as any);
 
@@ -297,12 +298,16 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
     async reload() {},
     summarizeAgent() { return "helper (project)"; },
   };
+  let managerSessions = [runningAgent, childAgent];
   const fakeManager = {
-    listSessions(): any[] { return this.sessions; },
+    listSessions(): any[] { return managerSessions; },
     sessions: [] as any[],
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], tree: [runningAgent, childAgent], active: true });
-      const resultsPromise = Promise.resolve([fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })]);
+      const resultsPromise = Promise.resolve().then(() => {
+        managerSessions = [];
+        return [fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })];
+      });
       return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent, childAgent], resultsPromise };
     },
   };
@@ -334,6 +339,135 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
   assert.match(widgetLines[1], /root/);
   assert.match(widgetLines[2], /child/);
   assert.deepEqual(widgets.at(-1), ["subagent", undefined, { placement: "belowEditor" }]);
+});
+
+test("background run widget updates render the full manager inventory, not only the latest batch", async () => {
+  const retained = fakeAgent({
+    id: "retained",
+    config: { name: "retained", resumable: true },
+    createdAt: 1,
+    status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ready" },
+  });
+  const oldBackground = fakeAgent({
+    id: "old-bg",
+    dispatch: "background",
+    config: { name: "old-bg" },
+    createdAt: 2,
+    status: { kind: "completed", startedAt: 1, completedAt: 3, response: "done" },
+  });
+  const latestBackground = fakeAgent({
+    id: "new-bg",
+    dispatch: "background",
+    config: { name: "new-bg" },
+    createdAt: 3,
+    status: { kind: "running", startedAt: 4 },
+  });
+  const allSessions = [retained, oldBackground, latestBackground];
+  const fakeManager = {
+    listSessions(): any[] { return allSessions; },
+    startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
+      onUpdate?.({ sessions: [latestBackground], tree: [latestBackground], active: true });
+      return {
+        groupId: "g1",
+        sessions: [latestBackground],
+        tree: () => [latestBackground],
+        resultsPromise: new Promise<any[]>(() => {}),
+      };
+    },
+  };
+  const fakeRegistry = {
+    agents: new Map([["helper", { name: "helper", description: "Helps", source: "project" }]]),
+    async reload() {},
+    summarizeAgent() { return "helper (project)"; },
+  };
+  const tool = registerExtension({
+    agentRegistry: fakeRegistry,
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { ...DEFAULT_SUBAGENT_SETTINGS, widgetLayout: "stacked" } }; } },
+  });
+
+  const widgets: any[] = [];
+  const result = await tool.execute("tool-call", {
+    action: "run",
+    background: true,
+    tasks: [{ agent: "helper", prompt: "background work" }],
+  }, undefined, undefined, {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: { setWidget: (...args: any[]) => widgets.push(args), notify() {} },
+  });
+
+  assert.equal(result.details.view, "background-started");
+  const lines = renderWidgetContent(widgets.at(-1)[1], undefined, 80).join("\n");
+  assert.match(lines, /Background · 1 running · 1 ready/);
+  assert.match(lines, /new-bg/);
+  assert.match(lines, /old-bg/);
+  assert.match(lines, /Resumable · 1 ready/);
+  assert.match(lines, /retained/);
+});
+
+test("foreground run widget updates also preserve background and retained sections while running", async () => {
+  const background = fakeAgent({
+    id: "bg",
+    dispatch: "background",
+    config: { name: "background" },
+    createdAt: 1,
+    status: { kind: "running", startedAt: 1 },
+  });
+  const retained = fakeAgent({
+    id: "retained",
+    config: { name: "retained", resumable: true },
+    createdAt: 2,
+    status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ready" },
+  });
+  const current = fakeAgent({
+    id: "current",
+    retention: "transient",
+    config: { name: "current" },
+    createdAt: 3,
+    status: { kind: "running", startedAt: 3 },
+  });
+  let finish!: () => void;
+  const fakeManager = {
+    listSessions(): any[] { return [background, retained, current]; },
+    startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
+      Promise.resolve().then(() => onUpdate?.({ sessions: [current], tree: [current], active: true }));
+      return {
+        groupId: "g1",
+        sessions: [current],
+        tree: () => [current],
+        resultsPromise: new Promise<any[]>(resolve => {
+          finish = () => resolve([fakeAgent({ id: "current", config: { name: "current" }, status: { kind: "completed", response: "done" } })]);
+        }),
+      };
+    },
+  };
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map([["helper", { name: "helper", description: "Helps", source: "project" }]]), async reload() {}, summarizeAgent() { return "helper (project)"; } },
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { ...DEFAULT_SUBAGENT_SETTINGS, widgetLayout: "stacked" } }; } },
+  });
+
+  const widgets: any[] = [];
+  const execute = tool.execute("tool-call", {
+    action: "run",
+    tasks: [{ agent: "helper", prompt: "work" }],
+  }, undefined, undefined, {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: { setWidget: (...args: any[]) => widgets.push(args), notify() {} },
+  });
+
+  await new Promise(resolve => setImmediate(resolve));
+  const liveLines = renderWidgetContent(widgets[0][1], undefined, 80).join("\n");
+  assert.match(liveLines, /Background · 1 running/);
+  assert.match(liveLines, /background/);
+  assert.match(liveLines, /Resumable · 1 ready/);
+  assert.match(liveLines, /retained/);
+  assert.match(liveLines, /\+1 foreground running/);
+
+  finish();
+  await execute;
 });
 
 test("subagent action=run accepts a heterogeneous batch of spawn and resume tasks", async () => {

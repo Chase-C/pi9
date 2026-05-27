@@ -139,11 +139,11 @@ export async function runAction(
     : { background: params.background === true };
 
   if (params.background === true) {
-    const handle = deps.agentManager.startRun(ctx, signal, parsed, update => {
-      updateSubagentWidget(ctx, widgetAgents(update), deps.getCurrentSettings());
+    const handle = deps.agentManager.startRun(ctx, signal, parsed, () => {
+      updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
     }, startOptions);
     handle.resultsPromise.catch(() => {});
-    updateSubagentWidget(ctx, handle.sessions, deps.getCurrentSettings());
+    updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
     return toolResult(backgroundStartedDetails(handle.sessions));
   }
 
@@ -152,7 +152,7 @@ export async function runAction(
   const emitPartial = (update: RunUpdate) => {
     const partial = partialToolResult(update, deps.getCurrentSettings().display, runStartedAt);
     onUpdate?.(partial);
-    updateSubagentWidget(ctx, widgetAgents(update), deps.getCurrentSettings());
+    updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
   };
   const handle = deps.agentManager.startRun(ctx, signal, parsed, emitPartial, startOptions);
   const settled = deps.parentSessionId !== undefined
@@ -170,10 +170,6 @@ export async function runAction(
 /** The model-facing `results` envelope: the `view` tag plus the projected per-entry JSON. */
 function resultsJson(entries: ResultEntry[], opts?: { exposeId?: boolean }) {
   return { view: "results" as const, results: toResults(entries, opts) };
-}
-
-function widgetAgents(update: RunUpdate): AgentSnapshot[] {
-  return update.tree.length > 0 ? update.tree : update.sessions;
 }
 
 function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings, runStartedAt: number): { content: { type: "text"; text: string }[]; details: SubagentDetails } {
