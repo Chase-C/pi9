@@ -280,6 +280,123 @@ test("/subagents settings closes through injected cancel keybindings", async () 
   assert.equal(closed, true);
 });
 
+test("/subagents settings accepts j/k navigation like the other subagents views", async () => {
+  const saved: any[] = [];
+  const commands = registerCommand({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: { sessions: [], listSessions() { return this.sessions; } },
+    settingsStore: {
+      async load() { return { settings: { widgetPlacement: "belowEditor", widgetLayout: "auto" } }; },
+      async save(settings: any) { saved.push(settings); },
+    },
+  });
+
+  await commands.get("subagents").handler("settings", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      custom(factory: any) {
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        component.handleInput("j"); // widgetPlacement -> widgetLayout
+        component.handleInput("\r"); // auto -> columns
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  const last = saved.at(-1);
+  assert.ok(last, "expected settings to save");
+  assert.equal(last.widgetLayout, "columns");
+});
+
+test("/subagents sessions view can open settings", async () => {
+  const session = fakeAgent({ status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+  const saved: any[] = [];
+  const commands = registerCommand({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: { sessions: [session], listSessions() { return this.sessions; } },
+    settingsStore: {
+      async load() { return { settings: { widgetPlacement: "belowEditor" } }; },
+      async save(settings: any) { saved.push(settings); },
+    },
+  });
+
+  let customCalls = 0;
+  let sessionsText = "";
+  await commands.get("subagents").handler("", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      custom(factory: any) {
+        customCalls += 1;
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        if (customCalls === 1) {
+          sessionsText = component.render(120).join("\n");
+          component.handleInput("s");
+          return Promise.resolve({ action: "settings" });
+        }
+        component.handleInput("\r");
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.match(sessionsText, /Subagent Sessions/);
+  assert.match(sessionsText, /s settings/);
+  assert.equal(customCalls, 2);
+  assert.equal(saved.at(-1).widgetPlacement, "aboveEditor");
+});
+
+test("/subagents can switch between sessions and agents views", async () => {
+  const reloadCalls: string[] = [];
+  const commands = registerCommand({
+    agentRegistry: {
+      agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", resumable: false }]]),
+      async reload(cwd: string) { reloadCalls.push(cwd); },
+      summarizeAgent() { return ""; },
+    },
+    agentManager: {
+      sessions: [fakeAgent({ status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } })],
+      listSessions() { return this.sessions; },
+    },
+  });
+
+  const renders: string[] = [];
+  let customCalls = 0;
+  await commands.get("subagents").handler("", {
+    cwd: "/repo",
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory: any) {
+        customCalls += 1;
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        renders.push(component.render(120).join("\n"));
+        if (customCalls === 1) {
+          component.handleInput("\t");
+          return Promise.resolve({ action: "agents" });
+        }
+        if (customCalls === 2) {
+          component.handleInput("\t");
+          return Promise.resolve({ action: "sessions" });
+        }
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.match(renders[0], /Subagent Sessions/);
+  assert.match(renders[0], /tab agents/);
+  assert.match(renders[1], /Subagent Agents/);
+  assert.match(renders[1], /tab sessions/);
+  assert.match(renders[2], /Subagent Sessions/);
+  assert.deepEqual(reloadCalls, ["/repo"]);
+});
+
 test("/subagents command is a silent no-op without UI, regardless of whether a notify is supplied", async () => {
   const fakeRegistry = {
     agents: new Map([["helper", { name: "helper", description: "Helps", source: "project", resumable: false }]]),

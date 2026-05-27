@@ -67,26 +67,35 @@ export function handleListInspectNavigation(
   return false;
 }
 
-export function agentListHelp() {
-  return "↑↓ select · enter inspect · s settings · esc close";
-}
-
-export function agentInspectHelp() {
-  return "b back · s settings · esc close";
-}
-
-export function listHelp(session: AgentSnapshot | undefined) {
+export function agentListHelp(canOpenSessions = false) {
   const actions = ["↑↓ select", "enter inspect"];
-  if (session?.capabilities.canResume) actions.push("r resume");
-  actions.push("c remove retained", "esc close");
+  if (canOpenSessions) actions.push("tab sessions");
+  actions.push("s settings", "esc close");
   return actions.join(" · ");
 }
 
-export function inspectHelp(session: AgentSnapshot) {
+export function agentInspectHelp(canOpenSessions = false) {
+  const actions = ["b back"];
+  if (canOpenSessions) actions.push("tab sessions");
+  actions.push("s settings", "esc close");
+  return actions.join(" · ");
+}
+
+export function listHelp(session: AgentSnapshot | undefined, canOpenAgents = false) {
+  const actions = ["↑↓ select", "enter inspect"];
+  if (session?.capabilities.canResume) actions.push("r resume");
+  if (session?.capabilities.canClear) actions.push("c remove");
+  if (canOpenAgents) actions.push("tab agents");
+  actions.push("s settings", "esc close");
+  return actions.join(" · ");
+}
+
+export function inspectHelp(session: AgentSnapshot, canOpenAgents = false) {
   const actions = [];
   if (session.capabilities.canResume) actions.push("r resume");
   if (session.capabilities.canClear) actions.push("c remove");
-  actions.push("b back", "esc close");
+  if (canOpenAgents) actions.push("tab agents");
+  actions.push("b back", "s settings", "esc close");
   return actions.join(" · ");
 }
 
@@ -112,4 +121,8 @@ export function isUpKey(data: string, keybindings?: SubagentKeybindings) {
 
 export function isDownKey(data: string, keybindings?: SubagentKeybindings) {
   return keybindingsMatch(keybindings, data, "tui.select.down") || matchesKey(data, "down") || data === "\x1b[B" || data === "j" || data === "J";
+}
+
+export function isSwitchViewKey(data: string) {
+  return matchesKey(data, "tab") || data === "\t" || data === "\x09";
 }

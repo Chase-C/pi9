@@ -107,7 +107,7 @@ export async function openSubagentSettings(
 
   let saveQueue = Promise.resolve();
   try {
-    await ctx.ui.custom<void>((_tui, theme, keybindings, done) => new SubagentSettingsComponent(
+    await ctx.ui.custom<void>((tui, theme, keybindings, done) => new SubagentSettingsComponent(
       settings,
       theme,
       keybindings,
@@ -133,6 +133,7 @@ export async function openSubagentSettings(
         ));
       },
       () => done(undefined),
+      () => tui.requestRender(),
     ));
   } catch (error) {
     notify(ctx, `Subagents UI failed: ${errorMessage(error)}`, "warning");

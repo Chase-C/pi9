@@ -405,10 +405,12 @@ When active or retained sessions exist, `/subagents` opens the Sessions view. Fr
 - Inspect a session's status, agent metadata, prompt preview, progress counters, timestamps, usage, output/error snippets, and available actions.
 - Resume a completed resumable session, or a retryable resume attempt that failed before re-attaching to its retained session. The command asks for a follow-up prompt in an editor, runs with a cancellable loader, updates the widget live, and appends a concise custom result message to the main conversation. Cancelling the loader interrupts the child run instead of hiding background work.
 - Remove a retained non-running resumable session.
+- Open Settings with `s`.
+- Switch to the Agents browser with `tab` when agent discovery is available.
 
-If no active or retained sessions exist, `/subagents` opens the read-only Agents browser instead. The browser lists discovered user/project agent definitions and lets you inspect model, thinking, tools, resumable status, and source path metadata. It does not launch agents.
+If no active or retained sessions exist, `/subagents` opens the read-only Agents browser instead. The browser lists discovered user/project agent definitions and lets you inspect model, thinking, tools, resumable status, and source path metadata. It does not launch agents. When sessions exist, `tab` switches back to the Sessions view.
 
-Run `/subagents settings` to open the Settings view directly.
+Run `/subagents settings` to open the Settings view directly. All `/subagents` views use the same movement keys, including configured select keybindings and `j`/`k`.
 
 ## Background subagents
 

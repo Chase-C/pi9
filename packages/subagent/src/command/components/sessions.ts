@@ -13,6 +13,7 @@ import {
   handleListInspectNavigation,
   inspectHelp,
   isCancelKey,
+  isSwitchViewKey,
   listHelp,
   selectedListLines,
   type ListInspectState,
@@ -31,6 +32,7 @@ export class SubagentSessionsComponent implements Component {
     private readonly display: SubagentDisplaySettings,
     private readonly notify: (message: string, level?: string) => void,
     private readonly done: (result?: SubagentsCommandResult) => void,
+    private readonly canOpenAgents = false,
   ) { }
 
   invalidate(): void { }
@@ -45,14 +47,14 @@ export class SubagentSessionsComponent implements Component {
       return fitLinesToWidth([
         accent(this.theme, "Subagent Session"),
         ...formatSubagentSessionInspect(session, Date.now(), this.display).map(line => `  ${line}`),
-        dim(this.theme, inspectHelp(session)),
+        dim(this.theme, inspectHelp(session, this.canOpenAgents)),
       ], width);
     }
 
     return fitLinesToWidth([
       accent(this.theme, "Subagent Sessions"),
       ...selectedListLines(sessions, this.state.selected, formatSubagentSessionSummary, this.theme),
-      dim(this.theme, listHelp(sessions[this.state.selected])),
+      dim(this.theme, listHelp(sessions[this.state.selected], this.canOpenAgents)),
     ], width);
   }
 
@@ -60,6 +62,14 @@ export class SubagentSessionsComponent implements Component {
     const sessions = this.sessions;
     if (isCancelKey(data, this.keybindings)) {
       this.done();
+      return;
+    }
+    if (data === "s" || data === "S") {
+      this.done({ action: "settings" });
+      return;
+    }
+    if (this.canOpenAgents && isSwitchViewKey(data)) {
+      this.done({ action: "agents" });
       return;
     }
     if (data === "c" || data === "C") {

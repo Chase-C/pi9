@@ -12,6 +12,7 @@ import {
   fitLinesToWidth,
   handleListInspectNavigation,
   isCancelKey,
+  isSwitchViewKey,
   selectedListLines,
   type ListInspectState,
   type SubagentKeybindings,
@@ -27,13 +28,14 @@ export class SubagentAgentsComponent implements Component {
     private readonly theme: Theme,
     private readonly keybindings: SubagentKeybindings,
     private readonly done: (result?: SubagentsCommandResult) => void,
+    private readonly canOpenSessions: () => boolean = () => false,
   ) { }
 
   invalidate(): void { }
 
   render(width: number): string[] {
     if (this.agents.length === 0) {
-      return fitLinesToWidth([accent(this.theme, "Subagent Agents"), "No configured subagent agents.", dim(this.theme, agentListHelp())], width);
+      return fitLinesToWidth([accent(this.theme, "Subagent Agents"), "No configured subagent agents.", dim(this.theme, agentListHelp(this.canOpenSessions()))], width);
     }
 
     this.state.selected = clamp(this.state.selected, 0, this.agents.length - 1);
@@ -42,14 +44,14 @@ export class SubagentAgentsComponent implements Component {
       return fitLinesToWidth([
         accent(this.theme, "Agent Definition"),
         ...formatAgentConfigInspect(agent).map(line => `  ${line}`),
-        dim(this.theme, agentInspectHelp()),
+        dim(this.theme, agentInspectHelp(this.canOpenSessions())),
       ], width);
     }
 
     return fitLinesToWidth([
       accent(this.theme, "Subagent Agents"),
       ...selectedListLines(this.agents, this.state.selected, formatAgentConfigSummary, this.theme),
-      dim(this.theme, agentListHelp()),
+      dim(this.theme, agentListHelp(this.canOpenSessions())),
     ], width);
   }
 
@@ -60,6 +62,10 @@ export class SubagentAgentsComponent implements Component {
     }
     if (data === "s" || data === "S") {
       this.done({ action: "settings" });
+      return;
+    }
+    if (this.canOpenSessions() && isSwitchViewKey(data)) {
+      this.done({ action: "sessions" });
       return;
     }
     handleListInspectNavigation(data, this.state, this.agents.length, this.keybindings, () => this.tui.requestRender());

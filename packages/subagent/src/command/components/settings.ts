@@ -2,7 +2,7 @@ import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agen
 import { SettingsList, type Component, type SettingItem } from "@earendil-works/pi-tui";
 
 import type { BackgroundNotifyMode, SubagentSettings, WidgetLayout, WidgetPlacement } from "../../config/settings.js";
-import { accent, fitLinesToWidth, isCancelKey, type SubagentKeybindings } from "../input.js";
+import { accent, fitLinesToWidth, isCancelKey, isDownKey, isEnterKey, isUpKey, type SubagentKeybindings } from "../input.js";
 
 export type SubagentSettingsChange =
   | { kind: "widgetPlacement"; value: WidgetPlacement }
@@ -19,6 +19,7 @@ export class SubagentSettingsComponent implements Component {
     private readonly keybindings: SubagentKeybindings,
     onChange: (change: SubagentSettingsChange) => void,
     private readonly done: () => void,
+    private readonly requestRender: () => void = () => {},
   ) {
     const items: SettingItem[] = [
       {
@@ -68,9 +69,17 @@ export class SubagentSettingsComponent implements Component {
       this.done();
       return;
     }
-    this.settingsList.handleInput(data);
+    this.settingsList.handleInput(normalizeSettingsListInput(data, this.keybindings));
+    this.requestRender();
   }
 
+}
+
+function normalizeSettingsListInput(data: string, keybindings: SubagentKeybindings) {
+  if (isUpKey(data, keybindings)) return "\x1b[A";
+  if (isDownKey(data, keybindings)) return "\x1b[B";
+  if (isEnterKey(data, keybindings)) return "\r";
+  return data;
 }
 
 function getSubagentSettingsListTheme(theme: Theme) {
