@@ -10,11 +10,72 @@ function registerExtension() {
   return registeredTool;
 }
 
+function registerExtensionWithMessageRenderers() {
+  const renderers = new Map<string, any>();
+  subagentExtension({
+    registerTool() {},
+    registerMessageRenderer: (customType: string, renderer: any) => renderers.set(customType, renderer),
+  } as any);
+  return renderers;
+}
+
 const passthroughTheme = { fg: (_color: string, text: string) => text };
 
 function titleText(tool: any, args: unknown, context?: unknown): string {
   return tool.renderCall(args, passthroughTheme, context).render(200).join("\n");
 }
+
+test("background completion message renderer shows compact themed status summary when collapsed", () => {
+  const renderers = registerExtensionWithMessageRenderers();
+  const renderer = renderers.get("subagent-background-completion");
+  assert.equal(typeof renderer, "function");
+
+  const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
+  const component = renderer(
+    {
+      content: "fallback content with sessionId hidden-session",
+      details: {
+        completions: [
+          { sessionId: "s-complete", agent: "helper", label: "short task that is much too long for the configured display limit", status: "completed", elapsedMs: 1250 },
+          { sessionId: "s-error", agent: "critic", status: "error", elapsedMs: 65000 },
+        ],
+      },
+    },
+    { expanded: false },
+    theme,
+  );
+  const rendered = component.render(160).join("\n");
+
+  assert.match(rendered, /2 background subagents completed/);
+  assert.match(rendered, /helper \(short task that is much too long for the configured display…\) · <success>completed<\/success> · 1\.3s/);
+  assert.match(rendered, /critic · <error>error<\/error> · 1m05s/);
+  assert.doesNotMatch(rendered, /s-complete|s-error|hidden-session/);
+  assert.doesNotMatch(rendered, /Call subagent results/);
+});
+
+test("background completion message renderer expands to full session details and results hint", () => {
+  const renderers = registerExtensionWithMessageRenderers();
+  const renderer = renderers.get("subagent-background-completion");
+  assert.equal(typeof renderer, "function");
+
+  const component = renderer(
+    {
+      content: "1 background subagent completed since the last notification:\n- fallback · completed · 1s · sessionId fallback-id\n\nCall subagent results with these sessionIds to retrieve output.",
+      details: {
+        completions: [
+          { sessionId: "s-interrupted", agent: "helper", label: "full detail task", status: "interrupted", elapsedMs: 1000 },
+        ],
+      },
+    },
+    { expanded: true },
+    passthroughTheme,
+  );
+  const rendered = component.render(160).join("\n");
+
+  assert.match(rendered, /1 background subagent completed since the last notification:/);
+  assert.match(rendered, /helper \(full detail task\) · interrupted · 1\.0s · sessionId s-interrupted/);
+  assert.match(rendered, /Call subagent results with these sessionIds to retrieve output\./);
+});
 
 test("subagent tool result renderer falls back to simple text when themed rendering fails", () => {
   const tool = registerExtension();

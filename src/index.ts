@@ -10,6 +10,7 @@ import { defineSubagentTool } from "./tool/define-subagent-tool.js";
 import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./config/settings.js";
 import { prepareSubagentRuntime } from "./runtime/prepare-subagent-runtime.js";
 import { registerSubagentsCommand } from "./command/register.js";
+import { formatBackgroundCompletionMessage } from "./view/background-completion-message.js";
 import { formatSubagentResumeMessageContent } from "./view/resume-message.js";
 
 
@@ -46,6 +47,11 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
         ? message.content
         : formatSubagentResumeMessageContent(message.details as any, currentSettings.display);
       return new Text(theme?.fg ? theme.fg("customMessageText", content) : content, 0, 0);
+    });
+  } catch { }
+  try {
+    pi.registerMessageRenderer?.("subagent-background-completion", (message, options, theme) => {
+      return new Text(formatBackgroundCompletionMessage(message, Boolean(options?.expanded), theme, currentSettings.display), 0, 0);
     });
   } catch { }
 
