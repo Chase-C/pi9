@@ -13,20 +13,17 @@ What's distinctive about this package:
 - **Small, opinionated tool prompt.** The tool description is concise by design to avoid bloating context. It gives the parent clear "when to delegate" and "when to skip" guidance, and uses a compact call-shape signature so the schema is legible without prose for every parameter.
 - **Configurable without code.** Concurrency, default behaviors, notification style, widget placement, and discovery rules are all settings, editable from `/subagents settings` or a single JSON file. The defaults are chosen so most projects don't have to touch them.
 
-## Install for local development
+## Install
 
 ```bash
-npm install
-pi install .
+pi install npm:@pi9/subagent
 ```
 
-For quick testing without installing:
+For quick testing without installing (in this repo):
 
 ```bash
 pi -e .
 ```
-
-After edits, reload Pi — it runs the TypeScript in `src/` directly, so there's no build step.
 
 ## Agent discovery
 
