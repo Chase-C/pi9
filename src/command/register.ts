@@ -24,13 +24,17 @@ export function registerSubagentsCommand(
 ) {
   pi.registerCommand?.("subagents", {
     description: "Manage active and retained subagent sessions",
+    getArgumentCompletions: (prefix: string) => getSubagentsArgumentCompletions(prefix),
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      if (args.trim() === "settings") {
+      const command = args.trim();
+      if (command === "settings") {
         await openSubagentSettings(ctx, agentManager, settingsStore, onSettingsUpdated);
         return;
       }
 
-      let view: SubagentsCommandView = agentManager.listSessions().length === 0 ? "agents" : "sessions";
+      let view: SubagentsCommandView = command === "agents" || command === "sessions"
+        ? command
+        : agentManager.listSessions().length === 0 ? "agents" : "sessions";
 
       while (true) {
         let action: SubagentsCommandResult | undefined;
@@ -117,4 +121,16 @@ export function registerSubagentsCommand(
       }
     },
   });
+}
+
+function getSubagentsArgumentCompletions(prefix: string) {
+  const commands = [
+    { value: "settings", label: "settings", description: "Open subagent settings" },
+    { value: "sessions", label: "sessions", description: "Open active and retained subagent sessions" },
+    { value: "agents", label: "agents", description: "Browse discovered subagent definitions" },
+  ];
+  const normalized = prefix.trimStart();
+  if (normalized.includes(" ")) return null;
+  const filtered = commands.filter(item => item.value.startsWith(normalized));
+  return filtered.length > 0 ? filtered : null;
 }

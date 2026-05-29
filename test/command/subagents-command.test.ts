@@ -19,6 +19,18 @@ function registerCommand(dependencies: any = {}) {
   return commands;
 }
 
+test("/subagents command exposes argument completions for direct views", () => {
+  const commands = registerCommand({
+    agentManager: { listSessions: () => [] },
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+  });
+
+  const completions = commands.get("subagents").getArgumentCompletions("s");
+
+  assert.deepEqual(completions.map((item: any) => item.value), ["settings", "sessions"]);
+  assert.equal(commands.get("subagents").getArgumentCompletions("unknown"), null);
+});
+
 test("/subagents settings exposes placement values, saves changes, and updates active widget", async () => {
   const runningSession = fakeAgent({ status: { kind: "running", startedAt: 1 }, turns: 1 });
   const fakeManager = {
