@@ -10,6 +10,7 @@ import { defineSubagentTool } from "./tool/define-subagent-tool.js";
 import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./config/settings.js";
 import { registerSubagentLifecycleEvents } from "./runtime/lifecycle-events.js";
 import { prepareSubagentRuntime } from "./runtime/prepare-subagent-runtime.js";
+import { registerSubagentMetadataPersistence } from "./runtime/session-metadata.js";
 import { registerSubagentSessionGuards } from "./runtime/session-guards.js";
 import { registerSubagentsCommand } from "./command/register.js";
 import { formatBackgroundCompletionMessage } from "./view/background-completion-message.js";
@@ -41,6 +42,7 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   });
 
   registerSubagentLifecycleEvents(pi.events, agentManager);
+  registerSubagentMetadataPersistence(pi, agentManager, () => currentSettings.display);
   registerSubagentSessionGuards(pi as any, agentManager);
   try {
     pi.registerShortcut?.("ctrl+shift+.", {
