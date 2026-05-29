@@ -57,3 +57,24 @@ test("subagent lifecycle events keep resumed completions observable", () => {
   assert.equal(completions.length, 2);
   assert.equal(completions[1].data.snapshot.status.completedAt, 80);
 });
+
+test("subagent lifecycle events keep resumed queued and started attempts observable", () => {
+  const emitted: Array<{ event: string; data: any }> = [];
+  const events = { emit: (event: string, data: unknown) => emitted.push({ event, data }) };
+  const driver = source();
+
+  registerSubagentLifecycleEvents(events, driver.manager as any);
+
+  driver.emit(fakeAgent({ id: "s1", status: { kind: "queued", queuedAt: 10 } }));
+  driver.emit(fakeAgent({ id: "s1", status: { kind: "running", startedAt: 20 } }));
+  driver.emit(fakeAgent({ id: "s1", status: { kind: "completed", startedAt: 20, completedAt: 30 } }));
+  driver.emit(fakeAgent({ id: "s1", status: { kind: "queued", queuedAt: 40 } }));
+  driver.emit(fakeAgent({ id: "s1", status: { kind: "running", startedAt: 50 } }));
+
+  const queued = emitted.filter(e => e.event === "subagent:queued");
+  const started = emitted.filter(e => e.event === "subagent:started");
+  assert.equal(queued.length, 2);
+  assert.equal(started.length, 2);
+  assert.equal(queued[1].data.snapshot.status.queuedAt, 40);
+  assert.equal(started[1].data.snapshot.status.startedAt, 50);
+});

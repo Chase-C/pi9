@@ -44,12 +44,6 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   registerSubagentLifecycleEvents(pi.events, agentManager);
   registerSubagentMetadataPersistence(pi, agentManager, () => currentSettings.display);
   registerSubagentSessionGuards(pi as any, agentManager);
-  try {
-    pi.registerShortcut?.("ctrl+shift+.", {
-      description: "Open the subagents panel",
-      handler: async () => pi.sendUserMessage?.("/subagents", { deliverAs: "followUp" } as any),
-    });
-  } catch { }
 
   registerSubagentsCommand(pi, agentManager, settingsStore, agentRegistry, settings => {
     currentSettings = settings;

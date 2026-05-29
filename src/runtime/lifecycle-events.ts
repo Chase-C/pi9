@@ -16,8 +16,8 @@ export function registerSubagentLifecycleEvents(
 ): () => void {
   if (!events || typeof events.emit !== "function" || typeof source.onAgentUpdate !== "function") return () => { };
 
-  const seenQueued = new Set<string>();
-  const seenStarted = new Set<string>();
+  const seenQueued = new Map<string, number | undefined>();
+  const seenStarted = new Map<string, number>();
   const seenTerminal = new Map<string, SeenTerminal>();
 
   return source.onAgentUpdate((agent, kind) => {
@@ -28,15 +28,17 @@ export function registerSubagentLifecycleEvents(
     if (kind !== "status") return;
 
     if (snapshot.status.kind === "queued") {
-      if (seenQueued.has(snapshot.id)) return;
-      seenQueued.add(snapshot.id);
+      const queuedAt = snapshot.status.queuedAt;
+      if (seenQueued.has(snapshot.id) && seenQueued.get(snapshot.id) === queuedAt) return;
+      seenQueued.set(snapshot.id, queuedAt);
       events.emit("subagent:queued", { sessionId: snapshot.id, snapshot });
       return;
     }
 
     if (snapshot.status.kind === "running") {
-      if (seenStarted.has(snapshot.id)) return;
-      seenStarted.add(snapshot.id);
+      const startedAt = snapshot.status.startedAt;
+      if (seenStarted.get(snapshot.id) === startedAt) return;
+      seenStarted.set(snapshot.id, startedAt);
       events.emit("subagent:started", { sessionId: snapshot.id, snapshot });
       return;
     }

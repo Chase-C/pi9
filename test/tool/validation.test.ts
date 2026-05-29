@@ -22,20 +22,6 @@ test("subagent extension still registers the tool when custom resume renderer re
   assert.equal(registeredTool.name, "subagent");
 });
 
-test("subagent extension registers a shortcut for opening the subagents panel", () => {
-  const shortcuts: any[] = [];
-  const sent: any[] = [];
-  subagentExtension({
-    registerTool() {},
-    registerShortcut: (shortcut: string, options: any) => shortcuts.push({ shortcut, options }),
-    sendUserMessage: (...args: any[]) => sent.push(args),
-  } as any);
-
-  assert.equal(shortcuts[0].shortcut, "ctrl+shift+.");
-  shortcuts[0].options.handler();
-  assert.deepEqual(sent[0], ["/subagents", { deliverAs: "followUp" }]);
-});
-
 test("subagent tool registers a non-empty description", () => {
   const tool = registerExtension();
 
