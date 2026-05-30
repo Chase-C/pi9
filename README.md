@@ -1,17 +1,15 @@
 # @pi9/subagent
 
-A Pi package that adds subagent delegation: a single `subagent` tool the main agent can use to spawn isolated child `AgentSession`s, see their progress live, and pick up where they left off.
+A Pi package that adds subagent delegation: a single `subagent` tool the main agent uses to spawn isolated child `AgentSession`s, watch their progress live, and pick up where they left off. Reach for it when work would crowd the parent conversation or benefits from an independent perspective — focused research, planning, review, bug investigation, test analysis, and implementation handoffs.
 
-Reach for it when the work would crowd the parent conversation or benefits from an independent perspective: focused research, planning, review, bug investigation, test analysis, and implementation handoffs.
+## Highlights
 
-What's distinctive about this package:
-
-- **Resumable sessions.** Agents can opt in to being resumable, letting the parent send follow-up prompts to the same child later. The child keeps its accumulated context across resumes instead of starting cold each time.
-- **Background dispatch.** A batch can be dispatched in the background so the parent doesn't wait. Children keep running independently of the call that started them, and the parent is notified when they finish — the notification style is configurable so it doesn't have to interrupt the active turn.
-- **Recursive subagents.** Subagents can spawn their own subagents, and the parent sees the whole tree as one coherent run: nested children appear under their parent, counts and elapsed time aggregate across the tree, and a single shared concurrency limit applies across all levels so recursive fan-out stays bounded.
-- **Minimal API surface.** A single tool covers listing agents, listing sessions, spawning, resuming, fetching results, and cleanup. Spawn and resume tasks can be mixed in the same batch, so the main agent rarely needs more than one call to dispatch a round of work.
-- **Small, opinionated tool prompt.** The tool description is concise by design to avoid bloating context. It gives the parent clear "when to delegate" and "when to skip" guidance, and uses a compact call-shape signature so the schema is legible without prose for every parameter.
-- **Configurable without code.** Concurrency, default behaviors, notification style, widget placement, and discovery rules are all settings, editable from `/subagents settings` or a single JSON file. The defaults are chosen so most projects don't have to touch them.
+- **Resumable sessions** — send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
+- **Background dispatch** — fire off a batch, keep working, and get notified when children finish.
+- **Recursive subagents** — children spawn their own children; the parent renders the whole tree as one run under a single shared concurrency limit.
+- **One tool, small footprint** — a single call lists, spawns, resumes, collects, and cleans up, with a deliberately compact prompt that won't bloat the parent's context.
+- **Visible and observable** — per-child status, turns, tokens, and tool calls live in the tool row and a dockable widget; lifecycle events and a persistent session index keep every run inspectable after it finishes.
+- **Configurable without code** — concurrency, notifications, discovery, and layout are all settings with sensible defaults.
 
 ## Install
 
@@ -65,104 +63,25 @@ Supported frontmatter:
 
 The markdown body is trimmed and used as the child's system prompt.
 
-## Use the tool
+## Resumable sessions
 
-The tool accepts a required `action`: `agents`, `list`, `run`, `results`, or `remove`.
-
-### `action: "agents"`
-
-List configured agent definitions, including each agent's `tools` and default `skills`.
-
-```ts
-subagent({ action: "agents" })
-```
-
-### `action: "list"`
-
-List active and retained subagent sessions. Each row carries two independent tags:
-
-- `dispatch: "foreground" | "background"` — how the run was started.
-- `retention: "transient" | "persistent"` — whether the session survives in the catalog after its current attempt settles. Background sessions are always persistent; foreground sessions are persistent only when resumable.
-
-```ts
-subagent({ action: "list" })
-subagent({ action: "list", status: ["completed", "error"] })
-```
-
-An empty `status` array returns no sessions (distinct from no filter). Valid values:
-
-| Status | Meaning |
-| --- | --- |
-| `queued` | Waiting on the shared concurrency queue. |
-| `running` | Actively executing. |
-| `completed` | Finished and returned output. |
-| `error` | Agent unknown, failed before running, or the child session failed without cancellation semantics. |
-| `aborted` | Explicitly aborted (e.g., via `subagent remove`). |
-| `interrupted` | Stopped because the parent tool/command was cancelled. |
-| `skipped` | Queued task never started because the parent was cancelled before a child session was created. |
-
-A `completed` resumable session can be resumed; a resume attempt that fails before re-attaching is also retryable. All other terminal states are inspect/remove-only.
-
-### `action: "run"`
-
-`run` takes a `tasks` array. Each task is either a **spawn** (carrying `agent`) or a **resume** (carrying `sessionId`). Providing both or neither is rejected.
-
-Spawn task fields:
-
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `agent` | yes | Runtime agent name from a discovered definition. |
-| `prompt` | yes | The task to delegate. |
-| `label` | no | Human-readable identifier shown in widgets and logs in place of the agent name. |
-| `resumable` | no | Boolean override of the agent default. A `false` override discards the session immediately at completion. |
-| `model`, `thinking`, `cwd` | no | Override the agent's configured model, thinking level, or working directory. Relative `cwd` resolves against the parent. |
-| `skills` | no | Skill names to inject. Fully replaces the agent's default `skills` (no merge); pass `[]` to opt out. Unknown names are a hard error. Explicit skills bypass each skill's `disable-model-invocation` flag. |
-
-Resume task fields:
-
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `sessionId` | yes | A retained resumable session that is completed, or whose last resume failed before re-attaching. |
-| `prompt` | yes | The follow-up to send. |
-| `label`, `resumable` | no | Re-assert label or resumable override. `model`, `thinking`, `cwd`, `skills`, and `agent` are rejected on resume. |
-
-Single spawn:
+Mark an agent `resumable: true` (or override per task) and its session is retained after it settles. The parent can then send a follow-up to the same `sessionId`, and the child continues with its accumulated context instead of starting cold. Spawns and resumes can be mixed in one batch:
 
 ```ts
 subagent({
   action: "run",
   tasks: [
-    { agent: "scout", prompt: "Find the auth entry points and summarize relevant files." }
-  ]
-})
-```
-
-Multi-task spawn with labels and skills:
-
-```ts
-subagent({
-  action: "run",
-  tasks: [
-    { agent: "scout", label: "frontend auth", prompt: "Map frontend auth code and list key files.", skills: ["codesearch"] },
-    { agent: "scout", label: "backend auth", prompt: "Map backend auth code and list key files." },
-    { agent: "reviewer", prompt: "Review auth-related tests and summarize coverage gaps." }
-  ]
-})
-```
-
-Mixed spawn and resume in one call:
-
-```ts
-subagent({
-  action: "run",
-  tasks: [
-    { sessionId: "...", prompt: "Use your previous findings to propose the smallest implementation plan." },
+    { sessionId: "...", prompt: "Use your earlier findings to propose the smallest implementation plan." },
     { agent: "reviewer", prompt: "Independently review the new plan once it lands." }
   ]
 })
 ```
 
-Batch-level `background: true` dispatches the run non-blocking. The call returns immediately with initial session views; children keep running independently of the call that started them and remain visible in `list` until removed or collected, even if the agent isn't resumable. `background` is a batch-level flag and is rejected on individual tasks.
+Retention lasts for the current Pi process only — restart or extension reload releases it. Resume from the tool, or interactively from `/subagents`.
+
+## Background dispatch
+
+Add `background: true` to a run and the call returns immediately with initial session views. Children keep running independently of the call that started them and stay visible in `list` until removed or collected, even if the agent isn't resumable.
 
 ```ts
 subagent({
@@ -172,74 +91,17 @@ subagent({
 })
 ```
 
-The parent remains responsible for sequencing. If later work depends on earlier output, make one `subagent` call, inspect the result, then make the next call.
+When a background child finishes, the parent is notified. The `backgroundNotify` setting decides how: coalesce until the parent is idle (`auto`), steer into the active turn (`steer`), or stay silent (`none`). Notifications carry only metadata — fetch the actual output with `subagent results`.
 
-### `action: "results"`
+## Recursive subagents
 
-```ts
-subagent({ action: "results", sessionIds: ["..."] })                  // peek without removing
-subagent({ action: "results", sessionIds: ["..."], remove: true })    // collect terminal entries and sweep them
-```
+Give an agent the `subagent` tool in its `tools` allowlist and it can spawn its own children. The parent sees the whole tree as one coherent run: nested children appear under their parent, counts and elapsed time aggregate across the tree, and a single shared concurrency limit applies across all levels so recursive fan-out stays bounded.
 
-`results` never blocks. It returns one entry per id in input order (duplicates allowed):
+## Live display
 
-```ts
-type SubagentResult =
-  | { sessionId?: string; ready: true; result: AgentResult }
-  | { sessionId: string; ready: false; status: "queued" | "running"; elapsedMs: number; agent: string; label?: string }
-  | { sessionId: string; error: string };
-```
+While subagents run, two surfaces keep you in the loop: the tool row in the transcript, and a persistent widget outside it.
 
-- Terminal entries return the projected `AgentResult` (see [Result shape](#result-shape)) under `{ ready: true, result }`.
-- Queued/running entries return `{ ready: false, status, elapsedMs, agent, label? }`. `elapsedMs` is measured from when the child started (running) or from when the current attempt was queued (queued).
-- Unknown ids return `{ sessionId, error: "Unknown subagent session: <id>" }`. The overall response stays `isError: false` — partial success is success.
-- `remove: true` sweeps terminal entries after collection. Running entries are never removed regardless of the flag.
-- Not background-only: a retained resumable `sessionId` can be inspected this way too.
-
-### `action: "remove"`
-
-```ts
-subagent({ action: "remove", sessionIds: ["..."] })        // remove specific sessions; running ones are aborted
-subagent({ action: "remove", scope: "retained" })          // remove all retained resumable sessions
-subagent({ action: "remove", scope: "non-running" })       // remove everything that isn't currently running
-subagent({ action: "remove", scope: "background" })        // remove all background sessions (terminal and running)
-```
-
-Exactly one of `sessionIds` or `scope` is required. The response shape is `{ removed, aborted, sessionIds, errors }`. Unknown ids appear in `errors[]` without setting `isError`.
-
-### Result shape
-
-`run` and `results` share one envelope. A terminal entry's `result` looks like:
-
-```ts
-{
-  view: "results",
-  results: [
-    {
-      sessionId: "...",
-      ready: true,
-      result: {
-        agent: "scout",
-        label: "frontend auth",
-        prompt: "Map frontend auth code and list key files.",
-        status: "completed",
-        output: "...",
-        model: "anthropic/claude-sonnet-4",
-        resumable: true,
-        resumed: false,
-        sessionId: "...",
-        turns: 6,
-        tokens: 18432,
-        elapsedMs: 21044
-      }
-    }
-  ]
-}
-```
-
-`output` (or `error` for non-`completed` statuses) is the child's **full, untruncated** text — only the TUI compacts it. Both the inner `result.sessionId` and the outer envelope `sessionId` are present only when the result is resumable.
-
-## Live rendering
+### Tool row
 
 While a `run` is executing, the tool row shows one line per child with status, agent or `label`, turns, tokens, elapsed time, and its most recent tool calls. Finished children collapse to just their row:
 
@@ -253,7 +115,7 @@ While a `run` is executing, the tool row shows one line per child with status, a
 
 Expanding the tool call shows each child's prompt and full tool history. For resumed sessions, every previous run is shown as its own section above the current run, with its own prompt, tool history, and output. Mixed child failures still preserve successful results.
 
-## Progress widget
+### Progress widget
 
 A lightweight widget appears outside the tool row while there are active or retained resumable sessions, and auto-hides otherwise. Nested children appear under their parent with depth-based indentation.
 
@@ -288,8 +150,6 @@ The runtime knobs are the ones most users will reach for:
   - `steer` — inject a steering-style notification into the currently active run, falling back to a new turn if idle.
   - `none` — do not notify; the parent must call `subagent list` or `subagent results` to discover completions.
 
-Notifications carry only metadata (session ids, agent, label, terminal status, elapsed time) and direct the parent to call `subagent results` for the actual output.
-
 Beyond runtime, the settings file also has an `agentDiscovery` section (toggles for user/project sources, file extensions, duplicate-name policy) and a `display` section (truncation lengths and widget row caps). Defaults are tuned to be reasonable; reach for them only when something is being cut off or you need to narrow discovery.
 
 `/subagents settings` exposes the common controls; the rarer discovery and display knobs are file-only.
@@ -307,7 +167,25 @@ When active or retained sessions exist, it opens the Sessions view, where you ca
 
 If no sessions exist, `/subagents` opens the read-only Agents browser, which lists discovered agent definitions and their metadata. It does not launch agents.
 
-Run `/subagents settings` to open Settings directly. All views share the same movement keys, including configured select keybindings and `j`/`k`.
+Run `/subagents settings` to open Settings directly, or `/subagents agents` / `/subagents sessions` to jump straight to a view. All views share the same movement keys, including configured select keybindings and `j`/`k`.
+
+## Events and persistence
+
+The package emits `queued`, `started`, and `completed` lifecycle events on the host event bus, so other extensions can react to subagent progress without polling the tool. Terminal sessions are also recorded in a persistent `subagent-session-index` entry — status, timing, prompt previews, and output/error snippets — so recent activity survives across Pi sessions. And when you try to switch or fork a session while children are still queued or running, the package warns first instead of silently abandoning that work.
+
+## The `subagent` tool
+
+The tool takes one required `action`. The full parameter and result shapes live in `src/schema.ts` and are surfaced to the agent through the tool description; this is just the map of what each action does:
+
+| Action | What it does |
+| --- | --- |
+| `agents` | List configured agent definitions with their tools and default skills. |
+| `list` | List active and retained sessions; filter with `status`. |
+| `run` | Spawn (via `agent`) and/or resume (via `sessionId`) a `tasks` array. `background: true` dispatches non-blocking. |
+| `results` | Fetch results by `sessionIds` without blocking; `remove: true` sweeps terminal entries. |
+| `remove` | Remove sessions by `sessionIds` or `scope`; running ones are aborted. |
+
+Spawn tasks accept per-task overrides — `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable`. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`), plus a `sessionId` to resume when the result is resumable.
 
 ## Architecture
 
