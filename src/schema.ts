@@ -1,47 +1,47 @@
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 
 export const TaskSchema = Type.Object({
-  agent: Type.Optional(Type.String({ description: "Agent name (spawn). Mutually exclusive with sessionId." })),
-  sessionId: Type.Optional(Type.String({ description: "Retained session id (resume). Mutually exclusive with agent." })),
-  prompt: Type.String({ description: "Task or follow-up to send to the subagent." }),
+  agent: Type.Optional(Type.String({ description: "Agent name for a new spawn. Mutually exclusive with sessionId." })),
+  sessionId: Type.Optional(Type.String({ description: "Retained session to resume. Mutually exclusive with agent." })),
+  prompt: Type.String({ description: "Self-contained task/follow-up: objective, relevant files/dirs, known facts, constraints, expected output." }),
   label: Type.Optional(Type.String({
-    description: "Human-readable label shown in widgets and logs."
+    description: "Display label for widgets/logs."
   })),
   resumable: Type.Optional(Type.Boolean({
-    description: "Override the agent's resumable default. `true` retains the session after completion so its sessionId can be passed in a later ResumeTask; `false` discards it at completion."
+    description: "Keep/discard session after completion."
   })),
   model: Type.Optional(Type.String({ description: "Model override." })),
-  thinking: Type.Optional(Type.String({ description: "Thinking-level override." })),
-  cwd: Type.Optional(Type.String({ description: "Working directory for the child." })),
+  thinking: Type.Optional(Type.String({ description: "Thinking override." })),
+  cwd: Type.Optional(Type.String({ description: "Subagent working directory." })),
   skills: Type.Optional(Type.Array(Type.String(), {
-    description: "Skills injected into the system prompt. Fully replaces the agent's defaults ([] opts out); unknown names error. Explicit skills bypass disable-model-invocation."
+    description: "Skill names to inject; replaces agent defaults ([] disables)."
   })),
 });
 
+export const SUBAGENT_ACTIONS = ["agents", "list", "run", "results", "remove"] as const;
+export const SESSION_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
+export const REMOVAL_SCOPES = ["background", "retained", "non-running"] as const;
+
 export const SubagentParams = Type.Object({
-  action: Type.String({
-    description: "One of: agents, list, run, results, remove.",
-  }),
+  action: StringEnum(SUBAGENT_ACTIONS, { description: "Action to perform." }),
   tasks: Type.Optional(Type.Array(TaskSchema, { description: "Tasks for action=run. Multiple tasks run concurrently — they must not write to overlapping files." })),
   background: Type.Optional(Type.Boolean({
-    description: "Batch-level flag on action=run. Default false (blocking — wait for subagents to complete). Set true only when the user explicitly asks for fire-and-forget work, or a long-running task's output isn't needed for your next step. Background returns immediately with sessionIds and auto-notifies on completion; fetch output with { action: 'results' }.",
+    description: "For action=run. Return immediately; fetch later with action=results. Use only when results are not needed next.",
   })),
-  status: Type.Optional(Type.Array(Type.String(), {
-    description: "Status filter for action=list. Values: queued, running, completed, error, aborted, interrupted, skipped.",
+  status: Type.Optional(Type.Array(StringEnum(SESSION_STATUSES), {
+    description: "Filter list by status.",
   })),
   sessionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Session ids for action=remove or action=results." })),
-  scope: Type.Optional(Type.String({
-    description: "Removal scope for action=remove. One of: background, retained, non-running. Mutually exclusive with sessionIds.",
+  scope: Type.Optional(StringEnum(REMOVAL_SCOPES, {
+    description: "Removal scope for action=remove.",
   })),
   remove: Type.Optional(Type.Boolean({
-    description: "For action=results: sweep terminal entries after returning.",
+    description: "Remove terminal sessions when fetching results.",
   })),
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;
-
-export const SESSION_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
 export type SessionStatus = typeof SESSION_STATUSES[number];
 
 export function isSessionStatus(value: unknown): value is SessionStatus {

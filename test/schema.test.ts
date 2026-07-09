@@ -128,3 +128,11 @@ test("SubagentParams rejects results action when remove is not a boolean", () =>
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: "yes" }), false);
 });
 
+test("SubagentParams constrains action, status, and scope values", () => {
+  assert.equal(Check(SubagentParams, { action: "bogus" }), false);
+  assert.equal(Check(SubagentParams, { action: "list", status: ["running", "completed"] }), true);
+  assert.equal(Check(SubagentParams, { action: "list", status: ["stale"] }), false);
+  assert.equal(Check(SubagentParams, { action: "remove", scope: "background" }), true);
+  assert.equal(Check(SubagentParams, { action: "remove", scope: "everything" }), false);
+});
+

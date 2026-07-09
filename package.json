@@ -49,9 +49,6 @@
     "skills": [],
     "prompts": []
   },
-  "dependencies": {
-    "jiti": "^2.7.0"
-  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
@@ -59,9 +56,9 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.76.0",
-    "@earendil-works/pi-coding-agent": "^0.76.0",
-    "@earendil-works/pi-tui": "^0.76.0",
+    "@earendil-works/pi-ai": "^0.80.5",
+    "@earendil-works/pi-coding-agent": "^0.80.5",
+    "@earendil-works/pi-tui": "^0.80.5",
     "typebox": "^1.1.38",
     "typescript": "~6.0.3",
     "vitest": "^4.1.6"

@@ -11,14 +11,14 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSession,
-  type ExtensionFactory,
   type ModelRegistry,
   type Skill,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
 import { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
-import { ExtensionFactoryCache } from "./extension-factory-cache.js";
+import { discoverInheritedExtensionPaths } from "./extension-paths.js";
 import { timingAsync } from "./timing.js";
 import { completedRun, errorRun, interruptedRun, skippedRun } from "../domain/agent-finalize.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
@@ -30,13 +30,8 @@ export interface RunAgentDependencies {
   sessionManager: typeof SessionManager.inMemory;
   settingsManager: typeof SettingsManager.create;
   loadSkills: typeof loadSkills;
-  extensionFactoryCache: Pick<ExtensionFactoryCache, "load">;
-  /**
-   * Builds the child-session subagent factory for the current agent. When set, the factory it
-   * returns is prepended to the loader's `extensionFactories`, letting the spawned child see a
-   * `subagent` tool that delegates back into the parent's shared `AgentManager`.
-   */
-  childFactoryFor?: (agent: Agent) => ExtensionFactory;
+  loadExtensionPaths: (cwd: string, agentDir: string) => Promise<string[]>;
+  childToolFor?: (agent: Agent) => ToolDefinition;
 }
 
 export const DefaultRunAgentDependencies: RunAgentDependencies = {
@@ -46,9 +41,7 @@ export const DefaultRunAgentDependencies: RunAgentDependencies = {
   sessionManager: SessionManager.inMemory,
   settingsManager: SettingsManager.create,
   loadSkills,
-  extensionFactoryCache: new ExtensionFactoryCache({
-    bypass: process.env.PI_SUBAGENT_BYPASS_EXTENSION_CACHE === "1",
-  }),
+  loadExtensionPaths: discoverInheritedExtensionPaths,
 };
 
 export async function RunAttempt(
@@ -89,17 +82,14 @@ export async function RunAttempt(
     if (skillBlock) systemPrompt = `${systemPrompt}\n\n${skillBlock}`;
   }
 
-  const { factories, fallbackPaths } = await dependencies.extensionFactoryCache.load(cwd, agentDir);
-
-  const childFactory = dependencies.childFactoryFor?.(agent);
-  const allFactories: ExtensionFactory[] = childFactory ? [childFactory, ...factories] : factories;
+  const inheritedExtensionPaths = await dependencies.loadExtensionPaths(cwd, agentDir);
+  const childTool = dependencies.childToolFor?.(agent);
 
   const resourceLoader = new dependencies.ResourceLoader({
     cwd,
     agentDir,
     noExtensions: true,
-    extensionFactories: allFactories,
-    additionalExtensionPaths: fallbackPaths,
+    additionalExtensionPaths: inheritedExtensionPaths,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
@@ -122,6 +112,7 @@ export async function RunAttempt(
     thinkingLevel: agent.spawn.thinking ?? agent.config.thinking,
     modelRegistry: ctx.modelRegistry,
     tools: agent.config.tools,
+    customTools: childTool ? [childTool] : [],
     sessionManager,
     settingsManager,
   }));

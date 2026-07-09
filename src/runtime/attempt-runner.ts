@@ -1,4 +1,4 @@
-import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import type { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
@@ -30,7 +30,7 @@ export class AttemptRunner {
   private readonly _leases = new Map<string, QueueLease>();
   private readonly _runner: AgentRunner;
   private _isTracked: (agentId: string) => boolean;
-  private _childFactory?: (agent: Agent) => ExtensionFactory;
+  private _childTool?: (agent: Agent) => ToolDefinition;
 
   constructor(opts: AttemptRunnerOptions) {
     this._queue = new TaskQueue(opts.maxRunning);
@@ -38,12 +38,12 @@ export class AttemptRunner {
     this._runner = opts.runner ?? ((ctx, agent, attempt, signal) =>
       RunAttempt(ctx, agent, attempt, signal, {
         ...DefaultRunAgentDependencies,
-        ...(this._childFactory ? { childFactoryFor: this._childFactory } : {}),
+        ...(this._childTool ? { childToolFor: this._childTool } : {}),
       }));
   }
 
-  setChildFactory(fn: (agent: Agent) => ExtensionFactory): void {
-    this._childFactory = fn;
+  setChildTool(fn: (agent: Agent) => ToolDefinition): void {
+    this._childTool = fn;
   }
 
   setIsTracked(fn: (agentId: string) => boolean): void {

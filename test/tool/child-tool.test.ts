@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import type { AgentManager } from "../../src/runtime/agent-manager.js";
-import { makeChildSubagentFactory } from "../../src/tool/child-factory.js";
+import { makeChildSubagentTool } from "../../src/tool/child-tool.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 import { baseCtx, makeManager, makeSession, run } from "../helpers/runtime.js";
 
@@ -15,32 +15,25 @@ const baseAgentConfig = { name: "helper", description: "d", systemPrompt: "s", s
 
 function captureChildTool(
   manager: AgentManager,
-
   registry: any,
   parent: Agent,
   getCurrentSettings: () => any = () => DEFAULT_SUBAGENT_SETTINGS,
 ): any {
-  let captured: any;
-  const factory = makeChildSubagentFactory({ manager, registry, parent, getCurrentSettings });
-  factory({ registerTool: (tool: any) => { captured = tool; } } as any);
-  return captured;
+  return makeChildSubagentTool({ manager, registry, parent, getCurrentSettings });
 }
 
-test("makeChildSubagentFactory returns a factory that registers a 'subagent' tool", () => {
+test("makeChildSubagentTool returns a 'subagent' tool", () => {
   const registry: FakeRegistry = { agents: new Map() };
   const manager = makeManager(registry as any);
   const parent = new Agent("parent-1", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
 
-  const factory = makeChildSubagentFactory({
+  const tool = makeChildSubagentTool({
     manager, registry: registry as any, parent,
     getCurrentSettings: () => DEFAULT_SUBAGENT_SETTINGS,
   });
-  const registered: any[] = [];
-  factory({ registerTool: (tool: any) => registered.push(tool) } as any);
 
-  assert.equal(registered.length, 1);
-  assert.equal(registered[0].name, "subagent");
-  assert.equal(typeof registered[0].execute, "function");
+  assert.equal(tool.name, "subagent");
+  assert.equal(typeof tool.execute, "function");
 });
 
 test("child subagent tool delegates action=run to the shared manager with parentId set", async () => {
@@ -107,9 +100,7 @@ test("recursive foreground subagent spawn completes with a single shared queue s
   const runner = async (ctx: any, agent: any) => {
     agent.attach(makeSession());
     if (agent.spawn.prompt === "spawn-child") {
-      const factory = makeChildSubagentFactory({ manager, registry: registry as any, parent: agent, getCurrentSettings: () => DEFAULT_SUBAGENT_SETTINGS });
-      let tool: any;
-      factory({ registerTool: (t: any) => { tool = t; } } as any);
+      const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "child-call",
         { action: "run", tasks: [{ agent: "worker", prompt: "leaf" }] },
@@ -142,9 +133,7 @@ test("recursive foreground subagent chain can exceed the shared queue cap withou
     agent.attach(makeSession());
     if (agent.spawn.prompt.startsWith("spawn-")) {
       const remaining = Number(agent.spawn.prompt.slice("spawn-".length));
-      const factory = makeChildSubagentFactory({ manager, registry: registry as any, parent: agent, getCurrentSettings: () => DEFAULT_SUBAGENT_SETTINGS });
-      let tool: any;
-      factory({ registerTool: (t: any) => { tool = t; } } as any);
+      const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         `child-${remaining}`,
         { action: "run", tasks: [{ agent: "worker", prompt: remaining > 1 ? `spawn-${remaining - 1}` : "leaf" }] },
@@ -169,9 +158,7 @@ test("recursive foreground subagent chain can exceed the shared queue cap withou
 });
 
 test("recursive subagent spawn: root → child → grandchild all live under one shared manager with correct parent links", async () => {
-  // Custom runner that simulates each Agent's behavior: depending on the prompt, the agent either
-  // spawns its own subagent via the child-session factory tool, or returns directly. This exercises
-  // the full child-factory flow without standing up a real Pi session.
+  // Custom runner that simulates each Agent spawning through its child-session tool.
   const registry = {
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
@@ -180,9 +167,7 @@ test("recursive subagent spawn: root → child → grandchild all live under one
     recordedParents[agent.id] = agent.parentId;
     agent.attach(makeSession());
     if (agent.spawn.prompt === "spawn-child") {
-      const factory = makeChildSubagentFactory({ manager, registry: registry as any, parent: agent, getCurrentSettings: () => DEFAULT_SUBAGENT_SETTINGS });
-      let tool: any;
-      factory({ registerTool: (t: any) => { tool = t; } } as any);
+      const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "c-call",
         { action: "run", tasks: [{ agent: "worker", prompt: "spawn-grandchild" }] },
@@ -194,9 +179,7 @@ test("recursive subagent spawn: root → child → grandchild all live under one
       return completedRun(agent, "child-done");
     }
     if (agent.spawn.prompt === "spawn-grandchild") {
-      const factory = makeChildSubagentFactory({ manager, registry: registry as any, parent: agent, getCurrentSettings: () => DEFAULT_SUBAGENT_SETTINGS });
-      let tool: any;
-      factory({ registerTool: (t: any) => { tool = t; } } as any);
+      const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "g-call",
         { action: "run", tasks: [{ agent: "worker", prompt: "leaf" }] },
@@ -254,15 +237,13 @@ test("child subagent tool does not reload settings or rebuild the registry on ea
   const manager = makeManager(registry as any, 2, async (_c: any, a: any) => { a.attach(makeSession()); return completedRun(a, "ok"); });
   const parent = new Agent("parent-7", baseAgentConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
 
-  const factory = makeChildSubagentFactory({
+  const tool = makeChildSubagentTool({
     manager, registry: registry as any, parent,
     getCurrentSettings: () => { settingsCalls += 1; return DEFAULT_SUBAGENT_SETTINGS; },
   });
-  let captured: any;
-  factory({ registerTool: (t: any) => { captured = t; } } as any);
 
-  await captured.execute("c1", { action: "list" }, undefined, undefined, baseCtx());
-  await captured.execute("c2", { action: "agents" }, undefined, undefined, baseCtx());
+  await tool.execute("c1", { action: "list" }, undefined, undefined, baseCtx());
+  await tool.execute("c2", { action: "agents" }, undefined, undefined, baseCtx());
 
   assert.equal(registryReloads, 0, "child invocations must not reload the registry");
   assert.ok(settingsCalls >= 1, "child invocations should read current settings");

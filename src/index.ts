@@ -5,7 +5,7 @@ import { AgentRegistry } from "./domain/agent-registry.js";
 import { AgentManager } from "./runtime/agent-manager.js";
 import { BackgroundNotifier } from "./runtime/background-notifier.js";
 import { timingAsync } from "./runtime/timing.js";
-import { makeChildSubagentFactory } from "./tool/child-factory.js";
+import { makeChildSubagentTool } from "./tool/child-tool.js";
 import { defineSubagentTool } from "./tool/define-subagent-tool.js";
 import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "./config/settings.js";
 import { registerSubagentLifecycleEvents } from "./runtime/lifecycle-events.js";
@@ -30,8 +30,8 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
   const getCurrentSettings = () => currentSettings;
-  agentManager.runner?.setChildFactory?.(parent =>
-    makeChildSubagentFactory({ manager: agentManager, registry: agentRegistry, parent, getCurrentSettings })
+  agentManager.runner?.setChildTool?.(parent =>
+    makeChildSubagentTool({ manager: agentManager, registry: agentRegistry, parent, getCurrentSettings })
   );
 
   new BackgroundNotifier({

@@ -55,34 +55,37 @@ export interface SubagentToolDeps {
   parentSessionId?: string;
 }
 
-const TOOL_DESCRIPTION = `Delegate focused work to a specialized subagent in an isolated context window. Your prompt is the subagent's only context (beyond its system prompt), so include everything it needs: objective, files/dirs, constraints, output format.
+const TOOL_DESCRIPTION = `Spawn a specialized subagent for bounded, separable work in an isolated context.
+Subagent prompt *must* be self-contained: objective, relevant files/dirs, known facts, constraints, expected output.
 
 Delegate when:
-- the work would otherwise crowd this conversation (large searches/reads, or long-running work with a clean summary back)
-- the work benefits from independent context (e.g. a reviewer)
+- The user explicitly asks for delegation: named agent, second opinion/reviewer, or parallel investigation.
+- The work would crowd this conversation: large searches/reads, many docs, big diffs, or long-running work.
+- The subagent adds distinct value: specialized skill/tooling, or fresh inspection of a bounded slice.
 
 Skip delegation when:
 - you would finish it in a handful of tool calls, given the context you already have
 - using the subagent's output would require redoing the work yourself
+- it would only add generic QA or extra confidence
 
-When the user names a specific agent, immediately call { action: "run" }. Otherwise, call { action: "agents" } and pick one whose tools/skills/prompt fit — if nothing fits, do the work yourself.
+If the user names an agent, run it. Otherwise list agents first; if none fit, do it yourself.
 
 Call shapes:
 
   { action: "agents" } — list known agents
   { action: "list", status?: [SessionStatus, ...] } — list active and retained sessions
-  { action: "run", background?: boolean, tasks: [SpawnTask | ResumeTask, ...] } — spawn or resume tasks (in parallel)
-  { action: "results", sessionIds: [string, ...], remove?: boolean } — fetch output (set \`remove: true\` to sweep)
+  { action: "run", background?: boolean, tasks: [SpawnTask | ResumeTask, ...] } — spawn or resume tasks
+  { action: "results", sessionIds: [string, ...], remove?: boolean } — fetch output, optionally removing sessions
   { action: "remove", sessionIds: [string, ...] } — remove specific sessions (running ones abort)
   { action: "remove", scope: Scope } — remove all sessions matching a scope
 
-  SpawnTask     = { agent, prompt, label?, resumable?, model?, thinking?, cwd?, skills? }
-  ResumeTask    = { sessionId, prompt, label?, resumable? }
-  SessionStatus = "queued" | "running"                                            // active
-                | "completed" | "error" | "aborted" | "interrupted" | "skipped"   // terminal
-  Scope         = "background"    // background-dispatched sessions
-                | "retained"      // resumable foreground sessions kept after completion
-                | "non-running"   // everything except currently-running sessions
+  SpawnTask = { agent, prompt, label?, resumable?, model?, thinking?, cwd?, skills? }
+  ResumeTask = { sessionId, prompt, label?, resumable? }
+  SessionStatus = "queued" | "running" // active
+                | "completed" | "error" | "aborted" | "interrupted" | "skipped" // terminal
+  Scope = "background" // background-dispatched sessions
+        | "retained" // resumable foreground sessions kept after completion
+        | "non-running" // everything except currently-running sessions
 `;
 
 export function defineSubagentTool(deps: SubagentToolDeps) {
