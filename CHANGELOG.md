@@ -6,43 +6,23 @@ This changelog starts with version `v0.2.1`.
 
 ### Added
 
-- Add a concise `promptSnippet` so the custom tool appears in Pi's `Available tools` section.
-- Add tool-specific delegation guidelines covering when to delegate, when to work directly, and when agent discovery is necessary.
-- Add model-facing serializers for agent discovery and session inventory while preserving richer internal details for rendering.
-- Expose resolved `effectiveConfig` metadata in successful task results and session inventory, including the canonical model, thinking level, resolved working directory, effective skills, active tools, and resumability.
-- Add runtime tracking for acknowledged background results so delayed completion notifications can be deduplicated.
+- Add concise tool metadata and delegation guidance for deciding when and how to use subagents.
+- Add dedicated model-facing projections for agent discovery and session inventory.
+- Expose resolved model, thinking, working directory, skills, tools, and resumability as `effectiveConfig` in results and inventory.
 
 ### Changed
 
-- Update the release script to roll `[Unreleased]` into a dated version section and prepend those entries to generated GitHub Release notes.
-- Replace the long, duplicated subagent tool description with a compact capability summary.
-- Move action semantics and call mechanics into concise, action-specific schema field descriptions.
-- Keep the public tool schema flat and provider-compatible while tightening enum, string, and array validation.
-- Report agent discovery's overridable resumability setting as `defaultResumable` while retaining the internal `resumable` field used by renderers.
-- Normalize model-facing inventory statuses to `queued`, `running`, `completed`, `error`, `aborted`, `interrupted`, or `skipped`, including previous runs.
-- Translate the command UI's internal `canClear` capability to the model-facing `canRemove` capability.
-- Document when results omit non-actionable session IDs and how `resumable: false` affects resumed session retention.
-- Hide sessions from listing and lookup as soon as removal begins, including while a running session is being aborted.
-- Treat retrieval of a completed background result as notification acknowledgement and clear that acknowledgement when the session is resumed.
-- Distinguish background result retention from conversation resumability in the schema, settings UI, and README.
-- Document the default blocking behavior of `run`, immediate background handles, and the exact selection behavior of every removal scope.
+- Streamline the tool description and move action mechanics into the provider-compatible schema.
+- Clarify foreground/background behavior, result retention, conversation resumability, session IDs, and removal scopes.
+- Report agent defaults as `defaultResumable` and normalize model-facing statuses and capabilities.
+- Hide sessions from inventory as soon as removal begins.
+- Update the release script to create dated changelog sections and include their entries in GitHub Release notes.
 
 ### Fixed
 
-- Suppress stale background completion notifications when their sessions were removed before notification dispatch.
-- Suppress delayed completion notifications after `results` has already returned the completed session or while a matching `results` call is starting.
-- Report a precise `resumable: false` error when a completed non-resumable session receives a follow-up.
-- Reject empty task arrays, empty session ID arrays, and empty removal session lists before execution.
-- Reject empty task identifiers, prompts, model and working-directory overrides, and skill names in the public schema.
-- Reject unsupported thinking levels consistently in schema and runtime validation.
-
-### Tests
-
-- Add exact coverage for the compact description, prompt snippet, and delegation guidelines.
-- Add schema coverage for non-empty values, thinking-level enums, background semantics, resumability, and removal scopes.
-- Add projection coverage for `defaultResumable`, normalized inventory statuses, model-facing removal capability, and resolved `effectiveConfig` values.
-- Add lifecycle coverage for removal visibility and stale notifications after removal, result retrieval, or a matching results-tool start.
-- Add regression coverage for precise non-resumable follow-up errors and notification acknowledgement reset after resume.
+- Suppress stale background notifications after removal, result retrieval, or the start of a matching `results` call.
+- Improve errors for follow-ups to non-resumable sessions.
+- Reject empty task and session arrays, empty identifiers and overrides, and unsupported thinking levels.
 
 ## [0.2.1] - 2026-07-09
 
