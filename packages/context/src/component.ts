@@ -3,7 +3,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContextReport, ToolSource } from "./types.js";
 
-export const CONTEXT_REPORT_HELP = "↑↓/jk scroll · PgUp/PgDn page · Home/End · Esc close";
+export const CONTEXT_REPORT_HELP = "↑↓/jk scroll · PgUp/PgDn or u/d page · Home/End · q/Esc close";
 
 const CHROME_LINES = 4;
 const VIEW_HEIGHT_FRACTION = 0.9;
@@ -11,15 +11,16 @@ const GRAPH_CELL_TOKENS = 1_000;
 const GRAPH_CELL_GAP = " ";
 const GRAPH_GAP = 4;
 const SUMMARY_MIN_WIDTH = 28;
-const TOOL_DETAIL_LIMIT = 12;
 const GRAPH_STYLE = {
   prompt: { glyph: "●", color: "muted" },
   tools: { glyph: "◆", color: "warning" },
-  memory: { glyph: "▤", color: "error" },
+  memory: { glyph: "■", color: "error" },
   skills: { glyph: "✦", color: "success" },
-  conversation: { glyph: "◍", color: "accent" },
+  conversation: { glyph: "◉", color: "accent" },
   other: { glyph: "◇", color: "dim" },
-  free: { glyph: "□", color: "borderMuted" },
+  free: { glyph: "○", color: "borderMuted" },
+  compaction: { glyph: "▲", color: "warning" },
+  unknown: { glyph: "?", color: "dim" },
 } as const satisfies Record<string, { glyph: string; color: ThemeColor }>;
 
 type TreeBranch = "├" | "└";
@@ -41,7 +42,6 @@ interface DetailItem {
   label: string;
   tokens: number;
   meta?: string;
-  color?: ThemeColor;
 }
 
 export function createContextReportComponent(
@@ -74,6 +74,7 @@ export function createContextReportComponent(
 
       if (
         matchesKey(data, "escape") ||
+        matchesKey(data, "q") ||
         matchesKey(data, "enter") ||
         matchesKey(data, "ctrl+c")
       ) {
@@ -86,9 +87,9 @@ export function createContextReportComponent(
         next = clampScrollOffset(scrollOffset - 1, total, viewport);
       } else if (matchesKey(data, "down") || matchesKey(data, "j")) {
         next = clampScrollOffset(scrollOffset + 1, total, viewport);
-      } else if (matchesKey(data, "pageUp")) {
+      } else if (matchesKey(data, "pageUp") || matchesKey(data, "u")) {
         next = clampScrollOffset(scrollOffset - viewport, total, viewport);
-      } else if (matchesKey(data, "pageDown")) {
+      } else if (matchesKey(data, "pageDown") || matchesKey(data, "d")) {
         next = clampScrollOffset(scrollOffset + viewport, total, viewport);
       } else if (matchesKey(data, "home")) {
         next = 0;
@@ -188,7 +189,6 @@ export function formatContextReportLines(report: ContextReport, theme: Theme, wi
       label: skill.name.replace(/^skill:/, ""),
       tokens: skill.descTokens,
       meta: `full ${formatTokens(skill.bodyTokens)} · ${skill.scope}`,
-      color: "accent",
     })),
     theme,
   ));
@@ -204,10 +204,21 @@ function formatUsageOverview(report: ContextReport, theme: Theme, width: number)
   const contextWindow = knownTokenValue(report.usage.contextWindow) ?? 0;
   const currentTotal = knownTokenValue(report.usage.tokens);
   const usedCategories = buildGraphCategories(report, currentTotal);
-  const freeTokens = contextWindow > 0 && currentTotal !== null ? Math.max(0, contextWindow - currentTotal) : 0;
-  const graphCategories = freeTokens > 0
-    ? [...usedCategories, { label: "Free space", tokens: freeTokens, ...GRAPH_STYLE.free }]
-    : usedCategories;
+  const knownTokens = sum(usedCategories.map((category) => category.tokens));
+  const configuredReserve = report.compaction.enabled
+    ? knownTokenValue(report.compaction.reserveTokens) ?? 0
+    : 0;
+  const occupiedTokens = currentTotal ?? knownTokens;
+  const unoccupiedTokens = contextWindow > 0 ? Math.max(0, contextWindow - occupiedTokens) : 0;
+  const compactionTokens = Math.min(configuredReserve, unoccupiedTokens);
+  const freeTokens = currentTotal !== null ? Math.max(0, unoccupiedTokens - compactionTokens) : 0;
+  const unknownTokens = currentTotal === null ? Math.max(0, unoccupiedTokens - compactionTokens) : 0;
+  const graphCategories = [
+    ...usedCategories,
+    ...(freeTokens > 0 ? [{ label: "Free space", tokens: freeTokens, ...GRAPH_STYLE.free }] : []),
+    ...(unknownTokens > 0 ? [{ label: "Unknown capacity", tokens: unknownTokens, ...GRAPH_STYLE.unknown }] : []),
+    ...(compactionTokens > 0 ? [{ label: "Compaction reserve", tokens: compactionTokens, ...GRAPH_STYLE.compaction }] : []),
+  ];
   const totalGraphTokens = contextWindow > 0
     ? contextWindow
     : Math.max(GRAPH_CELL_TOKENS, sum(graphCategories.map((category) => category.tokens)));
@@ -215,7 +226,15 @@ function formatUsageOverview(report: ContextReport, theme: Theme, width: number)
     ? graphCategories
     : [{ label: "Free space", tokens: totalGraphTokens, ...GRAPH_STYLE.free }];
   const graphLines = formatGraphGrid(visibleGraphCategories, totalGraphTokens, graphColumnCount(width), theme);
-  const summaryLines = formatUsageSummary(report, usedCategories, freeTokens, theme);
+  const summaryLines = formatUsageSummary(
+    report,
+    usedCategories,
+    freeTokens,
+    unknownTokens,
+    configuredReserve,
+    compactionTokens,
+    theme,
+  );
 
   if (!shouldRenderSideBySide(width, graphLines)) {
     return [
@@ -238,6 +257,9 @@ function formatUsageSummary(
   report: ContextReport,
   categories: GraphCategory[],
   freeTokens: number,
+  unknownTokens: number,
+  configuredReserve: number,
+  compactionTokens: number,
   theme: Theme,
 ): string[] {
   const contextWindow = knownTokenValue(report.usage.contextWindow) ?? 0;
@@ -245,9 +267,6 @@ function formatUsageSummary(
   const modelLabel = report.model.name || report.model.id || "unknown model";
   const modelParts = [`${report.model.provider}/${report.model.id}`];
   if (report.model.thinking) modelParts.push(`thinking ${report.model.thinking}`);
-  const snapshot = report.kind === "conversation"
-    ? `captured ${formatAge(report.snapshot.capturedAt)}`
-    : "unavailable; showing static context only";
 
   const lines = [
     `${theme.fg("text", theme.bold(modelLabel))}${contextWindow > 0 ? theme.fg("muted", ` (${formatTokens(contextWindow)} context)`) : ""}`,
@@ -264,17 +283,30 @@ function formatUsageSummary(
   if (freeTokens > 0) {
     lines.push(`${theme.fg(GRAPH_STYLE.free.color, GRAPH_STYLE.free.glyph)} Free space: ${formatTokens(freeTokens)}${formatCategoryPercent(freeTokens, contextWindow)}`);
   }
+  if (unknownTokens > 0) {
+    lines.push(`${theme.fg(GRAPH_STYLE.unknown.color, GRAPH_STYLE.unknown.glyph)} Unknown capacity: ${formatTokens(unknownTokens)}${formatCategoryPercent(unknownTokens, contextWindow)}`);
+  }
+  if (configuredReserve > 0) {
+    const remaining = compactionTokens < configuredReserve
+      ? theme.fg("dim", ` · ${formatTokens(compactionTokens)} unoccupied`)
+      : "";
+    lines.push(`${theme.fg(GRAPH_STYLE.compaction.color, GRAPH_STYLE.compaction.glyph)} Compaction reserve: ${formatTokens(configuredReserve)}${formatCategoryPercent(configuredReserve, contextWindow)}${remaining}`);
+  }
 
-  lines.push("", `${theme.fg("text", "Snapshot:")} ${snapshot}`);
   return lines;
 }
 
 function buildGraphCategories(report: ContextReport, currentTotal: number | null): GraphCategory[] {
-  const toolTokens = sum(report.tools.filter((tool) => tool.active).map((tool) => tool.tokens));
+  const activeTools = report.tools.filter((tool) => tool.active);
+  const toolTokens = sum(activeTools.map((tool) => tool.tokens));
+  const toolPromptTokens = sum(activeTools.map((tool) => tool.promptTokens));
   const skillTokens = sum(report.skills.map((skill) => skill.descTokens));
   const memoryTokens = report.kind === "conversation" ? sum(report.memory.map((file) => file.tokens)) : 0;
   const conversationTokens = report.kind === "conversation" ? report.conversation.tokens : 0;
-  const systemPromptTokens = Math.max(0, report.promptTokens - skillTokens - memoryTokens);
+  const systemPromptTokens = Math.max(
+    0,
+    report.promptTokens - toolPromptTokens - skillTokens - memoryTokens,
+  );
   const categories = [
     { label: "System prompt", tokens: systemPromptTokens, ...GRAPH_STYLE.prompt },
     { label: "Tools", tokens: toolTokens, ...GRAPH_STYLE.tools },
@@ -401,48 +433,53 @@ function formatConversationSection(report: Extract<ContextReport, { kind: "conve
     heading(theme, "Conversation (estimated)", report.conversation.tokens),
     `${branch(theme, "├")}messages: user ${stats.userMessages} · assistant ${stats.assistantMessages} · tool results ${stats.toolResults}`,
     `${branch(theme, "├")}blocks: tool calls ${stats.toolCalls} · thinking ${stats.thinkingBlocks} · images ${stats.imageBlocks}`,
+    `${branch(theme, "├")}compactions: ${stats.compactions}`,
     `${branch(theme, "└")}message tokens: ${theme.fg("accent", formatTokens(report.conversation.tokens))}`,
   ];
 }
 
 function formatToolsSection(report: ContextReport, theme: Theme): string[] {
+  if (report.tools.length === 0) return [];
+
   const callCounts = report.kind === "conversation"
     ? collectToolCallCounts(report.conversation.history)
     : new Map<string, number>();
+  const groups: Array<{ title: string; kind: ToolSource["kind"] }> = [
+    { title: "Built-in tools", kind: "builtin" },
+    { title: "MCP tools", kind: "mcp" },
+    { title: "Extension tools", kind: "extension" },
+  ];
+  const activeTokens = sum(report.tools.filter((tool) => tool.active).map((tool) => tool.tokens));
+  const lines = [heading(theme, "Tools (estimated)", activeTokens)];
 
-  return formatDetailSection(
-    "Tools (estimated)",
-    report.tools.map((tool) => ({
-      label: tool.name,
-      tokens: tool.tokens,
-      meta: `${tool.active ? "active" : "inactive"} · ${formatToolSource(tool.source)} · ${formatCallCount(callCounts.get(tool.name) ?? 0)}`,
-      color: tool.active ? sourceColor(tool.source) : "dim",
-    })),
-    theme,
-    { limit: TOOL_DETAIL_LIMIT },
-  );
+  for (const group of groups) {
+    const tools = report.tools.filter((tool) => tool.source.kind === group.kind);
+    if (tools.length === 0) continue;
+
+    const groupTokens = sum(tools.filter((tool) => tool.active).map((tool) => tool.tokens));
+    lines.push(`${theme.fg("muted", "  ")}${theme.fg("text", theme.bold(group.title))}${theme.fg("dim", ` · ${formatTokens(groupTokens)} tokens`)}`);
+    tools.forEach((tool, index) => {
+      const tree = index === tools.length - 1 ? "└" : "├";
+      const meta = `${tool.active ? "active" : "inactive"} · ${formatToolSource(tool.source)} · ${formatCallCount(callCounts.get(tool.name) ?? 0)}`;
+      lines.push(`${theme.fg("muted", `    ${tree}─ `)}${theme.fg("text", tool.name)}: ${theme.fg("accent", formatTokens(tool.tokens))} tokens${theme.fg("dim", ` · ${meta}`)}`);
+    });
+  }
+
+  return lines;
 }
 
 function formatDetailSection(
   title: string,
   items: DetailItem[],
   theme: Theme,
-  { limit = Number.POSITIVE_INFINITY }: { limit?: number } = {},
 ): string[] {
   if (items.length === 0) return [];
 
-  const visible = items.slice(0, limit);
   const lines = [heading(theme, title, sum(items.map((item) => item.tokens)))];
-  visible.forEach((item, index) => {
-    const hidden = items.length - visible.length;
-    const isLast = hidden === 0 && index === visible.length - 1;
+  items.forEach((item, index) => {
     const meta = item.meta ? theme.fg("dim", ` · ${item.meta}`) : "";
-    lines.push(`${branch(theme, isLast ? "└" : "├")}${theme.fg(item.color ?? "text", item.label)}: ${theme.fg("accent", formatTokens(item.tokens))} tokens${meta}`);
+    lines.push(`${branch(theme, index === items.length - 1 ? "└" : "├")}${theme.fg("text", item.label)}: ${theme.fg("accent", formatTokens(item.tokens))} tokens${meta}`);
   });
-
-  if (items.length > visible.length) {
-    lines.push(`${branch(theme, "└")}${theme.fg("dim", `… ${items.length - visible.length} more`)}`);
-  }
 
   return lines;
 }
@@ -450,12 +487,6 @@ function formatDetailSection(
 function formatToolSource(source: ToolSource): string {
   if (source.kind === "builtin") return "builtin";
   return `${source.kind}:${source.name}`;
-}
-
-function sourceColor(source: ToolSource): ThemeColor {
-  if (source.kind === "extension") return "warning";
-  if (source.kind === "mcp") return "accent";
-  return "text";
 }
 
 function formatCallCount(count: number): string {
@@ -503,16 +534,6 @@ function formatPercent(value: number | null | undefined): string {
 
 function formatCategoryPercent(tokens: number | null, contextWindow: number): string {
   return tokens === null || contextWindow <= 0 ? "" : ` — ${((tokens / contextWindow) * 100).toFixed(1)}%`;
-}
-
-function formatAge(capturedAt: number, now = Date.now()): string {
-  const seconds = Math.floor(Math.max(0, now - capturedAt) / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  return `${Math.floor(minutes / 60)}h ago`;
 }
 
 function sum(values: readonly number[]): number {

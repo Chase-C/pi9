@@ -2,11 +2,14 @@ import { readFileSync } from "node:fs";
 import {
   buildSessionContext,
   estimateTokens as estimateMessageTokens,
+  getAgentDir,
+  SettingsManager,
+  type BuildSystemPromptOptions,
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import type { PromptSnapshot } from "./prompt-snapshot.js";
 import type {
+  CompactionDetails,
   ContextReport,
   ConversationDetails,
   ConversationStats,
@@ -24,14 +27,15 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 export function buildContextReport(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
-  snapshot?: PromptSnapshot,
+  compaction = collectCompactionDetails(ctx),
 ): ContextReport | undefined {
   const usage = ctx.getContextUsage();
   if (!usage) {
     return undefined;
   }
 
-  const systemPrompt = snapshot?.systemPrompt ?? ctx.getSystemPrompt() ?? "";
+  const systemPrompt = ctx.getSystemPrompt() ?? "";
+  const promptOptions = ctx.getSystemPromptOptions();
   const model: ModelDetails = {
     provider: ctx.model?.provider ?? "Unknown Provider",
     id: ctx.model?.id ?? "unknown-model",
@@ -40,27 +44,27 @@ export function buildContextReport(
     contextWindow: usage.contextWindow ?? ctx.model?.contextWindow,
   };
 
-  if (!snapshot) {
-    return {
-      kind: "static",
-      model,
-      usage,
-      promptTokens: estimateTokens(systemPrompt),
-      tools: collectToolDetails(pi),
-      skills: collectSkillDetails(pi),
-    };
-  }
-
   return {
     kind: "conversation",
     model,
     usage,
+    compaction,
     promptTokens: estimateTokens(systemPrompt),
-    tools: collectToolDetails(pi),
-    skills: collectSkillDetails(pi, snapshot),
-    memory: collectMemoryDetails(snapshot),
-    snapshot: { capturedAt: snapshot.capturedAt },
+    tools: collectToolDetails(pi, promptOptions, systemPrompt),
+    skills: collectSkillDetails(pi, promptOptions, systemPrompt),
+    memory: collectMemoryDetails(promptOptions, systemPrompt),
+    snapshot: { capturedAt: Date.now() },
     conversation: collectConversationDetails(ctx),
+  };
+}
+
+export function collectCompactionDetails(ctx: ExtensionCommandContext): CompactionDetails {
+  const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
+    projectTrusted: ctx.isProjectTrusted(),
+  }).getCompactionSettings();
+  return {
+    enabled: settings.enabled,
+    reserveTokens: settings.reserveTokens,
   };
 }
 
@@ -73,11 +77,16 @@ export function estimateTokens(text: unknown): number {
 
 export function collectSkillDetails(
   pi: ExtensionAPI,
-  snapshot?: PromptSnapshot,
+  promptOptions?: BuildSystemPromptOptions,
+  systemPrompt?: string,
 ): SkillDetails[] {
   const details: SkillDetails[] = [];
-  const skills = snapshot
-    ? (snapshot.options.skills ?? []).filter((skill) => !skill.disableModelInvocation)
+  if (promptOptions?.selectedTools && !promptOptions.selectedTools.includes("read")) {
+    return details;
+  }
+
+  const skills = promptOptions
+    ? (promptOptions.skills ?? []).filter((skill) => !skill.disableModelInvocation)
     : pi.getCommands().filter((cmd) => cmd.source === "skill");
 
   const visited = new Set<string>();
@@ -98,9 +107,18 @@ export function collectSkillDetails(
       // Missing skill files should not make /context fail.
     }
 
+    const promptEntry = [
+      "  <skill>",
+      `    <name>${escapeXml(skill.name)}</name>`,
+      `    <description>${escapeXml(skill.description ?? "")}</description>`,
+      `    <location>${escapeXml(path)}</location>`,
+      "  </skill>",
+    ].join("\n");
+    if (systemPrompt !== undefined && !systemPrompt.includes(promptEntry)) return;
+
     details.push({
       name: skill.name,
-      descTokens: estimateTokens(`${skill.name} ${skill.description}`),
+      descTokens: estimateTokens(promptEntry),
       bodyTokens: estimateTokens(content),
       scope: skill.sourceInfo.scope === "project" ? "project" : "user",
     });
@@ -110,54 +128,122 @@ export function collectSkillDetails(
   return details;
 }
 
-export function collectToolDetails(pi: ExtensionAPI): ToolDetails[] {
-  const details: ToolDetails[] = [];
+export function collectToolDetails(
+  pi: ExtensionAPI,
+  promptOptions?: BuildSystemPromptOptions,
+  systemPrompt?: string,
+): ToolDetails[] {
   const active = pi.getActiveTools();
-  const tools = pi.getAllTools();
+  const tools = new Map(pi.getAllTools().map((tool) => [tool.name, tool]));
+  const promptParts = collectToolPromptParts(tools, active, promptOptions, systemPrompt);
+  const details: ToolDetails[] = [];
 
-  const visited = new Set<string>();
-  tools.forEach((tool) => {
-    const key = `${tool.name}-${tool.sourceInfo.scope}`;
-    if (visited.has(key)) {
-      return;
-    }
-    visited.add(key);
-
+  for (const tool of tools.values()) {
     const source = tool.sourceInfo.source;
     let detailSource: ToolSource;
-    if (/^mcp_/i.test(tool.name) || /mcp/i.test(source)) {
-      detailSource = { kind: "mcp", name: source };
-    } else if (source === "builtin" || source === "sdk") {
+    if (source === "builtin" || /^<builtin:/i.test(tool.sourceInfo.path)) {
       detailSource = { kind: "builtin" };
+    } else if (/^mcp_/i.test(tool.name) || /mcp/i.test(source)) {
+      detailSource = { kind: "mcp", name: source };
     } else {
       detailSource = { kind: "extension", name: source };
     }
 
+    const definitionTokens = estimateTokens({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    });
+    const parts = promptParts.get(tool.name) ?? [];
+    const promptTokens = parts.length > 0 ? estimateTokens(parts.join("\n")) : 0;
     details.push({
       name: tool.name,
-      tokens: estimateTokens([tool.name, tool.description, JSON.stringify(tool.parameters)].join("\n")),
+      tokens: definitionTokens + promptTokens,
+      definitionTokens,
+      promptTokens,
       source: detailSource,
       active: active.includes(tool.name),
     });
-  });
+  }
 
   details.sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name));
   return details;
 }
 
-export function collectMemoryDetails(snapshot?: PromptSnapshot): MemoryDetails[] {
-  const files = snapshot?.options.contextFiles ?? [];
-  const details = files.map((file): MemoryDetails => ({
-    path: file.path,
-    tokens: estimateTokens(file.content),
-  }));
+function collectToolPromptParts(
+  tools: Map<string, ReturnType<ExtensionAPI["getAllTools"]>[number]>,
+  active: string[],
+  promptOptions?: BuildSystemPromptOptions,
+  systemPrompt?: string,
+): Map<string, string[]> {
+  const parts = new Map<string, string[]>();
+  if (!promptOptions || promptOptions.customPrompt) return parts;
+
+  const activeNames = promptOptions.selectedTools ?? active;
+  const append = (name: string, text: string): void => {
+    if (systemPrompt !== undefined && !systemPrompt.includes(text)) return;
+    const current = parts.get(name) ?? [];
+    current.push(text);
+    parts.set(name, current);
+  };
+
+  for (const name of activeNames) {
+    const snippet = promptOptions.toolSnippets?.[name];
+    if (snippet) append(name, `- ${name}: ${snippet}`);
+  }
+
+  const attributedGuidelines = new Set<string>();
+  if (
+    activeNames.includes("bash") &&
+    !activeNames.some((name) => name === "grep" || name === "find" || name === "ls")
+  ) {
+    const guideline = "Use bash for file operations like ls, rg, find";
+    append("bash", `- ${guideline}`);
+    attributedGuidelines.add(guideline);
+  }
+
+  const includedGuidelines = new Set(
+    (promptOptions.promptGuidelines ?? [])
+      .map((guideline) => guideline.trim())
+      .filter((guideline) => guideline.length > 0),
+  );
+  for (const name of activeNames) {
+    const tool = tools.get(name);
+    if (!tool) continue;
+
+    const toolGuidelines = new Set(
+      (tool.promptGuidelines ?? [])
+        .map((guideline) => guideline.trim())
+        .filter((guideline) => guideline.length > 0),
+    );
+    for (const guideline of toolGuidelines) {
+      if (!includedGuidelines.has(guideline) || attributedGuidelines.has(guideline)) continue;
+      append(name, `- ${guideline}`);
+      attributedGuidelines.add(guideline);
+    }
+  }
+
+  return parts;
+}
+
+export function collectMemoryDetails(
+  promptOptions?: BuildSystemPromptOptions,
+  systemPrompt?: string,
+): MemoryDetails[] {
+  const files = promptOptions?.contextFiles ?? [];
+  const details = files.flatMap((file): MemoryDetails[] => {
+    const promptEntry = `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>\n\n`;
+    if (systemPrompt !== undefined && !systemPrompt.includes(promptEntry)) return [];
+    return [{ path: file.path, tokens: estimateTokens(promptEntry) }];
+  });
 
   details.sort((a, b) => b.tokens - a.tokens || a.path.localeCompare(b.path));
   return details;
 }
 
 export function collectConversationDetails(ctx: ExtensionCommandContext): ConversationDetails {
-  const messages = buildSessionContext(ctx.sessionManager.getBranch()).messages;
+  const branch = ctx.sessionManager.getBranch();
+  const messages = buildSessionContext(branch).messages;
   const stats: ConversationStats = {
     userMessages: 0,
     assistantMessages: 0,
@@ -165,6 +251,7 @@ export function collectConversationDetails(ctx: ExtensionCommandContext): Conver
     toolCalls: 0,
     thinkingBlocks: 0,
     imageBlocks: 0,
+    compactions: branch.filter((entry) => entry.type === "compaction").length,
   };
   const history: ConversationTurn[] = [];
   let tokens = 0;
@@ -246,6 +333,15 @@ function addAssistantTurns(
   if (!emitted) {
     history.push({ kind: "assistant", tokens: fallbackTokens });
   }
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 function countImageBlocks(content: unknown): number {

@@ -1,6 +1,8 @@
 # @pi9/context
 
-Pi extension that registers `/context` — a scrollable breakdown of how your current context window is being used (model, fixed-scale usage graph, conversation stats, memory files, tools, and skills).
+Pi extension that registers `/context` — a scrollable breakdown of how your current context window is being used (model, fixed-scale usage graph, compaction reserve, conversation stats, memory files, tools, and skills).
+
+![The context report showing a token-usage graph and detailed breakdown](media/context-report.png)
 
 ## Usage
 
@@ -10,7 +12,7 @@ In an interactive pi session:
 /context
 ```
 
-The report opens as an inline custom view in the main UI flow. Scroll with **↑/↓** or **j/k**, page with **PgUp/PgDn**, jump with **Home/End**, and close with **Esc** (Enter also closes).
+The report opens as an inline custom view in the main UI flow. Scroll with **↑/↓** or **j/k**, page with **PgUp/PgDn** or **u/d**, jump with **Home/End**, and close with **q** or **Esc** (Enter also closes).
 
 In modes without extension UI support, the command shows a short warning only.
 

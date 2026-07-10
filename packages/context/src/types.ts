@@ -7,6 +7,7 @@ export interface ConversationContextReport {
   kind: "conversation";
   model: ModelDetails;
   usage: ContextUsage;
+  compaction: CompactionDetails;
   promptTokens: number;
   tools: ToolDetails[];
   skills: SkillDetails[];
@@ -19,9 +20,15 @@ export interface StaticContextReport {
   kind: "static";
   model: ModelDetails;
   usage: ContextUsage;
+  compaction: CompactionDetails;
   promptTokens: number;
   tools: ToolDetails[];
   skills: SkillDetails[];
+}
+
+export interface CompactionDetails {
+  enabled: boolean;
+  reserveTokens: number;
 }
 
 export interface ModelDetails {
@@ -35,6 +42,8 @@ export interface ModelDetails {
 export interface ToolDetails {
   name: string;
   tokens: number;
+  definitionTokens: number;
+  promptTokens: number;
   source: ToolSource;
   active: boolean;
 }
@@ -73,6 +82,7 @@ export interface ConversationStats {
   toolCalls: number;
   thinkingBlocks: number;
   imageBlocks: number;
+  compactions: number;
 }
 
 export type ConversationTurn =
