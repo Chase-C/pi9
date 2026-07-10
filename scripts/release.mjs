@@ -1,83 +1,82 @@
 #!/usr/bin/env node
-// Cuts a release in one step: bumps the version, rolls [Unreleased] into a
-// dated changelog section, tags and pushes the release commit, then creates a
-// GitHub Release with those changelog entries. The Release triggers
-// .github/workflows/publish.yml, which publishes to npm via OIDC trusted publishing.
-//
-// This script does NOT publish to npm directly — that stays with the workflow.
-//
-// Usage:
-//   npm run release:patch                 # 0.1.0 -> 0.1.1
-//   npm run release:minor                 # 0.1.0 -> 0.2.0
-//   npm run release:major                 # 0.1.0 -> 1.0.0
-//   npm run release -- 1.4.2              # explicit version
-//   npm run release -- patch --dry-run   # preview without changing anything
-//   npm run release -- patch --skip-checks   # skip the local typecheck+test gate
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RELEASE_BRANCH = "main";
+const PACKAGES = {
+  subagent: { workspace: "@pi9/subagent", dir: "packages/subagent", tagPrefix: "subagent-v" },
+  whisper: { workspace: "@pi9/whisper", dir: "packages/whisper", tagPrefix: "whisper-v" },
+};
 const KEYWORDS = ["patch", "minor", "major", "prepatch", "preminor", "premajor", "prerelease"];
 
 const args = process.argv.slice(2);
+const packageKey = args[0];
+const bump = args.slice(1).find(arg => !arg.startsWith("--"));
 const dryRun = args.includes("--dry-run");
 const skipChecks = args.includes("--skip-checks");
-const bump = args.find(a => !a.startsWith("--"));
+const target = PACKAGES[packageKey];
 
-function abort(msg) {
-  console.error(`\n✖ ${msg}\n`);
+function abort(message) {
+  console.error(`\n✖ ${message}\n`);
   process.exit(1);
 }
 
-// In a real run, a failed check aborts. In --dry-run it's reported but we keep
-// going, so you see the entire plan even from a dirty tree or the wrong branch.
-function check(ok, msg) {
-  if (ok) return;
-  if (dryRun) console.warn(`  ⚠ would abort: ${msg}`);
-  else abort(msg);
+function capture(command, commandArgs) {
+  return execFileSync(command, commandArgs, { cwd: ROOT, encoding: "utf8" }).trim();
 }
 
-function capture(cmd, cmdArgs) {
-  return execFileSync(cmd, cmdArgs, { encoding: "utf8" }).trim();
+function succeeds(command, commandArgs) {
+  try {
+    execFileSync(command, commandArgs, { cwd: ROOT, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-function silent(cmd, cmdArgs) {
-  execFileSync(cmd, cmdArgs, { stdio: "ignore" });
+function check(condition, message) {
+  if (condition) return;
+  if (dryRun) console.warn(`  ⚠ would abort: ${message}`);
+  else abort(message);
 }
 
-// State-changing commands: skipped (but printed) in --dry-run.
-function mutate(cmd, cmdArgs) {
+function mutate(command, commandArgs) {
   if (dryRun) {
-    console.log(`  [dry-run] ${cmd} ${cmdArgs.join(" ")}`);
+    console.log(`  [dry-run] ${command} ${commandArgs.join(" ")}`);
     return;
   }
-  execFileSync(cmd, cmdArgs, { stdio: "inherit" });
+  execFileSync(command, commandArgs, { cwd: ROOT, stdio: "inherit" });
 }
 
-function resolveNextVersion(currentVersion, bump) {
-  if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(bump)) return bump;
+function resolveNextVersion(currentVersion, requestedBump) {
+  if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(requestedBump)) return requestedBump;
 
   const dir = mkdtempSync(join(tmpdir(), "pi9-release-version-"));
   try {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "version-probe", version: currentVersion }));
-    return capture("npm", ["version", bump, "--no-git-tag-version", "--ignore-scripts", "--prefix", dir]).replace(/^v/, "");
+    return execFileSync(
+      "npm",
+      ["version", requestedBump, "--no-git-tag-version", "--ignore-scripts", "--prefix", dir],
+      { encoding: "utf8" },
+    ).trim().replace(/^v/, "");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-function prepareChangelog(content, version, date) {
+function prepareChangelog(content, version, date, newTag) {
   const heading = content.match(/^## \[Unreleased\](?: - .*?)?$/m);
-  if (!heading || heading.index === undefined) abort("CHANGELOG.md must contain a '## [Unreleased]' section.");
+  if (!heading || heading.index === undefined) abort("CHANGELOG.md must contain an [Unreleased] section.");
   if (new RegExp(`^## \\[${version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\](?: |$)`, "m").test(content)) {
     abort(`CHANGELOG.md already contains a ${version} release section.`);
   }
 
-  const sectionStart = heading.index;
-  const bodyStart = sectionStart + heading[0].length;
+  const bodyStart = heading.index + heading[0].length;
   const nextHeading = content.slice(bodyStart).match(/^## \[/m);
   if (!nextHeading || nextHeading.index === undefined) abort("CHANGELOG.md needs a released section after [Unreleased].");
   const nextSectionStart = bodyStart + nextHeading.index;
@@ -87,10 +86,9 @@ function prepareChangelog(content, version, date) {
   const link = content.match(/^\[Unreleased\]:\s+(.+?\/compare\/)([^\s]+)\.\.\.HEAD$/m);
   if (!link) abort("CHANGELOG.md must contain an [Unreleased] comparison link ending in ...HEAD.");
   const [, comparePrefix, previousTag] = link;
-  const tag = `v${version}`;
 
   let updated = [
-    content.slice(0, sectionStart),
+    content.slice(0, heading.index),
     "## [Unreleased]\n\n",
     `## [${version}] - ${date}\n\n`,
     notes,
@@ -99,109 +97,64 @@ function prepareChangelog(content, version, date) {
   ].join("");
   updated = updated.replace(
     /^\[Unreleased\]:.*$/m,
-    `[Unreleased]: ${comparePrefix}${tag}...HEAD\n[${version}]: ${comparePrefix}${previousTag}...${tag}`,
+    `[Unreleased]: ${comparePrefix}${newTag}...HEAD\n[${version}]: ${comparePrefix}${previousTag}...${newTag}`,
   );
-
   return { updated, notes };
 }
 
-// --- Validate arguments ----------------------------------------------------
-if (!bump) {
-  abort([
-    "Specify a version bump.",
-    "  npm run release:patch | release:minor | release:major",
-    "  npm run release -- <patch|minor|major|x.y.z> [--dry-run] [--skip-checks]",
-  ].join("\n"));
+if (!target || !bump) {
+  abort("Usage: node scripts/release.mjs <subagent|whisper> <patch|minor|major|x.y.z> [--dry-run] [--skip-checks]");
 }
-const isExplicitVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(bump);
-if (!KEYWORDS.includes(bump) && !isExplicitVersion) {
-  abort(`Invalid bump "${bump}". Use one of ${KEYWORDS.join(", ")}, or an explicit x.y.z version.`);
-}
+const explicitVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(bump);
+if (!KEYWORDS.includes(bump) && !explicitVersion) abort(`Invalid version bump: ${bump}`);
 
-const currentVersion = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-).version;
-const nextVersion = resolveNextVersion(currentVersion, bump);
-const newTag = `v${nextVersion}`;
-const now = new Date();
-const releaseDate = [
-  now.getFullYear(),
-  String(now.getMonth() + 1).padStart(2, "0"),
-  String(now.getDate()).padStart(2, "0"),
-].join("-");
-const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
-const changelog = prepareChangelog(readFileSync(changelogUrl, "utf8"), nextVersion, releaseDate);
+const packagePath = join(ROOT, target.dir, "package.json");
+const changelogPath = join(ROOT, target.dir, "CHANGELOG.md");
+const packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
+const nextVersion = resolveNextVersion(packageJson.version, bump);
+const newTag = `${target.tagPrefix}${nextVersion}`;
+const date = new Date().toISOString().slice(0, 10);
+const changelog = prepareChangelog(readFileSync(changelogPath, "utf8"), nextVersion, date, newTag);
 
-console.log(`\n→ Releasing @pi9/subagent (v${currentVersion} → ${newTag})${dryRun ? "  [dry-run]" : ""}\n`);
+console.log(`\n→ Releasing ${target.workspace} (${packageJson.version} → ${nextVersion})${dryRun ? " [dry-run]" : ""}\n`);
 
-// --- Preflight -------------------------------------------------------------
-let ghInstalled = true;
-try { silent("gh", ["--version"]); } catch { ghInstalled = false; }
-check(ghInstalled, "GitHub CLI (gh) not found. Install it: https://cli.github.com");
+check(succeeds("gh", ["--version"]), "GitHub CLI (gh) is not installed.");
+check(succeeds("gh", ["auth", "status"]), "GitHub CLI is not authenticated.");
+check(capture("git", ["rev-parse", "--abbrev-ref", "HEAD"]) === RELEASE_BRANCH, `Releases must be cut from ${RELEASE_BRANCH}.`);
+check(capture("git", ["status", "--porcelain"]) === "", "Working tree is not clean.");
 
-if (ghInstalled) {
-  let ghAuthed = true;
-  try { silent("gh", ["auth", "status"]); } catch { ghAuthed = false; }
-  check(ghAuthed, "Not logged in to GitHub CLI. Run: gh auth login");
+if (succeeds("git", ["fetch", "origin", RELEASE_BRANCH])) {
+  const [behind] = capture("git", ["rev-list", "--left-right", "--count", `origin/${RELEASE_BRANCH}...HEAD`]).split(/\s+/).map(Number);
+  check(behind === 0, `Local ${RELEASE_BRANCH} is ${behind} commit(s) behind origin/${RELEASE_BRANCH}.`);
 }
 
-const branch = capture("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
-check(branch === RELEASE_BRANCH, `Releases must be cut from "${RELEASE_BRANCH}", but you're on "${branch}".`);
-
-check(capture("git", ["status", "--porcelain"]) === "", "Working tree is not clean. Commit or stash your changes first.");
-
-try { silent("git", ["fetch", "origin", RELEASE_BRANCH]); } catch { /* offline: skip the up-to-date check */ }
-let behind = 0;
-try {
-  behind = Number(capture("git", ["rev-list", "--left-right", "--count", `origin/${RELEASE_BRANCH}...HEAD`]).split(/\s+/)[0] || 0);
-} catch { /* no upstream yet */ }
-check(behind === 0, `Local ${RELEASE_BRANCH} is ${behind} commit(s) behind origin/${RELEASE_BRANCH}. Run: git pull --ff-only`);
-
-// --- Local gate (mirrors the CI prepublishOnly gate) -----------------------
-if (skipChecks) {
-  console.log("⚠ Skipping local typecheck + tests (--skip-checks).");
+if (!skipChecks) {
+  mutate("npm", ["run", "typecheck", "--workspace", target.workspace]);
+  mutate("npm", ["test", "--workspace", target.workspace]);
 } else {
-  console.log("▶ Running typecheck + tests (skip with --skip-checks)…");
-  mutate("npm", ["run", "typecheck"]);
-  mutate("npm", ["test"]);
+  console.log("⚠ Skipping package checks.");
 }
 
-// --- Bump, changelog, push, release ---------------------------------------
 if (dryRun) {
-  console.log(`\n  [dry-run] npm version ${bump} --no-git-tag-version   (${newTag})`);
-  console.log(`  [dry-run] move CHANGELOG.md [Unreleased] entries to [${nextVersion}] - ${releaseDate}`);
+  console.log(`  [dry-run] set ${target.dir}/package.json version to ${nextVersion}`);
+  console.log(`  [dry-run] roll CHANGELOG.md [Unreleased] into ${nextVersion}`);
 } else {
-  const bumpedTag = execFileSync("npm", ["version", bump, "--no-git-tag-version"], { encoding: "utf8" }).trim();
-  if (bumpedTag !== newTag) abort(`npm resolved ${bumpedTag}, expected ${newTag}.`);
-  writeFileSync(changelogUrl, changelog.updated);
+  packageJson.version = nextVersion;
+  writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  writeFileSync(changelogPath, changelog.updated);
+  mutate("npm", ["install", "--package-lock-only", "--ignore-scripts"]);
 }
 
-mutate("git", ["add", "package.json", "package-lock.json", "CHANGELOG.md"]);
+mutate("git", ["add", `${target.dir}/package.json`, `${target.dir}/CHANGELOG.md`, "package-lock.json"]);
 mutate("git", ["commit", "-m", `Release ${newTag}`]);
 mutate("git", ["tag", "-a", newTag, "-m", `Release ${newTag}`]);
-
-console.log(`\n→ Version tag: ${newTag}`);
-
 mutate("git", ["push", "origin", RELEASE_BRANCH]);
 mutate("git", ["push", "origin", newTag]);
 
 if (dryRun) {
-  console.log(`  [dry-run] gh release create ${newTag} --title ${newTag} --generate-notes --notes <${nextVersion} changelog entries>`);
+  console.log(`  [dry-run] gh release create ${newTag}`);
 } else {
-  try {
-    execFileSync(
-      "gh",
-      ["release", "create", newTag, "--title", newTag, "--generate-notes", "--notes", changelog.notes],
-      { stdio: "inherit" },
-    );
-  } catch {
-    abort([
-      `Tag ${newTag} was pushed, but creating the GitHub Release failed.`,
-      "Create it manually with the matching CHANGELOG section to trigger the publish workflow.",
-    ].join("\n"));
-  }
+  mutate("gh", ["release", "create", newTag, "--title", newTag, "--generate-notes", "--notes", changelog.notes]);
 }
 
-console.log(`\n✔ ${dryRun ? "[dry-run] would create" : "Created"} release ${newTag}.`);
-console.log("  The publish workflow runs on the new Release — watch it with:");
-console.log("    gh run watch    (or the repo's Actions tab)\n");
+console.log(`\n✔ ${dryRun ? "Would create" : "Created"} ${newTag}.\n`);

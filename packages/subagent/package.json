@@ -1,0 +1,69 @@
+{
+  "name": "@pi9/subagent",
+  "version": "0.3.0",
+  "description": "Resumable, background, and recursive subagents for Pi with live progress and tree-wide concurrency limits.",
+  "license": "MIT",
+  "author": "Chase Cummings <chaseecummings@gmail.com>",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chase-C/pi9_subagent.git",
+    "directory": "packages/subagent"
+  },
+  "bugs": {
+    "url": "https://github.com/Chase-C/pi9_subagent/issues"
+  },
+  "homepage": "https://github.com/Chase-C/pi9_subagent/tree/main/packages/subagent#readme",
+  "files": [
+    "src",
+    "media",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "pi9",
+    "subagent"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "release": "node ../../scripts/release.mjs subagent",
+    "release:patch": "node ../../scripts/release.mjs subagent patch",
+    "release:minor": "node ../../scripts/release.mjs subagent minor",
+    "release:major": "node ../../scripts/release.mjs subagent major",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [],
+    "prompts": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.80.5",
+    "@earendil-works/pi-coding-agent": "^0.80.5",
+    "@earendil-works/pi-tui": "^0.80.5",
+    "typebox": "^1.1.38",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

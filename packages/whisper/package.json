@@ -1,0 +1,66 @@
+{
+  "name": "@pi9/whisper",
+  "version": "0.1.0",
+  "description": "Local agent-to-agent communication for Pi.",
+  "license": "MIT",
+  "author": "Chase Cummings <chaseecummings@gmail.com>",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chase-C/pi9_subagent.git",
+    "directory": "packages/whisper"
+  },
+  "bugs": {
+    "url": "https://github.com/Chase-C/pi9_subagent/issues"
+  },
+  "homepage": "https://github.com/Chase-C/pi9_subagent/tree/main/packages/whisper#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "pi9",
+    "whisper"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build --pretty false",
+    "clean": "tsc --build --clean",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "release": "node ../../scripts/release.mjs whisper",
+    "release:patch": "node ../../scripts/release.mjs whisper patch",
+    "release:minor": "node ../../scripts/release.mjs whisper minor",
+    "release:major": "node ../../scripts/release.mjs whisper major",
+    "prepublishOnly": "npm test"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "skills": [],
+    "prompts": []
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@types/node": "*",
+    "typebox": "*"
+  }
+}
