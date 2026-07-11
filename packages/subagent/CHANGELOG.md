@@ -4,6 +4,12 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Always show spawned session handles in background run results, including the collapsed view.
+- Render in-progress result polls with a static status instead of a frozen spinner.
+- Refresh the subagent widget after result collection or explicit removal clears sessions.
+
 ## [0.3.0] - 2026-07-09
 
 ### Added

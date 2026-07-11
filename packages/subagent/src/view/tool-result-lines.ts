@@ -302,13 +302,16 @@ function recentToolLines(agent: AgentSnapshot, depth: number, now: number, displ
  * here too.
  */
 function formatResultsLines(entries: readonly ResultEntry[], expanded: boolean, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
-  if (!expanded) return entries.map(entry => resultRow(entry, now, bold));
+  if (!expanded) return entries.map(entry => resultRow(entry, now, bold, display));
   return entries.flatMap((entry, index) => resultExpanded(entry, index < entries.length - 1, now, bold, display));
 }
 
-/** One collapsed result row: a bad-id error line, or the same run-style session row a live run renders. */
-function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined): DisplayLine {
+/** One collapsed result row. Running polls use a static inventory row rather than a frozen spinner. */
+function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine {
   if ("error" in entry) return { text: `${entry.sessionId} · error: ${entry.error}`, color: "error" };
+  if (effectiveStatus(entry.snapshot.status) === "running") {
+    return { text: `  ${formatSessionLine(entry.snapshot, now, bold, display)}`, color: statusPresentation(entry.snapshot.status).color };
+  }
   return formatRunSessionLine(entry.snapshot, now, bold);
 }
 
@@ -322,14 +325,17 @@ function resultExpanded(entry: ResultEntry, trailingBlank: boolean, now: number,
     const line: DisplayLine = { text: `${entry.sessionId} · error: ${entry.error}`, color: "error" };
     return trailingBlank ? [line, { text: "" }] : [line];
   }
-  return expandedLines(formatRunSessionLine(entry.snapshot, now, bold), entry.snapshot, true, trailingBlank, display, now, true);
+  const row = effectiveStatus(entry.snapshot.status) === "running"
+    ? { text: `  ${formatSessionLine(entry.snapshot, now, bold, display)}`, color: statusPresentation(entry.snapshot.status).color }
+    : formatRunSessionLine(entry.snapshot, now, bold);
+  return expandedLines(row, entry.snapshot, true, trailingBlank, display, now, true);
 }
 
-function formatBackgroundStartedLines(handles: BackgroundSpawnHandle[], count: number, expanded: boolean, bold?: Bold): DisplayLine[] {
+function formatBackgroundStartedLines(handles: BackgroundSpawnHandle[], count: number, _expanded: boolean, bold?: Bold): DisplayLine[] {
   return renderCountSummary({
     total: `${plural(count, "background subagent")} started`,
     counts: [],
-    expanded,
+    expanded: true,
     entries: handles,
     renderEntry: handle => [{
       text: handle.label

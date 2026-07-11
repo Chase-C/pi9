@@ -73,7 +73,7 @@ test("the dispatch:background segment surfaces in both inspect summary and inven
   assert.match(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /dispatch:background/);
 });
 
-test("background-started view collapsed line shows total count", () => {
+test("background-started view always shows spawned session handles when collapsed", () => {
   const sessions = [
     fakeAgent({ id: "s1", dispatch: "background", config: { name: "scout" }, status: { kind: "queued" } }),
     fakeAgent({ id: "s2", dispatch: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
@@ -81,7 +81,12 @@ test("background-started view collapsed line shows total count", () => {
   ];
 
   const collapsed = formatSubagentToolLines(backgroundStartedDetails(sessions), false, 0);
-  assert.deepEqual(collapsed, ["3 background subagents started"]);
+  assert.deepEqual(collapsed, [
+    "3 background subagents started",
+    "  s1",
+    "  s2",
+    "  s3",
+  ]);
 });
 
 test("background-started view expanded shows one line per session with session id and label when present", () => {
