@@ -26,5 +26,5 @@
 - Simplify tool detail lines and remove the report capture-age line.
 - Align development dependencies with Pi 0.80 and remove the unused `typebox` peer.
 
-[Unreleased]: https://github.com/Chase-C/pi9_subagent/compare/context-v0.1.0...HEAD
-[0.1.0]: https://github.com/Chase-C/pi9_subagent/releases/tag/context-v0.1.0
+[Unreleased]: https://github.com/Chase-C/pi9/compare/context-v0.1.0...HEAD
+[0.1.0]: https://github.com/Chase-C/pi9/releases/tag/context-v0.1.0

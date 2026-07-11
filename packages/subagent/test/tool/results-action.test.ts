@@ -64,6 +64,31 @@ test("subagent action=results with remove:true follows backgroundResults with a 
   assert.deepEqual(removeCalls, [{ sessionIds: ["s1"] }], "only the terminal/ready entry is swept");
 });
 
+test("subagent action=results with remove:true refreshes the widget after sweeping terminal sessions", async () => {
+  const widgets: unknown[][] = [];
+  let sessions = [fakeAgent({ id: "s1", dispatch: "background", status: { kind: "completed", startedAt: 1, completedAt: 2 } })];
+  const fakeManager = {
+    listSessions() { return sessions; },
+    backgroundResults() { return [{ snapshot: sessions[0] }]; },
+    async remove() { sessions = []; return { removed: 1, aborted: 0, sessionIds: ["s1"], errors: [] }; },
+  };
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+  });
+
+  await tool.execute(
+    "tool-call",
+    { action: "results", sessionIds: ["s1"], remove: true },
+    undefined,
+    undefined,
+    { ...baseCtx(), hasUI: true, ui: { setWidget: (...args: unknown[]) => widgets.push(args) } },
+  );
+
+  assert.ok(widgets.length > 0);
+  assert.equal(widgets.at(-1)?.[1], undefined);
+});
+
 test("subagent action=results keeps isError false when entries include per-id errors", async () => {
   const fakeManager = {
     listSessions(): any[] { return []; },

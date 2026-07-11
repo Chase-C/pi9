@@ -9,13 +9,13 @@
   "types": "dist/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Chase-C/pi9_subagent.git",
+    "url": "git+https://github.com/Chase-C/pi9.git",
     "directory": "packages/whisper"
   },
   "bugs": {
-    "url": "https://github.com/Chase-C/pi9_subagent/issues"
+    "url": "https://github.com/Chase-C/pi9/issues"
   },
-  "homepage": "https://github.com/Chase-C/pi9_subagent/tree/main/packages/whisper#readme",
+  "homepage": "https://github.com/Chase-C/pi9/tree/main/packages/whisper#readme",
   "files": [
     "dist",
     "README.md",

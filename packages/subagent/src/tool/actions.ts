@@ -91,7 +91,7 @@ export function listAction(deps: ActionDeps, params: SubagentParams): ActionResu
   });
 }
 
-export async function resultsAction(deps: ActionDeps, params: SubagentParams): Promise<ActionResult> {
+export async function resultsAction(deps: ActionDeps, params: SubagentParams, ctx?: ExtensionContext): Promise<ActionResult> {
   const { sessionIds } = params;
   if (!isStringArray(sessionIds)) return errorResult("results sessionIds must be an array of strings.");
   if (!isNonEmptyStringArray(sessionIds)) return errorResult("results sessionIds must be an array of non-empty strings.");
@@ -100,11 +100,12 @@ export async function resultsAction(deps: ActionDeps, params: SubagentParams): P
   if (params.remove) {
     const terminalIds = entries.flatMap(e => "snapshot" in e && e.snapshot.status.kind === "done" ? [e.snapshot.id] : []);
     await deps.agentManager.remove({ sessionIds: terminalIds });
+    if (ctx) updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
   }
   return toolResult(resultsDetails(entries), { json: resultsJson(entries, { exposeId: true }) });
 }
 
-export async function removeAction(deps: ActionDeps, params: SubagentParams): Promise<ActionResult> {
+export async function removeAction(deps: ActionDeps, params: SubagentParams, ctx?: ExtensionContext): Promise<ActionResult> {
   const { sessionIds, scope } = params;
   const hasIds = sessionIds !== undefined;
   const hasScope = scope !== undefined;
@@ -118,6 +119,7 @@ export async function removeAction(deps: ActionDeps, params: SubagentParams): Pr
   const summary = hasIds
     ? await deps.agentManager.remove({ sessionIds })
     : await deps.agentManager.remove({ scope: scope! });
+  if (ctx) updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
   return toolResult({ view: "remove-summary", summary });
 }
 

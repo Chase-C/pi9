@@ -107,8 +107,8 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       switch (params.action) {
         case "agents": return agentsAction(actionDeps);
         case "list": return listAction(actionDeps, params);
-        case "results": return resultsAction(actionDeps, params);
-        case "remove": return removeAction(actionDeps, params);
+        case "results": return resultsAction(actionDeps, params, ctx);
+        case "remove": return removeAction(actionDeps, params, ctx);
         case "run": return runAction(actionDeps, params, signal, onUpdate, ctx, settings);
         default:
           return errorResult(`Unknown action: ${String(params.action)}. Use "agents", "list", "run", "results", or "remove".`);
