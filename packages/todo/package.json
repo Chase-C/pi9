@@ -1,0 +1,59 @@
+{
+  "name": "@pi9/todo",
+  "version": "0.1.0",
+  "description": "Pi extension for managing agent todo tasks.",
+  "license": "MIT",
+  "author": "Chase Cummings <chaseecummings@gmail.com>",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chase-C/pi9.git",
+    "directory": "packages/todo"
+  },
+  "bugs": {
+    "url": "https://github.com/Chase-C/pi9/issues"
+  },
+  "homepage": "https://github.com/Chase-C/pi9/tree/main/packages/todo#readme",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "pi9",
+    "todo"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [],
+    "prompts": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@types/node": "^24.0.0",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
