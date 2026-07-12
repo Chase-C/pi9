@@ -29,7 +29,7 @@ pi -e packages/ask/src/index.ts
 }
 ```
 
-Input is trimmed and validated. The original questionnaire remains in session history, so selecting its tool call in `/tree` can rerun the complete question and all original alternatives.
+Input is trimmed and validated. In TUI mode, selecting an assistant entry containing one standalone `ask` call in `/tree` opens a blank copy of the original questionnaire. A submitted revision is stored as a durable `ask:reanswer` custom message and immediately continues the agent; Escape cancels without adding a message or triggering a turn. Branch-summary selections resolve their immediate original parent. Mixed-tool, multiple-ask, and invalid Ask entries cannot be replayed; unrelated entries are ignored.
 
 ## TUI controls
 
@@ -49,6 +49,8 @@ RPC mode falls back to Pi's `select` and `input` dialogs. Multiple selection use
 ## Context behavior
 
 Before each model request, completed ask calls are copied and pruned to the selected options, comments, and freeform answer. This reduces context use without mutating stored session entries. Cancelled and unavailable questionnaires are left intact.
+
+Re-answers are not native tool reruns and do not create a second tool result in session history. They use a rendered `ask:reanswer` custom message containing the revised answer. The context hook validates that marker against the original tool call and projects it as a synthetic tool result for the model. A canonical native result takes precedence, and malformed, ambiguous, or unmatched replay markers are left unchanged. Replay is available only in the TUI and only for a single standalone Ask tool call.
 
 ## Development
 

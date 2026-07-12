@@ -100,4 +100,171 @@ describe("rewriteAskContext", () => {
   ])("leaves $label unchanged", ({ messages }) => {
     expect(rewriteAskContext(messages)).toEqual(messages);
   });
+
+  const replay = (details: unknown, timestamp?: number) => ({
+    role: "custom", customType: "ask:reanswer", content: "replayed", details,
+    ...(timestamp !== undefined ? { timestamp } : {}),
+  });
+  const replayDetails = (overrides: Record<string, unknown> = {}) => ({
+    version: 1,
+    toolCallId: "ask-1",
+    question: "Choose",
+    context: "Release",
+    allowMultiple: false,
+    answer: { cancelled: false, selections: [{ label: "B" }] },
+    ...overrides,
+  });
+
+  it("matches a normalized replay marker against whitespace-padded stored arguments", () => {
+    const messages = [
+      call({
+        question: "  Choose  ",
+        context: "  Release  ",
+        options: [{ label: "  B  ", description: "  Second  " }],
+        allowMultiple: false,
+      }),
+      replay(replayDetails()),
+    ];
+
+    const rewritten = rewriteAskContext(messages) as any[];
+    expect(rewritten[0].content[1].arguments).toEqual({
+      question: "Choose",
+      context: "Release",
+      options: [{ label: "B", description: "Second" }],
+    });
+    expect(rewritten[1]).toMatchObject({ role: "toolResult", toolCallId: "ask-1" });
+  });
+
+  it("replaces a replay marker with a synthetic result immediately after its ask call", () => {
+    const messages = [
+      call({ question: "Choose", context: "Release", options: [{ label: "A" }, { label: "B", description: "Second" }] }),
+      replay(replayDetails(), 1_234),
+    ];
+    const snapshot = structuredClone(messages);
+
+    expect(rewriteAskContext(messages)).toEqual([
+      call({ question: "Choose", context: "Release", options: [{ label: "B", description: "Second" }] }),
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+        toolName: "ask",
+        content: [{ type: "text", text: "Selected: B" }],
+        details: { cancelled: false, selections: [{ label: "B" }] },
+        isError: false,
+        timestamp: 1_234,
+      },
+    ]);
+    expect(messages).toEqual(snapshot);
+  });
+
+  it("moves an intervening branch summary behind the synthetic result", () => {
+    const summary = { role: "branchSummary", content: "Earlier branch" };
+    const messages = [call({ question: "Choose", context: "Release", options: [{ label: "B" }] }), summary, replay(replayDetails())];
+
+    expect(rewriteAskContext(messages)).toEqual([
+      call({ question: "Choose", context: "Release", options: [{ label: "B" }] }),
+      expect.objectContaining({ role: "toolResult", toolCallId: "ask-1" }),
+      summary,
+    ]);
+  });
+
+  it("projects a submitted empty replay as a successful no-answer result", () => {
+    const messages = [
+      call({ question: "Choose", context: "Release", options: [{ label: "B" }] }),
+      replay(replayDetails({ answer: { cancelled: false, selections: [] } }), 99),
+    ];
+
+    expect(rewriteAskContext(messages)).toEqual([
+      call({ question: "Choose", context: "Release" }),
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+        toolName: "ask",
+        content: [{ type: "text", text: "No answer provided." }],
+        details: { cancelled: false, selections: [] },
+        isError: false,
+        timestamp: 99,
+      },
+    ]);
+  });
+
+  it("preserves replay comments and freeform answers in selected-only arguments", () => {
+    const answer = {
+      cancelled: false,
+      selections: [{ label: "A", comment: "because" }, { label: "B" }],
+      freeform: "extra",
+    };
+    const messages = [
+      call({ question: "Choose", context: "Release", options: [{ label: "A" }, { label: "B" }], allowMultiple: true }),
+      replay(replayDetails({ allowMultiple: true, answer })),
+    ];
+
+    const rewritten = rewriteAskContext(messages) as any[];
+    expect(rewritten[0].content[1].arguments).toEqual({
+      question: "Choose", context: "Release", options: [{ label: "A", comment: "because" }, { label: "B" }], allowMultiple: true, freeform: "extra",
+    });
+    expect(rewritten[1].content[0].text).toBe("Selected: A (because), B; response: extra");
+  });
+
+  it.each([
+    ["duplicate call IDs", [
+      call({ question: "Choose", context: "Release", options: [{ label: "B" }] }),
+      call({ question: "Choose", context: "Release", options: [{ label: "B" }] }),
+      replay(replayDetails()),
+    ]],
+    ["an Ask mixed with another tool call", [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "ask-1", name: "ask", arguments: { question: "Choose", context: "Release", options: [{ label: "B" }] } },
+          { type: "toolCall", id: "read-1", name: "read", arguments: {} },
+        ],
+      },
+      replay(replayDetails()),
+    ]],
+    ["multiple Ask calls in one message", [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "ask-1", name: "ask", arguments: { question: "Choose", context: "Release", options: [{ label: "B" }] } },
+          { type: "toolCall", id: "ask-2", name: "ask", arguments: { question: "Other" } },
+        ],
+      },
+      replay(replayDetails()),
+    ]],
+    ["an unknown selected label", [
+      call({ question: "Choose", context: "Release", options: [{ label: "A" }] }),
+      replay(replayDetails()),
+    ]],
+    ["multiple selections when disallowed", [
+      call({ question: "Choose", context: "Release", options: [{ label: "A" }, { label: "B" }] }),
+      replay(replayDetails({ answer: { cancelled: false, selections: [{ label: "A" }, { label: "B" }] } })),
+    ]],
+    ["freeform when disallowed", [
+      call({ question: "Choose", context: "Release", options: [{ label: "B" }], allowFreeform: false }),
+      replay(replayDetails({ answer: { cancelled: false, selections: [{ label: "B" }], freeform: "extra" } })),
+    ]],
+  ])("leaves an ambiguous or impossible replay unchanged: %s", (_label, messages) => {
+    expect(rewriteAskContext(messages)).toEqual(messages);
+  });
+
+  it.each([
+    ["malformed", replay(replayDetails({ answer: { cancelled: false, selections: "B" } }))],
+    ["version mismatch", replay(replayDetails({ version: 2 }))],
+    ["unmatched", replay(replayDetails({ toolCallId: "missing" }))],
+  ])("leaves %s replay messages unchanged", (_label, marker) => {
+    const messages = [call({ question: "Choose", context: "Release", options: [{ label: "B" }] }), marker];
+    expect(rewriteAskContext(messages)).toEqual(messages);
+  });
+
+  it("leaves native results unaffected and does not synthesize a duplicate", () => {
+    const native = result({ cancelled: false, selections: [{ label: "B" }] });
+    const marker = replay(replayDetails());
+    const messages = [call({ question: "Choose", context: "Release", options: [{ label: "B" }] }), native, marker];
+
+    const rewritten = rewriteAskContext(messages);
+    expect(rewritten).toHaveLength(3);
+    expect(rewritten[2]).toEqual(marker);
+    expect((rewritten as any[]).filter(message => message.role === "toolResult")).toHaveLength(1);
+  });
 });

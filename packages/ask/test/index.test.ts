@@ -3,15 +3,20 @@ import askExtension from "../src/index.js";
 
 function register() {
   let tool: any;
-  let contextHandler: any;
+  const handlers = new Map<string, any>();
   const emit = vi.fn();
+  const sendMessage = vi.fn();
+  const registerMessageRenderer = vi.fn();
   askExtension({
     registerTool: (definition: unknown) => { tool = definition; },
-    on: (event: string, handler: unknown) => { if (event === "context") contextHandler = handler; },
+    registerMessageRenderer,
+    sendMessage,
+    on: (event: string, handler: unknown) => { handlers.set(event, handler); },
     events: { emit },
   } as never);
+  const contextHandler = handlers.get("context");
   if (!tool || !contextHandler) throw new Error("ask integration was not registered");
-  return { tool, contextHandler, emit };
+  return { tool, contextHandler, handlers, emit, sendMessage, registerMessageRenderer };
 }
 
 const rpcUi = (answer = "1. Yes") => ({
@@ -131,7 +136,143 @@ describe("ask extension integration", () => {
     expect(result.details.status).toBe("cancelled");
     expect(emit).toHaveBeenCalledWith("ask:cancelled", result.details);
   });
+
+  it.each(["direct", "summary"])("replays a %s ask selection and immediately continues", async kind => {
+    const { handlers, sendMessage, emit, registerMessageRenderer } = register();
+    expect(registerMessageRenderer).toHaveBeenCalledWith("ask:reanswer", expect.any(Function));
+    const ask = assistantEntry("ask-entry");
+    const summary = { type: "branch_summary", id: "summary", parentId: "ask-entry", timestamp: "now", fromId: "x", summary: "s" };
+    const custom = vi.fn(async (factory: any) => {
+      let result: unknown;
+      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+      component.handleInput("\r");
+      return result;
+    });
+    await handlers.get("session_tree")(
+      { type: "session_tree", oldLeafId: "old", newLeafId: kind === "direct" ? "ask-entry" : "summary", ...(kind === "summary" ? { summaryEntry: summary } : {}) },
+      { mode: "tui", ui: { custom, notify: vi.fn() }, sessionManager: { getBranch: () => [ask, ...(kind === "summary" ? [summary] : [])] } },
+    );
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      customType: "ask:reanswer", display: true,
+      details: expect.objectContaining({ version: 1, toolCallId: "call-1", question: "Choose?", allowMultiple: false, answer: { cancelled: false, selections: [{ label: "Yes" }] } }),
+    }), { triggerTurn: true, deliverAs: "followUp" });
+    expect(emit).not.toHaveBeenCalledWith("ask:reanswered", expect.anything());
+    await handlers.get("agent_settled")({}, {});
+    expect(emit).toHaveBeenCalledWith("ask:reanswered", expect.objectContaining({ question: "Choose?" }));
+  });
+
+  it("guards replay after submission until agent settlement, then allows another replay", async () => {
+    const { handlers, sendMessage, emit } = register();
+    const custom = vi.fn(async (factory: any) => {
+      let result: unknown;
+      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+      component.handleInput("\r");
+      return result;
+    });
+    const ctx = replayContext([assistantEntry("ask-entry")], custom);
+
+    await handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
+    await handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
+    expect(custom).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(emit).not.toHaveBeenCalledWith("ask:reanswered", expect.anything());
+
+    await handlers.get("agent_settled")({}, {});
+    expect(emit).toHaveBeenCalledWith("ask:reanswered", expect.anything());
+    await handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
+    expect(custom).toHaveBeenCalledTimes(2);
+  });
+
+  it("cleans up the replay guard when message delivery throws", async () => {
+    const { handlers, sendMessage, emit } = register();
+    sendMessage.mockImplementationOnce(() => { throw new Error("delivery failed"); });
+    const custom = vi.fn(async (factory: any) => {
+      let result: unknown;
+      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+      component.handleInput("\r");
+      return result;
+    });
+    const ctx = replayContext([assistantEntry("ask-entry")], custom);
+
+    await expect(handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx)).rejects.toThrow("delivery failed");
+    await handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(emit).not.toHaveBeenCalledWith("ask:reanswered", expect.anything());
+  });
+
+  it("does nothing when replay is cancelled", async () => {
+    const { handlers, sendMessage, emit } = register();
+    const custom = vi.fn(async (factory: any) => {
+      let result: unknown;
+      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+      component.handleInput("\x1b");
+      return result;
+    });
+    await handlers.get("session_tree")({ newLeafId: "ask-entry" }, replayContext([assistantEntry("ask-entry")], custom));
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("ignores unrelated leaves, notifies mixed asks, and guards duplicate events while active", async () => {
+    const { handlers, sendMessage } = register();
+    const notify = vi.fn();
+    const mixed = assistantEntry("mixed", [{ name: "ask", arguments: { question: "Q" } }, { name: "read", arguments: {} }]);
+    await handlers.get("session_tree")({ newLeafId: "other" }, { mode: "tui", ui: { notify }, sessionManager: { getBranch: () => [assistantEntry("other", [{ name: "read", arguments: {} }])] } });
+    await handlers.get("session_tree")({ newLeafId: "mixed" }, { mode: "tui", ui: { notify }, sessionManager: { getBranch: () => [mixed] } });
+    expect(notify).toHaveBeenCalledOnce();
+
+    let finish!: (value: null) => void;
+    const custom = vi.fn(() => new Promise<null>(resolve => { finish = resolve; }));
+    const ctx = replayContext([assistantEntry("ask-entry")], custom);
+    const first = handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
+    await Promise.resolve();
+    const duplicate = handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
+    finish(null);
+    await Promise.all([first, duplicate]);
+    expect(custom).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("restores later native Ask details by tool-call identity with intervening summary=%s", (withSummary) => {
+    const { contextHandler } = register();
+    const nativeDetails = { status: "answered", question: "Later?", answer: { selections: [{ label: "Later" }] } };
+    const firstCall = { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "Choose?", options: [{ label: "Yes" }] } }] };
+    const laterCall = { role: "assistant", content: [{ type: "toolCall", id: "call-2", name: "ask", arguments: { question: "Later?", options: [{ label: "Later" }] } }] };
+    const laterResult = { role: "toolResult", toolCallId: "call-2", toolName: "ask", content: [{ type: "text", text: "verbose" }], details: nativeDetails };
+    const marker = { role: "custom", customType: "ask:reanswer", content: "Replay", timestamp: 42, details: { version: 1, toolCallId: "call-1", question: "Choose?", allowMultiple: false, answer: { cancelled: false, selections: [{ label: "Yes" }] } } };
+    const summary = { role: "branchSummary", content: "Earlier branch" };
+    const messages = [firstCall, ...(withSummary ? [summary] : []), laterCall, laterResult, marker];
+
+    const rewritten = contextHandler({ messages }).messages as any[];
+    const projectedNative = rewritten.find(message => message.toolCallId === "call-2");
+    expect(projectedNative.details).toEqual(nativeDetails);
+    expect(rewritten.find(message => message.content?.some?.((item: any) => item.id === "call-2")).details).toBeUndefined();
+    expect(rewritten.map(message => message.toolCallId ?? message.content?.[0]?.id ?? message.role)).toEqual(
+      withSummary
+        ? ["call-1", "call-1", "branchSummary", "call-2", "call-2"]
+        : ["call-1", "call-1", "call-2", "call-2"],
+    );
+  });
+
+  it("projects a durable replay through the canonical context adapter", () => {
+    const { contextHandler } = register();
+    const messages = [
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "  Choose?  ", context: "  Release  ", options: [{ label: "  Yes  " }, { label: " No " }] } }] },
+      { role: "custom", customType: "ask:reanswer", content: "Re-answer: Choose?", timestamp: 77, details: { version: 1, toolCallId: "call-1", question: "Choose?", context: "Release", allowMultiple: false, answer: { cancelled: false, selections: [{ label: "Yes" }] } } },
+    ];
+    const rewritten = contextHandler({ messages }).messages;
+    expect(rewritten[0].content[0].arguments).toEqual({ question: "Choose?", context: "Release", options: [{ label: "Yes" }] });
+    expect(rewritten[1]).toMatchObject({ role: "toolResult", toolCallId: "call-1", details: { cancelled: false, selections: [{ label: "Yes" }] }, isError: false, timestamp: 77 });
+  });
 });
+
+function assistantEntry(id: string, calls: Array<{ name: string; arguments: unknown }> = [{ name: "ask", arguments: { question: "Choose?", options: [{ label: "Yes" }] } }]) {
+  return { type: "message", id, parentId: null, timestamp: "now", message: { role: "assistant", content: calls.map((call, index) => ({ type: "toolCall", id: `call-${index + 1}`, ...call })) } };
+}
+
+function replayContext(entries: any[], custom: any) {
+  return { mode: "tui", ui: { custom, notify: vi.fn() }, sessionManager: { getBranch: () => entries } };
+}
 
 function theme() {
   return { fg: (_: string, text: string) => text, bg: (_: string, text: string) => text, bold: (text: string) => text } as any;
