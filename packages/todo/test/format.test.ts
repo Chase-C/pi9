@@ -1,31 +1,32 @@
 import { describe, expect, it } from "vitest";
-
 import { countTodos, formatTodoSummary, formatTodoTaskLines } from "../src/format.js";
+import type { TodoState } from "../src/types.js";
 
-const state = {
+const state: TodoState = {
   phases: [
     { name: "Planning", tasks: [
-      { id: "one", content: "Plan release", status: "pending" },
-      { id: "four", content: "Old approach", status: "cancelled" },
+      { name: "Plan release", status: "pending" },
+      { name: "Cancel old approach", status: "cancelled" },
     ] },
     { name: "Build", tasks: [
-      { id: "two", content: "Build feature", status: "in_progress" },
-      { id: "three", content: "Ship release", status: "completed" },
+      { name: "Build feature", status: "in_progress" },
+      { name: "Ship release", status: "completed" },
     ] },
   ],
-} as never;
+};
 
 describe("todo formatting", () => {
-  it("includes every status marker and task identity in the compact summary", () => {
+  it("includes every status marker and canonical task name", () => {
     const summary = formatTodoSummary(state);
-    expect(summary).toMatch(/○ \[one\] Plan release/);
-    expect(summary).toMatch(/× \[four\] Old approach/);
-    expect(summary).toMatch(/▶ \[two\] Build feature/);
-    expect(summary).toMatch(/✓ \[three\] Ship release/);
+    expect(summary).toMatch(/○ Plan release/);
+    expect(summary).toMatch(/× Cancel old approach/);
+    expect(summary).toMatch(/▶ Build feature/);
+    expect(summary).toMatch(/✓ Ship release/);
+    expect(summary).not.toMatch(/task-/);
   });
 
-  it("handles empty state and counts non-completed statuses as open", () => {
-    expect(formatTodoTaskLines({ phases: [] } as never)).toHaveLength(0);
+  it("handles empty state and counts non-terminal statuses as open", () => {
+    expect(formatTodoTaskLines({ phases: [] })).toHaveLength(0);
     expect(countTodos(state)).toEqual({ open: 2, completed: 1, cancelled: 1 });
   });
 });

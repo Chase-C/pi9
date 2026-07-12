@@ -8,14 +8,10 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ### Added
 
-- Keep the latest expanded `set` result on the active branch live through later mutations while preserving historical result details and collapsed rendering.
-- Add native-style self-rendered Todo tool shells with Pi background styling for pending, success, and error states while preserving visibility filtering and widget updates.
-- Keep hidden successful operations at zero rendered lines with no extra spacing.
-- Create the initial package scaffold.
-- Add the phased todo tool, branch-aware session restoration, stable task IDs, and compact renderer.
-- Add a persistent, configurable todo widget that follows session and branch state.
-- Add validated global and trusted-project UI settings for widget placement, preview size, completed-task visibility, generic Unicode glyph fallback, and TUI-only Todo tool visibility.
-- Enrich collapsed and expanded tool results with active-task context, numbered phase progress, status styling, and completion-transition metadata.
+- Add a provider-compatible phased planning tool with atomic `set`, `add`, `transition`, and `view` operations, immutable name-addressed tasks, and branch-aware state restoration.
+- Add compact and expanded task rendering with phase progress, status styling, completion metadata, live plan updates, and native tool shells.
+- Add a persistent configurable widget with focused phase previews, terminal-task summaries, animated activity markers, and flexible placement.
+- Add validated global and trusted-project settings for widget presentation, glyph fallback, and tool-output visibility.
 
 [Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.1.0...HEAD
 [0.1.0]: https://github.com/Chase-C/pi9/releases/tag/todo-v0.1.0

@@ -13,7 +13,6 @@ export type TodoWidgetPlacement = "belowEditor" | "aboveEditor" | "off";
 export type TodoWidgetSettings = {
   widgetPlacement?: TodoWidgetPlacement;
   maxVisibleTasks?: number;
-  showCompleted?: boolean;
   fallbackGlyphs?: boolean;
 };
 
@@ -41,14 +40,13 @@ export function updateTodoWidget(ctx: TodoWidgetContext | undefined, state: Todo
     }
 
     const hasVisibleTasks = state?.phases.some(phase => phase.tasks.some(task =>
-      settings.showCompleted === true || (task.status !== "completed" && task.status !== "cancelled"),
+      task.status === "pending" || task.status === "in_progress",
     )) ?? false;
     const factory: WidgetComponentFactory | undefined = hasVisibleTasks
-      ? (_tui, theme) => new TodoWidgetComponent(state!, theme, {
+      ? (tui, theme) => new TodoWidgetComponent(state!, theme, {
           maxVisible: settings.maxVisibleTasks,
-          showCompleted: settings.showCompleted,
           fallbackGlyphs: settings.fallbackGlyphs,
-        })
+        }, tui)
       : undefined;
     ctx.ui.setWidget("todo", factory, { placement });
   } catch (error) {

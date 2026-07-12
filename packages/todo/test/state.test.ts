@@ -2,84 +2,182 @@ import { describe, expect, it } from "vitest";
 import { createTodoState, transitionTodoState } from "../src/state.js";
 
 describe("todo state", () => {
-  it("assigns stable IDs and permits duplicate content and multiple in-progress tasks", () => {
-    const first = transitionTodoState(createTodoState(), {
+  it("sets a fresh pending plan and discards all previous state", () => {
+    const previous = {
+      phases: [{ name: "Old", tasks: [{ name: "Finished old work", status: "completed" as const }] }],
+    };
+    const next = transitionTodoState(previous, {
       action: "set",
-      tasks: [{ content: "Same", status: "in_progress" }, { content: "Same", status: "in_progress" }],
+      phases: [{ name: "Build", tasks: ["Implement session restoration", "Add integration coverage"] }],
     });
-    expect(first.phases).toEqual([{ name: "Tasks", tasks: [
-      { id: "task-1", content: "Same", status: "in_progress" },
-      { id: "task-2", content: "Same", status: "in_progress" },
-    ] }]);
-    expect(first.nextId).toBe(3);
+
+    expect(next).toEqual({ phases: [{ name: "Build", tasks: [
+      { name: "Implement session restoration", status: "pending" },
+      { name: "Add integration coverage", status: "pending" },
+    ] }] });
+    expect(previous.phases[0].tasks[0].status).toBe("completed");
   });
 
-  it("adds a batch to an existing or new named phase", () => {
-    const first = transitionTodoState(createTodoState(), {
-      action: "add", phase: "Build", tasks: [{ content: "Implement" }, { content: "Test", status: "in_progress" }],
-    });
-    const second = transitionTodoState(first, {
-      action: "add", phase: "Build", tasks: [{ content: "Review" }],
-    });
-    expect(second.phases).toEqual([
-      { name: "Tasks", tasks: [] },
-      { name: "Build", tasks: [
-        { id: "task-1", content: "Implement", status: "pending" },
-        { id: "task-2", content: "Test", status: "in_progress" },
-        { id: "task-3", content: "Review", status: "pending" },
-      ] },
-    ]);
-  });
-
-  it("rejects an empty add batch transactionally", () => {
-    const state = createTodoState();
-    expect(() => transitionTodoState(state, { action: "add", phase: "Build", tasks: [] })).toThrow(/at least one task/);
-    expect(state).toEqual(createTodoState());
-  });
-
-  it("updates content, status, and phase without mutating its input", () => {
-    const before = transitionTodoState(createTodoState(), {
-      action: "set", phases: [{ name: "Tasks", tasks: [{ content: "A" }] }, { name: "Done", tasks: [] }],
-    });
-    const after = transitionTodoState(before, {
-      action: "update", id: "task-1", content: "B", status: "completed", phase: "Done",
-    });
-    expect(before.phases[0].tasks).toHaveLength(1);
-    expect(after.phases).toEqual([
-      { name: "Tasks", tasks: [] },
-      { name: "Done", tasks: [{ id: "task-1", content: "B", status: "completed" }] },
-    ]);
-  });
-
-  it("rejects duplicate phase names transactionally", () => {
-    const state = createTodoState();
-    expect(() => transitionTodoState(state, {
-      action: "set", phases: [{ name: "Plan", tasks: [] }, { name: "Plan", tasks: [] }],
-    })).toThrow(/Duplicate phase name/);
-    expect(state).toEqual(createTodoState());
-  });
-
-  it("returns cloned snapshots, including for view", () => {
-    const state = createTodoState();
-    const snapshot = transitionTodoState(state, { action: "view" });
-    snapshot.phases[0].name = "Changed";
-    expect(state.phases[0].name).toBe("Tasks");
-  });
-
-  it("returns only the requested phase for a filtered view", () => {
+  it("allows set to clear the plan", () => {
     const state = transitionTodoState(createTodoState(), {
       action: "set",
+      phases: [{ name: "Build", tasks: ["Implement feature"] }],
+    });
+    expect(transitionTodoState(state, { action: "set", phases: [] })).toEqual({ phases: [] });
+  });
+
+  it("adds tasks to existing and missing phases without changing statuses", () => {
+    const state = transitionTodoState(createTodoState(), {
+      action: "set",
+      phases: [{ name: "Build", tasks: ["Implement feature"] }],
+    });
+    const active = transitionTodoState(state, {
+      action: "transition",
+      transitions: [{ phase: "Build", task: "Implement feature", status: "in_progress" }],
+    });
+    const next = transitionTodoState(active, {
+      action: "add",
       phases: [
-        { name: "Plan", tasks: [{ content: "Design" }] },
-        { name: "Build", tasks: [{ content: "Implement" }] },
+        { name: "Build", tasks: ["Handle invalid input"] },
+        { name: "Verify", tasks: ["Run integration tests"] },
       ],
     });
 
-    const snapshot = transitionTodoState(state, { action: "view", phase: "Build" });
+    expect(next.phases).toEqual([
+      { name: "Build", tasks: [
+        { name: "Implement feature", status: "in_progress" },
+        { name: "Handle invalid input", status: "pending" },
+      ] },
+      { name: "Verify", tasks: [{ name: "Run integration tests", status: "pending" }] },
+    ]);
+  });
 
-    expect(snapshot.phases).toEqual([{ name: "Build", tasks: [
-      { id: "task-2", content: "Implement", status: "pending" },
-    ] }]);
+  it("rejects empty and duplicate additions atomically", () => {
+    const state = transitionTodoState(createTodoState(), {
+      action: "set",
+      phases: [{ name: "Build", tasks: ["Implement feature"] }],
+    });
+
+    expect(() => transitionTodoState(state, { action: "add", phases: [] })).toThrow(/at least one task/);
+    expect(() => transitionTodoState(state, {
+      action: "add",
+      phases: [{ name: "Build", tasks: ["Implement feature"] }],
+    })).toThrow(/Duplicate task name/);
+    expect(() => transitionTodoState(state, {
+      action: "add",
+      phases: [
+        { name: "Verify", tasks: ["Run tests"] },
+        { name: "Verify", tasks: ["Inspect output"] },
+      ],
+    })).toThrow(/Duplicate phase name/);
+    expect(state.phases).toHaveLength(1);
+  });
+
+  it("reserves cancelled task names and permits reactivation", () => {
+    const state = transitionTodoState(createTodoState(), {
+      action: "set",
+      phases: [{ name: "Build", tasks: ["Implement feature"] }],
+    });
+    const cancelled = transitionTodoState(state, {
+      action: "transition",
+      transitions: [{ phase: "Build", task: "Implement feature", status: "cancelled" }],
+    });
+
+    expect(() => transitionTodoState(cancelled, {
+      action: "add",
+      phases: [{ name: "Build", tasks: ["Implement feature"] }],
+    })).toThrow(/Duplicate task name/);
+    expect(transitionTodoState(cancelled, {
+      action: "transition",
+      transitions: [{ phase: "Build", task: "Implement feature", status: "pending" }],
+    }).phases[0].tasks[0].status).toBe("pending");
+  });
+
+  it("applies status transitions atomically against the final state", () => {
+    const state = transitionTodoState(createTodoState(), {
+      action: "set",
+      phases: [
+        { name: "Build", tasks: ["Implement feature"] },
+        { name: "Verify", tasks: ["Run tests"] },
+      ],
+    });
+    const active = transitionTodoState(state, {
+      action: "transition",
+      transitions: [{ phase: "Build", task: "Implement feature", status: "in_progress" }],
+    });
+    const next = transitionTodoState(active, {
+      action: "transition",
+      transitions: [
+        { phase: "Build", task: "Implement feature", status: "completed" },
+        { phase: "Verify", task: "Run tests", status: "in_progress" },
+      ],
+    });
+
+    expect(next.phases[0].tasks[0].status).toBe("completed");
+    expect(next.phases[1].tasks[0].status).toBe("in_progress");
+    expect(() => transitionTodoState(state, {
+      action: "transition",
+      transitions: [
+        { phase: "Build", task: "Implement feature", status: "in_progress" },
+        { phase: "Verify", task: "Run tests", status: "in_progress" },
+      ],
+    })).toThrow(/one phase/);
+  });
+
+  it("rejects duplicate or unresolved transitions without mutating state", () => {
+    const state = transitionTodoState(createTodoState(), {
+      action: "set",
+      phases: [{ name: "Build", tasks: ["Implement feature", "Add tests"] }],
+    });
+    expect(() => transitionTodoState(state, {
+      action: "transition",
+      transitions: [
+        { phase: "Build", task: "Implement feature", status: "completed" },
+        { phase: "Build", task: "Implement feature", status: "cancelled" },
+      ],
+    })).toThrow(/only be transitioned once/);
+    expect(() => transitionTodoState(state, {
+      action: "transition",
+      transitions: [
+        { phase: "Build", task: "Implement feature", status: "completed" },
+        { phase: "Build", task: "Missing task", status: "completed" },
+      ],
+    })).toThrow(/Current tasks in Build[\s\S]*Implement feature/);
+    expect(state.phases[0].tasks.every((task) => task.status === "pending")).toBe(true);
+  });
+
+  it("uses exact case-sensitive names and rejects surrounding whitespace", () => {
+    const state = transitionTodoState(createTodoState(), {
+      action: "set",
+      phases: [{ name: "Build", tasks: ["Implement feature"] }],
+    });
+    expect(() => transitionTodoState(state, {
+      action: "transition",
+      transitions: [{ phase: "build", task: "Implement feature", status: "completed" }],
+    })).toThrow(/Phase not found/);
+    expect(() => transitionTodoState(state, {
+      action: "add",
+      phases: [{ name: " Build", tasks: ["Add tests"] }],
+    })).toThrow(/leading or trailing whitespace/);
+  });
+
+  it("filters view snapshots without mutating state", () => {
+    const state = transitionTodoState(createTodoState(), {
+      action: "set",
+      phases: [
+        { name: "Build", tasks: ["Implement feature"] },
+        { name: "Verify", tasks: ["Run tests"] },
+      ],
+    });
+    const view = transitionTodoState(state, { action: "view", phase: "Verify" });
+    expect(view.phases.map((phase) => phase.name)).toEqual(["Verify"]);
     expect(state.phases).toHaveLength(2);
+  });
+
+  it("rejects fields that do not belong to the selected action", () => {
+    expect(() => transitionTodoState(createTodoState(), {
+      action: "view",
+      phases: [],
+    })).toThrow(/does not accept field: phases/);
   });
 });

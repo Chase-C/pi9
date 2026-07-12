@@ -1,21 +1,36 @@
-import { describe, expect, it } from "vitest";
 import { Check } from "typebox/value";
+import { describe, expect, it } from "vitest";
 import { TodoParamsSchema } from "../src/schema.js";
 
 describe("TodoParamsSchema", () => {
-  it("requires add batches with a phase and uses the supported status enum", () => {
+  it("uses one strict flat provider-compatible object", () => {
+    expect(TodoParamsSchema.type).toBe("object");
+    expect("anyOf" in TodoParamsSchema).toBe(false);
     expect(Check(TodoParamsSchema, {
-      action: "add", phase: "Build", tasks: [{ content: "Write tests", status: "in_progress" }],
+      action: "set",
+      phases: [{ name: "Build", tasks: ["Implement feature"] }],
     })).toBe(true);
-    expect(Check(TodoParamsSchema, { action: "add", content: "Write tests", status: "in_progress" })).toBe(false);
     expect(Check(TodoParamsSchema, {
-      action: "add", phase: "Build", tasks: [{ content: "Write tests", status: "doing" }],
-    })).toBe(false);
-    expect(Check(TodoParamsSchema, { action: "archive" })).toBe(false);
+      action: "add",
+      phases: [{ name: "Verify", tasks: ["Run integration tests"] }],
+    })).toBe(true);
+    expect(Check(TodoParamsSchema, {
+      action: "transition",
+      transitions: [{ phase: "Build", task: "Implement feature", status: "completed" }],
+    })).toBe(true);
+    expect(Check(TodoParamsSchema, { action: "view", phase: "Build" })).toBe(true);
   });
 
-  it("accepts flat and phased set shapes", () => {
-    expect(Check(TodoParamsSchema, { action: "set", tasks: [{ content: "One" }] })).toBe(true);
-    expect(Check(TodoParamsSchema, { action: "set", phases: [{ name: "Plan", tasks: [] }] })).toBe(true);
+  it("rejects unknown properties, actions, statuses, and task objects", () => {
+    expect(Check(TodoParamsSchema, { action: "archive" })).toBe(false);
+    expect(Check(TodoParamsSchema, { action: "view", unknown: true })).toBe(false);
+    expect(Check(TodoParamsSchema, {
+      action: "set",
+      phases: [{ name: "Build", tasks: [42] }],
+    })).toBe(false);
+    expect(Check(TodoParamsSchema, {
+      action: "transition",
+      transitions: [{ phase: "Build", task: "Implement feature", status: "doing" }],
+    })).toBe(false);
   });
 });

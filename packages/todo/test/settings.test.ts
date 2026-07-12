@@ -22,7 +22,6 @@ test("todo UI settings validate each field independently", () => {
   const result = normalizeTodoUiSettings({
     widgetPlacement: "belowEditor",
     maxVisibleTasks: 0,
-    showCompleted: "yes",
     fallbackGlyphs: true,
     toolVisibility: "sometimes",
   });
@@ -30,12 +29,10 @@ test("todo UI settings validate each field independently", () => {
   assert.deepEqual(result.settings, {
     widgetPlacement: "belowEditor",
     maxVisibleTasks: 5,
-    showCompleted: false,
     fallbackGlyphs: true,
     toolVisibility: "set-only",
   });
   assert.match(result.warning ?? "", /maxVisibleTasks/);
-  assert.match(result.warning ?? "", /showCompleted/);
   assert.match(result.warning ?? "", /toolVisibility/);
 });
 
@@ -46,7 +43,7 @@ test("trusted project settings override global todo settings", async () => {
   await mkdir(join(root, "agent", "todo"), { recursive: true });
   await mkdir(join(root, "project", ".pi", "todo"), { recursive: true });
   await writeFile(globalPath, JSON.stringify({ widgetPlacement: "belowEditor", maxVisibleTasks: 3, toolVisibility: "all" }));
-  await writeFile(projectPath, JSON.stringify({ maxVisibleTasks: 9, showCompleted: true, toolVisibility: "none" }));
+  await writeFile(projectPath, JSON.stringify({ maxVisibleTasks: 9, toolVisibility: "none" }));
 
   const store = new TodoUiSettingsStore({
     globalSettingsPath: globalPath,
@@ -57,7 +54,6 @@ test("trusted project settings override global todo settings", async () => {
   assert.deepEqual(result.settings, {
     widgetPlacement: "belowEditor",
     maxVisibleTasks: 9,
-    showCompleted: true,
     fallbackGlyphs: false,
     toolVisibility: "none",
   });
@@ -81,7 +77,6 @@ test("untrusted projects do not load project-local todo settings", async () => {
   assert.deepEqual(result.settings, {
     widgetPlacement: "aboveEditor",
     maxVisibleTasks: 4,
-    showCompleted: false,
     fallbackGlyphs: false,
     toolVisibility: "set-only",
   });

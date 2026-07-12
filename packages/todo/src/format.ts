@@ -1,12 +1,6 @@
-import type { TodoState } from "./types.js";
+import type { Todo, TodoState } from "./types.js";
 
-type TaskLike = {
-  id?: unknown;
-  content?: unknown;
-  title?: unknown;
-  status?: unknown;
-  phase?: unknown;
-};
+export type PhasedTodo = Todo & { phase: string };
 
 export interface TodoCounts {
   open: number;
@@ -29,84 +23,39 @@ export function formatTodoSummary(state: TodoState | undefined): string {
   return [`Todo: ${summary}`, ...formatTodoTaskLines(state)].join("\n");
 }
 
-/** Plain task lines, grouped by phase when phases are present. */
 export function formatTodoTaskLines(state: TodoState | undefined): string[] {
-  const tasks = todoTasks(state);
-  if (tasks.length === 0) return [];
-
-  const phases = new Map<string, TaskLike[]>();
-  for (const task of tasks) {
-    const phase = taskPhase(task);
-    const group = phases.get(phase);
-    if (group) group.push(task);
-    else phases.set(phase, [task]);
-  }
-
-  const showPhases = phases.size > 1 || [...phases.keys()][0] !== "Tasks";
+  if (!state || state.phases.every((phase) => phase.tasks.length === 0)) return [];
   const lines: string[] = [];
-  for (const [phase, phaseTasks] of phases) {
-    if (showPhases) lines.push(`${phase}:`);
-    lines.push(...phaseTasks.map(task => `${showPhases ? "  " : ""}${taskMarker(task)} ${taskId(task)} ${taskText(task)}`));
+  for (const phase of state.phases) {
+    if (phase.tasks.length === 0) continue;
+    lines.push(`${phase.name}:`);
+    lines.push(...phase.tasks.map((task) => `  ${taskMarker(task)} ${task.name}`));
   }
   return lines;
 }
 
-export function countTodos(state: TodoState | readonly TaskLike[] | undefined): TodoCounts {
+export function countTodos(state: TodoState | readonly Todo[] | undefined): TodoCounts {
   const tasks = Array.isArray(state) ? state : todoTasks(state as TodoState | undefined);
   let open = 0;
   let completed = 0;
   let cancelled = 0;
   for (const task of tasks) {
-    const status = taskStatus(task);
-    if (status === "completed") completed++;
-    else if (status === "cancelled" || status === "canceled" || status === "skipped") cancelled++;
+    if (task.status === "completed") completed++;
+    else if (task.status === "cancelled") cancelled++;
     else open++;
   }
   return { open, completed, cancelled };
 }
 
-export function taskMarker(task: TaskLike): string {
-  switch (taskStatus(task)) {
+export function taskMarker(task: Pick<Todo, "status">): string {
+  switch (task.status) {
     case "completed": return "✓";
-    case "in_progress":
-    case "in-progress":
-    case "active": return "▶";
-    case "cancelled":
-    case "canceled":
-    case "skipped": return "×";
-    case "blocked": return "[!]";
+    case "in_progress": return "▶";
+    case "cancelled": return "×";
     default: return "○";
   }
 }
 
-export function taskStatus(task: TaskLike): string {
-  return typeof task.status === "string" ? task.status.toLowerCase() : "pending";
-}
-
-export function taskId(task: TaskLike): string {
-  return typeof task.id === "string" && task.id ? `[${task.id}]` : "[unknown-id]";
-}
-
-export function taskText(task: TaskLike): string {
-  if (typeof task.content === "string" && task.content) return task.content;
-  if (typeof task.title === "string" && task.title) return task.title;
-  return "Untitled task";
-}
-
-export function taskPhase(task: TaskLike): string {
-  return typeof task.phase === "string" && task.phase.trim() ? task.phase : "Tasks";
-}
-
-export function todoTasks(state: TodoState | undefined): TaskLike[] {
-  const value = state as { phases?: unknown; tasks?: unknown } | undefined;
-  if (Array.isArray(value?.phases)) {
-    return value.phases.flatMap(phase => {
-      const entry = phase as { name?: unknown; tasks?: unknown };
-      const name = typeof entry.name === "string" ? entry.name : "Tasks";
-      return Array.isArray(entry.tasks)
-        ? (entry.tasks as TaskLike[]).map(task => ({ ...task, phase: name }))
-        : [];
-    });
-  }
-  return Array.isArray(value?.tasks) ? value.tasks as TaskLike[] : [];
+export function todoTasks(state: TodoState | undefined): PhasedTodo[] {
+  return state?.phases.flatMap((phase) => phase.tasks.map((task) => ({ ...task, phase: phase.name }))) ?? [];
 }

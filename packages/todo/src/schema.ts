@@ -1,67 +1,34 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { TODO_STATUSES, type TodoActionName, type TodoPhaseInput, type TodoStatus, type TodoTaskInput } from "./types.js";
-
-export const TodoTaskSchema = Type.Object({
-  content: Type.String({ minLength: 1 }),
-  status: Type.Optional(StringEnum(TODO_STATUSES)),
-});
+import { TODO_ACTIONS, TODO_STATUSES, type TodoActionName, type TodoPhaseInput, type TodoTransitionInput } from "./types.js";
 
 export const TodoPhaseSchema = Type.Object({
-  name: Type.String({ minLength: 1 }),
-  tasks: Type.Array(TodoTaskSchema),
-});
+  name: Type.String({ minLength: 1, description: "Immutable phase name, 1 or 2 words, unique." }),
+  tasks: Type.Array(Type.String({
+    minLength: 1,
+    description: "Immutable task name, ideally 5–10 words, what not how, unique within its phase.",
+  })),
+}, { additionalProperties: false });
 
-const SetTodoParamsSchema = Type.Object({
-  action: StringEnum(["set"] as const),
-  tasks: Type.Optional(Type.Array(TodoTaskSchema)),
+export const TodoTransitionSchema = Type.Object({
+  phase: Type.String({ minLength: 1, description: "Exact immutable phase name." }),
+  task: Type.String({ minLength: 1, description: "Exact immutable task name within the phase." }),
+  status: StringEnum(TODO_STATUSES, { description: "New task status." }),
+}, { additionalProperties: false });
+
+/** Flat provider-facing schema. Action-specific requirements are enforced by the transition. */
+export const TodoParamsSchema = Type.Object({
+  action: StringEnum(TODO_ACTIONS),
   phases: Type.Optional(Type.Array(TodoPhaseSchema)),
-});
+  transitions: Type.Optional(Type.Array(TodoTransitionSchema, { minItems: 1 })),
+  phase: Type.Optional(Type.String({ minLength: 1, description: "Optional exact phase name used to filter view." })),
+}, { additionalProperties: false });
 
-const AddTodoParamsSchema = Type.Object({
-  action: StringEnum(["add"] as const),
-  phase: Type.String({ minLength: 1 }),
-  tasks: Type.Array(TodoTaskSchema),
-});
-
-const UpdateTodoParamsSchema = Type.Object({
-  action: StringEnum(["update"] as const),
-  id: Type.String({ minLength: 1 }),
-  content: Type.Optional(Type.String({ minLength: 1 })),
-  status: Type.Optional(StringEnum(TODO_STATUSES)),
-  phase: Type.Optional(Type.String({ minLength: 1 })),
-});
-
-const RemoveTodoParamsSchema = Type.Object({
-  action: StringEnum(["remove"] as const),
-  id: Type.String({ minLength: 1 }),
-});
-
-const ViewTodoParamsSchema = Type.Object({
-  action: StringEnum(["view"] as const),
-  phase: Type.Optional(Type.String({ minLength: 1 })),
-});
-
-/** Provider-facing shape. Action-specific semantic checks remain in the transition. */
-export const TodoParamsSchema = Type.Union([
-  SetTodoParamsSchema,
-  AddTodoParamsSchema,
-  UpdateTodoParamsSchema,
-  RemoveTodoParamsSchema,
-  ViewTodoParamsSchema,
-]);
-
-/**
- * Broad provider parameter view. The schema and transition enforce the
- * action-specific required fields; this remains broad for tool render hooks.
- */
+/** Broad parameter view used by tool render hooks. */
 export type TodoParams = {
   action: TodoActionName;
-  tasks?: TodoTaskInput[];
   phases?: TodoPhaseInput[];
-  id?: string;
-  content?: string;
-  status?: TodoStatus;
+  transitions?: TodoTransitionInput[];
   phase?: string;
 };
 

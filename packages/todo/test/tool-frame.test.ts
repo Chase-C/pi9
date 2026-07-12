@@ -72,7 +72,7 @@ describe("TodoToolFrame", () => {
       ["error", "toolErrorBg", "error"],
     ] as const) {
       const calls: ThemeCall[] = [];
-      const frame = new TodoToolFrame({ title: "todo", action: "update", state, content: "keep this" }, recordingTheme(calls));
+      const frame = new TodoToolFrame({ title: "todo", action: "transition", state, content: "keep this" }, recordingTheme(calls));
       const lines = frame.render(40);
       const output = lines.join("\n");
 

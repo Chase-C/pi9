@@ -4,25 +4,36 @@ import { formatTodoSummary } from "./format.js";
 import { restoreTodoState } from "./persistence.js";
 import { renderResult as renderTodoResult } from "./renderer.js";
 import { TodoToolFrame, type TodoToolFrameContent, type TodoToolFrameTheme } from "./tool-frame.js";
-import { TodoParamsSchema, type TodoParams } from "./schema.js";
+import { TodoParamsSchema } from "./schema.js";
 import { DEFAULT_TODO_UI_SETTINGS, loadTodoUiSettings, type TodoUiSettings } from "./settings.js";
-import { createTodoState, transitionTodoState } from "./state.js";
-import type { TodoAction, TodoState, TodoToolDetails } from "./types.js";
+import { createTodoState, todoAddressKey, transitionTodoState } from "./state.js";
+import { TODO_STATUSES, type TodoAction, type TodoAddress, type TodoState, type TodoToolDetails } from "./types.js";
 import { shouldRenderTodoAction } from "./visibility.js";
 import { updateTodoWidget } from "./widget.js";
 
-function changedTaskIds(previous: TodoState, next: TodoState): string[] {
-  const before = new Map(previous.phases.flatMap((phase) => phase.tasks.map((task) => [task.id, `${phase.name}\0${task.content}\0${task.status}`])));
-  const after = new Map(next.phases.flatMap((phase) => phase.tasks.map((task) => [task.id, `${phase.name}\0${task.content}\0${task.status}`])));
-  return [...new Set([...before.keys(), ...after.keys()])].filter((id) => before.get(id) !== after.get(id));
+function taskStatuses(state: TodoState): Map<string, string> {
+  return new Map(state.phases.flatMap((phase) => phase.tasks.map((task) => [todoAddressKey(phase.name, task.name), task.status])));
 }
 
-function completedTaskIds(previous: TodoState, next: TodoState): string[] {
-  const before = new Map(previous.phases.flatMap((phase) => phase.tasks.map((task) => [task.id, task.status])));
-  return next.phases
-    .flatMap((phase) => phase.tasks)
-    .filter((task) => before.has(task.id) && task.status === "completed" && before.get(task.id) !== "completed")
-    .map((task) => task.id);
+function taskAddresses(state: TodoState): Map<string, TodoAddress> {
+  return new Map(state.phases.flatMap((phase) => phase.tasks.map((task) => {
+    const address = { phase: phase.name, task: task.name };
+    return [todoAddressKey(address.phase, address.task), address];
+  })));
+}
+
+function changedTasks(previous: TodoState, next: TodoState): TodoAddress[] {
+  const before = taskStatuses(previous);
+  const after = taskStatuses(next);
+  const addresses = taskAddresses(next);
+  return [...after.keys()].filter((key) => before.get(key) !== after.get(key)).map((key) => addresses.get(key)!);
+}
+
+function completedTasks(previous: TodoState, next: TodoState): TodoAddress[] {
+  const before = taskStatuses(previous);
+  return next.phases.flatMap((phase) => phase.tasks
+    .filter((task) => task.status === "completed" && before.has(todoAddressKey(phase.name, task.name)) && before.get(todoAddressKey(phase.name, task.name)) !== "completed")
+    .map((task) => ({ phase: phase.name, task: task.name })));
 }
 
 function createTodoFrame(
@@ -63,7 +74,7 @@ class LiveSetResult implements Component {
     const details = this.result.details;
     const liveResult: TodoRenderInput = !this.isCurrent() || !details
       ? this.result
-      : { ...this.result, details: { ...details, state: this.getState(), changedTaskIds: [] } };
+      : { ...this.result, details: { ...details, state: this.getState(), changedTasks: [] } };
     return renderTodoResult(liveResult, { expanded: true }, this.theme, { fallbackGlyphs: this.fallbackGlyphs }).render(width);
   }
 }
@@ -95,12 +106,19 @@ export function registerTodoTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "todo",
     label: "Todo",
-    description: "Create and update a phased task plan. Use stable task IDs returned by the tool for updates and removal.",
-    promptSnippet: "Create and update a phased task plan for multi-step work",
+    description: [
+      "Maintain a concise phased plan that reflects both intended work and current execution progress.",
+      "Actions:",
+      "  set: Replace the entire plan. All tasks reset to pending. Use only for a new plan or full re-plan.",
+      "  add: Append tasks or phases without touching existing work.",
+      "  transition: Update task statuses (" + TODO_STATUSES.join(", ") + ") by exact phase and task name.",
+      "  view: Return the plan, optionally filtered to one phase.",
+    ].join("\n"),
+    promptSnippet: "Track multi-step work with the todo tool; keep statuses current as you go",
     promptGuidelines: [
-      "Use todo for non-trivial multi-step work and keep task statuses synchronized with actual progress.",
-      "Prefer updating the existing todo plan over replacing it, and target mutations with the stable task IDs returned by todo.",
-      "Do not mark todo tasks completed until their work and verification have succeeded.",
+      "Use todo for non-trivial work with three or more distinct steps; skip todo for simple tasks.",
+      "Transition todo statuses immediately and honestly—mark tasks completed only when fully done, not merely attempted, and cancel abandoned tasks rather than leaving them pending.",
+      "Todo tasks in_progress must all belong to a single phase; finish or cancel a phase's active tasks before starting the next.",
     ],
     parameters: TodoParamsSchema,
     renderShell: "self",
@@ -112,8 +130,12 @@ export function registerTodoTool(pi: ExtensionAPI): void {
         const details: TodoToolDetails = {
           action: params.action,
           state: next,
-          changedTaskIds: params.action === "view" ? [] : changedTaskIds(previous, next),
-          completedTaskIds: params.action === "view" ? [] : completedTaskIds(previous, next),
+          changedTasks: params.action === "view"
+            ? []
+            : params.action === "set"
+              ? [...taskAddresses(next).values()]
+              : changedTasks(previous, next),
+          completedTasks: params.action === "transition" ? completedTasks(previous, next) : [],
         };
         if (params.action !== "view") {
           state = next;

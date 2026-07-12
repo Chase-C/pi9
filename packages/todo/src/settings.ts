@@ -9,7 +9,6 @@ export type TodoToolVisibility = "all" | "set-only" | "none";
 export interface TodoUiSettings {
   widgetPlacement: TodoWidgetPlacement;
   maxVisibleTasks: number;
-  showCompleted: boolean;
   fallbackGlyphs: boolean;
   toolVisibility: TodoToolVisibility;
 }
@@ -33,7 +32,6 @@ export interface TodoUiSettingsStoreOptions {
 export const DEFAULT_TODO_UI_SETTINGS: TodoUiSettings = {
   widgetPlacement: "aboveEditor",
   maxVisibleTasks: 5,
-  showCompleted: false,
   fallbackGlyphs: false,
   toolVisibility: "set-only",
 };
@@ -127,13 +125,6 @@ function applySettings(value: unknown, settings: TodoUiSettings, warnings: strin
       settings.maxVisibleTasks = value.maxVisibleTasks as number;
     } else {
       warnings.push("Invalid todo maxVisibleTasks; ignoring value.");
-    }
-  }
-  if (value.showCompleted !== undefined) {
-    if (typeof value.showCompleted === "boolean") {
-      settings.showCompleted = value.showCompleted;
-    } else {
-      warnings.push("Invalid todo showCompleted; ignoring value.");
     }
   }
   if (value.fallbackGlyphs !== undefined) {

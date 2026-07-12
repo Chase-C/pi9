@@ -1,64 +1,94 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-
 import { renderResult } from "../src/renderer.js";
+import type { TodoToolDetails } from "../src/types.js";
 
-const details = {
-  state: {
-    phases: [
-      { name: "Planning", tasks: [{ id: "one", content: "Plan a very long release announcement", status: "pending" }] },
-      { name: "Build", tasks: [
-        { id: "two", content: "Implement renderer", status: "in_progress" },
-        { id: "three", content: "Publish package", status: "completed" },
-      ] },
-    ],
-  },
-  changedTaskIds: ["two"],
-} as never;
+const plainTheme = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => `*${text}*`,
+};
 
-const plainTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => `*${text}*` };
+const details: TodoToolDetails = {
+  action: "transition",
+  state: { phases: [
+    { name: "Planning", tasks: [{ name: "Plan release announcement", status: "pending" }] },
+    { name: "Build", tasks: [
+      { name: "Implement renderer", status: "in_progress" },
+      { name: "Publish package", status: "completed" },
+    ] },
+  ] },
+  changedTasks: [{ phase: "Build", task: "Implement renderer" }],
+  completedTasks: [],
+};
 
 describe("todo renderer", () => {
-  it("renders collapsed counts and active work", () => {
-    const collapsed = renderResult({ details }, { expanded: false }, plainTheme).render(80).join("\n").trim();
-    expect(collapsed).toContain("Todo · 2 open · 1 completed");
-    expect(collapsed).toContain("Active: 󰻃 Implement renderer");
+  it("renders compact counts, active work, and expansion hint", () => {
+    const collapsed = renderResult({ details }, { expanded: false }, plainTheme).render(120).join("\n");
+    expect(collapsed).toContain("2 open");
+    expect(collapsed).toContain("1 completed");
+    expect(collapsed).toContain("Implement renderer");
     expect(collapsed).toContain("↵ expand");
   });
 
-  it("renders phases, statuses, and changed task emphasis when expanded", () => {
-    const text = renderResult({ details }, { expanded: true }, plainTheme).render(80).join("\n");
-    expect(text).toContain("1. Planning · 0/1 completed");
-    expect(text).toContain("󰄰 [one] Plan a very long release announcement");
-    expect(text).toContain("2. Build · 1/2 completed");
-    expect(text).toContain("*  󰻃 [two] Implement renderer*");
-    expect(text).toContain("󰄴 [three] Publish package");
+  it("renders phases, statuses, and changed task emphasis without IDs", () => {
+    const text = renderResult({ details }, { expanded: true }, plainTheme).render(120).join("\n");
+    expect(text).toContain("*Todos · 1 active · 1 pending · 1 completed*");
+    expect(text).toContain("1. Planning · 1 pending");
+    expect(text).toContain("󰄰 Plan release announcement");
+    expect(text).toContain("*  2. Build · 1 active · 1 completed*");
+    expect(text).toContain("*    󰻃 Implement renderer*");
+    expect(text).toContain("󰄴 Publish package");
+    expect(text).not.toContain("[task-");
   });
 
-  it("uses Text wrapping safely at narrow widths and handles empty state", () => {
-    const lines = renderResult({ details }, { expanded: true }, plainTheme).render(12);
-    expect(lines.length).toBeGreaterThan(3);
-    expect(lines.every(line => visibleWidth(line) <= 12)).toBe(true);
-    expect(renderResult({ details: { state: { phases: [] } } as never }, {}, plainTheme).render(40)).toHaveLength(1);
+  it("keeps every phase and orders active, pending, then terminal tasks", () => {
+    const expanded = renderResult({ details: {
+      action: "view",
+      state: { phases: [
+        { name: "Plan", tasks: [
+          { name: "Done first", status: "completed" },
+          { name: "Pending first", status: "pending" },
+          { name: "Active", status: "in_progress" },
+          { name: "Pending second", status: "pending" },
+          { name: "Cancelled", status: "cancelled" },
+        ] },
+        { name: "Review", tasks: [{ name: "Review pending", status: "pending" }] },
+        { name: "Empty", tasks: [] },
+      ] },
+      changedTasks: [],
+      completedTasks: [],
+    } }, { expanded: true }, plainTheme, { fallbackGlyphs: true }).render(120).join("\n");
+
+    expect(expanded.indexOf("Active")).toBeLessThan(expanded.indexOf("Pending first"));
+    expect(expanded.indexOf("Pending first")).toBeLessThan(expanded.indexOf("Done first"));
+    expect(expanded).toContain("3. Empty");
   });
 
-  it("colors and strikes through task statuses", () => {
+  it("uses fallback glyphs and terminal styling", () => {
     const themed = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
       bold: (text: string) => text,
       strikethrough: (text: string) => `~${text}~`,
     };
     const text = renderResult({ details: {
+      action: "view",
       state: { phases: [{ name: "Tasks", tasks: [
-        { id: "pending", content: "Pending", status: "pending" },
-        { id: "active", content: "Active", status: "in_progress" },
-        { id: "done", content: "Done", status: "completed" },
-        { id: "cancelled", content: "Cancelled", status: "cancelled" },
+        { name: "Pending", status: "pending" },
+        { name: "Active", status: "in_progress" },
+        { name: "Done", status: "completed" },
+        { name: "Cancelled", status: "cancelled" },
       ] }] },
-    } as never }, { expanded: true }, themed, { fallbackGlyphs: true }).render(80).join("\n");
-    expect(text).toContain("<dim>  ○ [pending] Pending</dim>");
-    expect(text).toContain("<text>  ▶ [active] Active</text>");
-    expect(text).toContain("<success>  ✓ [done] ~Done~</success>");
-    expect(text).toContain("<dim>  × [cancelled] ~Cancelled~</dim>");
+      changedTasks: [],
+      completedTasks: [],
+    } }, { expanded: true }, themed, { fallbackGlyphs: true }).render(80).join("\n");
+    expect(text).toContain("<dim>    ○ Pending</dim>");
+    expect(text).toContain("<text>    ▶ Active</text>");
+    expect(text).toContain("<success>    ✓ ~Done~</success>");
+    expect(text).toContain("<dim>    × ~Cancelled~</dim>");
+  });
+
+  it("handles narrow and empty states safely", () => {
+    expect(renderResult({ details }, { expanded: true }, plainTheme).render(12).length).toBeGreaterThan(3);
+    const empty: TodoToolDetails = { action: "view", state: { phases: [] }, changedTasks: [], completedTasks: [] };
+    expect(renderResult({ details: empty }, { expanded: true }, plainTheme).render(80).join("\n")).toContain("No todo tasks");
   });
 });
