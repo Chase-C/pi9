@@ -17,7 +17,6 @@ const details: TodoToolDetails = {
     ] },
   ] },
   changedTasks: [{ phase: "Build", task: "Implement renderer" }],
-  completedTasks: [],
 };
 
 describe("todo renderer", () => {
@@ -55,7 +54,6 @@ describe("todo renderer", () => {
         { name: "Empty", tasks: [] },
       ] },
       changedTasks: [],
-      completedTasks: [],
     } }, { expanded: true }, plainTheme, { fallbackGlyphs: true }).render(120).join("\n");
 
     expect(expanded.indexOf("Active")).toBeLessThan(expanded.indexOf("Pending first"));
@@ -78,7 +76,6 @@ describe("todo renderer", () => {
         { name: "Cancelled", status: "cancelled" },
       ] }] },
       changedTasks: [],
-      completedTasks: [],
     } }, { expanded: true }, themed, { fallbackGlyphs: true }).render(80).join("\n");
     expect(text).toContain("<dim>    ○ Pending</dim>");
     expect(text).toContain("<text>    ▶ Active</text>");
@@ -88,7 +85,7 @@ describe("todo renderer", () => {
 
   it("handles narrow and empty states safely", () => {
     expect(renderResult({ details }, { expanded: true }, plainTheme).render(12).length).toBeGreaterThan(3);
-    const empty: TodoToolDetails = { action: "view", state: { phases: [] }, changedTasks: [], completedTasks: [] };
+    const empty: TodoToolDetails = { action: "view", state: { phases: [] }, changedTasks: [] };
     expect(renderResult({ details: empty }, { expanded: true }, plainTheme).render(80).join("\n")).toContain("No todo tasks");
   });
 });

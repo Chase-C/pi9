@@ -4,6 +4,16 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Add configurable, transient plan reminders based on agent turns and output tokens, with per-run limits and resets after Todo interactions.
+- Restore the full phased plan to model context once after manual or automatic compaction without altering session history or compaction summaries.
+
+### Changed
+
+- Refine model-facing Todo guidance to keep plans and task statuses current.
+- Add spacing below the above-editor Todo widget.
+
 ## [0.1.0] - 2026-07-11
 
 ### Added

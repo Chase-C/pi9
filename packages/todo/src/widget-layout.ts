@@ -1,7 +1,9 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
+import { formatTodoProgress, todoTasks } from "./format.js";
 import { todoGlyph } from "./glyphs.js";
+import { currentTodoPhaseIndex } from "./state.js";
 import type { Todo, TodoPhase, TodoState } from "./types.js";
 
 export type TodoWidgetLayoutOptions = {
@@ -14,10 +16,7 @@ type ThemeLike = Partial<Pick<Theme, "bold" | "fg" | "strikethrough">>;
 
 type DisplayTask = Todo & { taskIndex: number };
 
-/**
- * Produces compact widget rows. Every returned row is constrained to the supplied display width;
- * the component may subsequently wrap a row when a host chooses a narrower cell.
- */
+/** Produces compact widget rows constrained to the supplied display width. */
 export function renderTodoWidgetLines(
   state: TodoState | undefined,
   theme: ThemeLike | undefined,
@@ -25,15 +24,13 @@ export function renderTodoWidgetLines(
   options: TodoWidgetLayoutOptions = {},
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width) || 1);
-  const phases = Array.isArray(state?.phases) ? state.phases : [];
-  if (phases.length === 0 || !phases.some(phase => phase.tasks.length > 0)) return [];
-
-  const selectedPhaseIndex = selectPhase(phases);
+  const phases = state?.phases ?? [];
+  const selectedPhaseIndex = currentTodoPhaseIndex(phases);
   if (selectedPhaseIndex < 0) return [];
   const selectedPhase = phases[selectedPhaseIndex];
   const maxVisible = boundedMaxVisible(options.maxVisible);
   const selectedTasks = visibleTasks(selectedPhase.tasks, maxVisible);
-  const lines: string[] = [fit(toolTitle(summary(phases), theme), safeWidth)];
+  const lines: string[] = [fit(toolTitle(formatTodoProgress("Todos", todoTasks(state)), theme), safeWidth)];
 
   for (let phaseIndex = 0; phaseIndex < phases.length; phaseIndex++) {
     const phase = phases[phaseIndex];
@@ -58,47 +55,15 @@ export function renderTodoWidgetLines(
   return lines;
 }
 
-/** Alias kept for callers that prefer a builder-style name. */
-export const buildTodoWidgetLines = renderTodoWidgetLines;
-
 function boundedMaxVisible(value: number | undefined): number {
-  if (!Number.isFinite(value)) return 5;
-  return Math.max(1, Math.floor(value!));
-}
-
-function summary(phases: TodoPhase[]): string {
-  const tasks = phases.flatMap(phase => phase.tasks);
-  const active = tasks.filter(isActive).length;
-  const pending = tasks.filter(task => task.status === "pending").length;
-  const completed = tasks.filter(task => task.status === "completed").length;
-  const cancelled = tasks.filter(task => task.status === "cancelled").length;
-  return [
-    "Todos",
-    ...(active ? [`${active} active`] : []),
-    ...(pending ? [`${pending} pending`] : []),
-    ...(completed ? [`${completed} completed`] : []),
-    ...(cancelled ? [`${cancelled} cancelled`] : []),
-  ].join(" · ");
+  if (value === undefined || !Number.isFinite(value)) return 5;
+  return Math.max(1, Math.floor(value));
 }
 
 function phaseTitle(phase: TodoPhase, phaseIndex: number, selected: boolean, theme: ThemeLike | undefined): string {
-  const title = `${phaseIndex + 1}. ${phaseSummary(phase)}`;
+  const title = `${phaseIndex + 1}. ${formatTodoProgress(phase.name, phase.tasks)}`;
   if (selected) return toolTitle(`  ${title}`, theme);
   return theme?.fg ? theme.fg("dim", `  ${title}`) : `  ${title}`;
-}
-
-function phaseSummary(phase: TodoPhase): string {
-  const active = phase.tasks.filter(isActive).length;
-  const pending = phase.tasks.filter(task => task.status === "pending").length;
-  const completed = phase.tasks.filter(task => task.status === "completed").length;
-  const cancelled = phase.tasks.filter(task => task.status === "cancelled").length;
-  return [
-    phase.name,
-    ...(active ? [`${active} active`] : []),
-    ...(pending ? [`${pending} pending`] : []),
-    ...(completed ? [`${completed} completed`] : []),
-    ...(cancelled ? [`${cancelled} cancelled`] : []),
-  ].join(" · ");
 }
 
 function toolTitle(text: string, theme: ThemeLike | undefined): string {
@@ -106,7 +71,7 @@ function toolTitle(text: string, theme: ThemeLike | undefined): string {
   return theme?.fg ? theme.fg("toolTitle", bold) : bold;
 }
 
-function visibleTasks(tasks: Todo[], maxVisible: number): DisplayTask[] {
+function visibleTasks(tasks: readonly Todo[], maxVisible: number): DisplayTask[] {
   const ordered = tasks
     .map((task, taskIndex) => ({ ...task, taskIndex }))
     .filter(task => !isTerminal(task))
@@ -132,13 +97,7 @@ function taskPriority(task: Todo): number {
   return 2;
 }
 
-function selectPhase(phases: TodoPhase[]): number {
-  const active = phases.findIndex(phase => phase.tasks.some(isActive));
-  if (active >= 0) return active;
-  return phases.findIndex(phase => phase.tasks.some(task => task.status === "pending"));
-}
-
-function terminalTaskSummary(tasks: Todo[]): string | undefined {
+function terminalTaskSummary(tasks: readonly Todo[]): string | undefined {
   const completed = tasks.filter(task => task.status === "completed").length;
   const cancelled = tasks.filter(task => task.status === "cancelled").length;
   const parts = [

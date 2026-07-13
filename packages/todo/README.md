@@ -1,6 +1,6 @@
 # @pi9/todo
 
-A phased, branch-aware todo tool for the [Pi coding agent](https://github.com/earendil-works/pi-mono).
+A phased, session-aware todo tool for the [Pi coding agent](https://github.com/earendil-works/pi-mono).
 
 ## Features
 
@@ -14,74 +14,6 @@ A phased, branch-aware todo tool for the [Pi coding agent](https://github.com/ea
 - Native-style self-rendered tool shells with no extra spacing for hidden activity
 
 Todo snapshots are stored in tool-result details, so `/tree` navigation restores the plan associated with that branch.
-
-## Tool contract
-
-The provider-facing schema is one flat object rather than a union, which keeps it compatible across Pi providers. Action-specific requirements are validated atomically by the tool.
-
-### Set the complete plan
-
-`set` discards the complete current plan and creates exactly the supplied phases and tasks. Every task starts `pending`. An empty `phases` array clears the plan.
-
-```json
-{
-  "action": "set",
-  "phases": [
-    {
-      "name": "Build",
-      "tasks": ["Implement session restoration", "Add integration coverage"]
-    }
-  ]
-}
-```
-
-### Add newly discovered work
-
-`add` creates missing phases or appends tasks to existing phases without changing current tasks or statuses. New tasks start `pending`.
-
-```json
-{
-  "action": "add",
-  "phases": [
-    {
-      "name": "Verify",
-      "tasks": ["Run the complete test suite"]
-    }
-  ]
-}
-```
-
-### Transition task statuses
-
-`transition` applies status changes atomically using exact phase and task names.
-
-```json
-{
-  "action": "transition",
-  "transitions": [
-    {
-      "phase": "Build",
-      "task": "Implement session restoration",
-      "status": "completed"
-    },
-    {
-      "phase": "Verify",
-      "task": "Run the complete test suite",
-      "status": "in_progress"
-    }
-  ]
-}
-```
-
-Phase names and task names are immutable. Task names must be unique within their phase. Cancel obsolete tasks instead of removing them; cancel and add a corrected task when its name needs to change. All `in_progress` tasks must belong to one phase.
-
-### View the plan
-
-`view` returns the complete plan or one exact phase:
-
-```json
-{ "action": "view", "phase": "Build" }
-```
 
 ## Install
 
@@ -104,7 +36,12 @@ The settings loader reads global settings from `~/.pi/agent/todo/settings.json`.
   "widgetPlacement": "aboveEditor",
   "maxVisibleTasks": 5,
   "fallbackGlyphs": false,
-  "toolVisibility": "set-only"
+  "toolVisibility": "set-only",
+  "dynamicReminders": true,
+  "reminderMinTurns": 4,
+  "reminderMaxTurns": 8,
+  "reminderOutputTokens": 16000,
+  "reminderMaxPerRun": 2
 }
 ```
 
@@ -117,6 +54,10 @@ The settings loader reads global settings from `~/.pi/agent/todo/settings.json`.
 - `"none"` hides normal Todo activity.
 
 Errors are always shown. Todo output uses native-style self-rendered shells, and hidden successful operations render zero lines. When expanded, the latest rendered `set` result on the active branch follows later additions and transitions; historical details and collapsed rendering remain unchanged.
+
+Dynamic reminders are transient user-role context messages: they are supplied to the model only for the current request and are never added to session history. A reminder is due only after `reminderMinTurns`, then when either `reminderMaxTurns` or `reminderOutputTokens` is reached, up to `reminderMaxPerRun` times per agent run. This guarded-OR cadence prevents reminders during short bursts while still catching either many small turns or a few output-heavy turns. Output tokens are counted because model-generated work, rather than prompt size, is the useful signal that a plan may have become stale. Any successful Todo action, including `view`, resets the turn/token window at the end of that turn; failed actions do not. Set `dynamicReminders` to `false` to disable reminders.
+
+After a successful manual, threshold, or overflow Pi compaction, the extension injects a one-shot transient full phased plan into the next model context build. It includes every phase and task with literal statuses, including `completed` and `cancelled` tasks and terminal-only plans; plans with zero tasks are skipped. This does not change Pi's compaction summary or session history. The injection takes priority over a due dynamic cadence reminder and resets its staleness window, regardless of `dynamicReminders`. Its pending state is in memory only and is cleared on session start/reload or `/tree` navigation, so it is not persisted across an extension reload before delivery.
 
 Settings load when a session starts. The widget refreshes after todo changes and `/tree` navigation. Set `widgetPlacement` to `"off"` to disable it.
 

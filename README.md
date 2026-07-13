@@ -6,7 +6,7 @@ Pi9 is a collection of extensions for the [Pi coding agent](https://github.com/b
 
 - [`@pi9/context`](./packages/context) — an inline breakdown of current context-window usage.
 - [`@pi9/subagent`](./packages/subagent) — resumable, background, and recursive subagents with live progress and tree-wide concurrency limits.
-- [`@pi9/todo`](./packages/todo) — phased, branch-aware task planning with immutable task names and atomic status transitions.
+- [`@pi9/todo`](./packages/todo) — phased, session-aware task planning with immutable task names and atomic status transitions.
 - [`@pi9/whisper`](./packages/whisper) — local agent-to-agent communication.
 
 ## Development

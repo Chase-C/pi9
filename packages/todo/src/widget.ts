@@ -1,20 +1,14 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
+import type { TodoSettings } from "./settings.js";
 import type { TodoState } from "./types.js";
 import { TodoWidgetComponent } from "./widget-component.js";
 
-export type TodoWidgetPlacement = "belowEditor" | "aboveEditor" | "off";
-
-/**
- * Deliberately structural so this unit does not depend on the settings persistence layer.
- * The widget-prefixed forms allow a future settings module to expose namespaced UI settings.
- */
-export type TodoWidgetSettings = {
-  widgetPlacement?: TodoWidgetPlacement;
-  maxVisibleTasks?: number;
-  fallbackGlyphs?: boolean;
-};
+export type TodoWidgetSettings = Partial<Pick<
+  TodoSettings,
+  "widgetPlacement" | "maxVisibleTasks" | "fallbackGlyphs"
+>>;
 
 type WidgetComponentFactory = (tui: TUI, theme: Theme) => Component & { dispose?(): void };
 
@@ -39,19 +33,18 @@ export function updateTodoWidget(ctx: TodoWidgetContext | undefined, state: Todo
       return;
     }
 
-    const hasVisibleTasks = state?.phases.some(phase => phase.tasks.some(task =>
+    const visibleState = state?.phases.some(phase => phase.tasks.some(task =>
       task.status === "pending" || task.status === "in_progress",
-    )) ?? false;
-    const factory: WidgetComponentFactory | undefined = hasVisibleTasks
-      ? (tui, theme) => new TodoWidgetComponent(state!, theme, {
+    )) ? state : undefined;
+    const factory: WidgetComponentFactory | undefined = visibleState
+      ? (tui, theme) => new TodoWidgetComponent(visibleState, theme, {
           maxVisible: settings.maxVisibleTasks,
           fallbackGlyphs: settings.fallbackGlyphs,
+          blankLineBelow: placement === "aboveEditor",
         }, tui)
       : undefined;
     ctx.ui.setWidget("todo", factory, { placement });
   } catch (error) {
-    try {
-      ctx.ui.notify?.(`Todo widget update failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
-    } catch { }
+    ctx.ui.notify?.(`Todo widget update failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "@pi9/todo",
   "version": "0.1.0",
-  "description": "Pi extension for managing agent todo tasks.",
+  "description": "Phased, session-aware todo planning for Pi agents.",
   "license": "MIT",
   "author": "Chase Cummings <chaseecummings@gmail.com>",
   "type": "module",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cloneTodoState, restoreTodoState } from "../src/persistence.js";
+import { restoreTodoState } from "../src/persistence.js";
+import { cloneTodoState } from "../src/state.js";
 import type { TodoState } from "../src/types.js";
 
 const state = (name: string): TodoState => ({
@@ -24,8 +25,11 @@ describe("todo persistence", () => {
   it("clones state without retaining nested references", () => {
     const original = state("Build");
     const copy = cloneTodoState(original);
-    copy.phases[0].tasks[0].name = "Changed";
-    expect(original.phases[0].tasks[0].name).toBe("Complete Build");
+
+    expect(copy).toEqual(original);
+    expect(copy.phases).not.toBe(original.phases);
+    expect(copy.phases[0]).not.toBe(original.phases[0]);
+    expect(copy.phases[0].tasks[0]).not.toBe(original.phases[0].tasks[0]);
   });
 
   it("restores the newest valid snapshot in active branch order", () => {
@@ -61,8 +65,11 @@ describe("todo persistence", () => {
   });
 
   it("returns an independent empty state when no valid snapshot exists", () => {
-    const restored = restoreTodoState(contextFor([]));
-    restored.phases.push({ name: "Local", tasks: [] });
-    expect(restoreTodoState(contextFor([]))).toEqual({ phases: [] });
+    const first = restoreTodoState(contextFor([]));
+    const second = restoreTodoState(contextFor([]));
+
+    expect(first).toEqual({ phases: [] });
+    expect(second).not.toBe(first);
+    expect(second.phases).not.toBe(first.phases);
   });
 });

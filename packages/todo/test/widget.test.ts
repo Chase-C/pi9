@@ -128,6 +128,9 @@ test("updateTodoWidget supplies a component factory, honors placement, and clear
   assert.equal(calls[0][0], "todo");
   assert.equal(typeof calls[0][1], "function");
   assert.deepEqual(calls[0][2], { placement: "aboveEditor" });
+  const component = (calls[0][1] as (tui: never, theme: never) => TodoWidgetComponent)({ requestRender() { } } as never, undefined as never);
+  assert.equal(component.render(80).at(-1), "");
+  component.dispose();
 
   updateTodoWidget({ hasUI: true, ui: { setWidget: (...args: unknown[]) => calls.push(args) } }, {
     phases: [{ name: "Done", tasks: [{ name: "finished", status: "completed" }] }],
