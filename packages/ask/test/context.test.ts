@@ -13,6 +13,7 @@ const result = (details: unknown, id = "ask-1") => ({
   content: [{ type: "text", text: "the original verbose result" }],
   details,
 });
+const answered = (question: string, answer: unknown) => ({ status: "answered", question, answer });
 
 describe("rewriteAskContext", () => {
   it("keeps only selected option details and summarizes a successful answer", () => {
@@ -28,14 +29,13 @@ describe("rewriteAskContext", () => {
         allowMultiple: true,
         allowFreeform: true,
       }),
-      result({
-        cancelled: false,
+      result(answered("Choose", {
         selections: [
           { label: "Beta", description: "Second", comment: "Safest" },
           { label: "Gamma", description: "Third" },
         ],
         freeform: "Ship Friday",
-      }),
+      })),
     ];
 
     expect(rewriteAskContext(messages)).toEqual([
@@ -50,19 +50,15 @@ describe("rewriteAskContext", () => {
             arguments: {
               question: "Choose",
               context: "For the release",
-              options: [
-                { label: "Beta", description: "Second", comment: "Safest" },
-                { label: "Gamma", description: "Third" },
-              ],
+              answered: true,
               allowMultiple: true,
-              freeform: "Ship Friday",
             },
           },
         ],
       },
       {
         ...messages[1],
-        content: [{ type: "text", text: "Selected: Beta (Safest), Gamma; response: Ship Friday" }],
+        content: [{ type: "text", text: "Selected: Beta — Second (Safest), Gamma — Third; response: Ship Friday" }],
       },
     ]);
   });
@@ -70,11 +66,11 @@ describe("rewriteAskContext", () => {
   it("does not retain irrelevant multiplicity for a single selection", () => {
     const messages = [
       call({ question: "Choose", options: [{ label: "A" }, { label: "B" }], allowMultiple: true }),
-      result({ cancelled: false, selections: [{ label: "A" }] }),
+      result(answered("Choose", { selections: [{ label: "A" }] })),
     ];
 
     const rewritten = rewriteAskContext(messages) as any[];
-    expect(rewritten[0].content[1].arguments).toEqual({ question: "Choose", options: [{ label: "A" }] });
+    expect(rewritten[0].content[1].arguments).toEqual({ question: "Choose", answered: true });
     expect(rewritten[1].content[0].text).toBe("Selected: A");
   });
 
@@ -93,9 +89,9 @@ describe("rewriteAskContext", () => {
   });
 
   it.each([
-    { label: "unrelated calls", messages: [call({ question: "Q" }, "other", "read"), result({ cancelled: false, selections: [{ label: "A" }] }, "other")] },
-    { label: "unmatched calls", messages: [call({ question: "Q" }), result({ cancelled: false, selections: [{ label: "A" }] }, "different")] },
-    { label: "malformed details", messages: [call({ question: "Q" }), result({ cancelled: false, selections: "A" })] },
+    { label: "unrelated calls", messages: [call({ question: "Q" }, "other", "read"), result(answered("Q", { selections: [{ label: "A" }] }), "other")] },
+    { label: "unmatched calls", messages: [call({ question: "Q" }), result(answered("Q", { selections: [{ label: "A" }] }), "different")] },
+    { label: "malformed details", messages: [call({ question: "Q" }), result(answered("Q", { selections: "A" }))] },
     { label: "UI-unavailable errors", messages: [call({ question: "Q" }), { ...result(undefined), isError: true }] },
   ])("leaves $label unchanged", ({ messages }) => {
     expect(rewriteAskContext(messages)).toEqual(messages);
@@ -106,12 +102,11 @@ describe("rewriteAskContext", () => {
     ...(timestamp !== undefined ? { timestamp } : {}),
   });
   const replayDetails = (overrides: Record<string, unknown> = {}) => ({
-    version: 1,
     toolCallId: "ask-1",
     question: "Choose",
     context: "Release",
     allowMultiple: false,
-    answer: { cancelled: false, selections: [{ label: "B" }] },
+    answer: { selections: [{ label: "B" }] },
     ...overrides,
   });
 
@@ -130,7 +125,7 @@ describe("rewriteAskContext", () => {
     expect(rewritten[0].content[1].arguments).toEqual({
       question: "Choose",
       context: "Release",
-      options: [{ label: "B", description: "Second" }],
+      answered: true,
     });
     expect(rewritten[1]).toMatchObject({ role: "toolResult", toolCallId: "ask-1" });
   });
@@ -143,13 +138,13 @@ describe("rewriteAskContext", () => {
     const snapshot = structuredClone(messages);
 
     expect(rewriteAskContext(messages)).toEqual([
-      call({ question: "Choose", context: "Release", options: [{ label: "B", description: "Second" }] }),
+      call({ question: "Choose", context: "Release", answered: true }),
       {
         role: "toolResult",
         toolCallId: "ask-1",
         toolName: "ask",
-        content: [{ type: "text", text: "Selected: B" }],
-        details: { cancelled: false, selections: [{ label: "B" }] },
+        content: [{ type: "text", text: "Selected: B — Second" }],
+        details: answered("Choose", { selections: [{ label: "B" }] }),
         isError: false,
         timestamp: 1_234,
       },
@@ -162,7 +157,7 @@ describe("rewriteAskContext", () => {
     const messages = [call({ question: "Choose", context: "Release", options: [{ label: "B" }] }), summary, replay(replayDetails())];
 
     expect(rewriteAskContext(messages)).toEqual([
-      call({ question: "Choose", context: "Release", options: [{ label: "B" }] }),
+      call({ question: "Choose", context: "Release", answered: true }),
       expect.objectContaining({ role: "toolResult", toolCallId: "ask-1" }),
       summary,
     ]);
@@ -171,26 +166,25 @@ describe("rewriteAskContext", () => {
   it("projects a submitted empty replay as a successful no-answer result", () => {
     const messages = [
       call({ question: "Choose", context: "Release", options: [{ label: "B" }] }),
-      replay(replayDetails({ answer: { cancelled: false, selections: [] } }), 99),
+      replay(replayDetails({ answer: { selections: [] } }), 99),
     ];
 
     expect(rewriteAskContext(messages)).toEqual([
-      call({ question: "Choose", context: "Release" }),
+      call({ question: "Choose", context: "Release", answered: true }),
       {
         role: "toolResult",
         toolCallId: "ask-1",
         toolName: "ask",
         content: [{ type: "text", text: "No answer provided." }],
-        details: { cancelled: false, selections: [] },
+        details: answered("Choose", { selections: [] }),
         isError: false,
         timestamp: 99,
       },
     ]);
   });
 
-  it("preserves replay comments and freeform answers in selected-only arguments", () => {
+  it("preserves replay comments and freeform answers in the result", () => {
     const answer = {
-      cancelled: false,
       selections: [{ label: "A", comment: "because" }, { label: "B" }],
       freeform: "extra",
     };
@@ -201,7 +195,7 @@ describe("rewriteAskContext", () => {
 
     const rewritten = rewriteAskContext(messages) as any[];
     expect(rewritten[0].content[1].arguments).toEqual({
-      question: "Choose", context: "Release", options: [{ label: "A", comment: "because" }, { label: "B" }], allowMultiple: true, freeform: "extra",
+      question: "Choose", context: "Release", answered: true, allowMultiple: true,
     });
     expect(rewritten[1].content[0].text).toBe("Selected: A (because), B; response: extra");
   });
@@ -238,33 +232,32 @@ describe("rewriteAskContext", () => {
     ]],
     ["multiple selections when disallowed", [
       call({ question: "Choose", context: "Release", options: [{ label: "A" }, { label: "B" }] }),
-      replay(replayDetails({ answer: { cancelled: false, selections: [{ label: "A" }, { label: "B" }] } })),
+      replay(replayDetails({ answer: { selections: [{ label: "A" }, { label: "B" }] } })),
     ]],
     ["freeform when disallowed", [
       call({ question: "Choose", context: "Release", options: [{ label: "B" }], allowFreeform: false }),
-      replay(replayDetails({ answer: { cancelled: false, selections: [{ label: "B" }], freeform: "extra" } })),
+      replay(replayDetails({ answer: { selections: [{ label: "B" }], freeform: "extra" } })),
     ]],
   ])("leaves an ambiguous or impossible replay unchanged: %s", (_label, messages) => {
     expect(rewriteAskContext(messages)).toEqual(messages);
   });
 
   it.each([
-    ["malformed", replay(replayDetails({ answer: { cancelled: false, selections: "B" } }))],
-    ["version mismatch", replay(replayDetails({ version: 2 }))],
+    ["malformed", replay(replayDetails({ answer: { selections: "B" } }))],
     ["unmatched", replay(replayDetails({ toolCallId: "missing" }))],
   ])("leaves %s replay messages unchanged", (_label, marker) => {
     const messages = [call({ question: "Choose", context: "Release", options: [{ label: "B" }] }), marker];
     expect(rewriteAskContext(messages)).toEqual(messages);
   });
 
-  it("leaves native results unaffected and does not synthesize a duplicate", () => {
-    const native = result({ cancelled: false, selections: [{ label: "B" }] });
+  it("reuses a native result instead of synthesizing a duplicate", () => {
+    const native = result(answered("Choose", { selections: [{ label: "B" }] }));
     const marker = replay(replayDetails());
     const messages = [call({ question: "Choose", context: "Release", options: [{ label: "B" }] }), native, marker];
 
-    const rewritten = rewriteAskContext(messages);
-    expect(rewritten).toHaveLength(3);
-    expect(rewritten[2]).toEqual(marker);
-    expect((rewritten as any[]).filter(message => message.role === "toolResult")).toHaveLength(1);
+    const rewritten = rewriteAskContext(messages) as any[];
+    expect(rewritten).toHaveLength(2);
+    expect(rewritten[1]).toMatchObject({ role: "toolResult", toolCallId: "ask-1", details: answered("Choose", replayDetails().answer) });
+    expect(rewritten.filter(message => message.role === "toolResult")).toHaveLength(1);
   });
 });

@@ -1,25 +1,24 @@
-export type SelectionMode = "single" | "multi";
-export type QuestionnaireMode = "select" | "comment" | "freeform";
+type SelectionMode = "single" | "multi";
+type QuestionnaireMode = "select" | "comment" | "freeform";
 
-export interface QuestionnaireOption {
+interface QuestionnaireOption {
   id: string;
   label: string;
 }
 
-export interface QuestionnaireConfig {
+interface QuestionnaireConfig {
   selection: SelectionMode;
   options: readonly QuestionnaireOption[];
   allowFreeform?: boolean;
 }
 
-export interface AnswerSelection extends QuestionnaireOption {
+interface AnswerSelection extends QuestionnaireOption {
   comment?: string;
 }
 
-export interface QuestionnaireAnswer {
+interface QuestionnaireAnswer {
   selections: AnswerSelection[];
   freeform?: string;
-  text: string;
 }
 
 export interface QuestionnaireState {
@@ -35,7 +34,7 @@ export interface QuestionnaireState {
   answer: QuestionnaireAnswer | null;
 }
 
-export type QuestionnaireEvent =
+type QuestionnaireEvent =
   | { type: "move"; delta: number }
   | { type: "toggle" }
   | { type: "openComment" }
@@ -69,7 +68,6 @@ export function createQuestionnaireState(config: QuestionnaireConfig): Questionn
   };
 }
 
-/** Applies one UI intent without mutating the supplied state. */
 export function transitionQuestionnaire(state: QuestionnaireState, event: QuestionnaireEvent): QuestionnaireState {
   const next = clone(state);
   if (next.answer) return next;
@@ -120,7 +118,8 @@ export function transitionQuestionnaire(state: QuestionnaireState, event: Questi
         next.freeformDraft = saved;
       }
       leaveEditor(next);
-      if (state.mode === "freeform" && next.config.selection === "single" && saved) {
+      const freeformOnly = next.config.options.length === 0;
+      if (state.mode === "freeform" && (freeformOnly || (next.config.selection === "single" && saved))) {
         next.answer = finalAnswer(next);
       }
       break;
@@ -135,7 +134,7 @@ export function transitionQuestionnaire(state: QuestionnaireState, event: Questi
   return next;
 }
 
-export function finalAnswer(state: QuestionnaireState): QuestionnaireAnswer {
+function finalAnswer(state: QuestionnaireState): QuestionnaireAnswer {
   const selections = state.config.options
     .filter((option) => state.checked.has(option.id))
     .map((option): AnswerSelection => {
@@ -143,12 +142,9 @@ export function finalAnswer(state: QuestionnaireState): QuestionnaireAnswer {
       return comment ? { ...option, comment } : { ...option };
     });
   const freeform = state.freeformDraft.trim();
-  const lines = selections.map((option) => option.comment ? `${option.label} — ${option.comment}` : option.label);
-  if (freeform) lines.push(freeform);
   return {
     selections,
     ...(freeform ? { freeform } : {}),
-    text: lines.join("\n"),
   };
 }
 

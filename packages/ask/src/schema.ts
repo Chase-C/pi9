@@ -1,4 +1,4 @@
-import { Type, type Static } from "typebox";
+import { Type } from "typebox";
 
 export const AskOptionSchema = Type.Object({
   label: Type.String({ minLength: 1, description: "Short option title." }),
@@ -11,7 +11,5 @@ export const AskParamsSchema = Type.Object({
   options: Type.Optional(Type.Array(AskOptionSchema, { description: "Suggested answers." })),
   allowMultiple: Type.Optional(Type.Boolean({ default: false, description: "Allow selecting multiple options. Defaults to false." })),
   allowFreeform: Type.Optional(Type.Boolean({ default: true, description: "Allow a typed response. Defaults to true." })),
+  answered: Type.Optional(Type.Boolean({ description: "Historical-context marker: this question was answered and its original options were removed. Never include it in a new call." })),
 }, { additionalProperties: false });
-
-export type AskSchemaParams = Static<typeof AskParamsSchema>;
-export const AskSchema = AskParamsSchema;

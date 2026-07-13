@@ -1,6 +1,8 @@
 import type { AskOption, AskParams, ValidatedAskParams } from "./types.js";
 
 export function validateAskParams(params: AskParams): ValidatedAskParams {
+  if (params.answered !== undefined) throw new Error("Ask answered is reserved for historical context.");
+
   const question = params.question.trim();
   if (!question) throw new Error("Ask question must not be empty.");
 

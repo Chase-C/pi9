@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { AskComponent, createAskComponent } from "../src/component.js";
+import { AskComponent } from "../src/component.js";
 
 function theme(): Theme {
   return {
@@ -19,7 +19,7 @@ function make(options: Partial<ConstructorParameters<typeof AskComponent>[0]> = 
   const tui = { terminal: { rows: 24 }, requestRender: vi.fn() };
   const onSubmit = vi.fn();
   const onCancel = vi.fn();
-  const component = createAskComponent({
+  const component = new AskComponent({
     tui: tui as never,
     theme: theme(),
     question: "Which target should receive the release?",
@@ -110,6 +110,24 @@ describe("AskComponent", () => {
     component.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledWith({ selections: [], freeform: "Use the fallback" });
+  });
+
+  it("submits a multi-select freeform-only answer after saving it", () => {
+    const { component, onSubmit } = make({ options: [], allowMultiple: true });
+    component.handleInput("\r");
+    component.handleInput("Use the fallback");
+    component.handleInput("\r");
+
+    expect(onSubmit).toHaveBeenCalledWith({ selections: [], freeform: "Use the fallback" });
+  });
+
+  it("submits an empty freeform-only answer", () => {
+    const { component, onSubmit } = make({ options: [] });
+    component.handleInput("\r");
+    component.handleInput("\r");
+
+    expect(onSubmit).toHaveBeenCalledWith({ selections: [] });
+    expect(component.answer).toEqual({ selections: [] });
   });
 
   it("propagates focus to Pi Editor for IME cursor placement", () => {

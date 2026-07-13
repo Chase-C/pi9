@@ -9,6 +9,7 @@ export type AskParams = {
   options?: AskOption[];
   allowMultiple?: boolean;
   allowFreeform?: boolean;
+  answered?: boolean;
 };
 
 export type ValidatedAskParams = {
@@ -19,32 +20,15 @@ export type ValidatedAskParams = {
   allowFreeform: boolean;
 };
 
-export type AskSelection = AskOption & {
-  comment?: string;
-};
-
 export type AskAnswer = {
-  selections: AskSelection[];
+  selections: Array<AskOption & { comment?: string }>;
   freeform?: string;
 };
 
-export type AskAnsweredDetails = {
-  status: "answered";
-  question: string;
-  answer: AskAnswer;
-};
-
-export type AskCancelledDetails = {
-  status: "cancelled";
-  question: string;
-};
-
-export type AskUiUnavailableDetails = {
-  status: "ui_unavailable";
-  question: string;
-};
-
-export type AskToolDetails = AskAnsweredDetails | AskCancelledDetails | AskUiUnavailableDetails;
+export type AskToolDetails =
+  | { status: "answered"; question: string; answer: AskAnswer }
+  | { status: "cancelled"; question: string }
+  | { status: "ui_unavailable"; question: string };
 
 export type AskResponse = {
   content: Array<{ type: "text"; text: string }>;

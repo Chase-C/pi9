@@ -16,38 +16,27 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   createQuestionnaireState,
   transitionQuestionnaire,
-  type QuestionnaireAnswer,
-  type QuestionnaireEvent,
-  type QuestionnaireOption,
   type QuestionnaireState,
 } from "./state.js";
 import type { AskAnswer, AskOption } from "./types.js";
 
-/** An option as displayed by {@link AskComponent}. */
-export type AskComponentOption = AskOption & { id?: string };
+type NormalizedOption = AskOption & { id: string };
 
-export interface AskComponentOptions {
+interface AskComponentOptions {
   tui: TUI;
   theme: Theme;
   question: string;
   context?: string;
-  options?: readonly AskComponentOption[];
+  options?: readonly (AskOption & { id?: string })[];
   allowMultiple?: boolean;
   allowFreeform?: boolean;
   onSubmit?: (answer: AskAnswer) => void;
   onCancel?: () => void;
 }
 
-/**
- * A full-width question component intended to be placed in a Pi overlay.
- *
- * The component deliberately does not call `showOverlay`: the caller controls
- * the overlay anchor, height, and focus policy. It owns the questionnaire
- * state so it can also be used with `ctx.ui.custom`.
- */
 export class AskComponent implements Component, Focusable {
-  private readonly sourceOptions: AskComponentOption[];
-  private readonly optionsById = new Map<string, AskComponentOption>();
+  private readonly sourceOptions: NormalizedOption[];
+  private readonly optionsById = new Map<string, NormalizedOption>();
   private readonly editor: Editor;
   private questionnaireState: QuestionnaireState;
   private completedAnswer: AskAnswer | null = null;
@@ -64,30 +53,23 @@ export class AskComponent implements Component, Focusable {
       return normalized;
     });
 
-    const stateOptions: QuestionnaireOption[] = this.sourceOptions.map((option, index) => ({
-      id: option.id || `option-${index + 1}`,
-      label: option.label,
-    }));
     this.questionnaireState = createQuestionnaireState({
       selection: config.allowMultiple ? "multi" : "single",
-      options: stateOptions,
+      options: this.sourceOptions.map(({ id, label }) => ({ id, label })),
       allowFreeform: config.allowFreeform !== false,
     });
 
     this.editor = new Editor(config.tui, editorTheme(config.theme));
     this.editor.onChange = (value) => {
       if (this.questionnaireState.mode === "select") return;
-      this.applyTransition({ type: "edit", value });
+      this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "edit", value }));
     };
     this.editor.onSubmit = (value) => {
       if (this.questionnaireState.mode === "select") return;
-      // Pi Editor clears its own text and fires onChange("") before onSubmit.
-      // Save the submitted value explicitly rather than the cleared draft.
-      const withSubmittedValue = transitionQuestionnaire(this.questionnaireState, {
-        type: "edit",
-        value,
-      });
-      const next = transitionQuestionnaire(withSubmittedValue, { type: "saveEditor" });
+      const next = transitionQuestionnaire(
+        transitionQuestionnaire(this.questionnaireState, { type: "edit", value }),
+        { type: "saveEditor" },
+      );
       this.applyState(next);
       if (next.mode === "select") this.editor.setText("");
       this.finishIfAnswered(next);
@@ -95,7 +77,7 @@ export class AskComponent implements Component, Focusable {
     };
   }
 
-  /** Current questionnaire state, useful to an overlay integrator. */
+  /** Current questionnaire state, useful to UI integrators. */
   get state(): QuestionnaireState {
     return this.questionnaireState;
   }
@@ -131,7 +113,7 @@ export class AskComponent implements Component, Focusable {
       // while Ctrl+C remains the conventional way to cancel the whole ask.
       if (matchesKey(data, Key.escape)) {
         const original = this.questionnaireState.editorOriginal;
-        this.applyTransition({ type: "cancelEditor" });
+        this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "cancelEditor" }));
         this.editor.setText(original);
         this.requestRender();
         return;
@@ -176,10 +158,8 @@ export class AskComponent implements Component, Focusable {
       return;
     }
 
-    // This is deliberately a literal lower-case c, not a keybinding that
-    // could also match modified input. It never toggles the option.
     if (isLiteral(data, "c")) {
-      this.applyTransition({ type: "openComment" });
+      this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "openComment" }));
       return;
     }
 
@@ -271,12 +251,12 @@ export class AskComponent implements Component, Focusable {
     for (let index = 0; index < this.sourceOptions.length; index += 1) {
       const source = this.sourceOptions[index];
       const selected = this.questionnaireState.highlightedRow === index;
-      const checked = this.questionnaireState.checked.has(source.id || "");
+      const checked = this.questionnaireState.checked.has(source.id);
       const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
       const check = this.questionnaireState.config.selection === "multi"
         ? (checked ? this.config.theme.fg("success", "☑ ") : this.config.theme.fg("muted", "☐ "))
         : "";
-      const comment = this.questionnaireState.comments.has(source.id || "")
+      const comment = this.questionnaireState.comments.has(source.id)
         ? this.config.theme.fg("warning", " ✎")
         : "";
       const label = `${marker}${check}${source.label}${comment}`;
@@ -286,7 +266,7 @@ export class AskComponent implements Component, Focusable {
         addPrefixed("     ", source.description, "muted");
       }
       if (selected) {
-        const commentText = this.questionnaireState.comments.get(source.id || "");
+        const commentText = this.questionnaireState.comments.get(source.id);
         if (commentText) addPrefixed("     ", `✎ ${commentText}`, "dim");
       }
     }
@@ -314,7 +294,7 @@ export class AskComponent implements Component, Focusable {
       : "Enter save response · Esc discard";
   }
 
-  private editingOption(): AskComponentOption | undefined {
+  private editingOption(): NormalizedOption | undefined {
     const id = this.questionnaireState.editingOptionId;
     return id ? this.optionsById.get(id) : undefined;
   }
@@ -328,7 +308,7 @@ export class AskComponent implements Component, Focusable {
   }
 
   private move(delta: number): void {
-    this.applyTransition({ type: "move", delta });
+    this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "move", delta }));
     this.requestRender();
   }
 
@@ -346,10 +326,6 @@ export class AskComponent implements Component, Focusable {
     this.editor.setText(next.editorDraft);
     this.editor.focused = this._focused;
     this.requestRender();
-  }
-
-  private applyTransition(event: QuestionnaireEvent): void {
-    this.applyState(transitionQuestionnaire(this.questionnaireState, event));
   }
 
   private applyState(next: QuestionnaireState): void {
@@ -372,7 +348,7 @@ export class AskComponent implements Component, Focusable {
     this.config.onSubmit?.(answer);
   }
 
-  private toAskAnswer(answer: QuestionnaireAnswer): AskAnswer {
+  private toAskAnswer(answer: NonNullable<QuestionnaireState["answer"]>): AskAnswer {
     const selections = answer.selections.map((selection) => {
       const source = this.optionsById.get(selection.id);
       const result: AskOption & { comment?: string } = {
@@ -391,11 +367,6 @@ export class AskComponent implements Component, Focusable {
   private requestRender(): void {
     this.config.tui.requestRender();
   }
-}
-
-/** Factory form convenient for Pi's `ctx.ui.custom` and overlay integrations. */
-export function createAskComponent(options: AskComponentOptions): AskComponent {
-  return new AskComponent(options);
 }
 
 function editorTheme(theme: Theme): EditorTheme {
@@ -439,5 +410,3 @@ function addWrappedWithPrefix(lines: string[], prefix: string, text: string, wid
     lines.push(fit(`${index === 0 ? prefix : continuation}${wrapped[index]}`, width));
   }
 }
-
-export default createAskComponent;

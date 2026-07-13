@@ -6,9 +6,11 @@ import {
   ASK_REPLAY_CUSTOM_TYPE,
   buildAskReplayMessage,
   resolveAskReplayTarget,
+  validateStoredArgs,
 } from "../src/replay.js";
 
 const args = { question: "  Choose? ", options: [{ label: " A " }] };
+const params = validateStoredArgs(args)!;
 const assistant = (id: string, calls: Array<{ name: string; arguments: unknown }>): SessionEntry => ({
   type: "message", id, parentId: null, timestamp: "now",
   message: {
@@ -22,19 +24,18 @@ const event = (newLeafId: string | null, summaryEntry?: SessionTreeEvent["summar
 const lookup = (entries: SessionEntry[]) => (id: string) => entries.find((entry) => entry.id === id);
 
 describe("replay records", () => {
-  it("builds versioned, normalized custom message data", () => {
+  it("builds canonical replay data with answer-oriented tree text", () => {
     expect(ASK_REPLAY_CUSTOM_TYPE).toBe("ask:reanswer");
-    const message = buildAskReplayMessage("call-1", args, { selections: [{ label: "A" }] });
+    const message = buildAskReplayMessage("call-1", params, { selections: [{ label: "A" }] });
     expect(message).toEqual({
       customType: "ask:reanswer",
-      content: "Re-answer: Choose?",
-      display: true,
+      content: "Selected: A",
+      display: false,
       details: {
-        version: 1,
         toolCallId: "call-1",
         question: "Choose?",
         allowMultiple: false,
-        answer: { cancelled: false, selections: [{ label: "A" }] },
+        answer: { selections: [{ label: "A" }] },
       },
     });
 
@@ -51,8 +52,19 @@ describe("resolveAskReplayTarget", () => {
   it("resolves a direct assistant Ask leaf and normalizes its stored arguments", () => {
     const entry = assistant("ask-1", [{ name: "ask", arguments: args }]);
     expect(resolveAskReplayTarget(event("ask-1"), lookup([entry]))).toEqual({
-      status: "resolved", sourceEntryId: "ask-1",
+      status: "resolved", sourceEntryId: "ask-1", toolCallId: "call-0",
       params: { question: "Choose?", options: [{ label: "A" }], allowMultiple: false, allowFreeform: true },
+    });
+  });
+
+  it("resolves the visible Ask tool-result row to its assistant call", () => {
+    const selected = assistant("ask-1", [{ name: "ask", arguments: args }]);
+    const result = {
+      type: "message", id: "result-1", parentId: "ask-1", timestamp: "now",
+      message: { role: "toolResult", toolCallId: "call-0", toolName: "ask" } as never,
+    } satisfies SessionEntry;
+    expect(resolveAskReplayTarget(event("result-1"), lookup([selected, result]))).toMatchObject({
+      status: "resolved", sourceEntryId: "ask-1", toolCallId: "call-0",
     });
   });
 
@@ -63,6 +75,25 @@ describe("resolveAskReplayTarget", () => {
     expect(resolveAskReplayTarget(event("summary", { ...summary, parentId: "middle" }), lookup([
       { type: "custom", id: "middle", parentId: "ask-1", timestamp: "now", customType: "x" }, selected,
     ]))).toEqual({ status: "not-replayable", reason: "not-assistant" });
+  });
+
+  it("uses a revision instead of the native result retained by tool-row navigation", () => {
+    const params = validateStoredArgs({ question: "Choose?", options: [{ label: "A" }, { label: "B" }] })!;
+    const message = buildAskReplayMessage("call-1", params, {
+      selections: [{ label: "B" }],
+    });
+    const projected = rewriteAskContext([
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "Choose?", options: [{ label: "A" }, { label: "B" }] } }] },
+      { role: "toolResult", toolCallId: "call-1", toolName: "ask", content: [{ type: "text", text: "Selected: A" }], details: { status: "answered", question: "Choose?", answer: { selections: [{ label: "A" }] } }, isError: false },
+      { role: "custom", timestamp: 12, ...message },
+    ]) as any[];
+
+    expect(projected).toHaveLength(2);
+    expect(projected[0].content[0].arguments).toEqual({ question: "Choose?", answered: true });
+    expect(projected[1]).toMatchObject({
+      role: "toolResult", toolCallId: "call-1", content: [{ type: "text", text: "Selected: B" }],
+      details: { status: "answered", answer: { selections: [{ label: "B" }] } }, isError: false,
+    });
   });
 
   it.each([

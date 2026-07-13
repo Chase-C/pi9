@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import askWithRpc, { type AskDialogUI } from "../src/rpc.js";
+import { askWithRpc, type AskDialogUI } from "../src/rpc.js";
 
 function ui(select: (title: string, options: string[]) => Promise<string | undefined>, input: (title: string) => Promise<string | undefined>): AskDialogUI {
   return { select, input };
@@ -24,13 +24,13 @@ describe("ask RPC fallback", () => {
 
   it("uses input for the default freeform choice", async () => {
     const select = vi.fn().mockResolvedValue("1. Type a response…");
-    const input = vi.fn().mockResolvedValue("Something else");
+    const input = vi.fn().mockResolvedValue("   ");
 
     const result = await askWithRpc(ui(select, input), { question: "What next?" });
 
     expect(select).toHaveBeenCalledWith("What next?", ["1. Type a response…"]);
     expect(input).toHaveBeenCalledWith("What next?");
-    expect(result).toEqual({ selections: [], freeform: "Something else" });
+    expect(result).toEqual({ selections: [] });
   });
 
   it("returns null when a select or input dialog is cancelled", async () => {
@@ -80,7 +80,7 @@ describe("ask RPC fallback", () => {
   it("combines multi-selections with a freeform response", async () => {
     const input = vi.fn()
       .mockResolvedValueOnce("2, 1")
-      .mockResolvedValueOnce("Also check accessibility")
+      .mockResolvedValueOnce("  Also check accessibility  ")
       .mockResolvedValueOnce("")
       .mockResolvedValueOnce("");
 
@@ -101,7 +101,7 @@ describe("ask RPC fallback", () => {
     const input = vi.fn()
       .mockResolvedValueOnce("3, 1")
       .mockResolvedValueOnce("")
-      .mockResolvedValueOnce("Needs a migration note");
+      .mockResolvedValueOnce("  Needs a migration note  ");
 
     const result = await askWithRpc(inputUi(input), {
       question: "Which changes?",
@@ -134,18 +134,6 @@ describe("ask RPC fallback", () => {
     });
 
     expect(result).toBeNull();
-  });
-
-  it("accepts params first for tool-handler integration", async () => {
-    const select = vi.fn().mockResolvedValue("1. Yes");
-    const input = vi.fn().mockResolvedValue("");
-
-    const result = await askWithRpc(
-      { question: "Continue?", options: [{ label: "Yes" }] },
-      ui(select, input),
-    );
-
-    expect(result).toEqual({ selections: [{ label: "Yes" }] });
   });
 
   it("distinguishes duplicate rendered options and a label matching the freeform text", async () => {

@@ -15,11 +15,12 @@ function render(details: unknown, expanded: boolean, content = "fallback text"):
   return component.render(120).join("\n").trimEnd();
 }
 
-describe("ask revised-answer renderer", () => {
+describe("ask replay renderer", () => {
   const details = {
-    status: "answered",
+    toolCallId: "call-1",
     question: "Which target should I use?",
     context: "Both targets pass the current test suite.",
+    allowMultiple: false,
     answer: {
       selections: [
         { label: "Staging", description: "Validate internally first", comment: "Safer rollout" },
@@ -52,8 +53,9 @@ describe("ask revised-answer renderer", () => {
   });
 
   it("falls back to textual message content for malformed details", () => {
-    expect(() => render({ question: "Question", answer: { selections: "not an array" } }, false, "plain fallback")).not.toThrow();
-    expect(render({ question: "Question", answer: { selections: "not an array" } }, false, "plain fallback")).toBe("plain fallback");
-    expect(render({ question: "Question", answer: { selections: "not an array" } }, true, "plain fallback")).toBe("plain fallback");
+    const malformed = { toolCallId: "call-1", question: "Question", allowMultiple: false, answer: { selections: "not an array" } };
+    expect(() => render(malformed, false, "plain fallback")).not.toThrow();
+    expect(render(malformed, false, "plain fallback")).toBe("plain fallback");
+    expect(render(malformed, true, "plain fallback")).toBe("plain fallback");
   });
 });
