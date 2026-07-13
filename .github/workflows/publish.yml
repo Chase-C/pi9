@@ -3,6 +3,12 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.event.release.tag_name }}
 
       - uses: actions/setup-node@v4
         with:
@@ -25,25 +33,32 @@ jobs:
       - name: Select package from release tag
         id: package
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
         run: |
-          case "$GITHUB_REF_NAME" in
+          case "$RELEASE_TAG" in
             context-v*)
               echo "workspace=@pi9/context" >> "$GITHUB_OUTPUT"
               echo "path=packages/context" >> "$GITHUB_OUTPUT"
-              echo "version=${GITHUB_REF_NAME#context-v}" >> "$GITHUB_OUTPUT"
+              echo "version=${RELEASE_TAG#context-v}" >> "$GITHUB_OUTPUT"
               ;;
             subagent-v*)
               echo "workspace=@pi9/subagent" >> "$GITHUB_OUTPUT"
               echo "path=packages/subagent" >> "$GITHUB_OUTPUT"
-              echo "version=${GITHUB_REF_NAME#subagent-v}" >> "$GITHUB_OUTPUT"
+              echo "version=${RELEASE_TAG#subagent-v}" >> "$GITHUB_OUTPUT"
+              ;;
+            todo-v*)
+              echo "workspace=@pi9/todo" >> "$GITHUB_OUTPUT"
+              echo "path=packages/todo" >> "$GITHUB_OUTPUT"
+              echo "version=${RELEASE_TAG#todo-v}" >> "$GITHUB_OUTPUT"
               ;;
             whisper-v*)
               echo "workspace=@pi9/whisper" >> "$GITHUB_OUTPUT"
               echo "path=packages/whisper" >> "$GITHUB_OUTPUT"
-              echo "version=${GITHUB_REF_NAME#whisper-v}" >> "$GITHUB_OUTPUT"
+              echo "version=${RELEASE_TAG#whisper-v}" >> "$GITHUB_OUTPUT"
               ;;
             *)
-              echo "::error::Unsupported release tag: $GITHUB_REF_NAME"
+              echo "::error::Unsupported release tag: $RELEASE_TAG"
               exit 1
               ;;
           esac
