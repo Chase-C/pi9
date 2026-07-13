@@ -14,6 +14,7 @@
     "check": "npm run typecheck && npm test",
     "release:context": "node scripts/release.mjs context",
     "release:subagent": "node scripts/release.mjs subagent",
+    "release:todo": "node scripts/release.mjs todo",
     "release:whisper": "node scripts/release.mjs whisper"
   },
   "devDependencies": {
