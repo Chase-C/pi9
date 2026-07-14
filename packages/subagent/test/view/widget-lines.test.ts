@@ -285,7 +285,7 @@ test("formatWidgetLines appends parent marker on nested Resumable section rows",
     fakeAgent({
       id: "res-parent",
       retention: "persistent",
-      capabilities: { canResume: true, canClear: true },
+      capabilities: { canResume: true, canRemove: true, canClear: true },
       label: "Main Session",
       config: { name: "main", resumable: true },
       status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },

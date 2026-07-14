@@ -80,6 +80,7 @@ export function preflightFailure(
     usage: undefined,
     capabilities: {
       canResume: false,
+      canRemove: false,
       canClear: false,
     },
   };

@@ -1,5 +1,7 @@
-import { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+
+import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./model-thinking-level.js";
 
 export type AgentSource = "user" | "project";
 
@@ -16,7 +18,7 @@ export interface AgentConfig {
   sourcePath?: string;
 }
 
-const requiredFields = [ "name", "description" ];
+const requiredFields = [ "name" ];
 
 export function BuildAgentConfig(
   content: string,
@@ -27,9 +29,9 @@ export function BuildAgentConfig(
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
     const result = {
       name: parseString(frontmatter.name, "name"),
-      description: parseString(frontmatter.description, "description") ?? "",
+      description: parseRequiredString(frontmatter.description, "description"),
       model: parseString(frontmatter.model, "model"),
-      thinking: parseString(frontmatter.thinking, "thinking") as ModelThinkingLevel | undefined,
+      thinking: parseThinkingLevel(frontmatter.thinking),
       tools: parseCSVStrings(frontmatter.tools, "tools"),
       skills: parseCSVStrings(frontmatter.skills, "skills"),
       resumable: parseBoolean(frontmatter.resumable, "resumable") ?? options.defaultResumable ?? false,
@@ -53,6 +55,20 @@ function parseString(val: unknown, field: string): string | undefined {
   if (val == null) return undefined;
   if (typeof val === "string") return val;
   throw new Error(`Expected field "${field}" to be a string, but got ${typeof val}.`);
+}
+
+function parseRequiredString(val: unknown, field: string): string {
+  const value = parseString(val, field);
+  if (value === undefined || value.trim() === "") {
+    throw new Error(`Expected required field "${field}" to be a non-empty string.`);
+  }
+  return value;
+}
+
+function parseThinkingLevel(val: unknown): ModelThinkingLevel | undefined {
+  const thinking = parseString(val, "thinking");
+  if (thinking === undefined || isModelThinkingLevel(thinking)) return thinking;
+  throw new Error(`Expected field "thinking" to be one of: ${MODEL_THINKING_LEVELS.join(", ")}.`);
 }
 
 function parseCSVStrings(val: unknown, field: string): Array<string> | undefined {

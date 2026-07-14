@@ -68,7 +68,7 @@ test("preflight failures project current snapshot fields for unknown tasks", () 
       },
       activity: { turns: 0, compactions: 0, toolHistory: [] },
       usage: undefined,
-      capabilities: { canResume: false, canClear: false },
+      capabilities: { canResume: false, canRemove: false, canClear: false },
     });
     assert.deepEqual(unknownResume.failure, {
       id: "group:resume-4",
@@ -96,7 +96,7 @@ test("preflight failures project current snapshot fields for unknown tasks", () 
       },
       activity: { turns: 0, compactions: 0, toolHistory: [] },
       usage: undefined,
-      capabilities: { canResume: false, canClear: false },
+      capabilities: { canResume: false, canRemove: false, canClear: false },
     });
     assertCurrentSnapshotFields(unknownSpawn.failure as unknown as Record<string, unknown>);
     assertCurrentSnapshotFields(unknownResume.failure as unknown as Record<string, unknown>);
@@ -167,7 +167,7 @@ test("blocked known resumes project target config and preserve synthetic row fie
       },
       activity: { turns: 0, compactions: 0, toolHistory: [] },
       usage: undefined,
-      capabilities: { canResume: false, canClear: false },
+      capabilities: { canResume: false, canRemove: false, canClear: false },
     });
     assertCurrentSnapshotFields(result.failure as unknown as Record<string, unknown>);
   } finally {

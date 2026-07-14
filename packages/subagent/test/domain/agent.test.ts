@@ -135,6 +135,13 @@ test("snapshot projects requested skills for defaults, overrides, and explicit d
     cwd: "nested",
     resumable: true,
   });
+  assert.equal(override.snapshot().status.kind, "queued");
+  assert.deepEqual(override.snapshot().config.skills, ["requested-skill"]);
+  override.attach(fakeSession as any);
+  assert.equal(override.snapshot().status.kind, "running");
+  assert.deepEqual(override.snapshot().config.skills, ["requested-skill"]);
+  completedRun(override, "done");
+  assert.equal(override.snapshot().status.kind, "done");
   assert.deepEqual(override.snapshot().config.skills, ["requested-skill"]);
 
   const disabled = new Agent("disabled", config, {

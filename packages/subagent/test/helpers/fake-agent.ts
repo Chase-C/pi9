@@ -130,6 +130,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
   const resumable = cfg.resumable;
   const capabilities: AgentViewCapabilities = {
     canResume: rest.capabilities?.canResume ?? false,
+    canRemove: rest.capabilities?.canRemove ?? false,
     canClear: rest.capabilities?.canClear ?? false,
   };
   const messageSnippet = rest.messageSnippet ?? rest.message;

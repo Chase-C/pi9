@@ -578,7 +578,7 @@ test("results expanded mirrors the running view for a resumed snapshot, includin
 test("subagent session inspect output uses remove terminology", () => {
   const retainedSession = fakeAgent({
     retention: "persistent",
-    capabilities: { canResume: true, canClear: true },
+    capabilities: { canResume: true, canRemove: true, canClear: true },
     config: { resumable: true },
     status: { kind: "completed", startedAt: 2_000, completedAt: 5_000, response: "done" },
   });

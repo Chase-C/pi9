@@ -74,6 +74,9 @@ export interface AgentEffectiveConfig {
 
 export interface AgentViewCapabilities {
   readonly canResume: boolean;
+  /** Safe advertised removal capability; explicit remove calls may still abort active sessions. */
+  readonly canRemove: boolean;
+  /** @deprecated Use canRemove. Retained as a details-payload compatibility alias. */
   readonly canClear: boolean;
 }
 

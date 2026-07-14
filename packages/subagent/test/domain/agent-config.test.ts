@@ -38,9 +38,38 @@ test("BuildAgentConfig leaves optional fields undefined when absent and defaults
   assert.equal(config.resumable, false);
 });
 
+test("BuildAgentConfig rejects a missing description", () => {
+  const err = fail(BuildAgentConfig(`---\nname: helper\n---\nbody`, "project"));
+  assert.match(err.message, /Expected required field "description" to be a non-empty string/);
+});
+
+test("BuildAgentConfig rejects empty and whitespace-only descriptions", () => {
+  for (const description of ['""', '"   "']) {
+    const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: ${description}\n---\nbody`, "project"));
+    assert.match(err.message, /Expected required field "description" to be a non-empty string/);
+  }
+});
+
+test("BuildAgentConfig validates but does not normalize a description", () => {
+  const config = ok(BuildAgentConfig(`---\nname: helper\ndescription: "  useful  "\n---\nbody`, "project"));
+  assert.equal(config.description, "  useful  ");
+});
+
 test("BuildAgentConfig returns error when name is missing", () => {
   const err = fail(BuildAgentConfig(`---\ndescription: d\n---\nbody`, "project"));
   assert.match(err.message, /Missing required fields:.*name/);
+});
+
+test("BuildAgentConfig accepts every supported thinking level", () => {
+  for (const thinking of ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+    const config = ok(BuildAgentConfig(`---\nname: helper\ndescription: d\nthinking: ${thinking}\n---\n`, "project"));
+    assert.equal(config.thinking, thinking);
+  }
+});
+
+test("BuildAgentConfig rejects unsupported thinking levels", () => {
+  const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: d\nthinking: extreme\n---\n`, "project"));
+  assert.match(err.message, /Expected field "thinking" to be one of: off, minimal, low, medium, high, xhigh, max/);
 });
 
 test("BuildAgentConfig rejects non-string scalar fields with a type error naming the field", () => {

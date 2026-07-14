@@ -665,7 +665,7 @@ test("/subagents sessions command uses configured display lengths for notificati
 test("/subagents command reports custom UI failure without throwing", async () => {
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canClear: true }, config: { name: "helper", resumable: true, source: "project" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" }, turns: 1 })],
+    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { name: "helper", resumable: true, source: "project" }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" }, turns: 1 })],
   };
   const commands = registerCommand({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -689,7 +689,7 @@ test("/subagents command reports custom UI failure without throwing", async () =
 test("subagents command opens a sessions view from serialized DTOs", async () => {
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canClear: true }, config: { resumable: true }, options: { prompt: "Fix issue by updating the API" } })],
+    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true }, options: { prompt: "Fix issue by updating the API" } })],
   };
   const commands = registerCommand({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -732,7 +732,7 @@ test("/subagents resume reports an editor failure (missing or throwing) without 
     let runCalls = 0;
     const fakeManager = {
       listSessions(): any[] { return this.sessions; },
-      sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canClear: true }, config: { resumable: true } })],
+      sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true } })],
       startRun() { runCalls += 1; throw new Error("run should not start"); },
     };
     const commands = registerCommand({
@@ -764,7 +764,7 @@ test("subagents command resumes completed retained session with editor loader an
   const resumeCalls: any[] = [];
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canClear: true }, config: { resumable: true } })],
+    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true } })],
     startRun(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
       resumeCalls.push({ signal, sessionId: task.sessionId, prompt: task.prompt });
@@ -832,7 +832,7 @@ test("subagents command resumes completed retained session with editor loader an
 test("subagents command resume cancellation aborts the child and reports interruption", async () => {
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canClear: true }, config: { resumable: true } })],
+    sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true } })],
     startRun(_ctx: any, signal: AbortSignal, tasks: any[]) {
       const task = tasks[0];
       const resultsPromise = new Promise<any[]>(resolve => {
@@ -888,12 +888,13 @@ test("subagents command resume cancellation aborts the child and reports interru
   assert.match(notifications.at(-1)[0], /resume interrupted/);
 });
 
-test("subagents command inspect view shows metadata and removes retained session immediately", async () => {
-  const retainedSession = fakeAgent({
+test("subagents command inspect view removes a completed non-resumable background result", async () => {
+  const backgroundSession = fakeAgent({
+    dispatch: "background",
     retention: "persistent",
-    capabilities: { canResume: true, canClear: true },
-    config: { resumable: true, tools: ["read", "bash"] },
-    options: { prompt: "Fix retained context", model: "test/model", thinking: "low" },
+    capabilities: { canResume: false, canRemove: true, canClear: true },
+    config: { resumable: false, tools: ["read", "bash"] },
+    options: { prompt: "Fix background task", model: "test/model", thinking: "low" },
     status: { kind: "completed", startedAt: 2_000, completedAt: 5_000, response: "Implemented the retained-session fix." },
     turns: 3, toolUses: 2, compactions: 1, createdAt: 1_000,
     totalUsage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 } },
@@ -901,7 +902,7 @@ test("subagents command inspect view shows metadata and removes retained session
   const clearCalls: string[] = [];
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
-    sessions: [retainedSession],
+    sessions: [backgroundSession],
     async remove(args: any) {
       const [sessionId] = args.sessionIds;
       clearCalls.push(sessionId);
@@ -931,14 +932,15 @@ test("subagents command inspect view shows metadata and removes retained session
     },
   });
 
-  assert.match(inspectText, /Status: completed · resumable/);
+  assert.match(inspectText, /Status: completed/);
+  assert.doesNotMatch(inspectText, /Status: completed · resumable/);
   assert.match(inspectText, /Agent: helper \(project\)/);
   assert.match(inspectText, /Model: test\/model · thinking:low/);
   assert.match(inspectText, /Tools: read, bash/);
   assert.match(inspectText, /Progress: 3 turns · 2 tool uses · 1 compaction/);
   assert.match(inspectText, /Usage: 3 tokens · \$0\.0100/);
   assert.match(inspectText, /Output: Implemented the retained-session fix/);
-  assert.match(inspectText, /Actions: inspect, resume, remove/);
+  assert.match(inspectText, /Actions: inspect, remove/);
   assert.doesNotMatch(inspectText, /clear/);
   assert.deepEqual(clearCalls, ["s1"]);
   assert.deepEqual(fakeManager.sessions, []);

@@ -88,7 +88,7 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
       model: "test/model",
       thinking: "high",
       cwd: "/work/project",
-      skills: ["review"],
+      skills: ["requested-skill"],
       tools: ["read"],
       resumable: true,
     });
@@ -97,7 +97,7 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   };
   const fakeRegistry = {
     agents: new Map([
-      ["chatty", { name: "chatty", description: "Keeps context", systemPrompt: "s", source: "project", resumable: true, model: "test/model", tools: ["read"] }],
+      ["chatty", { name: "chatty", description: "Keeps context", systemPrompt: "s", source: "project", resumable: true, model: "test/model", tools: ["read"], skills: ["default-skill"] }],
     ]),
     async reload() {},
     summarizeAgent() { return "chatty (project)"; },
@@ -105,7 +105,7 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   const manager = new AgentManager(fakeRegistry as any, 1, runner);
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "chatty", prompt: "Remember this work." }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "chatty", prompt: "Remember this work.", skills: ["requested-skill"] }] }, undefined, undefined, baseCtx());
 
   const result = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
 
@@ -119,6 +119,7 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   assert.equal(retained.config.source, "project");
   assert.equal(retained.config.model, "test/model");
   assert.deepEqual(retained.config.tools, ["read"]);
+  assert.deepEqual(retained.config.skills, ["requested-skill"]);
   assert.equal(retained.status.output, "The final answer from the child.");
   assert.equal(retained.dispatch, "foreground");
   assert.equal(retained.retention, "persistent");
@@ -127,11 +128,12 @@ test("subagent tool action=list with no filter returns retained sessions tagged 
   assert.equal(modelSession.status.kind, "completed");
   assert.equal(Object.prototype.hasOwnProperty.call(modelSession.status, "outcome"), false);
   assert.equal(modelSession.status.output, "The final answer from the child.");
+  assert.deepEqual(modelSession.config.skills, ["requested-skill"]);
   assert.deepEqual(modelSession.effectiveConfig, {
     model: "test/model",
     thinking: "high",
     cwd: "/work/project",
-    skills: ["review"],
+    skills: ["requested-skill"],
     tools: ["read"],
     resumable: true,
   });
@@ -163,8 +165,49 @@ test("model-facing inventory reports background sessions as removable without le
 
   const result = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
 
-  assert.equal(result.details.sessions[0].capabilities.canClear, false, "renderer details retain the command UI capability");
+  assert.equal(result.details.sessions[0].capabilities.canRemove, true);
+  assert.equal(result.details.sessions[0].capabilities.canClear, true, "deprecated alias matches the safe removal capability");
   const modelSession = JSON.parse(result.content[0].text).sessions[0];
   assert.deepEqual(modelSession.capabilities, { canResume: false, canRemove: true });
   assert.equal(Object.prototype.hasOwnProperty.call(modelSession.capabilities, "canClear"), false);
+});
+
+test("model-facing inventory does not advertise active sessions as safely removable", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach({ messages: [], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} });
+    await gate;
+    return completedRun(agent, "done");
+  };
+  const fakeRegistry = {
+    agents: new Map([
+      ["worker", { name: "worker", description: "Works", systemPrompt: "", source: "project", resumable: true, tools: [] }],
+    ]),
+    async reload() {},
+    summarizeAgent() { return ""; },
+  };
+  const manager = new AgentManager(fakeRegistry as any, 1, runner);
+  const handle = manager.startRun(
+    baseCtx(),
+    undefined,
+    [{ kind: "spawn", agent: "worker", prompt: "go" }],
+    undefined,
+    { background: false },
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
+
+  const result = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
+  const detailsSession = result.details.sessions[0];
+  assert.equal(detailsSession.status.kind, "running");
+  assert.equal(detailsSession.capabilities.canRemove, false);
+  assert.equal(detailsSession.capabilities.canClear, false);
+  assert.deepEqual(JSON.parse(result.content[0].text).sessions[0].capabilities, {
+    canResume: false,
+    canRemove: false,
+  });
+
+  release();
+  await handle.resultsPromise;
 });

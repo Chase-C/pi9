@@ -199,6 +199,7 @@ export class Agent {
     const active = status.kind === "queued" || status.kind === "running";
     const activeAttempt = this._activeAttempt();
     const activeActivity = activeAttempt?.activity;
+    const canRemove = !active && this.catalogRetention.shouldRemainCataloged;
     const previousRuns = this._previousRunSections();
     return {
       id: this.id,
@@ -228,7 +229,8 @@ export class Agent {
       ...(this._effectiveConfig ? { effectiveConfig: this._effectiveConfig } : {}),
       capabilities: {
         canResume: this.canResume,
-        canClear: this.shouldRetainConversation && !active,
+        canRemove,
+        canClear: canRemove,
       },
     };
   }

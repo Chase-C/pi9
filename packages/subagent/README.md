@@ -72,9 +72,9 @@ Supported frontmatter:
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `name` | yes | Runtime agent name used in tool calls. |
-| `description` | yes | Short summary shown in tool results and browsers. |
+| `description` | yes | Non-blank summary shown in tool results and browsers. |
 | `model` | no | Model for this agent. Use `provider/model` or an unambiguous model id. |
-| `thinking` | no | Thinking level for the child session. |
+| `thinking` | no | Thinking level for the child session: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
 | `tools` | no | Comma-separated tool allowlist. If set, include `subagent` for agents that should be able to delegate recursively. |
 | `skills` | no | Comma-separated default skill names injected into the system prompt. Per-task `skills` replaces this list (no merge); use `none` or omit to declare none. |
 | `resumable` | no | Boolean. When `true`, conversation context is retained for follow-up prompts. This is separate from background result retention. Resumability lasts for the current Pi process only — restart or extension reload releases it. |
@@ -189,7 +189,7 @@ When active or retained sessions exist, it opens the Sessions view, where you ca
 
 - Inspect status, agent metadata, prompt preview, counters, timestamps, usage, and output/error snippets.
 - Resume a completed resumable session (or a resume attempt that failed before re-attaching). The command asks for a follow-up prompt, runs with a cancellable loader, updates the widget live, and appends a concise result message to the main conversation.
-- Remove a retained non-running session.
+- Remove any non-running session still in inventory, including completed non-resumable background results.
 - Open Settings with `s`, or switch to the Agents browser with `tab` when discovery is available.
 
 If no sessions exist, `/subagents` opens the read-only Agents browser, which lists discovered agent definitions and their metadata. It does not launch agents.
@@ -212,9 +212,9 @@ The tool takes one required `action`. Its parameter shapes live in `src/schema.t
 | `results` | Fetch results by `sessionIds` without blocking; `remove: true` sweeps terminal entries. |
 | `remove` | Remove sessions by `sessionIds` or `scope`; running ones are aborted. |
 
-Spawn tasks accept per-task overrides — `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable`. Agent discovery calls the configured default `defaultResumable` because a task can override it. Successful results and session inventory expose the resolved `effectiveConfig` (`model`, `thinking`, `cwd`, `skills`, `tools`, and `resumable`) for debugging overrides. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`). A synchronous `run` result includes `sessionId` only when it remains actionable for a follow-up; background handles and `results` entries include an ID for retrieval or removal even when conversation context is not resumable.
+Spawn tasks accept per-task overrides — `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable`. Agent discovery calls the configured default `defaultResumable` because a task can override it. Session `config` reports the resolved requested values, so task-level skills replace definition defaults and `skills: []` remains visible. Successful results and session inventory expose the runtime-observed `effectiveConfig` (`model`, `thinking`, `cwd`, `skills`, `tools`, and `resumable`) for debugging overrides. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`). A synchronous `run` result includes `sessionId` only when it remains actionable for a follow-up; background handles and `results` entries include an ID for retrieval or removal even when conversation context is not resumable.
 
-Removal scopes select: `background` for all background-dispatched sessions, `retained` for non-running resumable foreground sessions, and `non-running` for every queued or terminal session.
+Inventory advertises `canRemove` only for terminal sessions that remain cataloged; queued and running sessions report `false`. This is the safe interactive capability, not authorization: an explicit `remove` call can still remove a queued session or abort a running one. Removal scopes select: `background` for all background-dispatched sessions, `retained` for non-running resumable foreground sessions, and `non-running` for every queued or terminal session.
 
 ## Architecture
 

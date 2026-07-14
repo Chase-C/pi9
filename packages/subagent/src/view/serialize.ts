@@ -68,7 +68,7 @@ function serializeSessionForModel(session: AgentSnapshot) {
       : {}),
     capabilities: {
       canResume: capabilities.canResume,
-      canRemove: true,
+      canRemove: capabilities.canRemove,
     },
   };
 }

@@ -34,6 +34,7 @@ test("TaskSchema rejects empty strings and unsupported thinking levels", () => {
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", cwd: "" }), false);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "extreme" }), false);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "xhigh" }), true);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "max" }), true);
 });
 
 test("parseTask classifies spawn vs resume by which key is present and preserves all fields", () => {
@@ -44,7 +45,7 @@ test("parseTask classifies spawn vs resume by which key is present and preserves
     skills: ["tdd"],
     resumable: true,
     model: "m",
-    thinking: "high",
+    thinking: "max",
     cwd: "sub",
   });
   assert.deepEqual(spawn, {
@@ -55,7 +56,7 @@ test("parseTask classifies spawn vs resume by which key is present and preserves
     skills: ["tdd"],
     resumable: true,
     model: "m",
-    thinking: "high",
+    thinking: "max",
     cwd: "sub",
   });
 

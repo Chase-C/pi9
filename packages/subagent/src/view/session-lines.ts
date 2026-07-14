@@ -89,7 +89,7 @@ export function formatSubagentSessionInspect(
 
   const actions = ["inspect"];
   if (agent.capabilities.canResume) actions.push("resume");
-  if (agent.capabilities.canClear) actions.push("remove");
+  if (agent.capabilities.canRemove) actions.push("remove");
   lines.push(`Actions: ${actions.join(", ")}`);
   return lines;
 }

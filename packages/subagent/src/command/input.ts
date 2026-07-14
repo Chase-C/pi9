@@ -84,7 +84,7 @@ export function agentInspectHelp(canOpenSessions = false) {
 export function listHelp(session: AgentSnapshot | undefined, canOpenAgents = false) {
   const actions = ["↑↓ select", "enter inspect"];
   if (session?.capabilities.canResume) actions.push("r resume");
-  if (session?.capabilities.canClear) actions.push("c remove");
+  if (session?.capabilities.canRemove) actions.push("c remove");
   if (canOpenAgents) actions.push("tab agents");
   actions.push("s settings", "esc close");
   return actions.join(" · ");
@@ -93,7 +93,7 @@ export function listHelp(session: AgentSnapshot | undefined, canOpenAgents = fal
 export function inspectHelp(session: AgentSnapshot, canOpenAgents = false) {
   const actions = [];
   if (session.capabilities.canResume) actions.push("r resume");
-  if (session.capabilities.canClear) actions.push("c remove");
+  if (session.capabilities.canRemove) actions.push("c remove");
   if (canOpenAgents) actions.push("tab agents");
   actions.push("b back", "s settings", "esc close");
   return actions.join(" · ");

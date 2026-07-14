@@ -14,6 +14,8 @@ This changelog starts with version `v0.2.1`.
 - Make attempt kind, requested configuration, and catalog retention the canonical owners of resume state, task overrides, and session persistence.
 - Move task resolution out of `Agent`, model preflight failures directly, centralize tool invocation parsing, and eliminate source import cycles.
 - Report task-level skill overrides consistently in session and preflight snapshots, including explicit empty skill lists.
+- Require non-blank agent descriptions and validate definition thinking levels against `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+- Unify command- and model-facing safe removal capability as `canRemove`: terminal cataloged background and resumable sessions are removable, while active sessions are not advertised as removable. Details payloads retain deprecated `canClear` as an equivalent alias.
 - Consolidate settings updates and background-completion message projection while keeping current tool, event, and message shapes unchanged.
 - Reject non-boolean `run.background` and `results.remove` values at the runtime parsing boundary.
 

@@ -1,7 +1,9 @@
 import { StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 
-export const MODEL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thinking-level.js";
+
+export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thinking-level.js";
 
 export const TaskSchema = Type.Object({
   agent: Type.Optional(Type.String({
@@ -67,10 +69,6 @@ export type RemovalScope = typeof REMOVAL_SCOPES[number];
 
 export function isSessionStatus(value: unknown): value is SessionStatus {
   return typeof value === "string" && (SESSION_STATUSES as readonly string[]).includes(value);
-}
-
-export function isModelThinkingLevel(value: unknown): value is ModelThinkingLevel {
-  return typeof value === "string" && (MODEL_THINKING_LEVELS as readonly string[]).includes(value);
 }
 
 export type TaskRequest =
