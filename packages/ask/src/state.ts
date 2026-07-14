@@ -1,25 +1,7 @@
-type SelectionMode = "single" | "multi";
+import type { AskAnswer, ValidatedAskParams } from "./types.js";
+
 type QuestionnaireMode = "select" | "comment" | "freeform";
-
-interface QuestionnaireOption {
-  id: string;
-  label: string;
-}
-
-interface QuestionnaireConfig {
-  selection: SelectionMode;
-  options: readonly QuestionnaireOption[];
-  allowFreeform?: boolean;
-}
-
-interface AnswerSelection extends QuestionnaireOption {
-  comment?: string;
-}
-
-interface QuestionnaireAnswer {
-  selections: AnswerSelection[];
-  freeform?: string;
-}
+type QuestionnaireConfig = Pick<ValidatedAskParams, "options" | "allowMultiple" | "allowFreeform">;
 
 export interface QuestionnaireState {
   config: QuestionnaireConfig;
@@ -27,16 +9,16 @@ export interface QuestionnaireState {
   checked: Set<string>;
   comments: Map<string, string>;
   freeformDraft: string;
+  freeformChecked: boolean;
   mode: QuestionnaireMode;
   editorDraft: string;
-  editorOriginal: string;
-  editingOptionId: string | null;
-  answer: QuestionnaireAnswer | null;
+  answer: AskAnswer | null;
 }
 
 type QuestionnaireEvent =
   | { type: "move"; delta: number }
   | { type: "toggle" }
+  | { type: "toggleFreeform" }
   | { type: "openComment" }
   | { type: "openFreeform" }
   | { type: "edit"; value: string }
@@ -45,62 +27,60 @@ type QuestionnaireEvent =
   | { type: "submit" };
 
 export function createQuestionnaireState(config: QuestionnaireConfig): QuestionnaireState {
-  const ids = new Set<string>();
-  for (const option of config.options) {
-    if (!option.id) throw new Error("Option ids must be non-empty.");
-    if (ids.has(option.id)) throw new Error(`Duplicate option id: ${option.id}.`);
-    ids.add(option.id);
-  }
-  if (config.options.length === 0 && config.allowFreeform === false) {
-    throw new Error("A questionnaire needs an option or freeform input.");
-  }
   return {
-    config: { ...config, options: config.options.map((option) => ({ ...option })) },
+    config,
     highlightedRow: 0,
     checked: new Set(),
     comments: new Map(),
     freeformDraft: "",
+    freeformChecked: false,
     mode: "select",
     editorDraft: "",
-    editorOriginal: "",
-    editingOptionId: null,
     answer: null,
   };
 }
 
 export function transitionQuestionnaire(state: QuestionnaireState, event: QuestionnaireEvent): QuestionnaireState {
+  if (state.answer) return state;
   const next = clone(state);
-  if (next.answer) return next;
 
   switch (event.type) {
     case "move": {
       if (next.mode !== "select") break;
-      const rows = next.config.options.length + (next.config.allowFreeform === false ? 0 : 1);
+      const rows = next.config.options.length
+        + (next.config.allowFreeform ? 1 : 0)
+        + (next.config.allowMultiple ? 1 : 0);
       if (rows > 0) next.highlightedRow = ((next.highlightedRow + event.delta) % rows + rows) % rows;
       break;
     }
     case "toggle": {
       if (next.mode !== "select") break;
       const option = next.config.options[next.highlightedRow];
-      if (!option) return openFreeform(next);
-      if (next.config.selection === "single") {
-        next.checked = new Set([option.id]);
+      if (!option) {
+        if (next.highlightedRow === next.config.options.length) return openFreeform(next);
+        break;
+      }
+      if (!next.config.allowMultiple) {
+        next.checked = new Set([option.label]);
         next.answer = finalAnswer(next);
-      } else if (next.checked.has(option.id)) {
-        next.checked.delete(option.id);
+      } else if (next.checked.has(option.label)) {
+        next.checked.delete(option.label);
       } else {
-        next.checked.add(option.id);
+        next.checked.add(option.label);
       }
       break;
     }
+    case "toggleFreeform":
+      if (next.mode === "select" && next.config.allowMultiple && next.config.allowFreeform) {
+        next.freeformChecked = !next.freeformChecked;
+      }
+      break;
     case "openComment": {
       if (next.mode !== "select") break;
       const option = next.config.options[next.highlightedRow];
       if (!option) break;
       next.mode = "comment";
-      next.editingOptionId = option.id;
-      next.editorOriginal = next.comments.get(option.id) ?? "";
-      next.editorDraft = next.editorOriginal;
+      next.editorDraft = next.comments.get(option.label) ?? "";
       break;
     }
     case "openFreeform":
@@ -111,15 +91,17 @@ export function transitionQuestionnaire(state: QuestionnaireState, event: Questi
     case "saveEditor": {
       if (next.mode === "select") break;
       const saved = next.editorDraft.trim();
-      if (next.mode === "comment" && next.editingOptionId) {
-        if (saved) next.comments.set(next.editingOptionId, saved);
-        else next.comments.delete(next.editingOptionId);
+      if (next.mode === "comment") {
+        const option = next.config.options[next.highlightedRow];
+        if (option && saved) next.comments.set(option.label, saved);
+        else if (option) next.comments.delete(option.label);
       } else if (next.mode === "freeform") {
         next.freeformDraft = saved;
+        if (next.config.allowMultiple) next.freeformChecked = saved.length > 0;
       }
       leaveEditor(next);
       const freeformOnly = next.config.options.length === 0;
-      if (state.mode === "freeform" && (freeformOnly || (next.config.selection === "single" && saved))) {
+      if (state.mode === "freeform" && !next.config.allowMultiple && (freeformOnly || saved)) {
         next.answer = finalAnswer(next);
       }
       break;
@@ -134,14 +116,14 @@ export function transitionQuestionnaire(state: QuestionnaireState, event: Questi
   return next;
 }
 
-function finalAnswer(state: QuestionnaireState): QuestionnaireAnswer {
+function finalAnswer(state: QuestionnaireState): AskAnswer {
   const selections = state.config.options
-    .filter((option) => state.checked.has(option.id))
-    .map((option): AnswerSelection => {
-      const comment = state.comments.get(option.id);
+    .filter((option) => state.checked.has(option.label))
+    .map((option) => {
+      const comment = state.comments.get(option.label);
       return comment ? { ...option, comment } : { ...option };
     });
-  const freeform = state.freeformDraft.trim();
+  const freeform = state.config.allowMultiple && !state.freeformChecked ? "" : state.freeformDraft.trim();
   return {
     selections,
     ...(freeform ? { freeform } : {}),
@@ -149,10 +131,8 @@ function finalAnswer(state: QuestionnaireState): QuestionnaireAnswer {
 }
 
 function openFreeform(state: QuestionnaireState): QuestionnaireState {
-  if (state.mode !== "select" || state.config.allowFreeform === false) return state;
+  if (state.mode !== "select" || !state.config.allowFreeform) return state;
   state.mode = "freeform";
-  state.editingOptionId = null;
-  state.editorOriginal = state.freeformDraft;
   state.editorDraft = state.freeformDraft;
   return state;
 }
@@ -160,19 +140,12 @@ function openFreeform(state: QuestionnaireState): QuestionnaireState {
 function leaveEditor(state: QuestionnaireState): void {
   state.mode = "select";
   state.editorDraft = "";
-  state.editorOriginal = "";
-  state.editingOptionId = null;
 }
 
 function clone(state: QuestionnaireState): QuestionnaireState {
   return {
     ...state,
-    config: { ...state.config, options: state.config.options.map((option) => ({ ...option })) },
     checked: new Set(state.checked),
     comments: new Map(state.comments),
-    answer: state.answer ? {
-      ...state.answer,
-      selections: state.answer.selections.map((selection) => ({ ...selection })),
-    } : null,
   };
 }

@@ -5,8 +5,8 @@ import {
 } from "../src/state.js";
 
 const config = {
-  selection: "multi" as const,
-  options: [{ id: "ts", label: "TypeScript" }, { id: "rs", label: "Rust" }],
+  options: [{ label: "TypeScript" }, { label: "Rust" }],
+  allowMultiple: true,
   allowFreeform: true,
 };
 
@@ -16,15 +16,15 @@ describe("questionnaire state", () => {
     expect(state.highlightedRow).toBe(0);
     state = transitionQuestionnaire(state, { type: "move", delta: 1 });
     state = transitionQuestionnaire(state, { type: "toggle" });
-    expect([...state.checked]).toEqual(["rs"]);
+    expect([...state.checked]).toEqual(["Rust"]);
     expect(state.mode).toBe("select");
   });
 
   it("single-select finalizes the highlighted option", () => {
-    let state = createQuestionnaireState({ ...config, selection: "single" });
+    let state = createQuestionnaireState({ ...config, allowMultiple: false });
     state = transitionQuestionnaire(state, { type: "move", delta: 1 });
     state = transitionQuestionnaire(state, { type: "toggle" });
-    expect(state.answer).toEqual({ selections: [{ id: "rs", label: "Rust" }] });
+    expect(state.answer).toEqual({ selections: [{ label: "Rust" }] });
   });
 
   it("opens a comment without selecting and saves trimmed comments", () => {
@@ -34,7 +34,7 @@ describe("questionnaire state", () => {
     expect(state.checked.size).toBe(0);
     state = transitionQuestionnaire(state, { type: "edit", value: "  safer types  " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
-    expect(state.comments.get("ts")).toBe("safer types");
+    expect(state.comments.get("TypeScript")).toBe("safer types");
     expect(state.mode).toBe("select");
   });
 
@@ -46,7 +46,7 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "openComment" });
     state = transitionQuestionnaire(state, { type: "edit", value: "   " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
-    expect(state.comments.has("ts")).toBe(false);
+    expect(state.comments.has("TypeScript")).toBe(false);
   });
 
   it("Escape rolls editor changes back to the previously saved value", () => {
@@ -57,13 +57,13 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "openComment" });
     state = transitionQuestionnaire(state, { type: "edit", value: "discard me" });
     state = transitionQuestionnaire(state, { type: "cancelEditor" });
-    expect(state.comments.get("ts")).toBe("saved");
+    expect(state.comments.get("TypeScript")).toBe("saved");
     expect(state.editorDraft).toBe("");
     expect(state.mode).toBe("select");
   });
 
   it("single-select freeform saves and finalizes a trimmed response", () => {
-    let state = createQuestionnaireState({ ...config, selection: "single" });
+    let state = createQuestionnaireState({ ...config, allowMultiple: false });
     state = transitionQuestionnaire(state, { type: "openFreeform" });
     state = transitionQuestionnaire(state, { type: "edit", value: "  Zig  " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
@@ -72,7 +72,7 @@ describe("questionnaire state", () => {
   });
 
   it("keeps empty freeform open for single-select questions with options", () => {
-    let state = createQuestionnaireState({ ...config, selection: "single" });
+    let state = createQuestionnaireState({ ...config, allowMultiple: false });
     state = transitionQuestionnaire(state, { type: "openFreeform" });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
     expect(state.answer).toBeNull();
@@ -90,26 +90,34 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "saveEditor" });
     expect(state.answer).toBeNull();
     expect(state.freeformDraft).toBe("and Zig");
+    expect(state.freeformChecked).toBe(true);
     state = transitionQuestionnaire(state, { type: "submit" });
     expect(state.answer).toEqual({
-      selections: [{ id: "ts", label: "TypeScript", comment: "preferred" }],
+      selections: [{ label: "TypeScript", comment: "preferred" }],
       freeform: "and Zig",
     });
   });
 
-  it("submits an empty freeform-only answer", () => {
-    let state = createQuestionnaireState({ selection: "multi", options: [], allowFreeform: true });
+  it("submits an empty multi-select freeform-only answer from the submit row", () => {
+    let state = createQuestionnaireState({ options: [], allowMultiple: true, allowFreeform: true });
     state = transitionQuestionnaire(state, { type: "openFreeform" });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
+    expect(state.answer).toBeNull();
+    state = transitionQuestionnaire(state, { type: "move", delta: 1 });
+    state = transitionQuestionnaire(state, { type: "submit" });
     expect(state.answer).toEqual({ selections: [] });
   });
 
-  it("submits a multi-select freeform-only answer after saving it", () => {
-    let state = createQuestionnaireState({ selection: "multi", options: [], allowFreeform: true });
+  it("selects saved multi-select freeform text and omits it when unchecked", () => {
+    let state = createQuestionnaireState({ options: [], allowMultiple: true, allowFreeform: true });
     state = transitionQuestionnaire(state, { type: "openFreeform" });
     state = transitionQuestionnaire(state, { type: "edit", value: "  and Zig  " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
-    expect(state.answer).toEqual({ selections: [], freeform: "and Zig" });
+    expect(state.answer).toBeNull();
+    expect(state.freeformChecked).toBe(true);
+    state = transitionQuestionnaire(state, { type: "toggleFreeform" });
+    state = transitionQuestionnaire(state, { type: "submit" });
+    expect(state.answer).toEqual({ selections: [] });
   });
 
   it("final answers omit comments belonging to unselected options", () => {
@@ -120,6 +128,6 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "move", delta: 1 });
     state = transitionQuestionnaire(state, { type: "toggle" });
     state = transitionQuestionnaire(state, { type: "submit" });
-    expect(state.answer).toEqual({ selections: [{ id: "rs", label: "Rust" }] });
+    expect(state.answer).toEqual({ selections: [{ label: "Rust" }] });
   });
 });

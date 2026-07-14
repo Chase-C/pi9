@@ -2,6 +2,7 @@ import type { ExtensionAPI, SessionEntry, Theme } from "@earendil-works/pi-codin
 import { Text } from "@earendil-works/pi-tui";
 
 import { rewriteAskContext } from "./context.js";
+import { CHECKED_BOX, CHECKED_CIRCLE, EMPTY_BOX, EMPTY_CIRCLE } from "./glyphs.js";
 import { launchQuestionnaire } from "./questionnaire.js";
 import { renderAskReanswerMessage } from "./replay-renderer.js";
 import { ASK_REPLAY_CUSTOM_TYPE, buildAskReplayMessage, parseAskReplayDetails, resolveAskReplayTarget } from "./replay.js";
@@ -13,20 +14,25 @@ import { validateAskParams } from "./validation.js";
 
 const TREE_EDITOR_GUARD = "\u200B";
 
-const EMPTY_CIRCLE = "󰄰";
-const CHECKED_CIRCLE = "󰄴";
-
 type AskRendererState = {
   callComponent?: Text;
-  settled?: boolean;
-  answered?: boolean;
+  status?: "answered" | "settled";
   invalidate?: () => void;
 };
 
+type AskReplayState =
+  | { status: "idle" }
+  | { status: "prompting" }
+  | {
+      status: "dispatched";
+      details: ReturnType<typeof buildAskReplayMessage>["details"];
+      clearEditor: boolean;
+    };
+
 function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): string {
-  const questionColor = state.answered === true ? "text" : "dim";
+  const questionColor = state.status === "answered" ? "text" : "dim";
   const title = `${theme.fg("toolTitle", "ask")} ${theme.fg(questionColor, args.question)}`;
-  if (state.settled === true) return title;
+  if (state.status) return title;
 
   const optionCount = args.options.length;
   const mode = args.allowMultiple === true ? "multi · " : "";
@@ -35,24 +41,24 @@ function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): 
 
 function renderAnsweredOptions(args: AskParams, answer: AskAnswer, theme: Theme): string {
   const selections = new Map(answer.selections.map(selection => [selection.label, selection]));
+  const checkedGlyph = args.allowMultiple === true ? CHECKED_BOX : CHECKED_CIRCLE;
+  const emptyGlyph = args.allowMultiple === true ? EMPTY_BOX : EMPTY_CIRCLE;
   const lines = args.options.map(option => {
     const label = option.label.trim();
     const selection = selections.get(label);
     const comment = selection?.comment ? ` (${selection.comment})` : "";
     const text = `${label}${comment}`;
     return selection
-      ? `${theme.fg("success", CHECKED_CIRCLE)} ${theme.fg("text", text)}`
-      : theme.fg("dim", `${EMPTY_CIRCLE} ${text}`);
+      ? `${theme.fg("success", checkedGlyph)} ${theme.fg("text", text)}`
+      : theme.fg("dim", `${emptyGlyph} ${text}`);
   });
-  if (answer.freeform) lines.push(`${theme.fg("success", CHECKED_CIRCLE)} ${theme.fg("text", answer.freeform)}`);
+  if (answer.freeform) lines.push(`${theme.fg("success", checkedGlyph)} ${theme.fg("text", answer.freeform)}`);
   return lines.map((line, index) => `${index === 0 ? `${theme.fg("dim", "╰")} ` : "  "}${line}`).join("\n");
 }
 
 export default function askExtension(pi: ExtensionAPI) {
-  let replayInProgress = false;
+  let replayState: AskReplayState = { status: "idle" };
   let replayTreeSelection = false;
-  let clearReplayEditorAfterSettlement = false;
-  let pendingReplay: ReturnType<typeof buildAskReplayMessage>["details"] | undefined;
   const revisedAnswers = new Map<string, AskAnswer>();
   const rendererStates = new Map<string, AskRendererState>();
 
@@ -73,20 +79,17 @@ export default function askExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => restoreRevisions(ctx.sessionManager.getBranch()));
   pi.on("context", (event) => ({ messages: rewriteAskContext(event.messages) }));
   pi.on("agent_settled", (_event, ctx) => {
-    if (clearReplayEditorAfterSettlement) {
-      clearReplayEditorAfterSettlement = false;
+    if (replayState.status !== "dispatched") return;
+    if (replayState.clearEditor) {
+      replayState = { ...replayState, clearEditor: false };
       setTimeout(() => ctx.ui.setEditorText(""), 0);
     }
-    if (!pendingReplay) return;
-    pi.events.emit("ask:reanswered", pendingReplay);
-    pendingReplay = undefined;
-    replayInProgress = false;
+    pi.events.emit("ask:reanswered", replayState.details);
+    replayState = { status: "idle" };
   });
   pi.on("session_shutdown", () => {
-    pendingReplay = undefined;
-    replayInProgress = false;
+    replayState = { status: "idle" };
     replayTreeSelection = false;
-    clearReplayEditorAfterSettlement = false;
     revisedAnswers.clear();
     rendererStates.clear();
   });
@@ -98,7 +101,7 @@ export default function askExtension(pi: ExtensionAPI) {
   pi.on("session_tree", async (event, ctx) => {
     const suppressEditorRestore = replayTreeSelection;
     replayTreeSelection = false;
-    if (ctx.mode !== "tui" || replayInProgress) return;
+    if (ctx.mode !== "tui" || replayState.status !== "idle") return;
 
     const entries = ctx.sessionManager.getBranch();
     restoreRevisions(entries);
@@ -124,21 +127,18 @@ export default function askExtension(pi: ExtensionAPI) {
     const guardEditor = suppressEditorRestore && !ctx.ui.getEditorText().trim();
     if (guardEditor) ctx.ui.setEditorText(TREE_EDITOR_GUARD);
 
-    replayInProgress = true;
-    let dispatched = false;
+    replayState = { status: "prompting" };
     try {
       const answer = await launchQuestionnaire(ctx, resolution.params);
       if (!answer) return;
       const message = buildAskReplayMessage(call.id, resolution.params, answer);
       pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
       applyRevision(message.details.toolCallId, message.details.answer);
-      pendingReplay = message.details;
-      dispatched = true;
+      replayState = { status: "dispatched", details: message.details, clearEditor: guardEditor };
     } finally {
-      if (!dispatched) replayInProgress = false;
-      if (guardEditor) {
-        if (dispatched) clearReplayEditorAfterSettlement = true;
-        else setTimeout(() => ctx.ui.setEditorText(""), 0);
+      if (replayState.status !== "dispatched") {
+        replayState = { status: "idle" };
+        if (guardEditor) setTimeout(() => ctx.ui.setEditorText(""), 0);
       }
     }
   });
@@ -185,8 +185,7 @@ export default function askExtension(pi: ExtensionAPI) {
       rendererStates.set(context.toolCallId, context.state);
       const answer = revisedAnswers.get(context.toolCallId)
         ?? (result.details?.status === "answered" ? result.details.answer : undefined);
-      context.state.settled = true;
-      context.state.answered = answer !== undefined;
+      context.state.status = answer === undefined ? "settled" : "answered";
       context.state.callComponent?.setText(renderAskCall(context.args, theme, context.state));
       if (answer) return new Text(renderAnsweredOptions(context.args, answer, theme), 0, 0);
       const text = result.content.find((item) => item.type === "text")?.text ?? "Ask completed.";

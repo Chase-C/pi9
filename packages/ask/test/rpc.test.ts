@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { askWithRpc, type AskDialogUI } from "../src/rpc.js";
+import { askWithRpc as askWithValidatedRpc, type AskDialogUI } from "../src/rpc.js";
+import type { AskParams } from "../src/types.js";
+import { validateAskParams } from "../src/validation.js";
 
 function ui(select: (title: string, options: string[]) => Promise<string | undefined>, input: (title: string) => Promise<string | undefined>): AskDialogUI {
   return { select, input };
+}
+
+function askWithRpc(ui: AskDialogUI, params: AskParams, signal?: AbortSignal) {
+  return askWithValidatedRpc(ui, validateAskParams(params), signal);
 }
 
 describe("ask RPC fallback", () => {
@@ -136,25 +142,19 @@ describe("ask RPC fallback", () => {
     expect(result).toBeNull();
   });
 
-  it("distinguishes duplicate rendered options and a label matching the freeform text", async () => {
-    const select = vi.fn().mockResolvedValue("2. Same — description");
+  it("distinguishes an option label matching the freeform text", async () => {
+    const select = vi.fn().mockResolvedValue("1. Type a response…");
     const input = vi.fn().mockResolvedValue("");
     const result = await askWithRpc(ui(select, input), {
       question: "Choose",
-      options: [
-        { label: "Same", description: "description" },
-        { label: "Same", description: "description" },
-        { label: "Type a response…" },
-      ],
+      options: [{ label: "Type a response…" }],
     });
 
     expect(select.mock.calls[0]?.[1]).toEqual([
-      "1. Same — description",
-      "2. Same — description",
-      "3. Type a response…",
-      "4. Type a response…",
+      "1. Type a response…",
+      "2. Type a response…",
     ]);
-    expect(result).toEqual({ selections: [{ label: "Same", description: "description" }] });
+    expect(result).toEqual({ selections: [{ label: "Type a response…" }] });
   });
 
   it("passes the abort signal to every dialog and stops a multi-step flow after abort", async () => {
@@ -181,14 +181,6 @@ describe("ask RPC fallback", () => {
     const dialog = ui(vi.fn(), vi.fn());
     await expect(askWithRpc(dialog, { question: "Choose", options: [] }, controller.signal)).resolves.toBeNull();
     expect(dialog.select).not.toHaveBeenCalled();
-  });
-
-  it("rejects a prompt with neither options nor freeform", async () => {
-    await expect(askWithRpc(ui(vi.fn(), vi.fn()), {
-      question: "Impossible?",
-      options: [],
-      allowFreeform: false,
-    })).rejects.toThrow("at least one option");
   });
 });
 

@@ -1,20 +1,11 @@
-export type AskOption = {
-  label: string;
-  description?: string;
-};
+import type { Static } from "typebox";
 
-export type AskParams = {
-  question: string;
-  context?: string;
-  options: AskOption[];
-  allowMultiple?: boolean;
-  allowFreeform?: boolean;
-};
+import type { AskOptionSchema, AskParamsSchema } from "./schema.js";
 
-export type ValidatedAskParams = {
-  question: string;
-  context?: string;
-  options: AskOption[];
+export type AskOption = Static<typeof AskOptionSchema>;
+export type AskParams = Static<typeof AskParamsSchema>;
+
+export type ValidatedAskParams = Omit<AskParams, "allowMultiple" | "allowFreeform"> & {
   allowMultiple: boolean;
   allowFreeform: boolean;
 };

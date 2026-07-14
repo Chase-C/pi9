@@ -9,8 +9,6 @@ import type { AskReplayDetails } from "./replay.js";
 
 type RecordValue = Record<string, unknown>;
 type AskCall<T> = {
-  id: string;
-  block: RecordValue;
   args: RecordValue;
   message: T;
   standalone: boolean;
@@ -36,10 +34,9 @@ type AskSummaryPayload = {
  * projection must not leave a tool call without its result.
  */
 export function rewriteAskContext<T>(messages: readonly T[]): T[] {
-  const copied = structuredClone(messages) as T[];
-  const calls = collectCalls(copied);
-  const nativeResults = collectNativeResults(copied);
-  const replayRecords = collectReplayRecords(copied);
+  const calls = collectCalls(messages);
+  const nativeResults = collectNativeResults(messages);
+  const replayRecords = collectReplayRecords(messages);
 
   const summaries = new Map<T, T>();
   const removals = new Set<T>();
@@ -97,7 +94,7 @@ export function rewriteAskContext<T>(messages: readonly T[]): T[] {
   }
 
   const rewritten: T[] = [];
-  for (const message of copied) {
+  for (const message of messages) {
     const summary = summaries.get(message);
     if (summary) {
       rewritten.push(summary);
@@ -117,7 +114,7 @@ function collectCalls<T>(messages: readonly T[]): Map<string, AskCall<T> | undef
       if (block.name !== "ask" || typeof block.id !== "string") continue;
       const args = validateStoredArgs(block.arguments);
       const call = args
-        ? { id: block.id, block, args, message, standalone: toolCalls.length === 1 }
+        ? { args, message, standalone: toolCalls.length === 1 }
         : undefined;
       // Keep an invalid entry as ambiguous too. A later valid call with the
       // same ID must not make an otherwise malformed exchange transformable.

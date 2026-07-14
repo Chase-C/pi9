@@ -36,8 +36,8 @@ Input is trimmed and validated. In TUI mode, selecting the visible row for a sta
 The TUI temporarily replaces the editor with a custom questionnaire:
 
 - **↑/↓** or **j/k**: move between options
-- **Space**: toggle an option in multiple-selection mode
-- **Enter**: choose a single option, submit multiple selections, or edit freeform
+- **Space**: toggle an option or freeform response in multiple-selection mode; activate Submit when highlighted
+- **Enter**: choose a single option, toggle a multiple-selection option, edit freeform, or activate Submit when highlighted
 - **c**: add or edit a comment for the highlighted option
 - **Escape**: discard the current editor draft; from the option list, cancel
 - **Ctrl+C**: cancel from an editor

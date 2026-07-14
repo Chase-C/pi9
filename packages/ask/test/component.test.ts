@@ -25,9 +25,11 @@ function make(options: Partial<ConstructorParameters<typeof AskComponent>[0]> = 
     question: "Which target should receive the release?",
     context: "Both targets currently pass the test suite.",
     options: [
-      { id: "staging", label: "Staging", description: "Validate with internal users first" },
-      { id: "production", label: "Production", description: "Release immediately" },
+      { label: "Staging", description: "Validate with internal users first" },
+      { label: "Production", description: "Release immediately" },
     ],
+    allowMultiple: false,
+    allowFreeform: true,
     onSubmit,
     onCancel,
     ...options,
@@ -59,11 +61,20 @@ describe("AskComponent", () => {
     expect(component.answer?.selections[0]?.label).toBe("Staging");
   });
 
-  it("supports multi-select toggles and Enter submit", () => {
+  it("toggles multi-select options with Space and Enter, then submits from the button", () => {
     const { component, onSubmit } = make({ allowMultiple: true });
+    expect(component.render(80).join("\n")).toContain("󰄱 Staging");
+
     component.handleInput(" ");
+    expect(component.render(80).join("\n")).toContain("󰄵 Staging");
+
     component.handleInput("\x1b[B");
-    component.handleInput(" ");
+    component.handleInput("\r");
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    component.handleInput("\x1b[B");
+    component.handleInput("\x1b[B");
+    expect(component.render(80).join("\n")).toContain("› [ Submit ]");
     component.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledWith({
@@ -83,7 +94,7 @@ describe("AskComponent", () => {
     component.handleInput("Safer rollout");
     component.handleInput("\r");
     expect(component.state.mode).toBe("select");
-    expect(component.state.comments.get("staging")).toBe("Safer rollout");
+    expect(component.state.comments.get("Staging")).toBe("Safer rollout");
     expect(component.render(80).join("\n")).toContain("✎ Safer rollout");
     expect(component.state.checked.size).toBe(0);
   });
@@ -118,10 +129,27 @@ describe("AskComponent", () => {
     expect(onSubmit).toHaveBeenCalledWith({ selections: [], freeform: "Use the fallback" });
   });
 
-  it("submits a multi-select freeform-only answer after saving it", () => {
+  it("checks, toggles, and submits a multi-select freeform response", () => {
     const { component, onSubmit } = make({ options: [], allowMultiple: true });
+    expect(component.render(80).join("\n")).toContain("󰄱 Type a response");
+
     component.handleInput("\r");
+    const editingLines = component.render(80);
+    const freeformRow = editingLines.findIndex(line => line.includes("Type a response"));
+    const inputRow = editingLines.findIndex(line => line.includes("↳"));
+    const submitRow = editingLines.findIndex(line => line.includes("[ Submit ]"));
+    expect(inputRow).toBe(freeformRow + 1);
+    expect(submitRow).toBeGreaterThan(inputRow);
+
     component.handleInput("Use the fallback");
+    component.handleInput("\r");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(component.render(80).join("\n")).toContain("󰄵 Type a response… — Use the fallback");
+
+    component.handleInput(" ");
+    expect(component.render(80).join("\n")).toContain("󰄱 Type a response… — Use the fallback");
+    component.handleInput(" ");
+    component.handleInput("\x1b[B");
     component.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledWith({ selections: [], freeform: "Use the fallback" });

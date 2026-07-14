@@ -97,8 +97,17 @@ describe("ask extension integration", () => {
     }, {}, styledTheme, { state: {}, args, lastComponent: undefined });
     expect(withoutFreeform.render(80)).toHaveLength(2);
 
-    const multiArgs = { question: "Choose several", options: [{ label: "Only" }], allowMultiple: true };
-    expect(tool.renderCall(multiArgs, styledTheme, { state: {}, args: multiArgs, lastComponent: undefined }).render(80)[1].trimEnd()).toBe("[dim]╰ multi · options:1");
+    const multiArgs = { question: "Choose several", options: [{ label: "Alpha" }, { label: "Beta" }], allowMultiple: true };
+    const multiContext = { state: {}, args: multiArgs, lastComponent: undefined };
+    expect(tool.renderCall(multiArgs, styledTheme, multiContext).render(80)[1].trimEnd()).toBe("[dim]╰ multi · options:2");
+    const multiAnswered = tool.renderResult({
+      content: [{ type: "text", text: "Selected: Beta" }],
+      details: { status: "answered", question: "Choose several", answer: { selections: [{ label: "Beta" }] } },
+    }, {}, styledTheme, multiContext);
+    expect(multiAnswered.render(80).map((line: string) => line.trimEnd())).toEqual([
+      "[dim]╰ [dim]󰄱 Alpha",
+      "  [success]󰄵 [text]Beta",
+    ]);
   });
 
   it("normalizes without mutating the questionnaire and uses custom TUI", async () => {

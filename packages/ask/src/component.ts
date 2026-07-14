@@ -18,45 +18,27 @@ import {
   transitionQuestionnaire,
   type QuestionnaireState,
 } from "./state.js";
-import type { AskAnswer, AskOption } from "./types.js";
+import { CHECKED_BOX, EMPTY_BOX } from "./glyphs.js";
+import type { AskAnswer, ValidatedAskParams } from "./types.js";
 
-type NormalizedOption = AskOption & { id: string };
-
-interface AskComponentOptions {
+type AskComponentOptions = ValidatedAskParams & {
   tui: TUI;
   theme: Theme;
-  question: string;
-  context?: string;
-  options: readonly (AskOption & { id?: string })[];
-  allowMultiple?: boolean;
-  allowFreeform?: boolean;
   onSubmit?: (answer: AskAnswer) => void;
   onCancel?: () => void;
-}
+};
 
 export class AskComponent implements Component, Focusable {
-  private readonly sourceOptions: NormalizedOption[];
-  private readonly optionsById = new Map<string, NormalizedOption>();
   private readonly editor: Editor;
   private questionnaireState: QuestionnaireState;
-  private completedAnswer: AskAnswer | null = null;
   private cancelled = false;
   private _focused = false;
 
   constructor(private readonly config: AskComponentOptions) {
-    if (!config.question.trim()) throw new Error("An ask question must be non-empty.");
-
-    this.sourceOptions = config.options.map((option, index) => {
-      const id = option.id || `option-${index + 1}`;
-      const normalized = { ...option, id };
-      this.optionsById.set(id, normalized);
-      return normalized;
-    });
-
     this.questionnaireState = createQuestionnaireState({
-      selection: config.allowMultiple ? "multi" : "single",
-      options: this.sourceOptions.map(({ id, label }) => ({ id, label })),
-      allowFreeform: config.allowFreeform !== false,
+      options: config.options,
+      allowMultiple: config.allowMultiple,
+      allowFreeform: config.allowFreeform,
     });
 
     this.editor = new Editor(config.tui, editorTheme(config.theme));
@@ -71,7 +53,6 @@ export class AskComponent implements Component, Focusable {
         { type: "saveEditor" },
       );
       this.applyState(next);
-      if (next.mode === "select") this.editor.setText("");
       this.finishIfAnswered(next);
       this.requestRender();
     };
@@ -84,7 +65,7 @@ export class AskComponent implements Component, Focusable {
 
   /** The answer after a successful submit, or null while the prompt is open. */
   get answer(): AskAnswer | null {
-    return this.completedAnswer;
+    return this.questionnaireState.answer;
   }
 
   /** Whether the component was cancelled. */
@@ -106,79 +87,65 @@ export class AskComponent implements Component, Focusable {
   }
 
   handleInput(data: string): void {
-    if (this.completedAnswer || this.cancelled) return;
+    if (this.questionnaireState.answer || this.cancelled) return;
 
     if (this.questionnaireState.mode !== "select") {
       // Escape is intentionally an editor operation: it discards the draft,
       // while Ctrl+C remains the conventional way to cancel the whole ask.
       if (matchesKey(data, Key.escape)) {
-        const original = this.questionnaireState.editorOriginal;
         this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "cancelEditor" }));
-        this.editor.setText(original);
         this.requestRender();
-        return;
       }
-      if (matchesKey(data, Key.ctrl("c"))) {
+      else if (matchesKey(data, Key.ctrl("c"))) {
         this.cancel();
-        return;
       }
-      this.editor.handleInput(data);
-      this.requestRender();
-      return;
+      else {
+        this.editor.handleInput(data);
+        this.requestRender();
+      }
     }
-
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+    else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
       this.cancel();
-      return;
     }
-
-    if (matchesKey(data, Key.up) || isLiteral(data, "k")) {
+    else if (matchesKey(data, Key.up) || isLiteral(data, "k")) {
       this.move(-1);
-      return;
     }
-    if (matchesKey(data, Key.down) || isLiteral(data, "j")) {
+    else if (matchesKey(data, Key.down) || isLiteral(data, "j")) {
       this.move(1);
-      return;
     }
-    if (matchesKey(data, Key.pageUp)) {
+    else if (matchesKey(data, Key.pageUp)) {
       this.move(-5);
-      return;
     }
-    if (matchesKey(data, Key.pageDown)) {
+    else if (matchesKey(data, Key.pageDown)) {
       this.move(5);
-      return;
     }
-    if (matchesKey(data, Key.home)) {
+    else if (matchesKey(data, Key.home)) {
       this.move(-this.questionnaireState.highlightedRow);
-      return;
     }
-    if (matchesKey(data, Key.end)) {
+    else if (matchesKey(data, Key.end)) {
       const rowCount = this.rowCount();
       this.move(rowCount - 1 - this.questionnaireState.highlightedRow);
-      return;
     }
-
-    if (isLiteral(data, "c")) {
+    else if (isLiteral(data, "c")) {
       this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "openComment" }));
-      return;
     }
-
-    if (matchesKey(data, Key.space)) {
-      if (this.isFreeformRow()) {
-        this.openFreeform();
+    else if (matchesKey(data, Key.space)) {
+      if (this.isSubmitRow()) {
+        this.submit();
+      } else if (this.isFreeformRow() && this.questionnaireState.config.allowMultiple) {
+        this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "toggleFreeform" }));
+        this.requestRender();
       } else {
         this.toggle();
       }
-      return;
     }
-
-    if (matchesKey(data, Key.enter)) {
-      if (this.isFreeformRow()) {
-        this.openFreeform();
-      } else if (this.questionnaireState.config.selection === "single") {
-        this.toggle();
-      } else {
+    else if (matchesKey(data, Key.enter)) {
+      if (this.isSubmitRow()) {
         this.submit();
+      } else if (this.isFreeformRow()) {
+        this.openFreeform();
+      } else {
+        this.toggle();
       }
     }
   }
@@ -194,7 +161,7 @@ export class AskComponent implements Component, Focusable {
 
     add(this.config.theme.fg("border", "─".repeat(renderWidth)));
 
-    if (this.config.context?.trim()) {
+    if (this.config.context) {
       addPrefixed(" ", this.config.context, "muted");
       add("");
     }
@@ -203,6 +170,7 @@ export class AskComponent implements Component, Focusable {
 
     if (this.questionnaireState.mode === "select") {
       this.renderOptions(lines, renderWidth);
+      this.renderSubmit(lines, renderWidth);
       add("");
       addPrefixed(" ", this.config.theme.fg("dim", this.helpText()), "dim");
     } else {
@@ -218,6 +186,7 @@ export class AskComponent implements Component, Focusable {
         add(`${index === 0 ? inputPrefix : continuationPrefix}${line}`);
       }
       addPrefixed(continuationPrefix, this.config.theme.fg("dim", this.editorHelpText()), "dim");
+      this.renderSubmit(lines, renderWidth);
     }
 
     add(this.config.theme.fg("border", "─".repeat(renderWidth)));
@@ -226,7 +195,7 @@ export class AskComponent implements Component, Focusable {
 
   /** Submit the current multi-select answer programmatically. */
   submit(): void {
-    if (this.completedAnswer || this.cancelled) return;
+    if (this.questionnaireState.answer || this.cancelled) return;
     const next = transitionQuestionnaire(this.questionnaireState, { type: "submit" });
     this.applyState(next);
     this.finishIfAnswered(next);
@@ -235,7 +204,7 @@ export class AskComponent implements Component, Focusable {
 
   /** Cancel the ask, invoking onCancel at most once. */
   cancel(): void {
-    if (this.completedAnswer || this.cancelled) return;
+    if (this.questionnaireState.answer || this.cancelled) return;
     this.cancelled = true;
     this.editor.focused = false;
     this.config.onCancel?.();
@@ -247,15 +216,16 @@ export class AskComponent implements Component, Focusable {
       addWrappedWithPrefix(lines, prefix, styled, width);
     };
 
-    for (let index = 0; index < this.sourceOptions.length; index += 1) {
-      const source = this.sourceOptions[index];
+    const options = this.questionnaireState.config.options;
+    for (let index = 0; index < options.length; index += 1) {
+      const source = options[index];
       const selected = this.questionnaireState.highlightedRow === index;
-      const checked = this.questionnaireState.checked.has(source.id);
+      const checked = this.questionnaireState.checked.has(source.label);
       const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
-      const check = this.questionnaireState.config.selection === "multi"
-        ? (checked ? this.config.theme.fg("success", "☑ ") : this.config.theme.fg("muted", "☐ "))
+      const check = this.questionnaireState.config.allowMultiple
+        ? `${this.config.theme.fg(checked ? "success" : "muted", checked ? CHECKED_BOX : EMPTY_BOX)} `
         : "";
-      const comment = this.questionnaireState.comments.has(source.id)
+      const comment = this.questionnaireState.comments.has(source.label)
         ? this.config.theme.fg("warning", " ✎")
         : "";
       const label = `${marker}${check}${source.label}${comment}`;
@@ -265,24 +235,41 @@ export class AskComponent implements Component, Focusable {
         addPrefixed("     ", source.description, "muted");
       }
       if (selected) {
-        const commentText = this.questionnaireState.comments.get(source.id);
+        const commentText = this.questionnaireState.comments.get(source.label);
         if (commentText) addPrefixed("     ", `✎ ${commentText}`, "dim");
       }
     }
 
-    if (this.questionnaireState.config.allowFreeform !== false) {
-      const row = this.sourceOptions.length;
+    if (this.questionnaireState.config.allowFreeform) {
+      const row = options.length;
       const selected = this.questionnaireState.highlightedRow === row;
       const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
+      const checked = this.questionnaireState.freeformChecked;
+      const check = this.questionnaireState.config.allowMultiple
+        ? `${this.config.theme.fg(checked ? "success" : "muted", checked ? CHECKED_BOX : EMPTY_BOX)} `
+        : "";
       const draft = this.questionnaireState.freeformDraft;
       const suffix = draft ? ` — ${draft}` : "";
-      addPrefixed("", `${marker}${this.config.theme.fg(selected ? "accent" : "text", `Type a response…${suffix}`)}`);
+      addPrefixed("", `${marker}${check}${this.config.theme.fg(selected ? "accent" : "text", `Type a response…${suffix}`)}`);
     }
   }
 
+  private renderSubmit(lines: string[], width: number): void {
+    if (!this.questionnaireState.config.allowMultiple) return;
+    const selected = this.isSubmitRow();
+    const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
+    lines.push("");
+    addWrappedWithPrefix(
+      lines,
+      "",
+      `${marker}${this.config.theme.fg(selected ? "accent" : "text", "[ Submit ]")}`,
+      width,
+    );
+  }
+
   private helpText(): string {
-    if (this.questionnaireState.config.selection === "multi") {
-      return "↑↓/jk navigate · Space toggle · Enter submit · c comment · Esc cancel";
+    if (this.questionnaireState.config.allowMultiple) {
+      return "↑↓/jk navigate · Enter/Space toggle · Enter edit response · c comment · Esc cancel";
     }
     return "↑↓/jk navigate · Enter select · c comment · Esc cancel";
   }
@@ -294,11 +281,19 @@ export class AskComponent implements Component, Focusable {
   }
 
   private isFreeformRow(): boolean {
-    return this.questionnaireState.highlightedRow >= this.sourceOptions.length;
+    return this.questionnaireState.config.allowFreeform
+      && this.questionnaireState.highlightedRow === this.questionnaireState.config.options.length;
+  }
+
+  private isSubmitRow(): boolean {
+    return this.questionnaireState.config.allowMultiple
+      && this.questionnaireState.highlightedRow === this.rowCount() - 1;
   }
 
   private rowCount(): number {
-    return this.sourceOptions.length + (this.questionnaireState.config.allowFreeform === false ? 0 : 1);
+    return this.questionnaireState.config.options.length
+      + (this.questionnaireState.config.allowFreeform ? 1 : 0)
+      + (this.questionnaireState.config.allowMultiple ? 1 : 0);
   }
 
   private move(delta: number): void {
@@ -317,7 +312,6 @@ export class AskComponent implements Component, Focusable {
     if (!this.isFreeformRow()) return;
     const next = transitionQuestionnaire(this.questionnaireState, { type: "openFreeform" });
     this.applyState(next);
-    this.editor.setText(next.editorDraft);
     this.editor.focused = this._focused;
     this.requestRender();
   }
@@ -335,27 +329,9 @@ export class AskComponent implements Component, Focusable {
   }
 
   private finishIfAnswered(state: QuestionnaireState): void {
-    if (!state.answer || this.completedAnswer) return;
-    const answer = this.toAskAnswer(state.answer);
-    this.completedAnswer = answer;
+    if (!state.answer) return;
     this.editor.focused = false;
-    this.config.onSubmit?.(answer);
-  }
-
-  private toAskAnswer(answer: NonNullable<QuestionnaireState["answer"]>): AskAnswer {
-    const selections = answer.selections.map((selection) => {
-      const source = this.optionsById.get(selection.id);
-      const result: AskOption & { comment?: string } = {
-        label: source?.label ?? selection.label,
-      };
-      if (source?.description) result.description = source.description;
-      if (selection.comment) result.comment = selection.comment;
-      return result;
-    });
-    return {
-      selections,
-      ...(answer.freeform ? { freeform: answer.freeform } : {}),
-    };
+    this.config.onSubmit?.(state.answer);
   }
 
   private requestRender(): void {

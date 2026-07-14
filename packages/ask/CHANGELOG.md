@@ -2,33 +2,15 @@
 
 All notable changes to `@pi9/ask` will be documented in this file.
 
-## [Unreleased]
-
-### Changed
-
-- Project completed standalone Ask exchanges into hidden `ask:summary` context summaries without changing stored entries or visible Ask rows.
-- Require the `options` parameter in Ask tool calls and clarify when models should use structured questions instead of open-ended prompts.
-- Render pending tool calls with a compact branch line showing multi-select mode when applicable and the option count.
-- Render freeform and comment inputs as borderless, indented continuations of their selected option.
-- Keep option descriptions in the questionnaire while omitting them from settled tool-row output.
-
-### Fixed
-
-- Keep hidden replay-marker text out of the editor after re-answering from `/tree`.
-
-## [0.1.0] - 2026-07-12
+## [0.1.0]
 
 ### Added
 
-- Add a sequential `ask` tool with single-select, multi-select, option comments, and freeform responses across TUI and RPC modes.
-- Add a keyboard-driven questionnaire with descriptions, comment editing, cancellation, and compact response guidance.
-- Add branch-aware re-answering from the session tree with hidden durable revision markers and model-context projection.
+- Add a sequential `ask` tool for focused single-select and multi-select questions across TUI and RPC modes.
+- Add a keyboard-driven questionnaire with option descriptions, comments, freeform responses, cancellation, checkbox selection, and a dedicated multi-select submit action.
+- Add compact pending and answered tool-call rendering with Nerd Font selection glyphs, visible unselected options, and inline comment and freeform details.
+- Add branch-aware re-answering from the session tree with durable hidden revisions that update the original Ask result.
+- Add compact hidden context summaries for completed standalone Ask exchanges while preserving stored conversation entries.
+- Add strict input validation, structured answer details, model guidance, and graceful handling when interactive UI is unavailable.
 
-### Changed
-
-- Render pending questions with their response type, then replace the answer summary with an indented option list using Nerd Font selection glyphs.
-- Update the original Ask tool row when an answer is revised instead of displaying a separate revision message.
-- Prune completed Ask calls with a schema-valid historical marker while retaining structured answer details.
-
-[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.1.0...HEAD
 [0.1.0]: https://github.com/Chase-C/pi9/releases/tag/ask-v0.1.0

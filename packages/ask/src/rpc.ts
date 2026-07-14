@@ -1,4 +1,4 @@
-import type { AskAnswer, AskOption, AskParams } from "./types.js";
+import type { AskAnswer, AskOption, ValidatedAskParams } from "./types.js";
 
 export interface AskDialogUI {
   select(title: string, options: string[], dialogOptions?: { signal?: AbortSignal }): Promise<string | undefined>;
@@ -11,21 +11,15 @@ const FREEFORM_CHOICE = "Type a response…";
 
 export async function askWithRpc(
   ui: AskDialogUI,
-  params: AskParams,
+  params: ValidatedAskParams,
   signal?: AbortSignal,
 ): Promise<AskAnswer | null> {
-  const options = params.options;
-  const allowFreeform = params.allowFreeform !== false;
   const prompt = params.context ? `${params.context}\n\n${params.question}` : params.question;
-
-  if (options.length === 0 && !allowFreeform) {
-    throw new Error("The ask dialog needs at least one option when freeform responses are disabled.");
-  }
   if (signal?.aborted) return null;
 
-  return params.allowMultiple === true
-    ? runMultiSelect(ui, prompt, options, allowFreeform, signal)
-    : runSingleSelect(ui, prompt, options, allowFreeform, signal);
+  return params.allowMultiple
+    ? runMultiSelect(ui, prompt, params.options, params.allowFreeform, signal)
+    : runSingleSelect(ui, prompt, params.options, params.allowFreeform, signal);
 }
 
 async function runSingleSelect(
