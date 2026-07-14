@@ -14,8 +14,19 @@ export function isTodoActionName(value: unknown): value is TodoActionName {
 
 export type Todo = {
   readonly name: string;
+  readonly description: string;
   readonly status: TodoStatus;
 };
+
+export function isTerminalTodo(todo: Pick<Todo, "status">): boolean {
+  return todo.status === "completed" || todo.status === "cancelled";
+}
+
+export function todoTaskPriority(todo: Pick<Todo, "status">): number {
+  if (todo.status === "in_progress") return 0;
+  if (todo.status === "pending") return 1;
+  return 2;
+}
 
 export type TodoPhase = {
   readonly name: string;
@@ -24,6 +35,7 @@ export type TodoPhase = {
 
 export type TodoState = {
   readonly phases: readonly TodoPhase[];
+  readonly workingOn?: string;
 };
 
 export type TodoAddress = {
@@ -38,9 +50,14 @@ export type TodoToolDetails = {
   readonly changedTasks: readonly TodoAddress[];
 };
 
+export type TodoTaskInput = {
+  readonly name: string;
+  readonly description: string;
+};
+
 export type TodoPhaseInput = {
   readonly name: string;
-  readonly tasks: readonly string[];
+  readonly tasks: readonly TodoTaskInput[];
 };
 
 export type TodoTransitionInput = TodoAddress & {
@@ -60,11 +77,11 @@ export type AddTodoAction = {
 export type TransitionTodoAction = {
   readonly action: "transition";
   readonly transitions: readonly TodoTransitionInput[];
+  readonly workingOn?: string;
 };
 
 export type ViewTodoAction = {
   readonly action: "view";
-  readonly phase?: string;
 };
 
 export type TodoAction = SetTodoAction | AddTodoAction | TransitionTodoAction | ViewTodoAction;

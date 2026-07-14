@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderResult } from "../src/renderer.js";
 import type { TodoToolDetails } from "../src/types.js";
+import { todo } from "./helpers.js";
 
 const plainTheme = {
   fg: (_color: string, text: string) => text,
@@ -10,12 +11,12 @@ const plainTheme = {
 const details: TodoToolDetails = {
   action: "transition",
   state: { phases: [
-    { name: "Planning", tasks: [{ name: "Plan release announcement", status: "pending" }] },
+    { name: "Planning", tasks: [todo("Plan release announcement")] },
     { name: "Build", tasks: [
-      { name: "Implement renderer", status: "in_progress" },
-      { name: "Publish package", status: "completed" },
+      todo("Implement renderer", "in_progress"),
+      todo("Publish package", "completed"),
     ] },
-  ] },
+  ], workingOn: "Implementing the renderer" },
   changedTasks: [{ phase: "Build", task: "Implement renderer" }],
 };
 
@@ -44,15 +45,15 @@ describe("todo renderer", () => {
       action: "view",
       state: { phases: [
         { name: "Plan", tasks: [
-          { name: "Done first", status: "completed" },
-          { name: "Pending first", status: "pending" },
-          { name: "Active", status: "in_progress" },
-          { name: "Pending second", status: "pending" },
-          { name: "Cancelled", status: "cancelled" },
+          todo("Done first", "completed"),
+          todo("Pending first"),
+          todo("Active", "in_progress"),
+          todo("Pending second"),
+          todo("Cancelled", "cancelled"),
         ] },
-        { name: "Review", tasks: [{ name: "Review pending", status: "pending" }] },
+        { name: "Review", tasks: [todo("Review pending")] },
         { name: "Empty", tasks: [] },
-      ] },
+      ], workingOn: "Handling the active task" },
       changedTasks: [],
     } }, { expanded: true }, plainTheme, { fallbackGlyphs: true }).render(120).join("\n");
 
@@ -70,11 +71,11 @@ describe("todo renderer", () => {
     const text = renderResult({ details: {
       action: "view",
       state: { phases: [{ name: "Tasks", tasks: [
-        { name: "Pending", status: "pending" },
-        { name: "Active", status: "in_progress" },
-        { name: "Done", status: "completed" },
-        { name: "Cancelled", status: "cancelled" },
-      ] }] },
+        todo("Pending"),
+        todo("Active", "in_progress"),
+        todo("Done", "completed"),
+        todo("Cancelled", "cancelled"),
+      ] }], workingOn: "Handling the active task" },
       changedTasks: [],
     } }, { expanded: true }, themed, { fallbackGlyphs: true }).render(80).join("\n");
     expect(text).toContain("<dim>    ○ Pending</dim>");

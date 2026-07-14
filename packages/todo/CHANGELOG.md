@@ -4,6 +4,16 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Require `set` and `add` to contain non-empty phases with described tasks, expose descriptions in full-plan `view` results and model reminders, and reject persisted phases or tasks that do not meet those requirements.
+- Require fresh `workingOn` text on every transition that leaves tasks `in_progress`, clear it when work becomes terminal, and include it in views and model reminders.
+- Change `view` to return only the full plan rather than filtering by phase.
+- Streamline the model-facing tool description and guidance around planning, status transitions, verification, and current-work summaries.
+- Simplify widget headings and phase progress, keep active-task status glyphs static, and show current-work text on a separate dimmed line with Pi's standard spinner.
+- Keep the final terminal widget summary visible for five seconds before clearing it, including across repeated terminal-state refreshes.
+- Refresh the README with a product screenshot and a concise, user-focused overview of features and settings.
+
 ## [0.2.0] - 2026-07-13
 
 ### Added

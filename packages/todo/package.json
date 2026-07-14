@@ -18,6 +18,7 @@
   "homepage": "https://github.com/Chase-C/pi9/tree/main/packages/todo#readme",
   "files": [
     "src",
+    "media",
     "README.md",
     "LICENSE"
   ],

@@ -4,7 +4,11 @@ import { cloneTodoState } from "../src/state.js";
 import type { TodoState } from "../src/types.js";
 
 const state = (name: string): TodoState => ({
-  phases: [{ name, tasks: [{ name: `Complete ${name}`, status: "pending" }] }],
+  phases: [{ name, tasks: [{
+    name: `Complete ${name}`,
+    description: `Detailed description for ${name}.`,
+    status: "pending",
+  }] }],
 });
 
 const contextFor = (entries: unknown[]) => ({
@@ -45,7 +49,8 @@ describe("todo persistence", () => {
     const restored = restoreTodoState(contextFor([
       todoResult(state("Plan")),
       todoResult(state("Failed"), { isError: true }),
-      todoResult({ phases: [{ name: "Bad", tasks: [{ name: "Task", status: "doing" }] }] }),
+      todoResult({ phases: [{ name: "Legacy", tasks: [{ name: "Missing description", status: "pending" }] }] }),
+      todoResult({ phases: [{ name: "Bad", tasks: [{ name: "Task", description: "Detailed description for Task.", status: "doing" }] }] }),
       todoResult(state("Wrong action"), { action: null }),
     ]));
     expect(restored).toEqual(state("Plan"));
@@ -53,15 +58,17 @@ describe("todo persistence", () => {
 
   it("rejects malformed state invariants", () => {
     const duplicateTasks = { phases: [{ name: "Build", tasks: [
-      { name: "Same", status: "pending" },
-      { name: "Same", status: "completed" },
+      { name: "Same", description: "Detailed description for Same.", status: "pending" },
+      { name: "Same", description: "Detailed description for Same.", status: "completed" },
     ] }] };
     const splitActive = { phases: [
-      { name: "Build", tasks: [{ name: "Build task", status: "in_progress" }] },
-      { name: "Verify", tasks: [{ name: "Verify task", status: "in_progress" }] },
-    ] };
+      { name: "Build", tasks: [{ name: "Build task", description: "Detailed description for Build task.", status: "in_progress" }] },
+      { name: "Verify", tasks: [{ name: "Verify task", description: "Detailed description for Verify task.", status: "in_progress" }] },
+    ], workingOn: "Working in two phases" };
+    const emptyPhase = { phases: [{ name: "Empty", tasks: [] }] };
     expect(restoreTodoState(contextFor([todoResult(duplicateTasks)]))).toEqual({ phases: [] });
     expect(restoreTodoState(contextFor([todoResult(splitActive)]))).toEqual({ phases: [] });
+    expect(restoreTodoState(contextFor([todoResult(emptyPhase)]))).toEqual({ phases: [] });
   });
 
   it("returns an independent empty state when no valid snapshot exists", () => {

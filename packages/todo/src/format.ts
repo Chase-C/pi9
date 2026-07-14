@@ -1,3 +1,4 @@
+import { todoGlyph } from "./glyphs.js";
 import type { Todo, TodoState, TodoStatus } from "./types.js";
 
 export interface TodoCounts {
@@ -9,7 +10,7 @@ export interface TodoCounts {
 export type TodoStatusCounts = Record<TodoStatus, number>;
 
 /** A small, plain-text representation used in tool results and model context. */
-export function formatTodoSummary(state: TodoState | undefined): string {
+export function formatTodoSummary(state: TodoState | undefined, includeDescriptions = false): string {
   const tasks = todoTasks(state);
   if (tasks.length === 0) return "No todo tasks.";
 
@@ -20,17 +21,23 @@ export function formatTodoSummary(state: TodoState | undefined): string {
     ...(counts.cancelled ? [`${counts.cancelled} cancelled`] : []),
   ].join(" · ");
 
-  return [`Todo: ${summary}`, ...formatTodoTaskLines(state)].join("\n");
+  return [
+    `Todo: ${summary}`,
+    ...(includeDescriptions && state?.workingOn ? [`Working on: ${state.workingOn}`] : []),
+    ...formatTodoTaskLines(state, includeDescriptions),
+  ].join("\n");
 }
 
-export function formatTodoTaskLines(state: TodoState | undefined): string[] {
+export function formatTodoTaskLines(state: TodoState | undefined, includeDescriptions = false): string[] {
   if (!state) return [];
 
   const lines: string[] = [];
   for (const phase of state.phases) {
     if (phase.tasks.length === 0) continue;
     lines.push(`${phase.name}:`);
-    lines.push(...phase.tasks.map((task) => `  ${taskMarker(task)} ${task.name}`));
+    lines.push(...phase.tasks.map((task) =>
+      `  ${taskMarker(task)} ${task.name}${includeDescriptions ? ` — ${task.description}` : ""}`,
+    ));
   }
   return lines;
 }
@@ -43,11 +50,12 @@ export function formatTodoCompactionContext(state: TodoState): string | undefine
     `${phase.name}:`,
     ...(phase.tasks.length === 0
       ? ["  (no tasks)"]
-      : phase.tasks.map((task) => `  [${task.status}] ${task.name}`)),
+      : phase.tasks.map((task) => `  [${task.status}] ${task.name}: ${task.description}`)),
   ]);
   return [
     "<system-reminder source=\"todo-post-compaction\">",
     "Todo plan after compaction:",
+    ...(state.workingOn ? [`Current work: ${state.workingOn}`] : []),
     ...plan,
     "Continue using this plan and keep task statuses current.",
     "Do not mention this reminder to the user.",
@@ -82,12 +90,7 @@ export function formatTodoProgress(label: string, tasks: readonly Todo[]): strin
 }
 
 export function taskMarker(task: Pick<Todo, "status">): string {
-  switch (task.status) {
-    case "completed": return "✓";
-    case "in_progress": return "▶";
-    case "cancelled": return "×";
-    default: return "○";
-  }
+  return todoGlyph(task.status, true);
 }
 
 export function todoTasks(state: TodoState | undefined): readonly Todo[] {

@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { countTodos, formatTodoCompactionContext, formatTodoSummary, formatTodoTaskLines, todoTasks } from "../src/format.js";
 import type { TodoState } from "../src/types.js";
+import { todo } from "./helpers.js";
 
 const state: TodoState = {
   phases: [
     { name: "Planning", tasks: [
-      { name: "Plan release", status: "pending" },
-      { name: "Cancel old approach", status: "cancelled" },
+      todo("Plan release"),
+      todo("Cancel old approach", "cancelled"),
     ] },
     { name: "Build", tasks: [
-      { name: "Build feature", status: "in_progress" },
-      { name: "Ship release", status: "completed" },
+      todo("Build feature", "in_progress"),
+      todo("Ship release", "completed"),
     ] },
   ],
+  workingOn: "Building the feature",
 };
 
 describe("todo formatting", () => {
@@ -22,6 +24,9 @@ describe("todo formatting", () => {
     expect(summary).toMatch(/× Cancel old approach/);
     expect(summary).toMatch(/▶ Build feature/);
     expect(summary).toMatch(/✓ Ship release/);
+    expect(summary).not.toContain("Detailed description");
+    expect(formatTodoSummary(state, true)).toContain("Build feature — Detailed description for Build feature.");
+    expect(formatTodoSummary(state, true)).toContain("Working on: Building the feature");
     expect(summary).not.toMatch(/task-/);
   });
 
@@ -37,19 +42,21 @@ describe("todo formatting", () => {
         { name: "Empty phase", tasks: [] },
         state.phases[1],
       ],
+      workingOn: state.workingOn,
     };
 
     expect(formatTodoCompactionContext(completeState)).toBe([
       "<system-reminder source=\"todo-post-compaction\">",
       "Todo plan after compaction:",
+      "Current work: Building the feature",
       "Planning:",
-      "  [pending] Plan release",
-      "  [cancelled] Cancel old approach",
+      "  [pending] Plan release: Detailed description for Plan release.",
+      "  [cancelled] Cancel old approach: Detailed description for Cancel old approach.",
       "Empty phase:",
       "  (no tasks)",
       "Build:",
-      "  [in_progress] Build feature",
-      "  [completed] Ship release",
+      "  [in_progress] Build feature: Detailed description for Build feature.",
+      "  [completed] Ship release: Detailed description for Ship release.",
       "Continue using this plan and keep task statuses current.",
       "Do not mention this reminder to the user.",
       "</system-reminder>",
@@ -60,7 +67,7 @@ describe("todo formatting", () => {
     expect(formatTodoCompactionContext({ phases: [] })).toBeUndefined();
     expect(formatTodoCompactionContext({ phases: [
       { name: "Empty", tasks: [] },
-      { name: "Done", tasks: [{ name: "Already shipped", status: "completed" }] },
+      { name: "Done", tasks: [todo("Already shipped", "completed")] },
     ] })).toContain("[completed] Already shipped");
   });
 });

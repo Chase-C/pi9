@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import todoExtension from "../src/index.js";
 import { TodoToolFrame } from "../src/tool-frame.js";
+import { describedTask } from "./helpers.js";
 
 const settingsControl = vi.hoisted(() => ({ loaded: undefined as Record<string, unknown> | undefined }));
 vi.mock("../src/settings.js", async (importOriginal) => {
@@ -49,7 +50,7 @@ async function endTurn(handlers: Map<string, Handler>, output?: unknown): Promis
 
 async function setOpenPlan(tool: RegisteredTodoTool, task = "Implement feature"): Promise<void> {
   await tool.execute("set", {
-    action: "set", phases: [{ name: "Build", tasks: [task] }],
+    action: "set", phases: [{ name: "Build", tasks: [describedTask(task)] }],
   }, undefined, undefined, executionContext);
 }
 
@@ -310,7 +311,7 @@ describe("todoExtension", () => {
     await endTurn(handlers);
     for (let turn = 0; turn < 8; turn += 1) await endTurn(handlers);
 
-    const restoredState = { phases: [{ name: "Restored", tasks: [{ name: "Restored task", status: "pending" }] }] };
+    const restoredState = { phases: [{ name: "Restored", tasks: [{ name: "Restored task", description: "Detailed description for Restored task.", status: "pending" }] }] };
     await handlers.get("session_tree")?.({}, sessionContext([{
       type: "message",
       message: {
@@ -329,11 +330,12 @@ describe("todoExtension", () => {
     const set = await tool.execute("set", {
       action: "set",
       phases: [
-        { name: "Build", tasks: ["Implement feature"] },
-        { name: "Verify", tasks: ["Run integration tests"] },
+        { name: "Build", tasks: [describedTask("Implement feature")] },
+        { name: "Verify", tasks: [describedTask("Run integration tests")] },
       ],
     }, undefined, undefined, executionContext);
     expect(set.content[0].text).toContain("○ Implement feature");
+    expect(set.content[0].text).not.toContain("Detailed description for Implement feature.");
     expect(set.content[0].text).not.toContain("task-");
     expect(set.details.changedTasks).toEqual([
       { phase: "Build", task: "Implement feature" },
@@ -342,7 +344,7 @@ describe("todoExtension", () => {
 
     const add = await tool.execute("add", {
       action: "add",
-      phases: [{ name: "Build", tasks: ["Handle invalid input"] }],
+      phases: [{ name: "Build", tasks: [describedTask("Handle invalid input")] }],
     }, undefined, undefined, executionContext);
     expect(add.details.changedTasks).toEqual([{ phase: "Build", task: "Handle invalid input" }]);
 
@@ -352,18 +354,18 @@ describe("todoExtension", () => {
     }, undefined, undefined, executionContext);
     expect(transition.details.changedTasks).toEqual([{ phase: "Build", task: "Implement feature" }]);
 
-    const filtered = await tool.execute("view", { action: "view", phase: "Build" }, undefined, undefined, executionContext);
-    const full = await tool.execute("view", { action: "view" }, undefined, undefined, executionContext);
-    expect(filtered.details.state.phases.map((phase: any) => phase.name)).toEqual(["Build"]);
-    expect(full.details.state.phases.map((phase: any) => phase.name)).toEqual(["Build", "Verify"]);
-    expect(full.details.changedTasks).toEqual([]);
+    const view = await tool.execute("view", { action: "view" }, undefined, undefined, executionContext);
+    expect(view.details.state.phases.map((phase: any) => phase.name)).toEqual(["Build", "Verify"]);
+    expect(view.content[0].text).toContain("Implement feature — Detailed description for Implement feature.");
+    expect(view.content[0].text).toContain("Run integration tests — Detailed description for Run integration tests.");
+    expect(view.details.changedTasks).toEqual([]);
   });
 
   it("makes set destructive and resets supplied tasks to pending", async () => {
     const { tool } = setupTodoTool();
     await tool.execute("set", {
       action: "set",
-      phases: [{ name: "Build", tasks: ["Old task"] }],
+      phases: [{ name: "Build", tasks: [describedTask("Old task")] }],
     }, undefined, undefined, executionContext);
     await tool.execute("transition", {
       action: "transition",
@@ -371,10 +373,10 @@ describe("todoExtension", () => {
     }, undefined, undefined, executionContext);
     const reset = await tool.execute("reset", {
       action: "set",
-      phases: [{ name: "Verify", tasks: ["New task"] }],
+      phases: [{ name: "Verify", tasks: [describedTask("New task")] }],
     }, undefined, undefined, executionContext);
     expect(reset.details.state).toEqual({
-      phases: [{ name: "Verify", tasks: [{ name: "New task", status: "pending" }] }],
+      phases: [{ name: "Verify", tasks: [{ name: "New task", description: "Detailed description for New task.", status: "pending" }] }],
     });
   });
 
@@ -383,12 +385,15 @@ describe("todoExtension", () => {
     const partial = { args: { action: "set" }, isPartial: true, isError: false };
     expect(tool.renderShell).toBe("self");
     expect(tool.renderCall({ action: "add" }, theme, { ...partial, args: { action: "add" } }).render(80)).toHaveLength(0);
-    const pending = tool.renderCall({ action: "set", phases: [] }, theme, partial);
+    const pending = tool.renderCall({
+      action: "set",
+      phases: [{ name: "Build", tasks: [describedTask("Implement feature")] }],
+    }, theme, partial);
     expect(pending).toBeInstanceOf(TodoToolFrame);
     expect(pending.render(80).join("\n")).toContain("pending");
 
     const result = await tool.execute("set", {
-      action: "set", phases: [{ name: "Build", tasks: ["Implement feature"] }],
+      action: "set", phases: [{ name: "Build", tasks: [describedTask("Implement feature")] }],
     }, undefined, undefined, executionContext);
     const rendered = tool.renderResult(result, { expanded: false, isPartial: false }, theme, renderContext("set"));
     expect(rendered).toBeInstanceOf(TodoToolFrame);
@@ -398,14 +403,14 @@ describe("todoExtension", () => {
   it("keeps the latest expanded set result live through additions and transitions", async () => {
     const { tool } = setupTodoTool();
     const set = await tool.execute("set", {
-      action: "set", phases: [{ name: "Build", tasks: ["Implement feature"] }],
+      action: "set", phases: [{ name: "Build", tasks: [describedTask("Implement feature")] }],
     }, undefined, undefined, executionContext);
     const historical = structuredClone(set.details);
     const invalidate = vi.fn();
     const live = tool.renderResult(set, { expanded: true, isPartial: false }, theme, renderContext("set", invalidate));
 
     await tool.execute("add", {
-      action: "add", phases: [{ name: "Build", tasks: ["Add tests"] }],
+      action: "add", phases: [{ name: "Build", tasks: [describedTask("Add tests")] }],
     }, undefined, undefined, executionContext);
     await tool.execute("transition", {
       action: "transition", transitions: [{ phase: "Build", task: "Implement feature", status: "completed" }],
@@ -422,9 +427,9 @@ describe("todoExtension", () => {
   it("restores state when session tree navigation changes branches", async () => {
     const { tool, handlers } = setupTodoTool();
     await tool.execute("set", {
-      action: "set", phases: [{ name: "Current", tasks: ["Current task"] }],
+      action: "set", phases: [{ name: "Current", tasks: [describedTask("Current task")] }],
     }, undefined, undefined, executionContext);
-    const restoredState = { phases: [{ name: "Restored", tasks: [{ name: "Restored task", status: "pending" }] }] };
+    const restoredState = { phases: [{ name: "Restored", tasks: [{ name: "Restored task", description: "Detailed description for Restored task.", status: "pending" }] }] };
     await handlers.get("session_tree")?.({}, {
       hasUI: false,
       sessionManager: { getBranch: () => [{
@@ -441,10 +446,10 @@ describe("todoExtension", () => {
 
   it("serializes concurrent mutations", async () => {
     const { tool } = setupTodoTool();
-    await tool.execute("set", { action: "set", phases: [{ name: "Build", tasks: ["First task"] }] }, undefined, undefined, executionContext);
+    await tool.execute("set", { action: "set", phases: [{ name: "Build", tasks: [describedTask("First task")] }] }, undefined, undefined, executionContext);
     await Promise.all([
-      tool.execute("one", { action: "add", phases: [{ name: "Build", tasks: ["Second task"] }] }, undefined, undefined, executionContext),
-      tool.execute("two", { action: "add", phases: [{ name: "Build", tasks: ["Third task"] }] }, undefined, undefined, executionContext),
+      tool.execute("one", { action: "add", phases: [{ name: "Build", tasks: [describedTask("Second task")] }] }, undefined, undefined, executionContext),
+      tool.execute("two", { action: "add", phases: [{ name: "Build", tasks: [describedTask("Third task")] }] }, undefined, undefined, executionContext),
     ]);
     const view = await tool.execute("view", { action: "view" }, undefined, undefined, executionContext);
     expect(view.details.state.phases[0].tasks.map((task: any) => task.name)).toEqual(["First task", "Second task", "Third task"]);

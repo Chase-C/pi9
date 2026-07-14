@@ -1,15 +1,14 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import { formatTodoProgress, todoTasks } from "./format.js";
 import { todoGlyph } from "./glyphs.js";
 import { currentTodoPhaseIndex } from "./state.js";
-import type { Todo, TodoPhase, TodoState } from "./types.js";
+import { isTerminalTodo, todoTaskPriority, type Todo, type TodoPhase, type TodoState } from "./types.js";
 
 export type TodoWidgetLayoutOptions = {
   maxVisible?: number;
   fallbackGlyphs?: boolean;
-  activeMarker?: string;
+  workingMarker?: string;
 };
 
 type ThemeLike = Partial<Pick<Theme, "bold" | "fg" | "strikethrough">>;
@@ -25,12 +24,15 @@ export function renderTodoWidgetLines(
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width) || 1);
   const phases = state?.phases ?? [];
-  const selectedPhaseIndex = currentTodoPhaseIndex(phases);
+  const currentPhaseIndex = currentTodoPhaseIndex(phases);
+  const selectedPhaseIndex = currentPhaseIndex >= 0
+    ? currentPhaseIndex
+    : lastNonEmptyPhaseIndex(phases);
   if (selectedPhaseIndex < 0) return [];
   const selectedPhase = phases[selectedPhaseIndex];
   const maxVisible = boundedMaxVisible(options.maxVisible);
   const selectedTasks = visibleTasks(selectedPhase.tasks, maxVisible);
-  const lines: string[] = [fit(toolTitle(formatTodoProgress("Todos", todoTasks(state)), theme), safeWidth)];
+  const lines: string[] = [fit(toolTitle("Todos", theme), safeWidth)];
 
   for (let phaseIndex = 0; phaseIndex < phases.length; phaseIndex++) {
     const phase = phases[phaseIndex];
@@ -39,9 +41,9 @@ export function renderTodoWidgetLines(
 
     if (selected) {
       for (const task of selectedTasks) {
-        lines.push(fit(taskLine(task, theme, options.fallbackGlyphs, options.activeMarker), safeWidth));
+        lines.push(fit(taskLine(task, theme, options.fallbackGlyphs), safeWidth));
       }
-      const openTasks = phase.tasks.filter(task => !isTerminal(task));
+      const openTasks = phase.tasks.filter(task => !isTerminalTodo(task));
       const hidden = openTasks.length - selectedTasks.length;
       if (hidden > 0) lines.push(fit(`    +${hidden} more`, safeWidth));
       const terminalSummary = terminalTaskSummary(phase.tasks);
@@ -52,7 +54,20 @@ export function renderTodoWidgetLines(
     }
   }
 
+  if (state?.workingOn) {
+    lines.push("");
+    const text = theme?.fg ? theme.fg("dim", state.workingOn) : state.workingOn;
+    lines.push(fit(`  ${options.workingMarker ?? "⠋"} ${text}`, safeWidth));
+  }
+
   return lines;
+}
+
+function lastNonEmptyPhaseIndex(phases: readonly TodoPhase[]): number {
+  for (let index = phases.length - 1; index >= 0; index -= 1) {
+    if (phases[index].tasks.length > 0) return index;
+  }
+  return -1;
 }
 
 function boundedMaxVisible(value: number | undefined): number {
@@ -61,9 +76,15 @@ function boundedMaxVisible(value: number | undefined): number {
 }
 
 function phaseTitle(phase: TodoPhase, phaseIndex: number, selected: boolean, theme: ThemeLike | undefined): string {
-  const title = `${phaseIndex + 1}. ${formatTodoProgress(phase.name, phase.tasks)}`;
-  if (selected) return toolTitle(`  ${title}`, theme);
-  return theme?.fg ? theme.fg("dim", `  ${title}`) : `  ${title}`;
+  const title = `  ${phaseIndex + 1}. ${phase.name}`;
+  const terminal = phase.tasks.filter(isTerminalTodo).length;
+  const progress = `· ${terminal}/${phase.tasks.length}`;
+  if (!selected) {
+    const line = `${title} ${progress}`;
+    return theme?.fg ? theme.fg("dim", line) : line;
+  }
+  const dimProgress = theme?.fg ? theme.fg("dim", progress) : progress;
+  return `${toolTitle(title, theme)} ${dimProgress}`;
 }
 
 function toolTitle(text: string, theme: ThemeLike | undefined): string {
@@ -74,27 +95,20 @@ function toolTitle(text: string, theme: ThemeLike | undefined): string {
 function visibleTasks(tasks: readonly Todo[], maxVisible: number): DisplayTask[] {
   const ordered = tasks
     .map((task, taskIndex) => ({ ...task, taskIndex }))
-    .filter(task => !isTerminal(task))
-    .sort((left, right) => taskPriority(left) - taskPriority(right) || left.taskIndex - right.taskIndex);
+    .filter(task => !isTerminalTodo(task))
+    .sort((left, right) => todoTaskPriority(left) - todoTaskPriority(right) || left.taskIndex - right.taskIndex);
   const active = ordered.filter(isActive);
   return active.length > maxVisible ? active : ordered.slice(0, maxVisible);
 }
 
-function taskLine(task: Todo, theme: ThemeLike | undefined, fallbackGlyphs = false, activeMarker?: string): string {
-  const marker = isActive(task) && activeMarker ? activeMarker : todoGlyph(task.status, fallbackGlyphs);
+function taskLine(task: Todo, theme: ThemeLike | undefined, fallbackGlyphs = false): string {
+  const marker = todoGlyph(task.status, fallbackGlyphs);
   const color = task.status === "in_progress" ? "text" : task.status === "completed" ? "success" : "dim";
-  const name = (task.status === "completed" || task.status === "cancelled") && theme?.strikethrough
+  const name = isTerminalTodo(task) && theme?.strikethrough
     ? theme.strikethrough(task.name)
     : task.name;
-  let line = `    ${marker} ${name}`;
-  if (isActive(task) && theme?.bold) line = theme.bold(line);
+  const line = `    ${marker} ${name}`;
   return theme?.fg ? theme.fg(color, line) : line;
-}
-
-function taskPriority(task: Todo): number {
-  if (isActive(task)) return 0;
-  if (task.status === "pending") return 1;
-  return 2;
 }
 
 function terminalTaskSummary(tasks: readonly Todo[]): string | undefined {
@@ -109,10 +123,6 @@ function terminalTaskSummary(tasks: readonly Todo[]): string | undefined {
 
 function isActive(task: Todo): boolean {
   return task.status === "in_progress";
-}
-
-function isTerminal(task: Todo): boolean {
-  return task.status === "completed" || task.status === "cancelled";
 }
 
 function fit(line: string, width: number): string {

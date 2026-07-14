@@ -4,7 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { countTodos, formatTodoProgress, todoTasks } from "./format.js";
 import { todoGlyph } from "./glyphs.js";
 import { currentTodoPhaseIndex, todoAddressKey } from "./state.js";
-import type { Todo, TodoAddress, TodoToolDetails } from "./types.js";
+import { isTerminalTodo, todoTaskPriority, type Todo, type TodoAddress, type TodoToolDetails } from "./types.js";
 
 type ThemeLike = Partial<Pick<Theme, "fg" | "bold" | "strikethrough">>;
 type ThemeColor = Parameters<Theme["fg"]>[0];
@@ -56,25 +56,15 @@ function collapsedText(header: string, tasks: readonly Todo[], theme: ThemeLike 
 function orderedTasks(tasks: readonly Todo[]): Todo[] {
   return tasks
     .map((task, index) => ({ task, index }))
-    .sort((left, right) => taskPriority(left.task) - taskPriority(right.task) || left.index - right.index)
+    .sort((left, right) => todoTaskPriority(left.task) - todoTaskPriority(right.task) || left.index - right.index)
     .map(({ task }) => task);
 }
 
-function taskPriority(task: Todo): number {
-  if (task.status === "in_progress") return 0;
-  if (task.status === "pending") return 1;
-  return 2;
-}
-
 function renderTask(phase: string, task: Todo, changed: Set<string>, theme: ThemeLike | undefined, options: TodoRendererOptions): string {
-  const text = isTerminal(task) && theme?.strikethrough ? theme.strikethrough(task.name) : task.name;
+  const text = isTerminalTodo(task) && theme?.strikethrough ? theme.strikethrough(task.name) : task.name;
   let line = `    ${todoGlyph(task.status, options.fallbackGlyphs)} ${text}`;
   if ((task.status === "in_progress" || changed.has(todoAddressKey(phase, task.name))) && theme?.bold) line = theme.bold(line);
   return paint(theme, statusColor(task.status), line);
-}
-
-function isTerminal(task: Todo): boolean {
-  return task.status === "completed" || task.status === "cancelled";
 }
 
 function addressKey(address: TodoAddress): string {

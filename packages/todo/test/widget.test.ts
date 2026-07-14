@@ -6,30 +6,34 @@ import type { TodoState } from "../src/types.js";
 import { TodoWidgetComponent } from "../src/widget-component.js";
 import { updateTodoWidget } from "../src/widget.js";
 import { renderTodoWidgetLines } from "../src/widget-layout.js";
+import { todo } from "./helpers.js";
 
 afterEach(() => vi.useRealTimers());
 
 const state: TodoState = {
   phases: [
     { name: "Plan", tasks: [
-      { name: "Active task", status: "in_progress" },
-      { name: "First pending task", status: "pending" },
-      { name: "Finished task", status: "completed" },
-      { name: "Cancelled task", status: "cancelled" },
+      todo("Active task", "in_progress"),
+      todo("First pending task"),
+      todo("Finished task", "completed"),
+      todo("Cancelled task", "cancelled"),
     ] },
-    { name: "Build", tasks: [{ name: "Second pending task", status: "pending" }] },
+    { name: "Build", tasks: [todo("Second pending task")] },
   ],
+  workingOn: "Updating the todo widget",
 };
 
 test("todo widget nests numbered phases and shows tasks only under the active phase", () => {
   const lines = renderTodoWidgetLines(state, { bold: (text: string) => `<bold>${text}</bold>` } as never, 80, { maxVisible: 2, fallbackGlyphs: true });
-  assert.match(lines[0], /Todos.*1 active.*2 pending.*1 completed.*1 cancelled/);
-  assert.match(lines[1], /<bold>  1\. Plan.*1 active.*1 pending/);
-  assert.match(lines[2], /<bold>    ▶ Active task<\/bold>/);
+  assert.equal(lines[0], "<bold>Todos</bold>");
+  assert.equal(lines[1], "<bold>  1. Plan</bold> · 2/4");
+  assert.equal(lines[2], "    ▶ Active task");
   assert.match(lines[3], /    ○ First pending task/);
   assert.match(lines[4], /1 complete task · 1 cancelled task/);
-  assert.match(lines[5], /  2\. Build/);
-  assert.doesNotMatch(lines.join("\n"), /\[1\]|\[2\]|Second pending task/);
+  assert.equal(lines[5], "  2. Build · 0/1");
+  assert.equal(lines[6], "");
+  assert.equal(lines[7], "  ⠋ Updating the todo widget");
+  assert.doesNotMatch(lines.join("\n"), /Detailed description|\[1\]|\[2\]|Second pending task/);
 });
 
 test("todo widget summarizes terminal tasks beneath the selected phase", () => {
@@ -37,21 +41,25 @@ test("todo widget summarizes terminal tasks beneath the selected phase", () => {
     bold: (text: string) => `<bold>${text}</bold>`,
     fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
   } as never, 80, { maxVisible: 10, fallbackGlyphs: true }).join("\n");
-  assert.match(themed, /<toolTitle><bold>Todos/);
-  assert.match(themed, /<toolTitle><bold>  1\. Plan/);
+  assert.match(themed, /<toolTitle><bold>Todos<\/bold><\/toolTitle>\n/);
+  assert.match(themed, /<toolTitle><bold>  1\. Plan<\/bold><\/toolTitle> <dim>· 2\/4<\/dim>/);
+  assert.match(themed, /<text>    ▶ Active task<\/text>/);
+  assert.doesNotMatch(themed, /<bold>    ▶ Active task<\/bold>/);
   assert.match(themed, /<dim>    \+ 1 complete task · 1 cancelled task<\/dim>/);
-  assert.doesNotMatch(themed, /Finished task|Cancelled task|\[3\]|\[4\]/);
+  assert.match(themed, /  ⠋ <dim>Updating the todo widget<\/dim>/);
+  assert.doesNotMatch(themed, /Finished task|Cancelled task|\[3\]|\[4\]|Working on:/);
 });
 
 test("todo widget prioritizes statuses stably and shows every active task over the limit", () => {
   const activeState: TodoState = {
     phases: [{ name: "Work", tasks: [
-      { name: "pending first", status: "pending" },
-      { name: "active first", status: "in_progress" },
-      { name: "completed", status: "completed" },
-      { name: "active second", status: "in_progress" },
-      { name: "pending second", status: "pending" },
+      todo("pending first"),
+      todo("active first", "in_progress"),
+      todo("completed", "completed"),
+      todo("active second", "in_progress"),
+      todo("pending second"),
     ] }],
+    workingOn: "Handling both active tasks",
   };
   const lines = renderTodoWidgetLines(activeState, undefined, 80, { maxVisible: 1, fallbackGlyphs: true });
   const text = lines.join("\n");
@@ -61,12 +69,12 @@ test("todo widget prioritizes statuses stably and shows every active task over t
   assert.match(text, /1 complete task/);
 });
 
-test("todo widget falls back to the first pending phase and disappears when all tasks are terminal", () => {
+test("todo widget falls back to the first pending phase and renders terminal phase summaries", () => {
   const pendingState: TodoState = {
     phases: [
-      { name: "Done", tasks: [{ name: "old", status: "completed" }] },
-      { name: "Next", tasks: [{ name: "ready", status: "pending" }] },
-      { name: "Later", tasks: [{ name: "later", status: "pending" }] },
+      { name: "Done", tasks: [todo("old", "completed")] },
+      { name: "Next", tasks: [todo("ready")] },
+      { name: "Later", tasks: [todo("later")] },
     ],
   };
   const pendingLines = renderTodoWidgetLines(pendingState, undefined, 80, { fallbackGlyphs: true });
@@ -75,11 +83,11 @@ test("todo widget falls back to the first pending phase and disappears when all 
 
   const terminalLines = renderTodoWidgetLines({
     phases: [{ name: "Done", tasks: [
-      { name: "finished", status: "completed" },
-      { name: "cancelled", status: "cancelled" },
+      todo("finished", "completed"),
+      todo("cancelled", "cancelled"),
     ] }],
   }, undefined, 80, { fallbackGlyphs: true });
-  assert.deepEqual(terminalLines, []);
+  assert.match(terminalLines.join("\n"), /  1\. Done · 2\/2[\s\S]*1 complete task · 1 cancelled task/);
 });
 
 test("todo widget remains safe at narrow widths", () => {
@@ -90,16 +98,20 @@ test("todo widget remains safe at narrow widths", () => {
   for (const line of component.render(1)) assert.ok(visibleWidth(line) <= 1);
 });
 
-test("todo widget animates Nerd Font active markers with the droplet timing and stops when disposed", () => {
+test("todo widget keeps active markers static and animates the working line with pi's spinner", () => {
   vi.useFakeTimers();
   const requestRender = vi.fn();
   const component = new TodoWidgetComponent(state, undefined, {}, { requestRender } as never);
 
-  assert.match(component.render(80).join("\n"), / Active task/);
-  vi.advanceTimersByTime(219);
+  const initial = component.render(80).join("\n");
+  assert.match(initial, /󰻃 Active task/);
+  assert.match(initial, /\n\n  ⠋ Updating the todo widget/);
+  vi.advanceTimersByTime(79);
   assert.equal(requestRender.mock.calls.length, 0);
   vi.advanceTimersByTime(1);
-  assert.match(component.render(80).join("\n"), / Active task/);
+  const next = component.render(80).join("\n");
+  assert.match(next, /󰻃 Active task/);
+  assert.match(next, /\n\n  ⠙ Updating the todo widget/);
   assert.equal(requestRender.mock.calls.length, 1);
 
   component.dispose();
@@ -107,21 +119,25 @@ test("todo widget animates Nerd Font active markers with the droplet timing and 
   assert.equal(requestRender.mock.calls.length, 1);
 });
 
-test("todo widget uses pi's activity spinner when Nerd Font glyphs are disabled", () => {
+test("fallback glyphs do not change the working-line spinner", () => {
   vi.useFakeTimers();
   const requestRender = vi.fn();
   const component = new TodoWidgetComponent(state, undefined, { fallbackGlyphs: true }, { requestRender } as never);
 
-  assert.match(component.render(80).join("\n"), /⠋ Active task/);
+  const initial = component.render(80).join("\n");
+  assert.match(initial, /▶ Active task/);
+  assert.match(initial, /  ⠋ Updating the todo widget/);
   vi.advanceTimersByTime(80);
-  assert.match(component.render(80).join("\n"), /⠙ Active task/);
+  assert.match(component.render(80).join("\n"), /  ⠙ Updating the todo widget/);
   assert.equal(requestRender.mock.calls.length, 1);
   component.dispose();
 });
 
-test("updateTodoWidget supplies a component factory, honors placement, and clears terminal state", () => {
+test("updateTodoWidget shows terminal state for five seconds before clearing", () => {
+  vi.useFakeTimers();
   const calls: unknown[][] = [];
-  updateTodoWidget({ hasUI: true, ui: { setWidget: (...args: unknown[]) => calls.push(args) } }, state, {
+  const context = { hasUI: true, ui: { setWidget: (...args: unknown[]) => calls.push(args) } };
+  updateTodoWidget(context, state, {
     widgetPlacement: "aboveEditor",
     maxVisibleTasks: 1,
   });
@@ -132,16 +148,71 @@ test("updateTodoWidget supplies a component factory, honors placement, and clear
   assert.equal(component.render(80).at(-1), "");
   component.dispose();
 
-  updateTodoWidget({ hasUI: true, ui: { setWidget: (...args: unknown[]) => calls.push(args) } }, {
-    phases: [{ name: "Done", tasks: [{ name: "finished", status: "completed" }] }],
+  updateTodoWidget(context, {
+    phases: [{ name: "Done", tasks: [todo("finished", "completed")] }],
   }, {});
-  assert.deepEqual(calls[1], ["todo", undefined, { placement: "aboveEditor" }]);
+  assert.equal(typeof calls[1][1], "function");
+  const finalComponent = (calls[1][1] as (tui: never, theme: never) => TodoWidgetComponent)(undefined as never, undefined as never);
+  assert.match(finalComponent.render(80).join("\n"), /1\. Done · 1\/1[\s\S]*1 complete task/);
+  vi.advanceTimersByTime(4_999);
+  assert.equal(calls.length, 2);
+  vi.advanceTimersByTime(1);
+  assert.deepEqual(calls[2], ["todo", undefined]);
 
-  updateTodoWidget({ hasUI: true, ui: { setWidget: (...args: unknown[]) => calls.push(args) } }, { phases: [] }, {});
-  assert.deepEqual(calls[2], ["todo", undefined, { placement: "aboveEditor" }]);
+  updateTodoWidget(context, { phases: [] }, {});
+  assert.deepEqual(calls[3], ["todo", undefined, { placement: "aboveEditor" }]);
 
   updateTodoWidget({ hasUI: false, ui: { setWidget: (...args: unknown[]) => calls.push(args) } }, state, {});
+  assert.equal(calls.length, 4);
+});
+
+test("repeated terminal refreshes preserve the final summary until its timer expires", () => {
+  vi.useFakeTimers();
+  const calls: unknown[][] = [];
+  const context = { hasUI: true, ui: { setWidget: (...args: unknown[]) => calls.push(args) } };
+  const terminalState: TodoState = {
+    phases: [{ name: "Done", tasks: [{ name: "finished", description: "Finished the work.", status: "completed" }] }],
+  };
+
+  updateTodoWidget(context, state);
+  updateTodoWidget(context, terminalState);
+  vi.advanceTimersByTime(2_500);
+  updateTodoWidget(context, terminalState);
+
+  assert.equal(typeof calls[2][1], "function");
+  vi.advanceTimersByTime(2_499);
   assert.equal(calls.length, 3);
+  vi.advanceTimersByTime(1);
+  assert.deepEqual(calls[3], ["todo", undefined]);
+});
+
+test("an already-terminal restored plan stays hidden", () => {
+  vi.useFakeTimers();
+  const calls: unknown[][] = [];
+  const context = { hasUI: true, ui: { setWidget: (...args: unknown[]) => calls.push(args) } };
+  updateTodoWidget(context, {
+    phases: [{ name: "Done", tasks: [{ name: "finished", description: "Finished the work.", status: "completed" }] }],
+  });
+
+  assert.deepEqual(calls, [["todo", undefined, { placement: "aboveEditor" }]]);
+  vi.advanceTimersByTime(5_000);
+  assert.equal(calls.length, 1);
+});
+
+test("new open work cancels a pending terminal clear", () => {
+  vi.useFakeTimers();
+  const calls: unknown[][] = [];
+  const context = { hasUI: true, ui: { setWidget: (...args: unknown[]) => calls.push(args) } };
+  const terminalState: TodoState = {
+    phases: [{ name: "Done", tasks: [{ name: "finished", description: "Finished the work.", status: "completed" }] }],
+  };
+  updateTodoWidget(context, state);
+  updateTodoWidget(context, terminalState);
+  updateTodoWidget(context, state);
+
+  vi.advanceTimersByTime(5_000);
+  assert.equal(calls.length, 3);
+  assert.equal(typeof calls[2][1], "function");
 });
 
 test("updateTodoWidget clears when off and warns if setWidget fails", () => {

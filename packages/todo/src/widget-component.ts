@@ -4,8 +4,6 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TodoState } from "./types.js";
 import { renderTodoWidgetLines, type TodoWidgetLayoutOptions } from "./widget-layout.js";
 
-const DROPLET_FRAMES = ["", "", "󰺕", "󰻃", ""] as const;
-const DROPLET_DURATIONS_MS = [220, 110, 80, 100, 420] as const;
 const PI_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const PI_SPINNER_INTERVAL_MS = 80;
 
@@ -24,7 +22,7 @@ export class TodoWidgetComponent implements Component {
     private readonly options: TodoWidgetComponentOptions = {},
     private readonly tui?: Pick<TUI, "requestRender">,
   ) {
-    if (tui && state.phases.some(phase => phase.tasks.some(task => task.status === "in_progress"))) {
+    if (tui && state.workingOn) {
       this.scheduleNextFrame();
     }
   }
@@ -36,7 +34,7 @@ export class TodoWidgetComponent implements Component {
     const { blankLineBelow, ...layoutOptions } = this.options;
     const lines = renderTodoWidgetLines(this.state, this.theme, safeWidth, {
       ...layoutOptions,
-      activeMarker: this.frames[this.frameIndex],
+      workingMarker: PI_SPINNER_FRAMES[this.frameIndex],
     });
     if (blankLineBelow && lines.length > 0) lines.push("");
     return lines;
@@ -47,18 +45,11 @@ export class TodoWidgetComponent implements Component {
     this.timer = undefined;
   }
 
-  private get frames(): readonly string[] {
-    return this.options.fallbackGlyphs ? PI_SPINNER_FRAMES : DROPLET_FRAMES;
-  }
-
   private scheduleNextFrame(): void {
-    const delay = this.options.fallbackGlyphs
-      ? PI_SPINNER_INTERVAL_MS
-      : DROPLET_DURATIONS_MS[this.frameIndex];
     this.timer = setTimeout(() => {
-      this.frameIndex = (this.frameIndex + 1) % this.frames.length;
+      this.frameIndex = (this.frameIndex + 1) % PI_SPINNER_FRAMES.length;
       this.tui?.requestRender();
       this.scheduleNextFrame();
-    }, delay);
+    }, PI_SPINNER_INTERVAL_MS);
   }
 }

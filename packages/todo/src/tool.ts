@@ -172,20 +172,19 @@ export function registerTodoTool(pi: ExtensionAPI): void {
     name: "todo",
     label: "Todo",
     description: [
-      "Maintain a phased task plan.",
+      "Maintain a phased task plan for complex work with 3+ distinct steps.",
       "Actions:",
-      "  set(phases): Replace the plan; supplied tasks start pending.",
-      "  add(phases): Add phases or tasks; preserve existing tasks and statuses.",
-      "  transition(transitions): Set statuses by exact phase and task names.",
-      "  view(phase?): Return the full plan or one exact phase.",
+      "  set(phases): Replace the entire plan; all tasks start `pending`.",
+      "  add(phases): Add described tasks; preserve existing tasks and statuses.",
+      "  transition(transitions, workingOn?): Set statuses and current work by exact phase and task names.",
+      "  view(): Return the full plan with task descriptions.",
     ].join("\n"),
     promptSnippet: "Track multi-step work in a phased task plan",
     promptGuidelines: [
-      "Use todo for work with 3+ distinct steps; skip it for 1–2 steps.",
-      "Transition todo tasks immediately when work starts or ends; do not defer updates until the end.",
-      "Complete todo tasks only after the work is done and verified; cancel abandoned or obsolete tasks.",
-      "Add material new work to todo as new tasks rather than expanding existing task scope.",
-      "Keep `in_progress` todo tasks in one phase; complete or cancel them before starting another phase.",
+      "Update the todo plan immediately as work starts, finishes, or is abandoned; never defer status transitions to the end.",
+      "Mark todo tasks `completed` only after verification and `cancelled` when abandoned or obsolete; keep all `in_progress` tasks confined to one phase.",
+      "Include an accurate `workingOn` summary in every todo transition that leaves one or more tasks `in_progress`.",
+      "Use todo `add` for material new work rather than expanding the scope of existing tasks; use the destructive `set` action only for planning or replanning.",
     ],
     parameters: TodoParamsSchema,
     renderShell: "self",
@@ -210,7 +209,7 @@ export function registerTodoTool(pi: ExtensionAPI): void {
         updateTodoWidget(ctx, state, settings);
         interactedWithTodoThisTurn = true;
         return {
-          content: [{ type: "text" as const, text: formatTodoSummary(next) }],
+          content: [{ type: "text" as const, text: formatTodoSummary(next, params.action === "view") }],
           details,
         };
       });
