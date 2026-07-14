@@ -4,6 +4,8 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-14
+
 ### Changed
 
 - Require `set` and `add` to contain non-empty phases with described tasks, expose descriptions in full-plan `view` results and model reminders, and reject persisted phases or tasks that do not meet those requirements.
@@ -35,6 +37,7 @@ All notable changes to `@pi9/todo` will be documented in this file.
 - Add a persistent configurable widget with focused phase previews, terminal-task summaries, animated activity markers, and flexible placement.
 - Add validated global and trusted-project settings for widget presentation, glyph fallback, and tool-output visibility.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.2.0...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.3.0...HEAD
+[0.3.0]: https://github.com/Chase-C/pi9/compare/todo-v0.2.0...todo-v0.3.0
 [0.2.0]: https://github.com/Chase-C/pi9/compare/todo-v0.1.0...todo-v0.2.0
 [0.1.0]: https://github.com/Chase-C/pi9/releases/tag/todo-v0.1.0
