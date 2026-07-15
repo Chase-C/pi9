@@ -8,6 +8,7 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 - Dim the active task's status icon while keeping its text at the normal color.
 - Refine the working indicator's styling and distinguish active and idle states.
+- Add a one-character outer margin to the widget.
 
 ## [0.3.0] - 2026-07-14
 

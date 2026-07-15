@@ -57,11 +57,11 @@ export function renderTodoWidgetLines(
   if (state?.workingOn) {
     lines.push("");
     const working = `${options.workingMarker ?? WORKING_SPINNER_FRAMES[0]} ${state.workingOn}`;
-    const text = theme?.fg ? theme.fg("dim", working) : working;
+    const text = theme?.fg ? theme.fg("muted", working) : working;
     lines.push(fit(`  ${text}`, safeWidth));
   }
 
-  return lines;
+  return lines.map((line) => line ? fit(` ${line}`, safeWidth) : line);
 }
 
 function lastNonEmptyPhaseIndex(phases: readonly TodoPhase[]): number {
