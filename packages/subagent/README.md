@@ -2,15 +2,15 @@
 
 A Pi package that adds subagent delegation: a single `subagent` tool the main agent uses to spawn isolated child `AgentSession`s, watch their progress live, and pick up where they left off. Reach for it when work would crowd the parent conversation or benefits from an independent perspective — focused research, planning, review, bug investigation, test analysis, and implementation handoffs.
 
-![A subagent run with nested children rendering live progress, tool calls, and per-child counters](media/subagent-running.png)
+![A subagent run with nested children rendering live progress, tool calls, and per-child counters](media/subagent-overview.png)
 
 ## Highlights
 
 - **Resumable sessions** let the parent send follow-ups to the same child, which keeps its accumulated context across resumes instead of starting cold.
-- **Background dispatch** runs a batch without blocking, so the parent keeps working and is notified when children finish.
+- **Background dispatch** runs a batch without blocking, so the parent keeps working and, by default, is notified when children finish.
 - **Recursive subagents** spawn their own children, and the parent sees the whole tree as one run under a single shared concurrency limit.
 - A **single tool** lists, spawns, resumes, collects, and cleans up, and its deliberately compact prompt won't bloat the parent's context.
-- **Live, observable runs** show per-child status, turns, tokens, and tool calls in the tool row and a dockable widget, while lifecycle events and a persistent session index keep each one inspectable after it finishes.
+- **Live, observable runs** show per-child status, tokens, and tool activity in the tool row, with background and resumable sessions also tracked in a configurable widget.
 - **Zero-code configuration** puts concurrency, notifications, discovery, and layout in settings, with sensible defaults.
 
 ## Install
@@ -48,7 +48,7 @@ subagent({
 })
 ```
 
-4. **Watch it run** live in the tool row and the progress widget, then collect the result when it finishes.
+4. **Watch it run** live in the tool row. Foreground results return from the call; for background runs, use `subagent results` with the returned session handles.
 
 ## Define agents
 
@@ -88,7 +88,7 @@ Agents are markdown files discovered from:
 1. User `${PI_AGENT_DIR ?? ~/.pi/agent}/agents`.
 2. The nearest project `.pi/agents`, found by walking up from the tool's `cwd`.
 
-Each file is registered by its frontmatter `name`, not by filename. Project agents override user agents with the same name.
+Each file is registered by its frontmatter `name`, not by filename. Project agents override user agents with the same name by default; `agentDiscovery.duplicateNamePolicy` can reverse that precedence.
 
 ## Resumable sessions
 
@@ -108,7 +108,7 @@ Retention lasts for the current Pi process only — restart or extension reload 
 
 ## Background dispatch
 
-By default (`background: false`), a run waits for every task and returns their results. With `background: true`, the call returns session handles immediately while children continue independently. Background sessions stay available to `list` and `results` until removed, even when `resumable: false`; this result retention does not make their conversation context resumable.
+By default (`background: false`), a run waits for every task and returns their results. With `background: true`, the call returns session handles immediately while children continue independently. For the current Pi process, background sessions stay available to `list` and `results` until removed, even when `resumable: false`; this result retention does not make their conversation context resumable.
 
 ```ts
 subagent({
@@ -130,21 +130,21 @@ While subagents run, two surfaces keep you in the loop: the tool row in the tran
 
 ### Tool row
 
-While a `run` is executing, the tool row shows one line per child with status, agent or `label`, turns, tokens, elapsed time, and its most recent tool calls. Finished children collapse to just their row:
+While a `run` is executing, the tool row shows one line per child with status, agent and optional `label`, tool-call count, tokens, elapsed time, and recent tool calls. Finished children collapse to just their row:
 
 ```text
-  ⠋ reviewer  auth review · 2 turns · 18420 tokens · 37s
+  ⠋ reviewer  auth review  4 tool calls · 18420 tokens · 37s
     ⠋ bash npm test · 12s
     ✓ grep "formatRunSessionLine" in src · 1s
     ✓ read src/view/tool-result-lines.ts · 0s
-    +2 additional tool calls
+    +1 additional tool call
 ```
 
 Expanding the tool call shows each child's prompt and full tool history. For resumed sessions, every previous run is shown as its own section above the current run, with its own prompt, tool history, and output. Mixed child failures still preserve successful results.
 
 ### Progress widget
 
-A lightweight widget appears outside the tool row while there are active or retained resumable sessions, and auto-hides otherwise. Nested children appear under their parent with depth-based indentation.
+A lightweight widget groups background sessions and foreground resumable sessions, including terminal entries retained in the current process. Transient foreground runs remain in the tool row; when another widget section is present, their active count can appear in its footer. The widget auto-hides when it has no background or resumable section. Nested children appear under their parent with depth-based indentation.
 
 Configure placement and layout in `/subagents settings`:
 
@@ -155,7 +155,7 @@ Configure placement and layout in `/subagents settings`:
 
 ## Settings
 
-Settings are global per user and stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. The file is normalized with defaults the first time it's written, so opening it after a fresh install shows every supported key with its current value.
+Settings are global per user and stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. Missing or invalid values fall back to defaults. Changing a value through `/subagents settings` writes the normalized settings object to this file.
 
 The runtime knobs are the ones most users will reach for:
 
@@ -177,9 +177,9 @@ The runtime knobs are the ones most users will reach for:
   - `steer` — inject a steering-style notification into the currently active run, falling back to a new turn if idle.
   - `none` — do not notify; the parent must call `subagent list` or `subagent results` to discover completions.
 
-Beyond runtime, the settings file also has an `agentDiscovery` section (toggles for user/project sources, file extensions, duplicate-name policy) and a `display` section (truncation lengths and widget row caps). Defaults are tuned to be reasonable; reach for them only when something is being cut off or you need to narrow discovery.
+Beyond runtime, the settings file also has an `agentDiscovery` section (toggles for user/project sources, file extensions, duplicate-name policy, and invalid-definition warnings) and a `display` section (truncation lengths, widget visibility, and row caps). Defaults are tuned to be reasonable; reach for them only when something is being cut off or you need to narrow discovery.
 
-`/subagents settings` exposes the common controls; the rarer discovery and display knobs are file-only.
+`/subagents settings` exposes placement, layout, notification mode, concurrency, per-run task limits, default resumability, retained-row visibility, and widget row limits. Discovery and the remaining display controls are file-only.
 
 ## `/subagents` command
 
@@ -198,7 +198,7 @@ Run `/subagents settings` to open Settings directly, or `/subagents agents` / `/
 
 ## Events and persistence
 
-The package emits `queued`, `started`, and `completed` lifecycle events on the host event bus, so other extensions can react to subagent progress without polling the tool. Terminal sessions are also recorded in a persistent `subagent-session-index` entry — status, timing, prompt previews, and output/error snippets — so recent activity survives across Pi sessions. And when you try to switch or fork a session while children are still queued or running, the package warns first instead of silently abandoning that work.
+The package emits `subagent:updated`, `subagent:queued`, `subagent:started`, and `subagent:completed` events on the host event bus, so other extensions can react without polling the tool. It also appends a compact `subagent-session-index` entry for each terminal attempt to the current Pi session log, containing status, timing, prompt previews, and output/error snippets. These entries preserve activity metadata, but child conversations themselves are process-local and are not restored after restart or extension reload. In the interactive UI, switching or forking while children are queued or running asks for confirmation before tearing down that runtime.
 
 ## The `subagent` tool
 
@@ -212,7 +212,7 @@ The tool takes one required `action`. Its parameter shapes live in `src/schema.t
 | `results` | Fetch results by `sessionIds` without blocking; `remove: true` sweeps terminal entries. |
 | `remove` | Remove sessions by `sessionIds` or `scope`; running ones are aborted. |
 
-Spawn tasks accept per-task overrides — `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable`. Selected skills are resolved by name and their full instruction bodies are injected into the child system prompt; an unknown or unreadable skill fails the run before the child session starts. Agent discovery calls the configured default `defaultResumable` because a task can override it. Session `config` reports the resolved requested values, so task-level skills replace definition defaults and `skills: []` remains visible. Successful results and session inventory expose the runtime-observed `effectiveConfig` (`model`, `thinking`, `cwd`, `skills`, `tools`, and `resumable`) for debugging overrides. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`). A synchronous `run` result includes `sessionId` only when it remains actionable for a follow-up; background handles and `results` entries include an ID for retrieval or removal even when conversation context is not resumable.
+Spawn tasks accept `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable` overrides. Resume tasks accept only `label` and `resumable` overrides; `model`, `thinking`, `cwd`, and `skills` are fixed when the child session is created. Selected skills are resolved by name and their full instruction bodies are injected into the child system prompt; an unknown or unreadable skill fails the run before the child session starts. Agent discovery calls the configured default `defaultResumable` because a task can override it. Session `config` reports the resolved requested values, so task-level skills replace definition defaults and `skills: []` remains visible. Successful results and session inventory expose the runtime-observed `effectiveConfig` (`model`, `thinking`, `cwd`, `skills`, `tools`, and `resumable`) for debugging overrides. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. Results carry the child's full, untruncated `output` (or `error`). A synchronous `run` result includes `sessionId` only when it remains actionable for a follow-up; background handles and `results` entries include an ID for retrieval or removal even when conversation context is not resumable.
 
 Inventory advertises `canRemove` only for terminal sessions that remain cataloged; queued and running sessions report `false`. This is the safe interactive capability, not authorization: an explicit `remove` call can still remove a queued session or abort a running one. Removal scopes select: `background` for all background-dispatched sessions, `retained` for non-running resumable foreground sessions, and `non-running` for every queued or terminal session.
 
@@ -221,15 +221,15 @@ Inventory advertises `canRemove` only for terminal sessions that remain cataloge
 ```
 src/
 ├── index.ts         — Extension entry; wires the registry, manager, tool, command, and widget.
-├── schema.ts        — Zod schemas for tool parameters and structured results.
+├── schema.ts        — TypeBox tool parameters and action-specific runtime parsing.
 ├── config/          — Settings types, defaults, and `settings.json` load/save.
-├── domain/          — Pure domain model.
+├── domain/          — Session state, lifecycle decisions, and result projections.
 │   ├── agent.ts          — The Agent class: one child session, its attempts, and lifecycle.
 │   ├── agent-registry.ts — Discovers and indexes agent definitions from user/project dirs.
 │   ├── agent-snapshot.ts — Immutable state view used for rendering.
 │   └── ...               — Config parsing, result projection, attempt/finalize/decision helpers.
 ├── runtime/         — Execution machinery.
-│   ├── agent-manager.ts  — Top-level coordinator owning the registry, queue, and run groups.
+│   ├── agent-manager.ts  — Top-level coordinator owning the registry, attempt runner, and run groups.
 │   ├── task-queue.ts     — Tree-wide concurrency queue shared across recursive subagents.
 │   ├── run-group.ts      — One `run` call: tracks input order and surfaces tree state.
 │   ├── run-agent.ts      — Builds and runs the underlying SDK AgentSession for one attempt.
