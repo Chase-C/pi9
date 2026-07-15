@@ -52,7 +52,7 @@ test("tool run action does not expose transient foreground ids as collectable re
         prompt: "work",
         status: { kind: "completed", response: "done" },
       })]);
-      return { groupId: "g1", sessions: [], tree: () => [], resultsPromise };
+      return { sessions: [], resultsPromise };
     },
   };
   const tool = registerExtension({
@@ -84,7 +84,7 @@ test("tool run action returns full output only once in JSON details for a resume
         prompt: task.prompt,
         status: { kind: "completed", response: fullOutput, resumed: task.kind === "resume" },
       })));
-      return { groupId: "g1", sessions: [], tree: () => [], resultsPromise };
+      return { sessions: [], resultsPromise };
     },
   };
 
@@ -166,7 +166,7 @@ test("subagent tool notifies invalid settings fallback without breaking executio
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })]);
-      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
+      return { sessions: [runningAgent], resultsPromise };
     },
   };
   const tool = registerExtension({
@@ -206,7 +206,7 @@ test("subagent tool falls back to default UI settings when settings load rejects
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })]);
-      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
+      return { sessions: [runningAgent], resultsPromise };
     },
   };
   const tool = registerExtension({
@@ -246,7 +246,7 @@ test("subagent tool keeps subagent surfaces working but hides widget when placem
     startRun(_ctx: any, _signal: any, _tasks: any, onUpdate: any) {
       onUpdate?.({ sessions: [runningAgent], tree: [runningAgent], active: true });
       const resultsPromise = Promise.resolve([fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })]);
-      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent], resultsPromise };
+      return { sessions: [runningAgent], resultsPromise };
     },
   };
 
@@ -308,7 +308,7 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
         managerSessions = [];
         return [fakeAgent({ id: "s1", config: { name: "helper" }, prompt: "work", status: { kind: "completed", response: "done" } })];
       });
-      return { groupId: "g1", sessions: [runningAgent], tree: () => [runningAgent, childAgent], resultsPromise };
+      return { sessions: [runningAgent], resultsPromise };
     },
   };
 
@@ -344,6 +344,7 @@ test("subagent tool forwards live manager update tree to onUpdate and widget UI"
 test("background run widget updates render the full manager inventory, not only the latest batch", async () => {
   const retained = fakeAgent({
     id: "retained",
+    retention: "persistent",
     config: { name: "retained", resumable: true },
     createdAt: 1,
     status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ready" },
@@ -351,6 +352,7 @@ test("background run widget updates render the full manager inventory, not only 
   const oldBackground = fakeAgent({
     id: "old-bg",
     dispatch: "background",
+    retention: "persistent",
     config: { name: "old-bg" },
     createdAt: 2,
     status: { kind: "completed", startedAt: 1, completedAt: 3, response: "done" },
@@ -358,6 +360,7 @@ test("background run widget updates render the full manager inventory, not only 
   const latestBackground = fakeAgent({
     id: "new-bg",
     dispatch: "background",
+    retention: "persistent",
     config: { name: "new-bg" },
     createdAt: 3,
     status: { kind: "running", startedAt: 4 },
@@ -368,9 +371,7 @@ test("background run widget updates render the full manager inventory, not only 
     startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
       onUpdate?.({ sessions: [latestBackground], tree: [latestBackground], active: true });
       return {
-        groupId: "g1",
         sessions: [latestBackground],
-        tree: () => [latestBackground],
         resultsPromise: new Promise<any[]>(() => {}),
       };
     },
@@ -410,12 +411,14 @@ test("foreground run widget updates also preserve background and retained sectio
   const background = fakeAgent({
     id: "bg",
     dispatch: "background",
+    retention: "persistent",
     config: { name: "background" },
     createdAt: 1,
     status: { kind: "running", startedAt: 1 },
   });
   const retained = fakeAgent({
     id: "retained",
+    retention: "persistent",
     config: { name: "retained", resumable: true },
     createdAt: 2,
     status: { kind: "completed", startedAt: 1, completedAt: 2, response: "ready" },
@@ -433,9 +436,7 @@ test("foreground run widget updates also preserve background and retained sectio
     startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
       Promise.resolve().then(() => onUpdate?.({ sessions: [current], tree: [current], active: true }));
       return {
-        groupId: "g1",
         sessions: [current],
-        tree: () => [current],
         resultsPromise: new Promise<any[]>(resolve => {
           finish = () => resolve([fakeAgent({ id: "current", config: { name: "current" }, status: { kind: "completed", response: "done" } })]);
         }),
@@ -483,7 +484,7 @@ test("subagent action=run accepts a heterogeneous batch of spawn and resume task
         prompt: task.prompt,
         status: { kind: "completed", response: `done:${task.prompt}`, resumed: task.kind === "resume" },
       })));
-      return { groupId: "g1", sessions: [], tree: () => [], resultsPromise };
+      return { sessions: [], resultsPromise };
     },
   };
   const fakeRegistry = {
@@ -582,12 +583,12 @@ test("subagent action=run background:true never invokes the parent onUpdate chan
   assert.deepEqual(onUpdateCalls, []);
 });
 
-test("subagent action=run rejects a per-task background field with the batch-level migration error", async () => {
-  let runCalls = 0;
+test("subagent action=run rejects a non-boolean batch background without dispatching", async () => {
+  let startCalls = 0;
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [] as any[],
-    async run() { runCalls += 1; return []; },
+    startRun() { startCalls += 1; throw new Error("should not dispatch"); },
   };
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -597,12 +598,40 @@ test("subagent action=run rejects a per-task background field with the batch-lev
 
   const result = await tool.execute("tool-call", {
     action: "run",
-    tasks: [{ agent: "helper", prompt: "p", background: true }],
+    background: "false",
+    tasks: [{ agent: "helper", prompt: "p" }],
   }, undefined, undefined, baseCtx());
 
   assert.equal(result.isError, true);
-  assert.equal(runCalls, 0);
-  assert.match(result.content[0].text, /background is a batch-level flag on action='run', not a per-task field\./);
+  assert.equal(startCalls, 0);
+  assert.match(result.content[0].text, /run background must be a boolean/);
+});
+
+test("subagent action=results rejects a non-boolean remove flag without fetching or removing", async () => {
+  let fetchCalls = 0;
+  let removeCalls = 0;
+  const fakeManager = {
+    listSessions(): any[] { return this.sessions; },
+    sessions: [] as any[],
+    backgroundResults() { fetchCalls += 1; return []; },
+    async remove() { removeCalls += 1; },
+  };
+  const tool = registerExtension({
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+    agentManager: fakeManager,
+    settingsStore: { async load() { return { settings: { widgetPlacement: "belowEditor" } }; } },
+  });
+
+  const result = await tool.execute("tool-call", {
+    action: "results",
+    sessionIds: ["s1"],
+    remove: "false",
+  }, undefined, undefined, baseCtx());
+
+  assert.equal(result.isError, true);
+  assert.equal(fetchCalls, 0);
+  assert.equal(removeCalls, 0);
+  assert.match(result.content[0].text, /results remove must be a boolean/);
 });
 
 test("subagent action=run rejects a task carrying both agent and sessionId at parse time", async () => {
@@ -646,7 +675,7 @@ test("a late-arriving descendant status change triggers a partial re-emit with t
       });
       // Initial emit covers just the root (the descendant has not arrived yet).
       Promise.resolve().then(() => onUpdate({ sessions: [rootView], tree: [rootView], active: true }));
-      return { groupId: "g1", sessions: [rootView], tree: () => [rootView, grandView], resultsPromise };
+      return { sessions: [rootView], resultsPromise };
     },
   };
 
@@ -694,7 +723,7 @@ test("partial tool results carry the full descendant subtree; final tool result 
       const resultsPromise = new Promise<any[]>(resolve => {
         setTimeout(() => resolve([fakeAgent({ id: "root", config: { name: "root" }, prompt: "go", status: { kind: "completed", response: "ok" } })]), 10);
       });
-      return { groupId: "g1", sessions: [rootView], tree: () => [rootView, childView], resultsPromise };
+      return { sessions: [rootView], resultsPromise };
     },
   };
 

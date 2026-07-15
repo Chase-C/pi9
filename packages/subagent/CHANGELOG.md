@@ -4,6 +4,21 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Remove compatibility with legacy persisted render/notification payloads and deprecated deep-module APIs.
+
+### Changed
+
+- Tighten agent and tool-input validation for descriptions, thinking levels, and boolean flags.
+- Make task-level skill overrides authoritative, including `skills: []`, and inject selected skills' full instructions into child system prompts.
+- Consistently expose removal capability for terminal cataloged sessions across the tool and `/subagents` UI.
+- Redesign run, result, and background-completion rows around task labels, activity, usage, elapsed time, and nested-agent structure.
+
+### Fixed
+
+- Render pending results and agent activity with consistent statuses, rails, wrapping, and alignment.
+
 ## [0.3.1] - 2026-07-11
 
 ### Fixed

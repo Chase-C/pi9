@@ -73,7 +73,7 @@ export class SubagentSessionsComponent implements Component {
       return;
     }
     if (data === "c" || data === "C") {
-      this.clearSelected();
+      this.removeSelected();
       return;
     }
     if (data === "r" || data === "R") {
@@ -94,10 +94,10 @@ export class SubagentSessionsComponent implements Component {
     this.done({ action: "resume", sessionId: session.id, agent: session.config.name });
   }
 
-  private clearSelected() {
+  private removeSelected() {
     const session = this.sessions[this.state.selected];
     if (!session) return;
-    if (!session.capabilities.canClear) {
+    if (!session.capabilities.canRemove) {
       const detail = session.status.kind === "done" ? session.status.outcome : session.status.kind;
       this.notify(`Subagent session ${session.id} is ${detail} and cannot be removed.`, "warning");
       return;

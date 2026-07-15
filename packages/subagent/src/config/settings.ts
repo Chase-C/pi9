@@ -64,37 +64,41 @@ export const DEFAULT_SUBAGENT_UI_SETTINGS: SubagentUiSettings = {
   widgetLayout: "auto",
 };
 
-export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = {
-  ...DEFAULT_SUBAGENT_UI_SETTINGS,
-  runtime: {
-    maxTasksPerRun: 8,
-    maxConcurrentSubagents: 4,
-    defaultResumable: false,
-    backgroundNotify: "auto",
-  },
-  agentDiscovery: {
-    includeUserAgents: true,
-    includeProjectAgents: true,
-    projectAgentsStrategy: "nearest",
-    agentFileExtensions: [".md"],
-    duplicateNamePolicy: "projectOverridesUser",
-    warnOnInvalidAgents: false,
-  },
-  display: {
-    promptPreviewLength: 120,
-    messageSnippetLength: 200,
-    outputSnippetLength: 400,
-    outputSnippetMaxLines: 8,
-    resumeMessageSnippetLength: 80,
-    toolCallLabelMaxLength: 60,
-    toolInputSummaryLength: 80,
-    collapsedAgentListLimit: 8,
-    collapsedDescriptionLength: 100,
-    widgetShowRetainedSessions: true,
-    widgetShowForeground: true,
-    widgetMaxRowsPerSection: 6,
-  },
-};
+export function createDefaultSubagentSettings(): SubagentSettings {
+  return {
+    ...DEFAULT_SUBAGENT_UI_SETTINGS,
+    runtime: {
+      maxTasksPerRun: 8,
+      maxConcurrentSubagents: 4,
+      defaultResumable: false,
+      backgroundNotify: "auto",
+    },
+    agentDiscovery: {
+      includeUserAgents: true,
+      includeProjectAgents: true,
+      projectAgentsStrategy: "nearest",
+      agentFileExtensions: [".md"],
+      duplicateNamePolicy: "projectOverridesUser",
+      warnOnInvalidAgents: false,
+    },
+    display: {
+      promptPreviewLength: 120,
+      messageSnippetLength: 200,
+      outputSnippetLength: 400,
+      outputSnippetMaxLines: 8,
+      resumeMessageSnippetLength: 80,
+      toolCallLabelMaxLength: 60,
+      toolInputSummaryLength: 80,
+      collapsedAgentListLimit: 8,
+      collapsedDescriptionLength: 100,
+      widgetShowRetainedSessions: true,
+      widgetShowForeground: true,
+      widgetMaxRowsPerSection: 6,
+    },
+  };
+}
+
+export const DEFAULT_SUBAGENT_SETTINGS: SubagentSettings = createDefaultSubagentSettings();
 
 export type SubagentSettingsLoadResult = {
   settings: SubagentSettings;
@@ -119,10 +123,10 @@ export class SubagentSettingsStore {
       return normalizeSettings(parsed);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return { settings: cloneDefaults() };
+        return { settings: createDefaultSubagentSettings() };
       }
       return {
-        settings: cloneDefaults(),
+        settings: createDefaultSubagentSettings(),
         warning: `Invalid subagent settings at ${this.settingsPath}; using defaults.`,
       };
     }
@@ -137,13 +141,13 @@ export class SubagentSettingsStore {
 export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {
-      settings: cloneDefaults(),
+      settings: createDefaultSubagentSettings(),
       warning: "Invalid subagent settings; using defaults.",
     };
   }
 
   const record = value as Record<string, unknown>;
-  const settings = cloneDefaults();
+  const settings = createDefaultSubagentSettings();
   const warnings: string[] = [];
 
   const widgetPlacement = record.widgetPlacement;
@@ -196,19 +200,6 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
   }
 
   return { settings, ...(warnings.length ? { warning: warnings.join(" ") } : {}) };
-}
-
-function cloneDefaults(): SubagentSettings {
-  return {
-    widgetPlacement: DEFAULT_SUBAGENT_SETTINGS.widgetPlacement,
-    widgetLayout: DEFAULT_SUBAGENT_SETTINGS.widgetLayout,
-    runtime: { ...DEFAULT_SUBAGENT_SETTINGS.runtime },
-    agentDiscovery: {
-      ...DEFAULT_SUBAGENT_SETTINGS.agentDiscovery,
-      agentFileExtensions: [...DEFAULT_SUBAGENT_SETTINGS.agentDiscovery.agentFileExtensions],
-    },
-    display: { ...DEFAULT_SUBAGENT_SETTINGS.display },
-  };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

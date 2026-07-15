@@ -1,12 +1,6 @@
 import { getQueuedAt, getStartedAt } from "./agent-decisions.js";
+import type { AgentRunStatus } from "./agent-lifecycle.js";
 import type { AgentEffectiveConfig, AgentSnapshot } from "./agent-snapshot.js";
-
-export type AgentRunStatus =
-  | "completed"
-  | "error"
-  | "aborted"
-  | "skipped"
-  | "interrupted"
 
 /** Model-facing per-task result. Projected entirely from a terminal {@link AgentSnapshot}. */
 export interface AgentResult {
@@ -51,31 +45,6 @@ export function toResult(snapshot: AgentSnapshot): AgentResult {
     turns: snapshot.activity.turns,
     tokens: snapshot.usage?.totalTokens ?? 0,
     elapsedMs,
-  };
-}
-
-/**
- * The terminal data a settled attempt carries. The snapshot factory projects this onto the
- * `done` arm of {@link AgentSnapshot}; `toResult` then projects that into the result.
- */
-export interface AgentOutcome {
-  readonly status: AgentRunStatus;
-  readonly output?: string;
-  readonly error?: string;
-  readonly resumed: boolean;
-}
-
-export type FinalizeRunArgs =
-  | { status: "completed"; output?: string; error?: never; resumed?: boolean }
-  | { status: Exclude<AgentRunStatus, "completed">; output?: never; error?: string; resumed?: boolean };
-
-/** Normalizes finalize arguments into the terminal outcome stored on the attempt. */
-export function toOutcome(args: FinalizeRunArgs): AgentOutcome {
-  return {
-    status: args.status,
-    resumed: Boolean(args.resumed),
-    ...(args.output !== undefined ? { output: args.output } : {}),
-    ...(args.error !== undefined ? { error: args.error } : {}),
   };
 }
 

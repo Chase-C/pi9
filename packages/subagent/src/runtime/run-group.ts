@@ -1,4 +1,5 @@
-import type { Agent, AgentUpdateKind } from "../domain/agent.js";
+import type { Agent } from "../domain/agent.js";
+import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { timingStart } from "./timing.js";
 
@@ -16,8 +17,8 @@ export interface RunUpdate {
 export type RunUpdateListener = (update: RunUpdate) => void;
 
 type Entry =
-  | { kind: "agent"; inputIndex: number; resumed: boolean; agent: Agent }
-  | { kind: "static"; inputIndex: number; resumed: boolean; view: AgentSnapshot };
+  | { kind: "agent"; inputIndex: number; agent: Agent }
+  | { kind: "static"; inputIndex: number; view: AgentSnapshot };
 
 export interface RunGroupOptions {
   groupId: string;
@@ -46,17 +47,14 @@ export class RunGroup {
 
   constructor(private readonly opts: RunGroupOptions) { }
 
-  get groupId(): string { return this.opts.groupId }
-  get entryCount(): number { return this._entries.length }
-
-  addAgent(agent: Agent, inputIndex: number, resumed: boolean): void {
-    this._entries.push({ kind: "agent", inputIndex, resumed, agent });
+  addAgent(agent: Agent, inputIndex: number): void {
+    this._entries.push({ kind: "agent", inputIndex, agent });
     this._rootIds.add(agent.id);
     this._refreshTreeIds();
   }
 
-  addStaticView(view: AgentSnapshot, inputIndex: number, resumed: boolean): void {
-    this._entries.push({ kind: "static", inputIndex, resumed, view });
+  addStaticView(view: AgentSnapshot, inputIndex: number): void {
+    this._entries.push({ kind: "static", inputIndex, view });
   }
 
   /** Whether the given agent currently belongs to this group's subtree. */
@@ -94,9 +92,13 @@ export class RunGroup {
   }
 
   private _project(entry: Entry): AgentSnapshot {
-    return entry.kind === "agent"
-      ? { ...entry.agent.snapshot({ inputIndex: entry.inputIndex }), resumed: entry.resumed }
-      : { ...entry.view, resumed: entry.resumed };
+    if (entry.kind === "agent") {
+      return entry.agent.snapshot({ inputIndex: entry.inputIndex, includeResumed: true });
+    }
+    return {
+      ...entry.view,
+      resumed: entry.view.status.kind === "done" && entry.view.status.resumed === true,
+    };
   }
 
   /**

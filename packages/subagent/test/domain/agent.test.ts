@@ -5,8 +5,10 @@ import { Agent, type AgentUpdateListener } from "../../src/domain/agent.js";
 import type { AgentViewStatus } from "../../src/domain/agent-snapshot.js";
 import { completedRun } from "../../src/domain/agent-finalize.js";
 import { toResult } from "../../src/domain/agent-result.js";
+import { resolveTask } from "../../src/runtime/task-resolution.js";
 
 const noop: AgentUpdateListener = () => {};
+const fakeSession = { subscribe: () => () => {}, abort: () => {} };
 const view = (agent: Agent) => agent.snapshot();
 
 function doneStatus(agent: Agent): Extract<AgentViewStatus, { kind: "done" }> {
@@ -23,8 +25,8 @@ const baseConfig = {
 };
 
 /**
- * Builds a single-agent registry plus a `findAgent` shim so Agent.resolve can be exercised
- * directly. The returned `resolve` invokes the static factory with sensible defaults — tests
+ * Builds a single-agent registry plus a `findAgent` shim so task resolution can be exercised
+ * directly. The returned `resolve` invokes the runtime resolver with sensible defaults — tests
  * pass the listener if they want to observe update emissions.
  */
 function resolveScenario(opts: { config?: any } = {}) {
@@ -34,8 +36,8 @@ function resolveScenario(opts: { config?: any } = {}) {
   const tracked: Agent[] = [];
   const findAgent = (id: string) => tracked.find(a => a.id === id);
   function resolve(task: any, listener: AgentUpdateListener = noop, background = false) {
-    const result = Agent.resolve({
-      task, background, groupId: "g", inputIndex: 0, createdAt: Date.now(),
+    const result = resolveTask({
+      task, background, groupId: "g", inputIndex: 0,
       registry, findAgent, listener,
     });
     if (result.kind === "spawn") tracked.push(result.agent);
@@ -80,7 +82,7 @@ test("Agent constructor optional background flag controls projected dispatch", (
   assert.equal(view(backgroundAgent).dispatch, "background");
 });
 
-test("projectAgentView surfaces the default skills from the agent config", () => {
+test("snapshot uses configured defaults when no task override is provided", () => {
   const config = { ...baseConfig, skills: ["foo", "bar"] };
   const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
   assert.deepEqual(view(agent).config.skills, ["foo", "bar"]);
@@ -93,12 +95,84 @@ test("Agent per-task resumable beats the config default in both directions", () 
   for (const [configDefault, override] of [[true, false], [false, true]] as const) {
     const config = { ...baseConfig, resumable: configDefault };
     const agent = new Agent("id", config, { kind: "spawn", agent: "helper", prompt: "work", resumable: override }, noop);
-    assert.equal(agent.resumable, override);
+    assert.equal(agent.shouldRetainConversation, override);
     assert.equal(view(agent).config.resumable, override);
   }
 });
 
-test("Agent.resolve keeps the stored label when omitted on resume and overwrites it when provided", () => {
+test("snapshot projects requested skills for defaults, overrides, and explicit disable", () => {
+  const config = {
+    ...baseConfig,
+    model: "definition/model",
+    thinking: "low" as const,
+    tools: ["read", "grep"],
+    skills: ["definition-skill"],
+    resumable: false,
+  };
+  const defaults = new Agent("defaults", config, {
+    kind: "spawn",
+    agent: "helper",
+    prompt: "work",
+  }, noop);
+  assert.deepEqual(defaults.requestedConfig.skills, ["definition-skill"]);
+  assert.deepEqual(defaults.snapshot().config.skills, ["definition-skill"]);
+
+  const override = new Agent("override", config, {
+    kind: "spawn",
+    agent: "helper",
+    prompt: "work",
+    model: "spawn/model",
+    thinking: "high",
+    skills: ["requested-skill"],
+    cwd: "nested",
+    resumable: true,
+  }, noop);
+  assert.deepEqual(override.requestedConfig, {
+    model: "spawn/model",
+    thinking: "high",
+    skills: ["requested-skill"],
+    tools: ["read", "grep"],
+    cwd: "nested",
+    resumable: true,
+  });
+  assert.equal(override.snapshot().status.kind, "queued");
+  assert.deepEqual(override.snapshot().config.skills, ["requested-skill"]);
+  override.attach(fakeSession as any);
+  assert.equal(override.snapshot().status.kind, "running");
+  assert.deepEqual(override.snapshot().config.skills, ["requested-skill"]);
+  completedRun(override, "done");
+  assert.equal(override.snapshot().status.kind, "done");
+  assert.deepEqual(override.snapshot().config.skills, ["requested-skill"]);
+
+  const disabled = new Agent("disabled", config, {
+    kind: "spawn",
+    agent: "helper",
+    prompt: "work",
+    skills: [],
+  }, noop);
+  assert.deepEqual(disabled.requestedConfig.skills, []);
+  assert.deepEqual(disabled.snapshot().config.skills, []);
+});
+
+test("post-attach resumable overrides update the canonical policy and effective config", () => {
+  const agent = new Agent("id", { ...baseConfig, resumable: true }, {
+    kind: "spawn", agent: "helper", prompt: "first",
+  }, noop);
+  agent.setEffectiveConfig({ cwd: "/tmp", skills: [], tools: [], resumable: true });
+  agent.attach(fakeSession as any);
+  completedRun(agent, "first");
+
+  agent.beginResume("follow-up", false, false);
+  assert.equal(agent.requestedConfig.resumable, true, "queued override is not applied before attach");
+  agent.attach(fakeSession as any);
+
+  assert.equal(agent.requestedConfig.resumable, false);
+  assert.equal(agent.resumableEnabled, false);
+  assert.equal(agent.snapshot().effectiveConfig?.resumable, false);
+  assert.equal(agent.snapshot().config.resumable, false);
+});
+
+test("task resolution keeps the stored label when omitted on resume and overwrites it when provided", () => {
   const session = { subscribe: () => () => { }, abort: () => { } };
   const updates: string[] = [];
   const { resolve } = resolveScenario({ config: { ...baseConfig, resumable: true } });
@@ -119,7 +193,7 @@ test("Agent.resolve keeps the stored label when omitted on resume and overwrites
   );
   if (r1.kind !== "resume") throw new Error("expected resume");
   assert.equal(r1.agent.label, "researcher");
-  completedRun(r1.agent, "done again", true);
+  completedRun(r1.agent, "done again");
 
   // Resume with an explicit label and a per-attempt resumable override.
   const r2 = resolve(
@@ -133,7 +207,7 @@ test("Agent.resolve keeps the stored label when omitted on resume and overwrites
   assert.ok(updates.filter(k => k === "status").length >= 4, `expected several status updates, got ${updates.join(",")}`);
 });
 
-test("Agent.resolve re-subscribes the session on resume so events during a resumed cycle update its state", () => {
+test("task resolution re-subscribes the session on resume so events during a resumed cycle update its state", () => {
   let emit: ((event: any) => void) | undefined;
   const session = {
     messages: [],
@@ -242,7 +316,7 @@ test("multiple resumes accumulate previous run sections in chronological order a
   const r1 = resolve({ kind: "resume", sessionId: agent.id, prompt: "run two" });
   if (r1.kind !== "resume") throw new Error("expected resume");
   agent.attach(session as any);
-  completedRun(agent, "output two", true);
+  completedRun(agent, "output two");
 
   const r2 = resolve({ kind: "resume", sessionId: agent.id, prompt: "run three" });
   if (r2.kind !== "resume") throw new Error("expected resume");
@@ -378,14 +452,13 @@ test("Agent.abort on a terminal agent is a no-op and does not re-finalize", asyn
   assert.deepEqual(doneStatus(agent), settled);
 });
 
-test("Agent.resolve spawn for an unknown agent returns a preflight failure with a helpful error", () => {
+test("task resolution for an unknown agent returns a preflight failure with a helpful error", () => {
   const registry = { agents: new Map() } as any;
-  const result = Agent.resolve({
+  const result = resolveTask({
     task: { kind: "spawn", agent: "missing", prompt: "p" },
     background: false,
     groupId: "g",
     inputIndex: 0,
-    createdAt: 1,
     registry,
     findAgent: () => undefined,
     listener: noop,
@@ -398,7 +471,7 @@ test("Agent.resolve spawn for an unknown agent returns a preflight failure with 
   assert.equal(result.failure.status.kind, "done");
 });
 
-test("Agent.resolve explains that a completed non-resumable session cannot accept follow-ups", () => {
+test("task resolution explains that a completed non-resumable session cannot accept follow-ups", () => {
   const { resolve } = resolveScenario();
   const spawn = resolve({ kind: "spawn", agent: "helper", prompt: "work" });
   if (spawn.kind !== "spawn") throw new Error("expected spawn");
@@ -413,7 +486,7 @@ test("Agent.resolve explains that a completed non-resumable session cannot accep
   }
 });
 
-test("Agent.resolve resume rejects sessions that are mid-attempt or non-resumable, leaving the existing attempt intact", () => {
+test("task resolution rejects sessions that are mid-attempt or non-resumable, leaving the existing attempt intact", () => {
   const { resolve, tracked } = resolveScenario({ config: { ...baseConfig, source: "user", resumable: true } });
   const spawn = resolve({ kind: "spawn", agent: "helper", prompt: "work" });
   if (spawn.kind !== "spawn") throw new Error("expected spawn");

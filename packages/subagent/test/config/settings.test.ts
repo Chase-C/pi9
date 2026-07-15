@@ -4,7 +4,24 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SubagentSettingsStore } from "../../src/config/settings.js";
+import { createDefaultSubagentSettings, SubagentSettingsStore } from "../../src/config/settings.js";
+
+test("subagent default settings are fresh at every construction", () => {
+  const first = createDefaultSubagentSettings();
+  first.runtime.maxTasksPerRun = 99;
+  first.agentDiscovery.agentFileExtensions.push(".agent.md");
+  first.display.widgetShowForeground = false;
+
+  const second = createDefaultSubagentSettings();
+
+  assert.equal(second.runtime.maxTasksPerRun, 8);
+  assert.deepEqual(second.agentDiscovery.agentFileExtensions, [".md"]);
+  assert.equal(second.display.widgetShowForeground, true);
+  assert.notEqual(first.runtime, second.runtime);
+  assert.notEqual(first.agentDiscovery, second.agentDiscovery);
+  assert.notEqual(first.agentDiscovery.agentFileExtensions, second.agentDiscovery.agentFileExtensions);
+  assert.notEqual(first.display, second.display);
+});
 
 test("subagent UI settings default to below editor when file is missing", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-settings-default-"));
@@ -70,17 +87,17 @@ test("subagent settings reject invalid values with a field-named warning and fal
   }
 });
 
-test("subagent settings reject the legacy backgroundNotify names end-of-turn and next-tool-call and fall back to auto", async () => {
-  for (const legacy of ["end-of-turn", "next-tool-call"] as const) {
-    const root = await mkdtemp(join(tmpdir(), `subagent-settings-legacy-${legacy}-`));
+test("subagent settings reject unsupported backgroundNotify values and fall back to auto", async () => {
+  for (const value of ["end-of-turn", "next-tool-call"] as const) {
+    const root = await mkdtemp(join(tmpdir(), `subagent-settings-invalid-notify-${value}-`));
     const settingsPath = join(root, "subagent", "settings.json");
     await mkdir(join(root, "subagent"), { recursive: true });
-    await writeFile(settingsPath, JSON.stringify({ runtime: { backgroundNotify: legacy } }));
+    await writeFile(settingsPath, JSON.stringify({ runtime: { backgroundNotify: value } }));
 
     const result = await new SubagentSettingsStore(settingsPath).load();
 
-    assert.equal(result.settings.runtime.backgroundNotify, "auto", `${legacy}: should fall back to auto`);
-    assert.match(result.warning ?? "", /backgroundNotify/, `${legacy}: warning should mention backgroundNotify`);
+    assert.equal(result.settings.runtime.backgroundNotify, "auto", `${value}: should fall back to auto`);
+    assert.match(result.warning ?? "", /backgroundNotify/, `${value}: warning should mention backgroundNotify`);
   }
 });
 

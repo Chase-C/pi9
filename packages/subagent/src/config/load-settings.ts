@@ -1,5 +1,5 @@
 import {
-  DEFAULT_SUBAGENT_SETTINGS,
+  createDefaultSubagentSettings,
   normalizeSettings,
   type SubagentSettings,
   type SubagentSettingsLoadResult,
@@ -24,13 +24,9 @@ export async function loadSubagentSettings(
     return normalized.settings;
   } catch (error) {
     const message = `Failed to load subagent UI settings; using defaults. ${error instanceof Error ? error.message : String(error)}`;
-    notifySettingsWarning(ctx, { settings: DEFAULT_SUBAGENT_SETTINGS, warning: message });
-    return {
-      ...DEFAULT_SUBAGENT_SETTINGS,
-      runtime: { ...DEFAULT_SUBAGENT_SETTINGS.runtime },
-      agentDiscovery: { ...DEFAULT_SUBAGENT_SETTINGS.agentDiscovery, agentFileExtensions: [...DEFAULT_SUBAGENT_SETTINGS.agentDiscovery.agentFileExtensions] },
-      display: { ...DEFAULT_SUBAGENT_SETTINGS.display },
-    };
+    const settings = createDefaultSubagentSettings();
+    notifySettingsWarning(ctx, { settings, warning: message });
+    return settings;
   }
 }
 

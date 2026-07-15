@@ -1,9 +1,5 @@
 import type { AgentSnapshot, AgentToolUse, AgentViewStatus } from "./agent-snapshot.js";
 
-export function activeOrRetainedAgents<T extends { status: { kind: string }; resumable: boolean; background?: boolean }>(agents: T[]): T[] {
-  return agents.filter(a => isActiveStatusKind(a.status.kind) || a.resumable || a.background === true);
-}
-
 export function effectiveStatus(status: AgentViewStatus): string {
   return status.kind === "done" ? status.outcome : status.kind;
 }

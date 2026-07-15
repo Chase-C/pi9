@@ -23,7 +23,7 @@ function terminalSnapshot(over: Partial<AgentSnapshot> = {}): AgentSnapshot {
     status: { kind: "done", outcome: "completed", startedAt: 100, completedAt: 600, output: "the full output", resumed: false },
     activity: { turns: 3, compactions: 0, toolHistory: [] },
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 42, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    capabilities: { canResume: true, canClear: true },
+    capabilities: { canResume: true, canRemove: true, canClear: true },
     ...over,
   };
 }

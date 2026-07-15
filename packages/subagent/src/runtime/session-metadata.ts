@@ -1,5 +1,6 @@
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
-import type { Agent, AgentUpdateKind } from "../domain/agent.js";
+import type { Agent } from "../domain/agent.js";
+import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
 import { compact } from "../view/view-helpers.js";
 
 interface MetadataPi {

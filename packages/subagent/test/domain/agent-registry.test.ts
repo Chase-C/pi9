@@ -21,6 +21,47 @@ test("registry honors discovery options and default resumable", async () => {
   assert.equal(enabled.agents.get("helper")?.resumable, true);
 });
 
+test("registry skips invalid descriptions and only warns when configured", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-registry-description-"));
+  const projectAgents = join(root, ".pi", "agents");
+  await mkdir(projectAgents, { recursive: true });
+  await writeFile(join(projectAgents, "invalid.md"), `---\nname: invalid\ndescription: "   "\n---\nPrompt`);
+
+  const silentWarnings: string[] = [];
+  const silent = new AgentRegistry();
+  await silent.reload(root, { onWarning: warning => silentWarnings.push(warning) });
+  assert.equal(silent.agents.has("invalid"), false);
+  assert.deepEqual(silentWarnings, []);
+
+  const warnings: string[] = [];
+  const warning = new AgentRegistry();
+  await warning.reload(root, {
+    discovery: { warnOnInvalidAgents: true },
+    onWarning: message => warnings.push(message),
+  });
+  assert.equal(warning.agents.has("invalid"), false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Invalid subagent definition.*Expected required field "description"/);
+});
+
+test("registry skips invalid thinking levels and warns through the configured channel", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-registry-thinking-"));
+  const projectAgents = join(root, ".pi", "agents");
+  await mkdir(projectAgents, { recursive: true });
+  await writeFile(join(projectAgents, "invalid.md"), `---\nname: invalid\ndescription: Invalid thinking\nthinking: extreme\n---\nPrompt`);
+
+  const warnings: string[] = [];
+  const registry = new AgentRegistry();
+  await registry.reload(root, {
+    discovery: { warnOnInvalidAgents: true },
+    onWarning: message => warnings.push(message),
+  });
+
+  assert.equal(registry.agents.has("invalid"), false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Invalid subagent definition.*Expected field "thinking" to be one of/);
+});
+
 test("registry loads markdown files from ctx cwd project dir and keys by frontmatter name", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-registry-"));
   const projectAgents = join(root, ".pi", "agents");

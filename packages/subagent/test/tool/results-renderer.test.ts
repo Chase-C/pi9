@@ -36,8 +36,7 @@ test("results collapsed renders one run-style row per entry, including pending a
 
   assert.equal(lines.length, 3);
   assert.match(lines[0], /^  ✓ alpha /);
-  assert.match(lines[1], /beta · running/);
-  assert.doesNotMatch(lines[1], /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  assert.match(lines[1], /^  ● beta  0 tool calls · 0 tokens · /);
   assert.equal(lines[2], "s3 · error: Unknown subagent session: s3");
   // No count-summary header — the header is the tool-call title line.
   assert.doesNotMatch(lines.join("\n"), /\d results?\b/);

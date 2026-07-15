@@ -46,7 +46,7 @@ test("orchestrator handles a mixed batch of one spawn and one resume with resume
   };
   const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
     agent.attach(agent.retainedSession()!);
-    return completedRun(agent, `resume:${attempt.prompt}`, true);
+    return completedRun(agent, `resume:${attempt.prompt}`);
   };
   const registry = {
     agents: new Map([
@@ -78,10 +78,16 @@ test("orchestrator handles a mixed batch of one spawn and one resume with resume
   assert.equal(results[1].output, "resume:three");
   assert.equal(results[1].sessionId, seed.sessionId);
 
+  const liveResume = updates[0].sessions[1];
+  assert.equal(liveResume.resumed, true);
+  assert.equal(liveResume.status.kind, "queued");
+
   const final = updates.at(-1);
   assert.equal(final.sessions.length, 2);
   assert.equal(final.sessions[0].resumed, false);
   assert.equal(final.sessions[1].resumed, true);
+  assert.equal(final.sessions[1].status.kind, "done");
+  assert.equal(final.sessions[1].status.resumed, true);
 });
 
 test("orchestrator.startBatch returns sessions synchronously and a resultsPromise mirroring run() for background:false", async () => {
@@ -105,8 +111,6 @@ test("orchestrator.startBatch returns sessions synchronously and a resultsPromis
     { background: false },
   );
 
-  assert.equal(typeof batch.groupId, "string");
-  assert.ok(batch.groupId);
   assert.equal(batch.sessions.length, 2);
   assert.deepEqual(batch.sessions.map(s => s.config.name), ["helper", "helper"]);
   assert.deepEqual(batch.sessions.map(s => s.dispatch), ["foreground", "foreground"]);
@@ -154,6 +158,7 @@ test("orchestrator.startBatch background:true surfaces preflight failures as tra
     throw new Error("runner should not be called");
   });
 
+  const updates: any[] = [];
   const batch = manager.startRun(
     baseCtx(),
     undefined,
@@ -161,15 +166,20 @@ test("orchestrator.startBatch background:true surfaces preflight failures as tra
       { kind: "spawn", agent: "missing", prompt: "unknown agent", resumable: true },
       { kind: "resume", sessionId: "missing-session", prompt: "bad resume" },
     ],
-    undefined,
+    update => updates.push(update),
     { background: true },
   );
 
   assert.deepEqual(batch.sessions.map(s => s.dispatch), ["background", "background"]);
   assert.deepEqual(batch.sessions.map(s => s.retention), ["transient", "transient"]);
+  assert.deepEqual(batch.sessions.map(s => s.resumed), [false, true]);
+  assert.deepEqual(updates[0].sessions.map((s: any) => s.resumed), [false, true]);
   assert.deepEqual(backgroundStartedDetails(batch.sessions).handles, []);
 
-  const results = (await batch.resultsPromise).map(toResult);
+  const snapshots = await batch.resultsPromise;
+  assert.deepEqual(snapshots.map(s => s.status.kind === "done" ? s.status.resumed : undefined), [false, true]);
+  assert.ok(snapshots.every(s => !Object.prototype.hasOwnProperty.call(s, "resumed")));
+  const results = snapshots.map(toResult);
   assert.deepEqual(results.map(r => r.status), ["error", "error"]);
 });
 

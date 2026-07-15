@@ -6,7 +6,7 @@ import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers
 
 type FakeRegistry = { agents: Map<string, any>; reload?: () => Promise<void>; summarizeAgent?: () => string };
 
-test("Agent.resolve unknown-agent failure surfaces the input label on both synthetic results and views", async () => {
+test("task resolution unknown-agent failure surfaces the input label on both synthetic results and views", async () => {
   const registry: FakeRegistry = { agents: new Map() };
   const manager = makeManager(registry as any, 2, async () => ({ status: "completed" }) as any);
 
@@ -22,7 +22,7 @@ test("Agent.resolve unknown-agent failure surfaces the input label on both synth
   assert.equal(lastUpdate.sessions[0].label, "researcher");
 });
 
-test("Agent.resolve rejects duplicate resume tasks without corrupting the retained session", async () => {
+test("task resolution rejects duplicate resume tasks without corrupting the retained session", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
     agent.attach(session);
@@ -73,7 +73,7 @@ test("Agent.resolve rejects duplicate resume tasks without corrupting the retain
   assert.equal(sessions[0].status.kind === "done" && sessions[0].status.output, "new:first follow-up");
 });
 
-test("Agent.resolve resume failure for an unknown sessionId yields a per-task error and does not block siblings", async () => {
+test("task resolution resume failure for an unknown sessionId yields a per-task error and does not block siblings", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
     agent.attach(session);

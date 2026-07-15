@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -5,10 +6,10 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   ExtensionContext,
-  formatSkillsForPrompt,
   getAgentDir,
   loadSkills,
   SessionManager,
+  stripFrontmatter,
   SettingsManager,
   type AgentSession,
   type ModelRegistry,
@@ -30,6 +31,7 @@ export interface RunAgentDependencies {
   sessionManager: typeof SessionManager.inMemory;
   settingsManager: typeof SettingsManager.create;
   loadSkills: typeof loadSkills;
+  readSkillFile: typeof readFileSync;
   loadExtensionPaths: (cwd: string, agentDir: string) => Promise<string[]>;
   childToolFor?: (agent: Agent) => ToolDefinition;
 }
@@ -41,6 +43,7 @@ export const DefaultRunAgentDependencies: RunAgentDependencies = {
   sessionManager: SessionManager.inMemory,
   settingsManager: SettingsManager.create,
   loadSkills,
+  readSkillFile: readFileSync,
   loadExtensionPaths: discoverInheritedExtensionPaths,
 };
 
@@ -57,16 +60,17 @@ export async function RunAttempt(
       throw new Error(`Cannot resume an agent without a retained session.`);
     }
     agent.attach(session);
-    return PromptAgent(session, agent, attempt, signal, true);
+    return PromptAgent(session, agent, attempt, signal);
   }
 
   if (signal?.aborted) return skippedRun(agent);
 
   const runData = { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId };
-  const cwd = ResolveTaskCwd(ctx.cwd, agent.spawn.cwd);
+  const requestedConfig = agent.requestedConfig;
+  const cwd = ResolveTaskCwd(ctx.cwd, requestedConfig.cwd);
   const agentDir = dependencies.getAgentDir();
 
-  const requestedSkills = agent.spawn.skills ?? agent.config.skills ?? [];
+  const requestedSkills = requestedConfig.skills ?? [];
   let systemPrompt = agent.config.systemPrompt;
   if (requestedSkills.length > 0) {
     const { skills: available } = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true });
@@ -78,8 +82,18 @@ export async function RunAttempt(
       matched.push({ ...found, disableModelInvocation: false });
     }
     if (missingSkill) return errorRun(agent, `Unknown skill: ${missingSkill}`);
-    const skillBlock = formatSkillsForPrompt(matched);
-    if (skillBlock) systemPrompt = `${systemPrompt}\n\n${skillBlock}`;
+
+    try {
+      const skillBlocks = matched.map(skill => {
+        const content = dependencies.readSkillFile(skill.filePath, "utf-8");
+        const body = stripFrontmatter(content).trim();
+        return `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
+      });
+      systemPrompt = `${systemPrompt}\n\n${skillBlocks.join("\n\n")}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return errorRun(agent, `Could not load requested skill: ${message}`);
+    }
   }
 
   const inheritedExtensionPaths = await dependencies.loadExtensionPaths(cwd, agentDir);
@@ -101,8 +115,8 @@ export async function RunAttempt(
   await timingAsync("runAgent.resourceLoader.reload", { ...runData, cwd }, () => resourceLoader.reload());
   if (signal?.aborted) return skippedRun(agent);
 
-  const selectedModel = SelectModel(agent.spawn.model ?? agent.config.model, ctx.model, ctx.modelRegistry);
-  const requestedThinking = agent.spawn.thinking ?? agent.config.thinking;
+  const selectedModel = SelectModel(requestedConfig.model, ctx.model, ctx.modelRegistry);
+  const requestedThinking = requestedConfig.thinking;
   const sessionManager = dependencies.sessionManager(cwd);
   const settingsManager = dependencies.settingsManager(cwd, agentDir);
   const { session } = await timingAsync("runAgent.createAgentSession", { ...runData, cwd, model: selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : undefined }, () => dependencies.createAgentSession({
@@ -112,7 +126,7 @@ export async function RunAttempt(
     model: selectedModel,
     thinkingLevel: requestedThinking,
     modelRegistry: ctx.modelRegistry,
-    tools: agent.config.tools,
+    tools: requestedConfig.tools ? [...requestedConfig.tools] : undefined,
     customTools: childTool ? [childTool] : [],
     sessionManager,
     settingsManager,
@@ -122,14 +136,14 @@ export async function RunAttempt(
   const effectiveThinking = session.thinkingLevel ?? requestedThinking;
   const activeTools = typeof session.getActiveToolNames === "function"
     ? session.getActiveToolNames()
-    : agent.config.tools ?? [];
+    : requestedConfig.tools ?? [];
   agent.setEffectiveConfig({
     ...(effectiveModel ? { model: `${effectiveModel.provider}/${effectiveModel.id}` } : {}),
     ...(effectiveThinking ? { thinking: effectiveThinking as ModelThinkingLevel } : {}),
     cwd,
     skills: requestedSkills,
     tools: activeTools,
-    resumable: agent.resumableEnabled,
+    resumable: requestedConfig.resumable,
   });
 
   if (signal?.aborted) {
@@ -146,14 +160,13 @@ async function PromptAgent(
   agent: Agent,
   attempt: Attempt,
   signal?: AbortSignal,
-  resumed = false,
 ): Promise<AgentSnapshot> {
   const prompt = attempt.prompt;
   const onAbort = () => { void AbortSession(session); }
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return interruptedRun(agent, "Agent interrupted.", resumed);
+    return interruptedRun(agent, "Agent interrupted.");
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -162,19 +175,19 @@ async function PromptAgent(
     await timingAsync("runAgent.session.prompt", { agent: agent.agentName, sessionId: agent.id, promptLength: prompt.length }, () => session.prompt(prompt));
     const finalMessage = GetFinalAssistantMessage(session);
     if (finalMessage.stopReason === "aborted") {
-      return interruptedRun(agent, finalMessage.errorMessage || "Agent interrupted.", resumed);
+      return interruptedRun(agent, finalMessage.errorMessage || "Agent interrupted.");
     }
     if (finalMessage.stopReason === "error") {
-      return errorRun(agent, finalMessage.errorMessage || finalMessage.response || "Agent failed.", resumed);
+      return errorRun(agent, finalMessage.errorMessage || finalMessage.response || "Agent failed.");
     }
 
     const response = agent.message || finalMessage.response;
-    return completedRun(agent, response, resumed);
+    return completedRun(agent, response);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return signal?.aborted
-      ? interruptedRun(agent, message, resumed)
-      : errorRun(agent, message, resumed);
+      ? interruptedRun(agent, message)
+      : errorRun(agent, message);
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }

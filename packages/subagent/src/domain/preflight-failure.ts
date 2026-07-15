@@ -1,28 +1,33 @@
-import { Agent } from "./agent.js";
 import type { AgentConfig } from "./agent-config.js";
-import type { AgentRetention, AgentSnapshot } from "./agent-snapshot.js";
+import type { AgentRequestedConfig } from "./agent-requested-config.js";
+import type { AgentSnapshot } from "./agent-snapshot.js";
 import type { ResumeRequest, SpawnRequest } from "../schema.js";
 
 interface PreflightFailureMeta {
   groupId: string;
   inputIndex: number;
-  createdAt: number;
   task: SpawnRequest | ResumeRequest;
   background: boolean;
 }
 
-interface PreflightFailureArgs {
-  error: string;
-  target?: Agent;
+interface PreflightFailureTarget {
+  readonly id: string;
+  readonly agentName: string;
+  readonly config: AgentConfig;
+  readonly requestedConfig: AgentRequestedConfig;
+  readonly spawn: SpawnRequest;
+  readonly shouldRetainConversation: boolean;
 }
 
-const NOOP_LISTENER = () => {};
+interface PreflightFailureArgs {
+  error: string;
+  target?: PreflightFailureTarget;
+}
 
 /**
- * A failed preflight (unknown agent, bad or blocked resume) is represented as a synthetic
- * terminal snapshot in `error` state, built through the one snapshot factory on a throwaway
- * `Agent`. The throwaway never enters the catalog, so its placeholder config can't leak into
- * agent listing or discovery. The failed row and the result both derive from this snapshot.
+ * Build the terminal row for a task rejected before it gets an Agent attempt. This deliberately
+ * projects the same DTO shape as Agent.snapshot() without constructing a throwaway Agent: failed
+ * tasks never enter the session catalog and therefore do not need domain lifecycle state.
  *
  * The id reuses the live target's id when resuming a known session, else the
  * `${groupId}:resume-${inputIndex}` scheme so run-group ordering by `inputIndex` is preserved.
@@ -33,53 +38,50 @@ export function preflightFailure(
 ): AgentSnapshot {
   const { groupId, inputIndex, task, background } = meta;
   const { error, target } = args;
-
   const id = target?.id ?? `${groupId}:resume-${inputIndex}`;
-  const { config, spawn } = preflightAgentInputs(task, target);
-  const agent = new Agent(id, config, spawn, NOOP_LISTENER, { background });
-  agent.settle({ status: "error", error, resumed: task.kind === "resume" });
+  const label = task.label !== undefined ? task.label : target?.spawn.label;
+  const name = target?.agentName ?? (task.kind === "spawn" ? task.agent : "(unknown)");
+  const model = target?.requestedConfig.model ?? (task.kind === "spawn" ? task.model : undefined);
+  const thinking = target?.requestedConfig.thinking ?? (task.kind === "spawn" ? task.thinking : undefined);
+  const config = target?.config;
+  const description = target ? target.config.description : "";
+  const skills = target?.requestedConfig.skills ?? (task.kind === "spawn" ? task.skills : undefined);
+  const createdAt = Date.now();
+  const completedAt = Date.now();
 
-  // Preflight rows are per-run and never retained, even under a background batch; the factory's
-  // background-implies-persistent rule doesn't apply here.
-  const retention: AgentRetention = "transient";
-  const snapshot: AgentSnapshot = { ...agent.snapshot({ inputIndex }), retention };
-  // A throwaway Agent has no retained session, so its `resumable` is always false; reflect the
-  // live target's resumability instead so the result/row match the session being resumed.
-  if (!target) return { ...snapshot, config: { ...snapshot.config, source: undefined } };
-  return { ...snapshot, config: { ...snapshot.config, resumable: target.resumable } };
-}
-
-/** Config + spawn for the throwaway Agent: the live target's when known, else a placeholder. */
-function preflightAgentInputs(
-  task: SpawnRequest | ResumeRequest,
-  target?: Agent,
-): { config: AgentConfig; spawn: SpawnRequest } {
-  if (target) {
-    return {
-      config: target.config,
-      spawn: { ...target.spawn, prompt: task.prompt, ...(task.label !== undefined ? { label: task.label } : {}) },
-    };
-  }
-
-  const name = task.kind === "spawn" ? task.agent : "(unknown)";
-  const model = task.kind === "spawn" ? task.model : undefined;
-  const thinking = task.kind === "spawn" ? task.thinking : undefined;
-  const config: AgentConfig = {
-    name,
-    description: "",
-    systemPrompt: "",
-    source: "project",
-    resumable: false,
-    ...(model !== undefined ? { model } : {}),
-    ...(thinking !== undefined ? { thinking } : {}),
-  };
-  const spawn: SpawnRequest = {
-    kind: "spawn",
-    agent: name,
+  return {
+    id,
+    inputIndex,
+    ...(label !== undefined ? { label } : {}),
     prompt: task.prompt,
-    ...(task.label !== undefined ? { label: task.label } : {}),
-    ...(model !== undefined ? { model } : {}),
-    ...(thinking !== undefined ? { thinking } : {}),
+    createdAt,
+    dispatch: background ? "background" : "foreground",
+    // Preflight rows are per-run and never retained, even under a background batch.
+    retention: "transient",
+    config: {
+      name,
+      description,
+      source: config?.source,
+      sourcePath: config?.sourcePath,
+      model,
+      thinking,
+      tools: target?.requestedConfig.tools,
+      ...(skills !== undefined ? { skills } : {}),
+      resumable: target?.shouldRetainConversation ?? false,
+    },
+    status: {
+      kind: "done",
+      outcome: "error",
+      completedAt,
+      resumed: task.kind === "resume",
+      error,
+    },
+    activity: { turns: 0, compactions: 0, toolHistory: [] },
+    usage: undefined,
+    capabilities: {
+      canResume: false,
+      canRemove: false,
+      canClear: false,
+    },
   };
-  return { config, spawn };
 }

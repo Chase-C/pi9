@@ -1,10 +1,12 @@
 import { DEFAULT_SUBAGENT_SETTINGS, type BackgroundNotifyMode, type SubagentDisplaySettings } from "../config/settings.js";
 
-import type { Agent, AgentUpdateKind } from "../domain/agent.js";
-import type { AgentRunStatus } from "../domain/agent-result.js";
+import type { Agent } from "../domain/agent.js";
+import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
 import type { AgentManager } from "./agent-manager.js";
-
-const MAX_LISTED_COMPLETIONS = 20;
+import {
+  createBackgroundCompletionMessage,
+  type BackgroundCompletion,
+} from "../view/background-completion-message.js";
 
 export interface NotifierContext {
   isIdle(): boolean;
@@ -39,14 +41,6 @@ const defaultScheduleRetry = (fn: () => void, delayMs: number): (() => void) => 
   return () => clearTimeout(handle);
 };
 
-interface CompletionEntry {
-  sessionId: string;
-  agent: string;
-  label?: string;
-  status: AgentRunStatus;
-  elapsedMs: number;
-}
-
 type FlushTrigger =
   | "auto-event"   // turn_end / agent_end
   | "steer-event"  // tool_execution_start
@@ -61,7 +55,7 @@ type FlushAction =
   | { kind: "dispatch"; via: "auto" | "steer" };
 
 export class BackgroundNotifier {
-  private _queue: CompletionEntry[] = [];
+  private _queue: BackgroundCompletion[] = [];
   private _notifiedTerminalSessionIds = new Set<string>();
   private _unsubAgent: () => void = () => { };
   private _ctx: NotifierContext | undefined;
@@ -111,7 +105,7 @@ export class BackgroundNotifier {
     this._notifiedTerminalSessionIds.add(agent.id);
     const startedAt = status.startedAt ?? agent.createdAt;
     const elapsedMs = Math.max(0, status.completedAt - startedAt);
-    const entry: CompletionEntry = {
+    const entry: BackgroundCompletion = {
       sessionId: agent.id,
       agent: agent.agentName,
       status: status.outcome,
@@ -213,12 +207,11 @@ export class BackgroundNotifier {
     this._queue = [];
     if (entries.length === 0) return;
     const display = this.deps.getDisplay?.() ?? DEFAULT_SUBAGENT_SETTINGS.display;
-    const content = formatNotification(entries, display);
+    const message = createBackgroundCompletionMessage(entries, display);
     this.deps.pi.sendMessage(
       {
         customType: "subagent-background-completion",
-        content,
-        details: { completions: entries.map(e => ({ ...e })) },
+        ...message,
       },
       via === "steer" ? { deliverAs: "steer" } : { triggerTurn: true },
     );
@@ -232,36 +225,4 @@ function resultsSessionIds(event: unknown): Set<string> {
   const { action, sessionIds } = args as { action?: unknown; sessionIds?: unknown };
   if (action !== "results" || !Array.isArray(sessionIds)) return new Set();
   return new Set(sessionIds.filter((id): id is string => typeof id === "string"));
-}
-
-function formatNotification(entries: CompletionEntry[], display: SubagentDisplaySettings): string {
-  const limit = display.toolCallLabelMaxLength;
-  const visible = entries.slice(0, MAX_LISTED_COMPLETIONS);
-  const overflow = entries.length - visible.length;
-  const header = `${entries.length} background subagent${entries.length === 1 ? "" : "s"} completed since the last notification:`;
-  const lines = visible.map(entry => formatEntry(entry, limit));
-  if (overflow > 0) lines.push(`- ... and ${overflow} more`);
-  lines.push("");
-  lines.push("Call subagent results with these sessionIds to retrieve output.");
-  return [header, ...lines].join("\n");
-}
-
-function formatEntry(entry: CompletionEntry, labelLimit: number): string {
-  const elapsed = formatElapsed(entry.elapsedMs);
-  const labelPart = entry.label !== undefined ? ` (${truncate(entry.label, labelLimit)})` : "";
-  return `- ${entry.agent}${labelPart} · ${entry.status} · ${elapsed} · sessionId ${entry.sessionId}`;
-}
-
-function truncate(value: string, limit: number): string {
-  if (value.length <= limit) return value;
-  return `${value.slice(0, Math.max(0, limit - 3))}...`;
-}
-
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remSeconds = Math.floor(seconds - minutes * 60);
-  return `${minutes}m${remSeconds.toString().padStart(2, "0")}s`;
 }

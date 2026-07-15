@@ -7,9 +7,9 @@ import { updateSubagentWidget } from "../ui/widget.js";
 import { prepareSubagentRuntime } from "../runtime/prepare-subagent-runtime.js";
 import {
   SubagentResumeLoader,
-  SubagentSettingsComponent,
   type SubagentResumeCommandResult,
 } from "./components.js";
+import { applySubagentSettingsChange, SubagentSettingsComponent } from "./components/settings.js";
 import { errorMessage, notify } from "./notify.js";
 
 export async function resumeSessionFromCommand(
@@ -112,41 +112,20 @@ export async function openSubagentSettings(
       theme,
       keybindings,
       change => {
-        let confirmation: string;
-        if (change.kind === "widgetPlacement") {
-          settings = { ...settings, widgetPlacement: change.value };
+        const applied = applySubagentSettingsChange(settings, change);
+        settings = applied.settings;
+        if (change.kind === "widgetPlacement"
+          || change.kind === "widgetLayout"
+          || change.kind === "widgetShowRetainedSessions"
+          || change.kind === "widgetMaxRowsPerSection") {
           updateSubagentWidget(ctx, agentManager.listSessions(), settings);
-          confirmation = `Subagent widget placement set to ${change.value}.`;
-        } else if (change.kind === "widgetLayout") {
-          settings = { ...settings, widgetLayout: change.value };
-          updateSubagentWidget(ctx, agentManager.listSessions(), settings);
-          confirmation = `Subagent widget layout set to ${change.value}.`;
-        } else if (change.kind === "backgroundNotify") {
-          settings = { ...settings, runtime: { ...settings.runtime, backgroundNotify: change.value } };
-          confirmation = `Subagent background notify set to ${change.value}.`;
         } else if (change.kind === "maxConcurrentSubagents") {
-          settings = { ...settings, runtime: { ...settings.runtime, maxConcurrentSubagents: change.value } };
           agentManager.configure({ maxRunning: change.value });
-          confirmation = `Subagent max running set to ${change.value}.`;
-        } else if (change.kind === "maxTasksPerRun") {
-          settings = { ...settings, runtime: { ...settings.runtime, maxTasksPerRun: change.value } };
-          confirmation = `Subagent max tasks per run set to ${change.value}.`;
-        } else if (change.kind === "defaultResumable") {
-          settings = { ...settings, runtime: { ...settings.runtime, defaultResumable: change.value } };
-          confirmation = `Subagent default resumable set to ${change.value}.`;
-        } else if (change.kind === "widgetShowRetainedSessions") {
-          settings = { ...settings, display: { ...settings.display, widgetShowRetainedSessions: change.value } };
-          updateSubagentWidget(ctx, agentManager.listSessions(), settings);
-          confirmation = `Subagent show retained sessions set to ${change.value}.`;
-        } else {
-          settings = { ...settings, display: { ...settings.display, widgetMaxRowsPerSection: change.value } };
-          updateSubagentWidget(ctx, agentManager.listSessions(), settings);
-          confirmation = `Subagent widget rows per section set to ${change.value}.`;
         }
         onSettingsUpdated?.(settings);
         const settingsToSave = settings;
         saveQueue = saveQueue.then(() => settingsStore.save(settingsToSave).then(
-          () => notify(ctx, confirmation, "info"),
+          () => notify(ctx, applied.confirmation, "info"),
           error => notify(ctx, `Failed to save subagent settings: ${errorMessage(error)}`, "warning"),
         ));
       },

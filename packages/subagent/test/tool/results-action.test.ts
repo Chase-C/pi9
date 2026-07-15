@@ -66,7 +66,7 @@ test("subagent action=results with remove:true follows backgroundResults with a 
 
 test("subagent action=results with remove:true refreshes the widget after sweeping terminal sessions", async () => {
   const widgets: unknown[][] = [];
-  let sessions = [fakeAgent({ id: "s1", dispatch: "background", status: { kind: "completed", startedAt: 1, completedAt: 2 } })];
+  let sessions = [fakeAgent({ id: "s1", dispatch: "background", retention: "persistent", status: { kind: "completed", startedAt: 1, completedAt: 2 } })];
   const fakeManager = {
     listSessions() { return sessions; },
     backgroundResults() { return [{ snapshot: sessions[0] }]; },

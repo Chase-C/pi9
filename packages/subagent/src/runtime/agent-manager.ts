@@ -2,14 +2,16 @@ import { randomUUID } from "node:crypto";
 
 import { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { Agent, type AgentUpdateKind } from "../domain/agent.js";
+import { Agent } from "../domain/agent.js";
+import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
 import type { ResultEntry } from "../domain/agent-result.js";
-import { activeOrRetainedAgents, effectiveStatus } from "../domain/agent-decisions.js";
+import { effectiveStatus } from "../domain/agent-decisions.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import type { SessionStatus, TaskRequest } from "../schema.js";
 import { AttemptRunner, type AgentRunner } from "./attempt-runner.js";
 import { RunGroup, type RunUpdateListener } from "./run-group.js";
+import { resolveTask } from "./task-resolution.js";
 import { timingStart } from "./timing.js";
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
@@ -23,11 +25,8 @@ export interface StartRunOptions {
 }
 
 export interface RunHandle {
-  readonly groupId: string;
   /** Root sessions in input order, captured at handle creation. */
   readonly sessions: AgentSnapshot[];
-  /** Live snapshot of the run tree (roots + descendants in pre-order). */
-  tree(): AgentSnapshot[];
   /** Terminal snapshots in input order. The tool layer projects each via `toResult`. */
   readonly resultsPromise: Promise<AgentSnapshot[]>;
 }
@@ -56,8 +55,10 @@ export class AgentManager {
   }
 
   listSessions(filter?: { status?: SessionStatus[] }): AgentSnapshot[] {
-    const listed = this._agents.filter(agent => !this._removingSessionIds.has(agent.id));
-    const views = activeOrRetainedAgents(listed).map(agent => agent.snapshot());
+    const listed = this._agents
+      .filter(agent => !this._removingSessionIds.has(agent.id))
+      .filter(agent => agent.catalogRetention.shouldRemainCataloged);
+    const views = listed.map(agent => agent.snapshot());
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
@@ -157,7 +158,7 @@ export class AgentManager {
   }
 
   /**
-   * Starts a run group. Each task is resolved through pure preflight helpers; surviving spawns
+   * Starts a run group. Each task is resolved by the runtime task resolver; surviving spawns
    * adopt a new Agent into the catalog, surviving resumes start a fresh attempt on the existing
    * Agent. Every agent in the group is wired into a {@link RunGroup} so updates from
    * {@link onAgentUpdate} route back to its listener.
@@ -172,26 +173,24 @@ export class AgentManager {
     options: StartRunOptions,
   ): RunHandle {
     const groupId = randomUUID();
-    const createdAt = Date.now();
 
     const group = new RunGroup({ groupId, onUpdate, walkTree: ids => this._walkTree(ids) });
     this._groups.set(groupId, group);
 
-    const controller = options.background ? new AbortController() : undefined;
-    const childSignal = controller ? controller.signal : signal;
+    // Background runs deliberately decouple from the caller's cancellation signal.
+    const childSignal = options.background ? undefined : signal;
     const touched = new Set<string>();
 
     const { background, parentId } = options;
     const results = tasks.map((task, inputIndex) => {
-      const resumed = task.kind === "resume";
-      const result = Agent.resolve({
-        task, background, groupId, inputIndex, createdAt, parentId, registry: this.registry,
+      const result = resolveTask({
+        task, background, groupId, inputIndex, parentId, registry: this.registry,
         findAgent: id => this._agents.find(a => a.id === id),
         listener: (agent, update) => this._agentUpdate(agent, update),
       });
 
       if (result.kind === "failure") {
-        group.addStaticView(result.failure, inputIndex, resumed);
+        group.addStaticView(result.failure, inputIndex);
         return Promise.resolve(result.failure);
       }
 
@@ -201,7 +200,7 @@ export class AgentManager {
         this._acknowledgedResultIds.delete(result.agent.id);
       }
 
-      group.addAgent(result.agent, inputIndex, resumed);
+      group.addAgent(result.agent, inputIndex);
       touched.add(result.agent.id);
       return this._runner.run(ctx, childSignal, result.agent, result.agent.requireCurrentAttempt());
     });
@@ -213,10 +212,7 @@ export class AgentManager {
     const resultsPromise = Promise.all(results)
       .finally(() => {
         this._agents = this._agents.filter(
-          agent => !touched.has(agent.id)
-            || agent.background
-            || agent.status.kind !== "done"
-            || agent.resumable
+          agent => !touched.has(agent.id) || agent.catalogRetention.shouldRemainCataloged
         );
 
         group.flush();
@@ -225,9 +221,7 @@ export class AgentManager {
       });
 
     return {
-      groupId,
       sessions: initialSessions,
-      tree: () => group.tree(),
       resultsPromise,
     };
   }
@@ -242,7 +236,9 @@ export class AgentManager {
   private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
     const available = this._agents.filter(agent => !this._removingSessionIds.has(agent.id));
     if (scope === "background") return available.filter(a => a.background);
-    if (scope === "retained") return available.filter(a => !a.background && a.status.kind !== "running" && a.resumable);
+    if (scope === "retained") {
+      return available.filter(a => !a.background && a.status.kind !== "running" && a.catalogRetention.retention === "persistent");
+    }
     if (scope === "non-running") return available.filter(a => a.status.kind !== "running");
     throw new Error(`Unknown remove scope: ${String(scope)}`);
   }

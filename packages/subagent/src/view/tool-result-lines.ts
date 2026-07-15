@@ -25,11 +25,11 @@ import {
 } from "./format-helpers.js";
 import { formatRunSessionLine, formatSessionLine } from "./session-lines.js";
 import {
-  parseDetails,
   type AgentListingEntry,
   type BackgroundSpawnHandle,
   type InventoryFilter,
   type RemoveSummary,
+  type SubagentDetails,
 } from "./details.js";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
@@ -61,7 +61,7 @@ function agentConfigMetadataLines(config: AgentListingEntry | AgentConfig): stri
 }
 
 export function formatSubagentToolLines(
-  details: unknown,
+  details: SubagentDetails,
   expanded = false,
   now = Date.now(),
   display: SubagentDisplaySettings = DEFAULT_DISPLAY,
@@ -81,7 +81,7 @@ export interface RunSummary {
 }
 
 /**
- * Derives a {@link RunSummary} from opaque `run` or `results` details, or `undefined` for any other
+ * Derives a {@link RunSummary} from `run` or `results` details, or `undefined` for any other
  * view. The shared count powers both the live run title and the completed/results header. A `run`
  * counts its `subtree` when present (so nested children are included), otherwise the flat
  * `sessions`; a `results` envelope counts each entry's snapshot, plus any bad-id entries (which are
@@ -89,19 +89,17 @@ export interface RunSummary {
  * finished. New live `run` details carry `runStartedAt`; otherwise elapsed runs from the earliest
  * row time.
  */
-export function runSummary(details: unknown, now = Date.now()): RunSummary | undefined {
-  const narrowed = parseDetails(details);
-  if (!narrowed) return undefined;
-  if (narrowed.view === "run") {
-    const sessions = narrowed.subtree && narrowed.subtree.length > 0 ? narrowed.subtree : narrowed.sessions;
-    return summarizeSnapshots(sessions, narrowed.runStartedAt, now);
+export function runSummary(details: SubagentDetails, now = Date.now()): RunSummary | undefined {
+  if (details.view === "run") {
+    const sessions = details.subtree && details.subtree.length > 0 ? details.subtree : details.sessions;
+    return summarizeSnapshots(sessions, details.runStartedAt, now);
   }
-  if (narrowed.view === "results") {
-    const snapshots = narrowed.results.flatMap(entry => ("snapshot" in entry ? [entry.snapshot] : []));
+  if (details.view === "results") {
+    const snapshots = details.results.flatMap(entry => ("snapshot" in entry ? [entry.snapshot] : []));
     // A settled run has no more "now" to measure against, so freeze the header elapsed at the last
     // completion; a background poll still carrying active entries keeps tracking wall-clock time.
     const summary = summarizeSnapshots(snapshots, undefined, resultsUpperBound(snapshots, now));
-    summary.finished += narrowed.results.length - snapshots.length;
+    summary.finished += details.results.length - snapshots.length;
     return summary;
   }
   return undefined;
@@ -135,7 +133,7 @@ function summarizeSnapshots(sessions: readonly AgentSnapshot[], runStartedAt: nu
 }
 
 export function createSubagentTextComponent(
-  details: unknown,
+  details: SubagentDetails,
   expanded: boolean,
   theme: Theme | undefined,
   now = Date.now(),
@@ -148,36 +146,35 @@ export function createSubagentTextComponent(
 }
 
 function formatSubagentToolDisplayLines(
-  details: unknown,
+  details: SubagentDetails,
   expanded = false,
   now = Date.now(),
   bold: Bold | undefined,
   display: SubagentDisplaySettings,
 ): DisplayLine[] | undefined {
-  const narrowed = parseDetails(details);
-  if (!narrowed) return undefined;
+  if (details.view === "error") return undefined;
 
-  switch (narrowed.view) {
+  switch (details.view) {
     case "agents":
-      return formatAgentListLines(narrowed.agents, expanded, bold, display).map(text => ({ text }));
+      return formatAgentListLines(details.agents, expanded, bold, display).map(text => ({ text }));
     case "results":
-      return formatResultsLines(narrowed.results, expanded, now, bold, display);
+      return formatResultsLines(details.results, expanded, now, bold, display);
     case "run": {
-      const ordered = narrowed.subtree && narrowed.subtree.length > 0
-        ? orderAsTree(narrowed.subtree)
-        : narrowed.sessions.map(agent => ({ agent, depth: 0 }));
+      const ordered = details.subtree && details.subtree.length > 0
+        ? orderAsTree(details.subtree)
+        : details.sessions.map(agent => ({ agent, depth: 0 }));
       return expandRows(ordered, expanded, now, bold, display, runRow, true, true);
     }
     case "inventory": {
-      const { sessions, filter } = narrowed;
+      const { sessions, filter } = details;
       if (sessions.length === 0) return [{ text: "No subagent sessions." }];
       if (!expanded && sessions.length > 1) return formatViewGroupLine(serializeGroup(sessions), filter);
       return expandRows(orderAsTree(sessions), expanded, now, bold, display, inventoryRow, false);
     }
     case "remove-summary":
-      return formatRemoveSummaryLines(narrowed.summary, expanded);
+      return formatRemoveSummaryLines(details.summary, expanded);
     case "background-started":
-      return formatBackgroundStartedLines(narrowed.handles, narrowed.count, expanded, bold);
+      return formatBackgroundStartedLines(details.handles, details.count, expanded, bold);
   }
 }
 
@@ -254,18 +251,58 @@ function expandRows(
   includeSnippet: boolean,
   richToolHistory = false,
 ): DisplayLine[] {
-  const withIndent = ({ agent, depth }: { agent: AgentSnapshot; depth: number }): DisplayLine => {
-    const line = renderRow(agent, now, bold, display);
-    return depth > 0 ? { ...line, text: `${"  ".repeat(depth)}${line.text}` } : line;
+  const layoutAt = (index: number) => runTreeLayout(
+    ordered[index].depth,
+    (ordered[index + 1]?.depth ?? -1) > ordered[index].depth,
+  );
+  const withIndent = (entry: { agent: AgentSnapshot; depth: number }, layout: RunTreeLayout): DisplayLine => {
+    const line = renderRow(entry.agent, now, bold, display);
+    if (!richToolHistory) {
+      return entry.depth > 0 ? { ...line, text: `${"  ".repeat(entry.depth)}${line.text}` } : line;
+    }
+    if (entry.depth === 0) return line;
+    return {
+      ...line,
+      text: `${layout.agentPrefix}${line.text.slice(2)}`,
+      ...(line.segments ? { segments: [{ text: layout.agentPrefix }, ...line.segments.slice(1)] } : {}),
+    };
   };
   if (!expanded) {
-    return ordered.flatMap(entry => [
-      withIndent(entry),
-      ...(richToolHistory ? recentToolLines(entry.agent, entry.depth, now, display) : []),
-    ]);
+    return ordered.flatMap((entry, index) => {
+      const layout = layoutAt(index);
+      return [
+        withIndent(entry, layout),
+        ...(richToolHistory ? recentToolLines(entry.agent, now, display, layout) : []),
+      ];
+    });
   }
-  return ordered.flatMap((entry, index) =>
-    expandedLines(withIndent(entry), entry.agent, includeSnippet, index < ordered.length - 1, display, now, richToolHistory));
+  return ordered.flatMap((entry, index) => {
+    const layout = layoutAt(index);
+    return expandedLines(withIndent(entry, layout), entry.agent, includeSnippet, index < ordered.length - 1, display, now, richToolHistory);
+  });
+}
+
+interface RunTreeLayout {
+  agentPrefix: string;
+  toolPrefix: string;
+  overflowPrefix: string;
+  railPrefix?: string;
+}
+
+/** Keeps nested connectors and tool details aligned from one canonical agent-row prefix. */
+function runTreeLayout(depth: number, hasNestedChild: boolean): RunTreeLayout {
+  const agentPrefix = depth === 0 ? "  " : `${"  ".repeat(depth)}╰─ `;
+  const toolColumn = agentPrefix.length + 2; // status glyph + following space
+  const detailPrefix = new Array<string>(toolColumn).fill(" ");
+  const railColumn = (depth + 1) * 2;
+  if (hasNestedChild) detailPrefix[railColumn] = "│";
+  const overflowPrefix = detailPrefix.join("");
+  return {
+    agentPrefix,
+    toolPrefix: `${overflowPrefix}╰ `,
+    overflowPrefix,
+    ...(hasNestedChild ? { railPrefix: overflowPrefix.slice(0, railColumn + 1) } : {}),
+  };
 }
 
 /**
@@ -275,20 +312,40 @@ function expandRows(
  * other tools — so the in-flight nested progress stays visible. Otherwise show the most recent
  * calls newest-first, capped at three, with a trailing line counting any further calls.
  */
-function recentToolLines(agent: AgentSnapshot, depth: number, now: number, display: SubagentDisplaySettings): DisplayLine[] {
+function recentToolLines(
+  agent: AgentSnapshot,
+  now: number,
+  display: SubagentDisplaySettings,
+  layout: RunTreeLayout,
+): DisplayLine[] {
   if (!isActiveStatusKind(effectiveStatus(agent.status))) return [];
   const history = agent.activity.toolHistory;
-  const indent = 4 + depth * 2;
   const max = display.toolInputSummaryLength;
+  const withRailColor = (text: string, color: ThemeColor | undefined, hangingIndent: number): DisplayLine => ({
+    text,
+    color,
+    hangingIndent,
+    ...(layout.railPrefix ? { segments: [
+      { text: layout.railPrefix, color: "text" },
+      { text: text.slice(layout.railPrefix.length), ...(color ? { color } : {}) },
+    ] } : {}),
+  });
+  const formatTool = (tool: AgentSnapshot["activity"]["toolHistory"][number]): DisplayLine => {
+    const line = formatToolUseLine(tool, 0, now, max);
+    return withRailColor(`${layout.toolPrefix}${line.text}`, line.color, layout.toolPrefix.length);
+  };
   const runningSubagents = history.filter(tool => tool.name === "subagent" && tool.completedAt === undefined);
-  if (runningSubagents.length > 0) {
-    return runningSubagents.slice().reverse().map(tool => formatToolUseLine(tool, indent, now, max));
-  }
+  if (runningSubagents.length > 0) return runningSubagents.slice().reverse().map(formatTool);
+
   const recent = history.slice(-3).reverse();
-  const lines = recent.map(tool => formatToolUseLine(tool, indent, now, max));
+  const lines = recent.map(formatTool);
   const extra = history.length - recent.length;
   if (extra > 0) {
-    lines.push({ text: `${" ".repeat(indent)}+${extra} additional tool call${extra === 1 ? "" : "s"}`, hangingIndent: indent });
+    lines.push(withRailColor(
+      `${layout.overflowPrefix}+${extra} additional tool call${extra === 1 ? "" : "s"}`,
+      "muted",
+      layout.overflowPrefix.length,
+    ));
   }
   return lines;
 }
@@ -306,13 +363,10 @@ function formatResultsLines(entries: readonly ResultEntry[], expanded: boolean, 
   return entries.flatMap((entry, index) => resultExpanded(entry, index < entries.length - 1, now, bold, display));
 }
 
-/** One collapsed result row. Running polls use a static inventory row rather than a frozen spinner. */
-function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine {
+/** One collapsed result row, using the same shape for pending and terminal snapshots. */
+function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined, _display: SubagentDisplaySettings): DisplayLine {
   if ("error" in entry) return { text: `${entry.sessionId} · error: ${entry.error}`, color: "error" };
-  if (effectiveStatus(entry.snapshot.status) === "running") {
-    return { text: `  ${formatSessionLine(entry.snapshot, now, bold, display)}`, color: statusPresentation(entry.snapshot.status).color };
-  }
-  return formatRunSessionLine(entry.snapshot, now, bold);
+  return formatRunSessionLine(entry.snapshot, now, bold, true);
 }
 
 /**
@@ -325,9 +379,7 @@ function resultExpanded(entry: ResultEntry, trailingBlank: boolean, now: number,
     const line: DisplayLine = { text: `${entry.sessionId} · error: ${entry.error}`, color: "error" };
     return trailingBlank ? [line, { text: "" }] : [line];
   }
-  const row = effectiveStatus(entry.snapshot.status) === "running"
-    ? { text: `  ${formatSessionLine(entry.snapshot, now, bold, display)}`, color: statusPresentation(entry.snapshot.status).color }
-    : formatRunSessionLine(entry.snapshot, now, bold);
+  const row = formatRunSessionLine(entry.snapshot, now, bold, true);
   return expandedLines(row, entry.snapshot, true, trailingBlank, display, now, true);
 }
 

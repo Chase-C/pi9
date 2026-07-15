@@ -1,30 +1,20 @@
-import { randomUUID } from "node:crypto";
-
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { AgentConfig } from "./agent-config.js";
-import { Attempt, type AttemptKind } from "./agent-attempt.js";
-import type { AgentOutcome } from "./agent-result.js";
-import type { AgentEffectiveConfig, AgentRunSection, AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
-import type { ResumeRequest, SpawnRequest } from "../schema.js";
-import { preflightFailure } from "./preflight-failure.js";
-import { AgentRegistry } from "./agent-registry.js";
-
-export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
-
-interface ResolveArgs {
-  task: SpawnRequest | ResumeRequest;
-  background: boolean;
-  groupId: string;
-  inputIndex: number;
-  createdAt: number;
-  registry: AgentRegistry;
-  findAgent: (id: string) => Agent | undefined;
-  listener: AgentUpdateListener;
-  parentId?: string,
-}
+import { Attempt } from "./agent-attempt.js";
+import type { AgentRunOutcome, AttemptKind, AgentUpdateKind } from "./agent-lifecycle.js";
+import type { AgentRequestedConfig } from "./agent-requested-config.js";
+import { resolveRequestedConfig } from "./agent-requested-config.js";
+import type { AgentEffectiveConfig, AgentRetention, AgentRunSection, AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
+import type { SpawnRequest } from "../schema.js";
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
+
+/** Internal retention decision shared by catalog operations and snapshot projection. */
+export interface AgentCatalogRetention {
+  readonly shouldRemainCataloged: boolean;
+  readonly retention: AgentRetention;
+}
 
 export class Agent {
 
@@ -40,6 +30,7 @@ export class Agent {
   private _unsubscribe?: () => void;
   private _background: boolean;
   private _effectiveConfig: AgentEffectiveConfig | undefined;
+  private _requestedConfig: AgentRequestedConfig;
 
   constructor(
     readonly id: string,
@@ -51,6 +42,7 @@ export class Agent {
     this.agentName = spawn.agent;
     this._background = options.background ?? false;
     this.parentId = options.parentId;
+    this._requestedConfig = resolveRequestedConfig(config, spawn);
     this._appliedResumableOverride = spawn.resumable;
     this._label = spawn.label;
     this._current = this._newAttempt("spawn", spawn.prompt, spawn.resumable);
@@ -60,52 +52,17 @@ export class Agent {
     return new Attempt(kind, prompt, resumableOverride, updateKind => this._emit(updateKind));
   }
 
-  static resolve(
-    args: ResolveArgs,
-  ):
-    | { kind: "spawn"; agent: Agent }
-    | { kind: "resume"; agent: Agent }
-    | { kind: "failure"; failure: AgentSnapshot } {
-    const { task, background, registry, findAgent, listener, parentId } = args;
-    if (task.kind === "spawn") {
-      const config = registry.agents.get(task.agent);
-      if (config) {
-        return {
-          kind: "spawn",
-          agent: new Agent(randomUUID(), config, task, listener, { background, parentId }),
-        };
-      }
-
-      const available = Array.from(registry.agents.values()).map(a => `- ${a.name} (${a.source})`).join("\n");
-      const error = `Unknown agent: ${task.agent}. Available agents:\n${available}`;
-      return {
-        kind: "failure",
-        failure: preflightFailure(args, { error }),
-      };
-    } else {
-      const target = findAgent(task.sessionId);
-      let error: string | undefined;
-      if (!target) {
-        error = `Unknown resumable subagent session: ${task.sessionId}`;
-      } else if (target.hasCurrentAttempt) {
-        error = `Cannot resume subagent session ${task.sessionId}: it is already resuming.`;
-      } else if (!target.resumableEnabled) {
-        error = `Cannot resume subagent session ${task.sessionId}: it was created with resumable: false.`;
-      } else if (!target.canResume) {
-        error = `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.outcome : target.status.kind}.`;
-      } else {
-        if (task.label !== undefined) target._label = task.label;
-        target._background = background;
-        target._current = target._newAttempt("resume", task.prompt, task.resumable);
-        target._emit("status");
-        return { kind: "resume", agent: target };
-      }
-
-      return {
-        kind: "failure",
-        failure: preflightFailure(args, { error: error!, target }),
-      }
-    }
+  /** Begin a follow-up attempt after the runtime has validated the resume request. */
+  beginResume(
+    prompt: string,
+    resumableOverride: boolean | undefined,
+    background: boolean,
+    label?: string,
+  ): void {
+    if (label !== undefined) this._label = label;
+    this._background = background;
+    this._current = this._newAttempt("resume", prompt, resumableOverride);
+    this._emit("status");
   }
 
   private _emit(kind: AgentUpdateKind) {
@@ -132,6 +89,9 @@ export class Agent {
     if (!this._current) throw new Error(`Agent ${this.id} has no current attempt.`);
     return this._current;
   }
+
+  /** Canonical task-facing settings for runtime setup. */
+  get requestedConfig(): AgentRequestedConfig { return this._requestedConfig; }
 
   get resumableOverride(): boolean | undefined {
     if (this._current) return this._current.resumableOverride ?? this._appliedResumableOverride;
@@ -160,7 +120,7 @@ export class Agent {
       kind: "done",
       outcome: outcome.status,
       completedAt: attempt.state.completedAt,
-      resumed: outcome.resumed,
+      resumed: attempt.kind === "resume",
       ...(attempt.state.startedAt !== undefined ? { startedAt: attempt.state.startedAt } : {}),
       ...(outcome.output !== undefined ? { output: outcome.output } : {}),
       ...(outcome.error !== undefined ? { error: outcome.error } : {}),
@@ -172,9 +132,23 @@ export class Agent {
   /** The session retained for a possible resume. Sticky after first attach. */
   retainedSession(): AgentSession | undefined { return this._retainedSession }
 
+  get resumableEnabled(): boolean {
+    return this._appliedResumableOverride ?? this._requestedConfig.resumable;
+  }
+
+  /** Whether a current attempt or retained conversation exists, independent of policy. */
+  get hasCurrentOrRetainedConversation(): boolean {
+    return this._current !== undefined || this._retainedSession !== undefined;
+  }
+
+  /** Whether the current policy keeps the current/retained conversation available. */
+  get shouldRetainConversation(): boolean {
+    return this.resumableEnabled === true && this.hasCurrentOrRetainedConversation;
+  }
+
   /** True iff this agent is eligible to be resumed right now. */
   get canResume(): boolean {
-    if (!this.resumable) return false;
+    if (!this.resumableEnabled) return false;
     if (this._current) return false;
     if (!this._retainedSession) return false;
     const last = this._lastAttempt;
@@ -184,20 +158,16 @@ export class Agent {
     return last.state.result.status === "completed";
   }
 
-  get resumableEnabled(): boolean {
-    return this._appliedResumableOverride ?? this.config.resumable;
-  }
-
-  get resumable(): boolean {
-    if (!this.resumableEnabled) return false;
-    if (this._current) return true;
-    return this._retainedSession !== undefined;
-  }
-
-  hasResumableSession(): boolean {
-    if (!this.resumableEnabled) return false;
-    if (this._current?.state.kind === "running") return true;
-    return this._retainedSession !== undefined;
+  /**
+   * One catalog-retention decision. Active attempts remain visible even when their conversation
+   * policy is disabled, but only background dispatch or a retained conversation is persistent.
+   */
+  get catalogRetention(): AgentCatalogRetention {
+    const persistent = this._background || this.shouldRetainConversation;
+    return {
+      shouldRemainCataloged: this.hasCurrentAttempt || persistent,
+      retention: persistent ? "persistent" : "transient",
+    };
   }
 
   /** Prompt of the current in-flight attempt, or the most recent terminal attempt. */
@@ -224,30 +194,33 @@ export class Agent {
    * text fields (snippet, messageSnippet); presentation code compacts them when rendering.
    * `activity`/`usage` describe the active run; completed prior attempts surface in `previousRuns`.
    */
-  snapshot(options: { inputIndex?: number } = {}): AgentSnapshot {
+  snapshot(options: { inputIndex?: number; includeResumed?: boolean } = {}): AgentSnapshot {
     const status = this.status;
     const active = status.kind === "queued" || status.kind === "running";
-    const activeActivity = this._activeAttempt()?.activity;
+    const activeAttempt = this._activeAttempt();
+    const activeActivity = activeAttempt?.activity;
+    const canRemove = !active && this.catalogRetention.shouldRemainCataloged;
     const previousRuns = this._previousRunSections();
     return {
       id: this.id,
       ...(options.inputIndex !== undefined ? { inputIndex: options.inputIndex } : {}),
       ...(this.parentId !== undefined ? { parentSessionId: this.parentId } : {}),
       ...(this._label !== undefined ? { label: this._label } : {}),
+      ...(options.includeResumed ? { resumed: activeAttempt?.kind === "resume" } : {}),
       ...(this.activePrompt !== undefined ? { prompt: this.activePrompt } : {}),
       createdAt: this.createdAt,
       dispatch: this._background ? "background" : "foreground",
-      retention: this._background || this.resumable ? "persistent" : "transient",
+      retention: this.catalogRetention.retention,
       config: {
         name: this.agentName,
         description: this.config.description,
         source: this.config.source,
         sourcePath: this.config.sourcePath,
-        model: this.spawn.model ?? this.config.model,
-        thinking: this.spawn.thinking ?? this.config.thinking,
-        tools: this.config.tools,
-        ...(this.config.skills !== undefined ? { skills: this.config.skills } : {}),
-        resumable: this.resumable,
+        model: this._requestedConfig.model,
+        thinking: this._requestedConfig.thinking,
+        tools: this._requestedConfig.tools,
+        ...(this._requestedConfig.skills !== undefined ? { skills: this._requestedConfig.skills } : {}),
+        resumable: this.shouldRetainConversation,
       },
       status,
       activity: activeActivity ? activeActivity.snapshot() : { turns: 0, compactions: 0, toolHistory: [] },
@@ -256,7 +229,8 @@ export class Agent {
       ...(this._effectiveConfig ? { effectiveConfig: this._effectiveConfig } : {}),
       capabilities: {
         canResume: this.canResume,
-        canClear: this.resumable && !active,
+        canRemove,
+        canClear: canRemove,
       },
     };
   }
@@ -268,16 +242,15 @@ export class Agent {
   async abort(reason?: string): Promise<void> {
     const current = this._current;
     if (!current) return;
-    const resumed = current.kind === "resume";
     if (current.state.kind === "running") {
       const session = current.state.session;
       await Promise.resolve(session.abort()).catch(() => undefined);
       if (!this._current) return;
-      this.settle({ status: "aborted", error: reason ?? "Agent aborted.", resumed });
+      this.settle({ status: "aborted", error: reason ?? "Agent aborted." });
       return;
     }
     if (current.state.kind === "queued") {
-      this.settle({ status: "skipped", error: reason ?? "Agent skipped.", resumed });
+      this.settle({ status: "skipped", error: reason ?? "Agent skipped." });
     }
   }
 
@@ -290,6 +263,7 @@ export class Agent {
     current.attach(session);
     if (current.resumableOverride !== undefined) {
       this._appliedResumableOverride = current.resumableOverride;
+      this._requestedConfig = { ...this._requestedConfig, resumable: current.resumableOverride };
       if (this._effectiveConfig) {
         this._effectiveConfig = { ...this._effectiveConfig, resumable: this.resumableEnabled };
       }
@@ -302,7 +276,7 @@ export class Agent {
    * Settle the current attempt with a terminal outcome and return the resulting terminal
    * snapshot. Idempotent if there's no in-flight attempt — returns the current snapshot.
    */
-  settle(outcome: AgentOutcome): AgentSnapshot {
+  settle(outcome: AgentRunOutcome): AgentSnapshot {
     const current = this._current;
     if (!current) return this.snapshot();
     this._finishSubscription();

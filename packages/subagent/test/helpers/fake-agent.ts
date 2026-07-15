@@ -43,7 +43,6 @@ type FakeStatusInput =
       response?: string;
       error?: string;
       resumed?: boolean;
-      session?: unknown;
     })
   | AgentViewStatus;
 
@@ -94,7 +93,6 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
     statusOverride ?? { kind: "completed", startedAt: 1, completedAt: 2, response: "done" };
 
   let viewStatus: AgentViewStatus;
-  let ranSession: unknown;
 
   if ("kind" in baseStatus && (TERMINAL_RESULT_KINDS as readonly string[]).includes(baseStatus.kind)) {
     const terminal = baseStatus as Extract<FakeStatusInput, { kind: TerminalKind }>;
@@ -118,8 +116,6 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
       ...(output !== undefined ? { output } : {}),
       ...(error !== undefined ? { error } : {}),
     };
-    if ("session" in terminal) ranSession = terminal.session;
-    else if (outcome === "completed" || outcome === "interrupted") ranSession = {};
   } else if (baseStatus.kind === "running") {
     viewStatus = { kind: "running", startedAt: ("startedAt" in baseStatus && baseStatus.startedAt) || 1 };
   } else if (baseStatus.kind === "queued") {
@@ -131,14 +127,11 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
     viewStatus = baseStatus as AgentViewStatus;
   }
 
-  const resumable = Boolean(cfg.resumable) && (viewStatus.kind !== "done" || Boolean(ranSession));
-  const active = viewStatus.kind === "queued" || viewStatus.kind === "running";
-  const derivedCanResume = resumable && viewStatus.kind === "done"
-    && (viewStatus.outcome === "completed" || viewStatus.startedAt === undefined);
-  const derivedCanClear = resumable && !active;
+  const resumable = cfg.resumable;
   const capabilities: AgentViewCapabilities = {
-    canResume: rest.capabilities?.canResume ?? derivedCanResume,
-    canClear: rest.capabilities?.canClear ?? derivedCanClear,
+    canResume: rest.capabilities?.canResume ?? false,
+    canRemove: rest.capabilities?.canRemove ?? false,
+    canClear: rest.capabilities?.canClear ?? false,
   };
   const messageSnippet = rest.messageSnippet ?? rest.message;
   const turns = rest.turns ?? 0;
@@ -169,7 +162,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
     ...(rest.prompt !== undefined ? { prompt: rest.prompt } : {}),
     createdAt: rest.createdAt ?? 1,
     dispatch: rest.dispatch ?? "foreground",
-    retention: rest.retention ?? (rest.dispatch === "background" || resumable ? "persistent" : "transient"),
+    retention: rest.retention ?? "transient",
     config: {
       name: cfg.name,
       description: cfg.description,

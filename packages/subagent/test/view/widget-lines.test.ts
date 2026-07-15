@@ -30,6 +30,7 @@ test("formatWidgetLines renders Background and Resumable sections with header co
     fakeAgent({
       id: "bg-done",
       dispatch: "background",
+      retention: "persistent",
       config: { name: "reviewer" },
       createdAt: 2,
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
@@ -37,6 +38,7 @@ test("formatWidgetLines renders Background and Resumable sections with header co
     }),
     fakeAgent({
       id: "res",
+      retention: "persistent",
       config: { name: "helper", resumable: true },
       createdAt: 3,
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "done" },
@@ -65,6 +67,7 @@ test("formatWidgetLines keeps active foreground-resumable agents in the Resumabl
     fakeAgent({
       id: "bg",
       dispatch: "background",
+      retention: "persistent",
       config: { name: "background" },
       status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
     }),
@@ -142,12 +145,14 @@ test("formatWidgetLines omits retained rows but keeps counts when widgetShowReta
   const agents = [
     fakeAgent({
       dispatch: "background",
+      retention: "persistent",
       config: { name: "reviewer" },
       status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
     }),
     fakeAgent({
       id: "err",
       dispatch: "background",
+      retention: "persistent",
       config: { name: "flaky" },
       createdAt: 2,
       status: { kind: "error", startedAt: 1, completedAt: 2_000, error: "boom" },
@@ -163,6 +168,7 @@ test("formatWidgetLines caps rows per section and keeps in-flight rows preferent
   const agents = Array.from({ length: 8 }, (_, i) => fakeAgent({
     id: `bg-${i}`,
     dispatch: "background",
+    retention: "persistent",
     createdAt: i + 1,
     config: { name: `agent-${i}` },
     status: i < 2
@@ -182,7 +188,7 @@ test("formatWidgetLines caps rows per section and keeps in-flight rows preferent
 
 test("formatWidgetLines omits footer when widgetShowForeground is false", () => {
   const agents = [
-    fakeAgent({ dispatch: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ dispatch: "background", retention: "persistent", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
     fakeAgent({ id: "fg", retention: "transient", config: { name: "inline" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
@@ -253,6 +259,7 @@ test("formatWidgetLines appends parent marker with immediate parent display name
     fakeAgent({
       id: "bg-parent",
       dispatch: "background",
+      retention: "persistent",
       label: "Orchestrator",
       config: { name: "orchestrator" },
       status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
@@ -277,6 +284,8 @@ test("formatWidgetLines appends parent marker on nested Resumable section rows",
   const agents = [
     fakeAgent({
       id: "res-parent",
+      retention: "persistent",
+      capabilities: { canResume: true, canRemove: true, canClear: true },
       label: "Main Session",
       config: { name: "main", resumable: true },
       status: { kind: "completed", startedAt: 1, completedAt: 2_000, response: "ok" },
@@ -284,6 +293,7 @@ test("formatWidgetLines appends parent marker on nested Resumable section rows",
     fakeAgent({
       id: "res-child",
       parentSessionId: "res-parent",
+      retention: "persistent",
       config: { name: "follow-up", resumable: true },
       status: { kind: "completed", startedAt: 3_000, completedAt: 4_000, response: "ok" },
     }),
@@ -318,6 +328,7 @@ test("formatWidgetLines parent marker resolves only the immediate parent on mult
     fakeAgent({
       id: "root",
       dispatch: "background",
+      retention: "persistent",
       config: { name: "root-agent" },
       status: { kind: "running", startedAt: 1 },
     }),

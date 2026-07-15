@@ -651,7 +651,7 @@ test("BackgroundNotifier notifies again when a background session resumes and co
   };
   const resumeRunner = async (_ctx: any, agent: any, _attempt: any) => {
     agent.attach(makeSession());
-    return completedRun(agent, "ok again", true);
+    return completedRun(agent, "ok again");
   };
   const manager = makeManager(runner, resumeRunner);
   const pi = fakePi();

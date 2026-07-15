@@ -37,6 +37,7 @@ const makeBaseDeps = (overrides: any = {}) => ({
   createAgentSession: async () => ({ session: { messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }], subscribe: () => () => {}, prompt: async () => {}, abort: () => {} } }),
   sessionManager: (cwd: string) => ({ cwd }),
   settingsManager: (cwd: string, agentDir: string) => ({ cwd, agentDir }),
+  readSkillFile: () => "---\nname: test\ndescription: Test skill\n---\n\nFull skill instructions.",
   loadExtensionPaths: async () => [],
   ...overrides,
 });
@@ -229,7 +230,7 @@ test("run-agent treats final assistant error stop reason as failed child run", a
   assert.equal(agent.status.error, "model overloaded");
 });
 
-test("run-agent injects requested skills into the system prompt and disables loader skill scanning", async () => {
+test("run-agent injects requested skill bodies into the system prompt and disables loader skill scanning", async () => {
   let loaderOptions: any;
   const session = {
     messages: [{ role: "assistant", content: [{ type: "text", text: "final" }] }],
@@ -254,11 +255,36 @@ test("run-agent injects requested skills into the system prompt and disables loa
   assert.equal(loaderOptions.noSkills, true);
   const prompt = loaderOptions.systemPromptOverride();
   assert.match(prompt, /^BASE PROMPT/);
-  assert.match(prompt, /<available_skills>/);
-  assert.match(prompt, /<name>tdd<\/name>/);
-  assert.match(prompt, /<description>Test-driven development<\/description>/);
+  assert.match(prompt, /<skill name="tdd" location="\/skills\/tdd\/SKILL.md">/);
+  assert.match(prompt, /References are relative to \/skills\/tdd\./);
+  assert.match(prompt, /Full skill instructions\./);
+  assert.doesNotMatch(prompt, /description: Test skill/);
   // disable-model-invocation skills are not filtered when explicitly named.
-  assert.match(prompt, /<name>review<\/name>/);
+  assert.match(prompt, /<skill name="review" location="\/skills\/review\/SKILL.md">/);
+});
+
+test("run-agent reports an unreadable requested skill as a failed run without starting a session", async () => {
+  let createCalled = false;
+  const skill = {
+    name: "broken",
+    description: "Broken skill",
+    filePath: "/skills/broken/SKILL.md",
+    baseDir: "/skills/broken",
+    sourceInfo: { path: "/skills/broken/SKILL.md", source: "local", scope: "project", origin: "top-level" },
+    disableModelInvocation: false,
+  };
+  const dependencies = makeBaseDeps({
+    createAgentSession: async () => { createCalled = true; return { session: { subscribe: () => () => {}, prompt: async () => {}, abort: () => {}, messages: [] } }; },
+    loadSkills: () => ({ skills: [skill], diagnostics: [] }),
+    readSkillFile: () => { throw new Error("permission denied"); },
+  });
+  const agent = new Agent("id", { ...baseConfig, skills: ["broken"] }, { kind: "spawn", agent: "helper", prompt: "work" }, noop);
+
+  const result = toResult(await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies));
+
+  assert.equal(result.status, "error");
+  assert.match(result.error ?? "", /Could not load requested skill: permission denied/);
+  assert.equal(createCalled, false);
 });
 
 test("run-agent reports an unknown skill from per-task or frontmatter sources as a failed run without starting a session", async () => {
@@ -310,7 +336,9 @@ test("run-agent uses agent-frontmatter default skills when the task does not pro
   assert.equal(result.status, "completed");
   const prompt = loaderOptions.systemPromptOverride();
   assert.match(prompt, /^BASE PROMPT/);
-  assert.match(prompt, /<name>foo<\/name>/);
+  assert.match(prompt, /<skill name="foo" location="\/skills\/foo\/SKILL.md">/);
+  assert.match(prompt, /Full skill instructions\./);
+  assert.deepEqual(agent.snapshot().config.skills, ["foo"]);
 });
 
 test("run-agent per-task skills fully replace agent-frontmatter default skills", async () => {
@@ -336,9 +364,11 @@ test("run-agent per-task skills fully replace agent-frontmatter default skills",
   await RunAttempt(baseCtx(), agent, agent.requireCurrentAttempt(), undefined, dependencies);
 
   const prompt = loaderOptions.systemPromptOverride();
-  assert.match(prompt, /<name>bar<\/name>/);
-  assert.doesNotMatch(prompt, /<name>foo<\/name>/);
-  assert.doesNotMatch(prompt, /<name>baz<\/name>/);
+  assert.match(prompt, /<skill name="bar"/);
+  assert.deepEqual(agent.snapshot().effectiveConfig?.skills, ["bar"]);
+  assert.deepEqual(agent.snapshot().config.skills, ["bar"]);
+  assert.doesNotMatch(prompt, /<skill name="foo"/);
+  assert.doesNotMatch(prompt, /<skill name="baz"/);
 });
 
 test("run-agent explicit empty per-task skills opts out of agent-frontmatter defaults", async () => {
@@ -361,6 +391,7 @@ test("run-agent explicit empty per-task skills opts out of agent-frontmatter def
 
   assert.equal(loaderOptions.systemPromptOverride(), "BASE PROMPT");
   assert.equal(loadSkillsCalls, 0, "should not load skills when the task explicitly opted out");
+  assert.deepEqual(agent.snapshot().config.skills, []);
 });
 
 test("emits coarse async spans for an attempt but no per-step sync narration when timing is enabled", async () => {
@@ -391,16 +422,16 @@ test("emits coarse async spans for an attempt but no per-step sync narration whe
   await rm(logFile, { force: true });
 });
 
-test("inherited paths load through Pi's compatibility loader", async () => {
+test("inherited paths load through the native extension loader", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-native-loader-"));
   const agentDir = join(root, "agent");
   await mkdir(agentDir, { recursive: true });
-  const entry = join(root, "legacy-pi-ai.ts");
+  const entry = join(root, "pi-ai-extension.ts");
   await writeFile(entry, `
     import { streamSimpleOpenAICodexResponses } from "@earendil-works/pi-ai";
     export default () => {
       if (typeof streamSimpleOpenAICodexResponses !== "function") {
-        throw new Error("Pi compatibility alias was bypassed");
+        throw new Error("Expected exported helper was unavailable");
       }
     };
   `);

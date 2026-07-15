@@ -61,8 +61,8 @@ test("queued session elapsed uses queuedAt instead of session createdAt", () => 
 });
 
 test("the dispatch:background segment surfaces in both inspect summary and inventory line formatters", () => {
-  const retained = fakeAgent({ config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
-  const background = fakeAgent({ id: "s2", dispatch: "background", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
+  const retained = fakeAgent({ retention: "persistent", config: { name: "helper", resumable: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
+  const background = fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "helper", resumable: true }, status: { kind: "running", startedAt: 1 } });
 
   // formatSubagentSessionSummary (inspect view)
   assert.doesNotMatch(formatSubagentSessionSummary(retained), /dispatch:/);
@@ -75,9 +75,9 @@ test("the dispatch:background segment surfaces in both inspect summary and inven
 
 test("background-started view always shows spawned session handles when collapsed", () => {
   const sessions = [
-    fakeAgent({ id: "s1", dispatch: "background", config: { name: "scout" }, status: { kind: "queued" } }),
-    fakeAgent({ id: "s2", dispatch: "background", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
-    fakeAgent({ id: "s3", dispatch: "background", config: { name: "reviewer" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "s1", dispatch: "background", retention: "persistent", config: { name: "scout" }, status: { kind: "queued" } }),
+    fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "scout" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "s3", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, status: { kind: "queued" } }),
   ];
 
   const collapsed = formatSubagentToolLines(backgroundStartedDetails(sessions), false, 0);
@@ -91,8 +91,8 @@ test("background-started view always shows spawned session handles when collapse
 
 test("background-started view expanded shows one line per session with session id and label when present", () => {
   const sessions = [
-    fakeAgent({ id: "scout-1", dispatch: "background", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
-    fakeAgent({ id: "rev-1", dispatch: "background", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
+    fakeAgent({ id: "scout-1", dispatch: "background", retention: "persistent", config: { name: "scout" }, label: "frontend auth", status: { kind: "queued" } }),
+    fakeAgent({ id: "rev-1", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, status: { kind: "running", startedAt: 1 } }),
   ];
 
   const expanded = formatSubagentToolLines(backgroundStartedDetails(sessions), true, 0).join("\n");
@@ -142,9 +142,9 @@ test("results view expanded renders each entry as a run-style block with its res
 
 test("background-started details project collectable handles with sessionId and optional label", () => {
   const sessions = [
-    fakeAgent({ id: "a", dispatch: "background", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
+    fakeAgent({ id: "a", dispatch: "background", retention: "persistent", config: { name: "scout" }, inputIndex: 0, label: "alpha", status: { kind: "queued" } }),
     fakeAgent({ id: "preflight", dispatch: "background", retention: "transient", config: { name: "missing" }, inputIndex: 1, status: { kind: "error", error: "Unknown agent" } }),
-    fakeAgent({ id: "b", dispatch: "background", config: { name: "reviewer" }, inputIndex: 2, status: { kind: "queued" } }),
+    fakeAgent({ id: "b", dispatch: "background", retention: "persistent", config: { name: "reviewer" }, inputIndex: 2, status: { kind: "queued" } }),
   ];
 
   const details = backgroundStartedDetails(sessions);
@@ -236,8 +236,8 @@ test("subagent run renders details.subtree as a depth-indented tree when present
 
   assert.equal(lines.length, 3);
   assert.match(lines[0], /^  ⠋ alpha/);
-  assert.match(lines[1], /^    ⠋ beta/);
-  assert.match(lines[2], /^      ⠋ gamma/);
+  assert.match(lines[1], /^  ╰─ ⠋ beta/);
+  assert.match(lines[2], /^    ╰─ ⠋ gamma/);
 });
 
 test("collapsed subagent run rows show the three most recent tools newest-first with an additional-calls tail", () => {
@@ -257,10 +257,10 @@ test("collapsed subagent run rows show the three most recent tools newest-first 
 
   // Newest tool first, capped at three, then a tail line counting the older (4th) call.
   assert.equal(lines.length, 5);
-  assert.equal(lines[0], "  ⠇ reviewer · 2 turns · 0 tokens · 18s");
-  assert.equal(lines[1], "    bash(npm test --workspace=@pi9/subagent) · 12s");
-  assert.equal(lines[2], '    grep("formatRunSessionLine" in packages/subagent/src) · 1s');
-  assert.equal(lines[3], "    read(packages/subagent/src/view/tool-result-lines.ts) · 0s");
+  assert.equal(lines[0], "  ⠇ reviewer  4 tool calls · 0 tokens · 18s");
+  assert.equal(lines[1], "    ╰ bash(npm test --workspace=@pi9/subagent) · 12s");
+  assert.equal(lines[2], '    ╰ grep("formatRunSessionLine" in packages/subagent/src) · 1s');
+  assert.equal(lines[3], "    ╰ read(packages/subagent/src/view/tool-result-lines.ts) · 0s");
   assert.equal(lines[4], "    +1 additional tool call");
 });
 
@@ -276,8 +276,8 @@ test("collapsed subagent run additional-calls tail pluralizes and counts every t
   const lines = formatSubagentToolLines(runDetails([session]), false, 19_000);
 
   assert.equal(lines.length, 5);
-  assert.equal(lines[1], "    read(file-5.ts) · 0s");
-  assert.equal(lines[3], "    read(file-3.ts) · 0s");
+  assert.equal(lines[1], "    ╰ read(file-5.ts) · 0s");
+  assert.equal(lines[3], "    ╰ read(file-3.ts) · 0s");
   assert.equal(lines[4], "    +3 additional tool calls");
 });
 
@@ -334,9 +334,9 @@ test("collapsed subagent run row shows only the active subagent tool line when p
   const lines = formatSubagentToolLines(runDetails([parent], { subtree: [parent, child] }), false, 10_000);
 
   assert.deepEqual(lines, [
-    "  ⠸ parent · 0 turns · 0 tokens · 9s",
-    "    subagent(run 2 tasks) · 6s",
-    "    ⠸ child · 0 turns · 0 tokens · 5s",
+    "  ⠸ parent  2 tool calls · 0 tokens · 9s",
+    "  │ ╰ subagent(run 2 tasks) · 6s",
+    "  ╰─ ⠸ child  0 tool calls · 0 tokens · 5s",
   ]);
 });
 
@@ -577,6 +577,8 @@ test("results expanded mirrors the running view for a resumed snapshot, includin
 
 test("subagent session inspect output uses remove terminology", () => {
   const retainedSession = fakeAgent({
+    retention: "persistent",
+    capabilities: { canResume: true, canRemove: true, canClear: true },
     config: { resumable: true },
     status: { kind: "completed", startedAt: 2_000, completedAt: 5_000, response: "done" },
   });

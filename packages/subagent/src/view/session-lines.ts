@@ -89,7 +89,7 @@ export function formatSubagentSessionInspect(
 
   const actions = ["inspect"];
   if (agent.capabilities.canResume) actions.push("resume");
-  if (agent.capabilities.canClear) actions.push("remove");
+  if (agent.capabilities.canRemove) actions.push("remove");
   lines.push(`Actions: ${actions.join(", ")}`);
   return lines;
 }
@@ -362,10 +362,29 @@ export function formatSessionLine(row: AgentSnapshot, now: number, bold?: Bold, 
   return parts.join(" · ");
 }
 
-export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold): DisplayLine {
-  const { glyph, color } = statusPresentation(row.status, now);
-  const name = `  ${glyph} ${applyBold(bold, row.config.name)}${(row.label) ? `  ${row.label}` : ""}`;
-  return { text: sessionRowSegments(row, now, name, { toolCount: false, activeTool: false }).join(" · "), color };
+export function formatRunSessionLine(row: AgentSnapshot, now: number, bold?: Bold, staticRunning = false): DisplayLine {
+  const { glyph, color } = staticRunning && effectiveStatus(row.status) === "running"
+    ? { glyph: "●", color: "accent" as const }
+    : statusPresentation(row.status, now);
+  const name = applyBold(bold, row.config.name);
+  const label = row.label ? `  ${row.label}` : "";
+  const metadata = [
+    ...(row.resumed ? ["resumed"] : []),
+    plural(getToolUseCount(row), "tool call"),
+    plural(row.usage?.totalTokens ?? 0, "token"),
+    rowElapsed(row, now),
+  ].join(" · ");
+  return {
+    text: `  ${glyph} ${name}${label}  ${metadata}`,
+    segments: [
+      { text: "  " },
+      { text: glyph, color },
+      { text: " " },
+      { text: name, color: "text" },
+      ...(label ? [{ text: label, color: "text" as const }] : []),
+      { text: `  ${metadata}`, color: "dim" },
+    ],
+  };
 }
 
 function sessionRowSegments(

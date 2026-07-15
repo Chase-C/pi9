@@ -46,10 +46,6 @@ export class AttemptRunner {
     this._childTool = fn;
   }
 
-  setIsTracked(fn: (agentId: string) => boolean): void {
-    this._isTracked = fn;
-  }
-
   configure(opts: { maxRunning?: number }): void {
     if (opts.maxRunning !== undefined) this._queue.maxRunning = opts.maxRunning;
   }
@@ -78,14 +74,13 @@ export class AttemptRunner {
     attempt: Attempt,
   ): Promise<AgentSnapshot> {
     const kind = attempt.kind;
-    const resumed = kind === "resume";
     return this._queue.enqueue(async lease => {
       const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId });
       let result: AgentSnapshot;
       let error: string | undefined;
 
       if (signal?.aborted || !this._isTracked(agent.id)) {
-        result = skippedRun(agent, resumed);
+        result = skippedRun(agent);
       } else if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
         result = agent.snapshot();
       } else {
@@ -99,8 +94,8 @@ export class AttemptRunner {
           } else {
             error = message;
             result = signal?.aborted
-              ? (attempt.state.kind === "queued" ? skippedRun(agent, resumed) : interruptedRun(agent, message, resumed))
-              : errorRun(agent, message, resumed);
+              ? (attempt.state.kind === "queued" ? skippedRun(agent) : interruptedRun(agent, message))
+              : errorRun(agent, message);
           }
         } finally {
           this._leases.delete(agent.id);

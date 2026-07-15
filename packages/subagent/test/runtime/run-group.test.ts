@@ -25,9 +25,8 @@ test("RunGroup.tree emits a descendant root only once", () => {
     }),
   });
 
-  group.addAgent(parent, 0, false);
-  group.addAgent(child, 1, true);
-
+  group.addAgent(parent, 0);
+  group.addAgent(child, 1);
   assert.deepEqual(group.tree().map(view => view.id), ["parent", "child"]);
 });
 

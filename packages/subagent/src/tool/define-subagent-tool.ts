@@ -3,16 +3,16 @@ import { Text } from "@earendil-works/pi-tui";
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
-import { SubagentParams } from "../schema.js";
+import { parseSubagentInvocation, SubagentParams } from "../schema.js";
 import type { SubagentSettings } from "../config/settings.js";
 import { createSubagentTextComponent, runSummary, type RunSummary, type SubagentDetails } from "../view/format.js";
 import {
   agentsAction,
-  errorResult,
   listAction,
   removeAction,
   resultsAction,
   runAction,
+  invocationErrorResult,
   type ActionDeps,
 } from "./actions.js";
 
@@ -22,7 +22,7 @@ interface SubagentRenderState {
 }
 
 /**
- * The `· …` suffix for a tool-call title. Whenever a live summary is present (a `run` or its
+ * The trailing summary for a tool-call title. Whenever a live summary is present (a `run` or its
  * completed `results`), it shows the subagent counts and elapsed time — `running`/`queued` only
  * when above zero, `finished` and elapsed always. Otherwise (no summary yet, or a view that yields
  * none) it falls back to the task count so the first title render stays useful before any result.
@@ -35,10 +35,10 @@ function callSuffix(summary: RunSummary | undefined, args: any): string {
       `${summary.finished} finished`,
       summary.elapsed,
     ];
-    return ` · ${counts.join(" · ")}`;
+    return `  ${counts.join(" · ")}`;
   }
   const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
-  return tasks.length ? ` · ${tasks.length} task${tasks.length === 1 ? "" : "s"}` : "";
+  return tasks.length ? `  ${tasks.length} task${tasks.length === 1 ? "" : "s"}` : "";
 }
 
 export interface SubagentToolDeps {
@@ -77,8 +77,12 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     renderCall(args, theme, context) {
       const action = typeof args?.action === "string" ? args.action : "pending";
       const summary = context?.state?.runSummary;
-      const line = `subagent ${action}${callSuffix(summary, args)}`;
-      return new Text(theme?.fg ? theme.fg("toolTitle", line) : line, 0, 0);
+      const title = theme?.bold ? theme.bold("subagent") : "subagent";
+      const label = `${title} ${action}`;
+      const suffix = callSuffix(summary, args);
+      const styledLabel = theme?.fg ? theme.fg("toolTitle", label) : label;
+      const styledSuffix = theme?.fg ? theme.fg("dim", suffix) : suffix;
+      return new Text(`${styledLabel}${styledSuffix}`, 0, 0);
     },
     renderResult(result, options, theme, context) {
       try {
@@ -100,18 +104,15 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const settings = await prepareInvocation(ctx);
 
-      if (!params.action) {
-        return errorResult(`Provide an action: "agents", "list", "run", "results", or "remove".\n\nAvailable agents:\n${agentRegistry.summarizeAgent()}`);
-      }
+      const invocation = parseSubagentInvocation(params, { maxTasks: settings.runtime.maxTasksPerRun });
+      if ("error" in invocation) return invocationErrorResult(actionDeps, invocation);
 
-      switch (params.action) {
-        case "agents": return agentsAction(actionDeps);
-        case "list": return listAction(actionDeps, params);
-        case "results": return resultsAction(actionDeps, params, ctx);
-        case "remove": return removeAction(actionDeps, params, ctx);
-        case "run": return runAction(actionDeps, params, signal, onUpdate, ctx, settings);
-        default:
-          return errorResult(`Unknown action: ${String(params.action)}. Use "agents", "list", "run", "results", or "remove".`);
+      switch (invocation.action) {
+        case "agents": return agentsAction(actionDeps, invocation);
+        case "list": return listAction(actionDeps, invocation);
+        case "results": return resultsAction(actionDeps, invocation, ctx);
+        case "remove": return removeAction(actionDeps, invocation, ctx);
+        case "run": return runAction(actionDeps, invocation, signal, onUpdate, ctx);
       }
     },
   });

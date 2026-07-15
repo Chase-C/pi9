@@ -2,7 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 
-import { SubagentParams, TaskSchema, parseTask } from "../src/schema.js";
+import { SubagentParams, TaskSchema, parseSubagentInvocation, parseTask } from "../src/schema.js";
 
 test("TaskSchema accepts an optional label string and rejects non-string values", () => {
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work" }), true);
@@ -34,6 +34,7 @@ test("TaskSchema rejects empty strings and unsupported thinking levels", () => {
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", cwd: "" }), false);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "extreme" }), false);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "xhigh" }), true);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "max" }), true);
 });
 
 test("parseTask classifies spawn vs resume by which key is present and preserves all fields", () => {
@@ -44,7 +45,7 @@ test("parseTask classifies spawn vs resume by which key is present and preserves
     skills: ["tdd"],
     resumable: true,
     model: "m",
-    thinking: "high",
+    thinking: "max",
     cwd: "sub",
   });
   assert.deepEqual(spawn, {
@@ -55,7 +56,7 @@ test("parseTask classifies spawn vs resume by which key is present and preserves
     skills: ["tdd"],
     resumable: true,
     model: "m",
-    thinking: "high",
+    thinking: "max",
     cwd: "sub",
   });
 
@@ -121,14 +122,71 @@ test("parseTask rejects unsupported thinking levels", () => {
   assert.match(result.error, /thinking must be one of/);
 });
 
-test("parseTask rejects a task carrying the batch-level background field", () => {
-  const spawn = parseTask({ agent: "helper", prompt: "do work", background: true });
-  assert.ok("error" in spawn);
-  assert.match(spawn.error, /background is a batch-level flag on action='run', not a per-task field\./);
+test("parseSubagentInvocation narrows every action arm without carrying extra fields", () => {
+  assert.deepEqual(parseSubagentInvocation({ action: "agents", tasks: "ignored" }), { action: "agents" });
+  assert.deepEqual(
+    parseSubagentInvocation({ action: "list", status: ["running"], extra: "ignored" }),
+    { action: "list", status: ["running"] },
+  );
+  assert.deepEqual(
+    parseSubagentInvocation({ action: "run", tasks: [{ agent: "helper", prompt: "do work" }], extra: "ignored" }),
+    { action: "run", tasks: [{ kind: "spawn", agent: "helper", prompt: "do work" }] },
+  );
+  assert.deepEqual(
+    parseSubagentInvocation({ action: "results", sessionIds: ["s1"], remove: true, extra: "ignored" }),
+    { action: "results", sessionIds: ["s1"], remove: true },
+  );
+  assert.deepEqual(
+    parseSubagentInvocation({ action: "remove", scope: "retained", extra: "ignored" }),
+    { action: "remove", scope: "retained" },
+  );
+});
 
-  const resume = parseTask({ sessionId: "s", prompt: "follow up", background: true });
-  assert.ok("error" in resume);
-  assert.match(resume.error, /background is a batch-level flag on action='run', not a per-task field\./);
+test("parseSubagentInvocation applies the configured run task limit before task parsing", () => {
+  const result = parseSubagentInvocation(
+    { action: "run", tasks: [{ agent: "helper", prompt: "one" }, { agent: "helper", prompt: "two" }] },
+    { maxTasks: 1 },
+  );
+  assert.deepEqual(result, {
+    error: "Too many tasks (2). Max is 1.",
+    action: "run",
+    taskCountError: true,
+  });
+});
+
+test("parseSubagentInvocation validates action presence and values", () => {
+  const missing = parseSubagentInvocation({});
+  assert.ok("error" in missing);
+  assert.equal(missing.missingAction, true);
+
+  const unknown = parseSubagentInvocation({ action: "resume" });
+  assert.ok("error" in unknown);
+  assert.match(unknown.error, /Unknown action/);
+});
+
+test("parseSubagentInvocation centralizes action field validation", () => {
+  const list = parseSubagentInvocation({ action: "list", status: ["stale"] });
+  assert.ok("error" in list);
+  assert.match(list.error, /Unknown status 'stale'/);
+
+  const results = parseSubagentInvocation({ action: "results", sessionIds: [""] });
+  assert.ok("error" in results);
+  assert.match(results.error, /non-empty strings/);
+
+  const remove = parseSubagentInvocation({ action: "remove", sessionIds: ["s1"], scope: "retained" });
+  assert.ok("error" in remove);
+  assert.match(remove.error, /exactly one of sessionIds or scope/);
+});
+
+test("parseSubagentInvocation requires current boolean fields", () => {
+  assert.deepEqual(
+    parseSubagentInvocation({ action: "run", tasks: [{ agent: "helper", prompt: "work" }], background: "false" }),
+    { error: "run background must be a boolean.", action: "run" },
+  );
+  assert.deepEqual(
+    parseSubagentInvocation({ action: "results", sessionIds: ["s1"], remove: "false" }),
+    { error: "results remove must be a boolean.", action: "results" },
+  );
 });
 
 test("SubagentParams accepts results action with sessionIds and optional remove flag", () => {

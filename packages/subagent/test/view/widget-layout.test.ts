@@ -63,12 +63,14 @@ test("renderWidgetModelLines renders side-by-side columns with full-width footer
     fakeAgent({
       id: "bg",
       dispatch: "background",
+      retention: "persistent",
       config: { name: "scout" },
       createdAt: 1,
       status: { kind: "running", startedAt: 9_000 },
     }),
     fakeAgent({
       id: "res",
+      retention: "persistent",
       config: { name: "helper", resumable: true },
       createdAt: 2,
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
@@ -137,11 +139,13 @@ test("renderWidgetModelLines auto layout uses columns when content fits side by 
   const agents = [
     fakeAgent({
       dispatch: "background",
+      retention: "persistent",
       config: { name: "scout" },
       status: { kind: "running", startedAt: 9_000 },
     }),
     fakeAgent({
       id: "res",
+      retention: "persistent",
       config: { name: "helper", resumable: true },
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
     }),
@@ -160,11 +164,13 @@ test("renderWidgetModelLines auto layout falls back to stacked when gutter canno
   const agents = [
     fakeAgent({
       dispatch: "background",
+      retention: "persistent",
       config: { name: "scout" },
       status: { kind: "running", startedAt: 9_000 },
     }),
     fakeAgent({
       id: "res",
+      retention: "persistent",
       config: { name: "helper", resumable: true },
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
     }),
@@ -185,6 +191,7 @@ test("renderWidgetModelLines truncates wide glyphs per column without breaking a
     fakeAgent({
       id: "bg-parent",
       dispatch: "background",
+      retention: "persistent",
       label: "Orchestrator",
       config: { name: "orchestrator" },
       createdAt: 1,
@@ -194,12 +201,14 @@ test("renderWidgetModelLines truncates wide glyphs per column without breaking a
       id: "bg-child",
       parentSessionId: "bg-parent",
       dispatch: "background",
+      retention: "persistent",
       config: { name: "worker" },
       createdAt: 2,
       status: { kind: "running", startedAt: 9_000 },
     }),
     fakeAgent({
       id: "res",
+      retention: "persistent",
       config: { name: "helper-with-a-long-resumable-name-too", resumable: true },
       createdAt: 3,
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
@@ -220,11 +229,13 @@ test("SubagentWidgetComponent threads widgetLayout into column rendering", () =>
   const agents = [
     fakeAgent({
       dispatch: "background",
+      retention: "persistent",
       config: { name: "scout" },
       status: { kind: "running", startedAt: 9_000 },
     }),
     fakeAgent({
       id: "res",
+      retention: "persistent",
       config: { name: "helper", resumable: true },
       status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
     }),

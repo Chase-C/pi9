@@ -1,4 +1,5 @@
-import type { Agent, AgentUpdateKind } from "../domain/agent.js";
+import type { Agent } from "../domain/agent.js";
+import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
 
 export interface SubagentEventBus {
   emit(event: string, data: unknown): void;

@@ -10,7 +10,7 @@ export interface SubagentResumeMessageDetails {
   promptPreview: string;
   outputSnippet?: string;
   errorSnippet?: string;
-  result?: unknown;
+  result: unknown;
 }
 
 export interface SubagentResumeMessage {

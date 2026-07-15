@@ -4,9 +4,119 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { completedRun, interruptedRun } from "../../src/domain/agent-finalize.js";
+import { Agent } from "../../src/domain/agent.js";
+import { completedRun, errorRun, interruptedRun } from "../../src/domain/agent-finalize.js";
 import { toResult, toResults } from "../../src/domain/agent-result.js";
 import { baseCtx, makeManager, makeSession, mergeRunners, run } from "../helpers/runtime.js";
+
+/** Build each physically possible lifecycle/state combination for the catalog policy matrix. */
+function matrixAgent(status: "queued" | "running" | "completed" | "error", background: boolean, state: "enabled" | "disabled" | "retained", id: string): Agent {
+  const agent = new Agent(
+    id,
+    { name: "matrix", description: "", systemPrompt: "", source: "project", resumable: state !== "disabled" },
+    { kind: "spawn", agent: "matrix", prompt: id },
+    () => {},
+    { background },
+  );
+  const session = makeSession() as any;
+
+  if (state === "retained" || status === "running") agent.attach(session);
+  if (status === "queued") {
+    if (state === "retained") {
+      completedRun(agent, "seed");
+      agent.beginResume("queued", undefined, background);
+    }
+  } else if (status === "completed") {
+    completedRun(agent, "done");
+  } else if (status === "error") {
+    errorRun(agent, "failed");
+  }
+  return agent;
+}
+
+test("catalog retention matrix preserves list, cleanup eligibility, and retained removal", async () => {
+  const statuses = ["queued", "running", "completed", "error"] as const;
+  const dispatches = [false, true] as const;
+  const states = ["enabled", "disabled", "retained"] as const;
+
+  for (const status of statuses) {
+    for (const background of dispatches) {
+      for (const state of states) {
+        const agent = matrixAgent(status, background, state, `${status}-${background}-${state}`);
+        const manager = makeManager({ agents: new Map() } as any);
+        // This injects a prepared lifecycle row so all matrix arms can use the manager's public
+        // inventory and scope operations without adding a second production construction path.
+        (manager as any)._agents = [agent];
+
+        const active = status === "queued" || status === "running";
+        const persistent = background || state !== "disabled" && (active || state === "retained");
+        const expectedListed = active || persistent;
+        assert.equal(agent.catalogRetention.shouldRemainCataloged, expectedListed, `${status}/${background}/${state}`);
+        assert.equal(agent.snapshot().retention, persistent ? "persistent" : "transient", `${status}/${background}/${state} retention`);
+        assert.equal(manager.listSessions().length, expectedListed ? 1 : 0, `${status}/${background}/${state} list`);
+
+        const expectedRetainedRemoval = !background && status !== "running" && persistent;
+        const removed = await manager.remove({ scope: "retained" });
+        assert.equal(removed.removed, expectedRetainedRemoval ? 1 : 0, `${status}/${background}/${state} remove`);
+        assert.equal(manager.listSessions().length, expectedListed && !expectedRetainedRemoval ? 1 : 0, `${status}/${background}/${state} after remove`);
+
+        if (!active) {
+          // Exercise the real post-run cleanup path for every terminal matrix arm as well as the
+          // direct owner projection above.
+          const cleanupManager = makeManager({
+            agents: new Map([[
+              "matrix",
+              { name: "matrix", description: "", systemPrompt: "", source: "project", resumable: state !== "disabled" },
+            ]]),
+          } as any, 1, async (_ctx: any, cleanupAgent: any) => {
+            if (state === "retained") cleanupAgent.attach(makeSession());
+            return status === "completed"
+              ? completedRun(cleanupAgent, "done")
+              : errorRun(cleanupAgent, "failed");
+          });
+          const cleanupBatch = cleanupManager.startRun(
+            baseCtx(),
+            undefined,
+            [{ kind: "spawn", agent: "matrix", prompt: "terminal" }],
+            undefined,
+            { background },
+          );
+          await cleanupBatch.resultsPromise;
+          assert.equal(cleanupManager.listSessions().length, expectedListed ? 1 : 0, `${status}/${background}/${state} cleanup`);
+          const cleanupRemoved = await cleanupManager.remove({ scope: "retained" });
+          assert.equal(cleanupRemoved.removed, expectedRetainedRemoval ? 1 : 0, `${status}/${background}/${state} cleanup remove`);
+        }
+      }
+    }
+  }
+});
+
+test("manager inventory and raw results omit top-level resumed while retaining terminal status.resumed", async () => {
+  const config = { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true };
+  const runner = async (_ctx: any, agent: any, attempt: any) => {
+    agent.attach(attempt.kind === "resume" ? agent.retainedSession()! : makeSession());
+    return completedRun(agent, `done:${attempt.prompt}`);
+  };
+  const manager = makeManager({ agents: new Map([["chatty", config]]) } as any, 1, runner);
+
+  const firstBatch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "first" },
+  ], undefined, { background: false });
+  assert.equal(firstBatch.sessions[0].resumed, false);
+  const [firstSnapshot] = await firstBatch.resultsPromise;
+  assert.equal(Object.prototype.hasOwnProperty.call(firstSnapshot, "resumed"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(manager.listSessions()[0], "resumed"), false);
+
+  const resumeBatch = manager.startRun(baseCtx(), undefined, [
+    { kind: "resume", sessionId: firstSnapshot.id, prompt: "follow-up" },
+  ], undefined, { background: false });
+  assert.equal(resumeBatch.sessions[0].resumed, true);
+  const [resumeSnapshot] = await resumeBatch.resultsPromise;
+  assert.equal(Object.prototype.hasOwnProperty.call(resumeSnapshot, "resumed"), false);
+  assert.equal(resumeSnapshot.status.kind, "done");
+  assert.equal(resumeSnapshot.status.kind === "done" && resumeSnapshot.status.resumed, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(manager.listSessions()[0], "resumed"), false);
+});
 
 test("AgentManager.listSessions returns all retained sessions when called with no filter", async () => {
   const session = makeSession();
@@ -90,7 +200,7 @@ test("AgentManager discards a completed session when a task overrides resumable 
   };
   const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
     agent.attach(agent.retainedSession()!);
-    return completedRun(agent, `follow:${attempt.prompt}`, true);
+    return completedRun(agent, `follow:${attempt.prompt}`);
   };
   const registry = {
     agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
@@ -214,7 +324,7 @@ test("AgentManager.backgroundResults reports queued resume elapsed from the curr
     };
     const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
       agent.attach(agent.retainedSession()!);
-      return completedRun(agent, `follow:${attempt.prompt}`, true);
+      return completedRun(agent, `follow:${attempt.prompt}`);
     };
     const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
 
@@ -1152,7 +1262,7 @@ test("AgentManager.cancelDescendantsOf stamps cancelled descendants with the rea
   assert.match(result.error ?? "", /error/);
 });
 
-test("RunHandle.tree returns just the root when the root has no descendants", async () => {
+test("run updates return just the root when the root has no descendants", async () => {
   let release!: () => void;
   const blocker = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
@@ -1164,17 +1274,17 @@ test("RunHandle.tree returns just the root when the root has no descendants", as
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 2, runner);
+  let tree: any[] = [];
   const handle = manager.startRun(
     baseCtx(),
     undefined,
     [{ kind: "spawn", agent: "worker", prompt: "root" }],
-    undefined,
+    update => { tree = update.tree; },
     { background: false },
   );
 
   await new Promise(resolve => setTimeout(resolve, 10));
   const rootId = manager.listSessions()[0].id;
-  const tree = handle.tree();
 
   assert.equal(tree.length, 1);
   assert.equal(tree[0].id, rootId);
@@ -1183,7 +1293,7 @@ test("RunHandle.tree returns just the root when the root has no descendants", as
   await handle.resultsPromise;
 });
 
-test("RunHandle.tree walks a root → child → grandchild chain via descendant runs sharing parentSessionId", async () => {
+test("run updates walk a root → child → grandchild chain via descendant runs sharing parentSessionId", async () => {
   let release!: () => void;
   const blocker = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
@@ -1195,11 +1305,12 @@ test("RunHandle.tree walks a root → child → grandchild chain via descendant 
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 4, runner);
+  let tree: any[] = [];
 
   const rootHandle = manager.startRun(
     baseCtx(), undefined,
     [{ kind: "spawn", agent: "worker", prompt: "root" }],
-    undefined, { background: false },
+    update => { tree = update.tree; }, { background: false },
   );
   await new Promise(r => setTimeout(r, 10));
   const rootId = manager.listSessions()[0].id;
@@ -1217,7 +1328,6 @@ test("RunHandle.tree walks a root → child → grandchild chain via descendant 
   );
   await new Promise(r => setTimeout(r, 10));
 
-  const tree = rootHandle.tree();
   assert.deepEqual(
     tree.map(s => ({ id: s.id, parent: s.parentSessionId })),
     [
@@ -1231,7 +1341,7 @@ test("RunHandle.tree walks a root → child → grandchild chain via descendant 
   await Promise.all([rootHandle.resultsPromise, childHandle.resultsPromise, grandHandle.resultsPromise]);
 });
 
-test("RunHandle.tree orders siblings by createdAt and multiple roots by input order within a single run", async () => {
+test("run updates order siblings by createdAt and multiple roots by input order within a single run", async () => {
   let release!: () => void;
   const blocker = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
@@ -1243,6 +1353,7 @@ test("RunHandle.tree orders siblings by createdAt and multiple roots by input or
     agents: new Map([["worker", { name: "worker", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
   };
   const manager = makeManager(registry as any, 8, runner);
+  let tree: any[] = [];
 
   // Two-root run; tasks are listed in input order (A then B), even though under-the-hood
   // createdAt may interleave when they actually start running.
@@ -1252,7 +1363,7 @@ test("RunHandle.tree orders siblings by createdAt and multiple roots by input or
       { kind: "spawn", agent: "worker", prompt: "rootA" },
       { kind: "spawn", agent: "worker", prompt: "rootB" },
     ],
-    undefined, { background: false },
+    update => { tree = update.tree; }, { background: false },
   );
   await new Promise(r => setTimeout(r, 5));
   const allRoots = manager.listSessions().filter(s => s.parentSessionId === undefined);
@@ -1279,7 +1390,6 @@ test("RunHandle.tree orders siblings by createdAt and multiple roots by input or
     .sort((a, b) => a.createdAt - b.createdAt)
     .map(s => s.id);
 
-  const tree = handle.tree();
   // Roots in input order (A then B); A's children appear under A in createdAt order.
   assert.deepEqual(tree.map(s => s.id), [rootAId, ...childAIds, rootBId]);
 

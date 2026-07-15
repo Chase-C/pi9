@@ -49,6 +49,7 @@ test("updateSubagentWidget factory renders stacked content with theme-colored st
       fakeAgent({
         id: "bg-done",
         dispatch: "background",
+        retention: "persistent",
         config: { name: "reviewer" },
         createdAt: 2,
         status: { kind: "completed", startedAt: 1, completedAt: 5_000, response: "ok" },
