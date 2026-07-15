@@ -251,18 +251,58 @@ function expandRows(
   includeSnippet: boolean,
   richToolHistory = false,
 ): DisplayLine[] {
-  const withIndent = ({ agent, depth }: { agent: AgentSnapshot; depth: number }): DisplayLine => {
-    const line = renderRow(agent, now, bold, display);
-    return depth > 0 ? { ...line, text: `${"  ".repeat(depth)}${line.text}` } : line;
+  const layoutAt = (index: number) => runTreeLayout(
+    ordered[index].depth,
+    (ordered[index + 1]?.depth ?? -1) > ordered[index].depth,
+  );
+  const withIndent = (entry: { agent: AgentSnapshot; depth: number }, layout: RunTreeLayout): DisplayLine => {
+    const line = renderRow(entry.agent, now, bold, display);
+    if (!richToolHistory) {
+      return entry.depth > 0 ? { ...line, text: `${"  ".repeat(entry.depth)}${line.text}` } : line;
+    }
+    if (entry.depth === 0) return line;
+    return {
+      ...line,
+      text: `${layout.agentPrefix}${line.text.slice(2)}`,
+      ...(line.segments ? { segments: [{ text: layout.agentPrefix }, ...line.segments.slice(1)] } : {}),
+    };
   };
   if (!expanded) {
-    return ordered.flatMap(entry => [
-      withIndent(entry),
-      ...(richToolHistory ? recentToolLines(entry.agent, entry.depth, now, display) : []),
-    ]);
+    return ordered.flatMap((entry, index) => {
+      const layout = layoutAt(index);
+      return [
+        withIndent(entry, layout),
+        ...(richToolHistory ? recentToolLines(entry.agent, now, display, layout) : []),
+      ];
+    });
   }
-  return ordered.flatMap((entry, index) =>
-    expandedLines(withIndent(entry), entry.agent, includeSnippet, index < ordered.length - 1, display, now, richToolHistory));
+  return ordered.flatMap((entry, index) => {
+    const layout = layoutAt(index);
+    return expandedLines(withIndent(entry, layout), entry.agent, includeSnippet, index < ordered.length - 1, display, now, richToolHistory);
+  });
+}
+
+interface RunTreeLayout {
+  agentPrefix: string;
+  toolPrefix: string;
+  overflowPrefix: string;
+  railPrefix?: string;
+}
+
+/** Keeps nested connectors and tool details aligned from one canonical agent-row prefix. */
+function runTreeLayout(depth: number, hasNestedChild: boolean): RunTreeLayout {
+  const agentPrefix = depth === 0 ? "  " : `${"  ".repeat(depth)}╰─ `;
+  const toolColumn = agentPrefix.length + 2; // status glyph + following space
+  const detailPrefix = new Array<string>(toolColumn).fill(" ");
+  const railColumn = (depth + 1) * 2;
+  if (hasNestedChild) detailPrefix[railColumn] = "│";
+  const overflowPrefix = detailPrefix.join("");
+  return {
+    agentPrefix,
+    toolPrefix: `${overflowPrefix}╰ `,
+    overflowPrefix,
+    ...(hasNestedChild ? { railPrefix: overflowPrefix.slice(0, railColumn + 1) } : {}),
+  };
 }
 
 /**
@@ -272,20 +312,40 @@ function expandRows(
  * other tools — so the in-flight nested progress stays visible. Otherwise show the most recent
  * calls newest-first, capped at three, with a trailing line counting any further calls.
  */
-function recentToolLines(agent: AgentSnapshot, depth: number, now: number, display: SubagentDisplaySettings): DisplayLine[] {
+function recentToolLines(
+  agent: AgentSnapshot,
+  now: number,
+  display: SubagentDisplaySettings,
+  layout: RunTreeLayout,
+): DisplayLine[] {
   if (!isActiveStatusKind(effectiveStatus(agent.status))) return [];
   const history = agent.activity.toolHistory;
-  const indent = 4 + depth * 2;
   const max = display.toolInputSummaryLength;
+  const withRailColor = (text: string, color: ThemeColor | undefined, hangingIndent: number): DisplayLine => ({
+    text,
+    color,
+    hangingIndent,
+    ...(layout.railPrefix ? { segments: [
+      { text: layout.railPrefix, color: "text" },
+      { text: text.slice(layout.railPrefix.length), ...(color ? { color } : {}) },
+    ] } : {}),
+  });
+  const formatTool = (tool: AgentSnapshot["activity"]["toolHistory"][number]): DisplayLine => {
+    const line = formatToolUseLine(tool, 0, now, max);
+    return withRailColor(`${layout.toolPrefix}${line.text}`, line.color, layout.toolPrefix.length);
+  };
   const runningSubagents = history.filter(tool => tool.name === "subagent" && tool.completedAt === undefined);
-  if (runningSubagents.length > 0) {
-    return runningSubagents.slice().reverse().map(tool => formatToolUseLine(tool, indent, now, max));
-  }
+  if (runningSubagents.length > 0) return runningSubagents.slice().reverse().map(formatTool);
+
   const recent = history.slice(-3).reverse();
-  const lines = recent.map(tool => formatToolUseLine(tool, indent, now, max));
+  const lines = recent.map(formatTool);
   const extra = history.length - recent.length;
   if (extra > 0) {
-    lines.push({ text: `${" ".repeat(indent)}+${extra} additional tool call${extra === 1 ? "" : "s"}`, hangingIndent: indent });
+    lines.push(withRailColor(
+      `${layout.overflowPrefix}+${extra} additional tool call${extra === 1 ? "" : "s"}`,
+      "muted",
+      layout.overflowPrefix.length,
+    ));
   }
   return lines;
 }
@@ -303,13 +363,10 @@ function formatResultsLines(entries: readonly ResultEntry[], expanded: boolean, 
   return entries.flatMap((entry, index) => resultExpanded(entry, index < entries.length - 1, now, bold, display));
 }
 
-/** One collapsed result row. Running polls use a static inventory row rather than a frozen spinner. */
-function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine {
+/** One collapsed result row, using the same shape for pending and terminal snapshots. */
+function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined, _display: SubagentDisplaySettings): DisplayLine {
   if ("error" in entry) return { text: `${entry.sessionId} · error: ${entry.error}`, color: "error" };
-  if (effectiveStatus(entry.snapshot.status) === "running") {
-    return { text: `  ${formatSessionLine(entry.snapshot, now, bold, display)}`, color: statusPresentation(entry.snapshot.status).color };
-  }
-  return formatRunSessionLine(entry.snapshot, now, bold);
+  return formatRunSessionLine(entry.snapshot, now, bold, true);
 }
 
 /**
@@ -322,9 +379,7 @@ function resultExpanded(entry: ResultEntry, trailingBlank: boolean, now: number,
     const line: DisplayLine = { text: `${entry.sessionId} · error: ${entry.error}`, color: "error" };
     return trailingBlank ? [line, { text: "" }] : [line];
   }
-  const row = effectiveStatus(entry.snapshot.status) === "running"
-    ? { text: `  ${formatSessionLine(entry.snapshot, now, bold, display)}`, color: statusPresentation(entry.snapshot.status).color }
-    : formatRunSessionLine(entry.snapshot, now, bold);
+  const row = formatRunSessionLine(entry.snapshot, now, bold, true);
   return expandedLines(row, entry.snapshot, true, trailingBlank, display, now, true);
 }
 

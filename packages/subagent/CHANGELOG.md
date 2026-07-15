@@ -18,6 +18,13 @@ This changelog starts with version `v0.2.1`.
 - Unify command- and model-facing safe removal capability as `canRemove`: terminal cataloged background and resumable sessions are removable, while active sessions are not advertised as removable. Details payloads retain deprecated `canClear` as an equivalent alias.
 - Consolidate settings updates and background-completion message projection while keeping current tool, event, and message shapes unchanged.
 - Reject non-boolean `run.background` and `results.remove` values at the runtime parsing boundary.
+- Refine tool-call titles with a bold tool name and a dimmed run/results summary.
+- Redesign run and results rows around task labels, tool-call counts, token usage, elapsed time, recent activity, and lightweight nested-agent rails.
+
+### Fixed
+
+- Render pending `results` entries consistently with run rows while using a static running glyph instead of a frozen spinner frame.
+- Keep top-level tool activity, nested connectors, wrapped continuation lines, and tree-rail colors aligned consistently.
 
 ### Tests
 

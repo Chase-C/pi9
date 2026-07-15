@@ -236,8 +236,8 @@ test("subagent run renders details.subtree as a depth-indented tree when present
 
   assert.equal(lines.length, 3);
   assert.match(lines[0], /^  ⠋ alpha/);
-  assert.match(lines[1], /^    ⠋ beta/);
-  assert.match(lines[2], /^      ⠋ gamma/);
+  assert.match(lines[1], /^  ╰─ ⠋ beta/);
+  assert.match(lines[2], /^    ╰─ ⠋ gamma/);
 });
 
 test("collapsed subagent run rows show the three most recent tools newest-first with an additional-calls tail", () => {
@@ -257,10 +257,10 @@ test("collapsed subagent run rows show the three most recent tools newest-first 
 
   // Newest tool first, capped at three, then a tail line counting the older (4th) call.
   assert.equal(lines.length, 5);
-  assert.equal(lines[0], "  ⠇ reviewer · 2 turns · 0 tokens · 18s");
-  assert.equal(lines[1], "    bash(npm test --workspace=@pi9/subagent) · 12s");
-  assert.equal(lines[2], '    grep("formatRunSessionLine" in packages/subagent/src) · 1s');
-  assert.equal(lines[3], "    read(packages/subagent/src/view/tool-result-lines.ts) · 0s");
+  assert.equal(lines[0], "  ⠇ reviewer  4 tool calls · 0 tokens · 18s");
+  assert.equal(lines[1], "    ╰ bash(npm test --workspace=@pi9/subagent) · 12s");
+  assert.equal(lines[2], '    ╰ grep("formatRunSessionLine" in packages/subagent/src) · 1s');
+  assert.equal(lines[3], "    ╰ read(packages/subagent/src/view/tool-result-lines.ts) · 0s");
   assert.equal(lines[4], "    +1 additional tool call");
 });
 
@@ -276,8 +276,8 @@ test("collapsed subagent run additional-calls tail pluralizes and counts every t
   const lines = formatSubagentToolLines(runDetails([session]), false, 19_000);
 
   assert.equal(lines.length, 5);
-  assert.equal(lines[1], "    read(file-5.ts) · 0s");
-  assert.equal(lines[3], "    read(file-3.ts) · 0s");
+  assert.equal(lines[1], "    ╰ read(file-5.ts) · 0s");
+  assert.equal(lines[3], "    ╰ read(file-3.ts) · 0s");
   assert.equal(lines[4], "    +3 additional tool calls");
 });
 
@@ -334,9 +334,9 @@ test("collapsed subagent run row shows only the active subagent tool line when p
   const lines = formatSubagentToolLines(runDetails([parent], { subtree: [parent, child] }), false, 10_000);
 
   assert.deepEqual(lines, [
-    "  ⠸ parent · 0 turns · 0 tokens · 9s",
-    "    subagent(run 2 tasks) · 6s",
-    "    ⠸ child · 0 turns · 0 tokens · 5s",
+    "  ⠸ parent  2 tool calls · 0 tokens · 9s",
+    "  │ ╰ subagent(run 2 tasks) · 6s",
+    "  ╰─ ⠸ child  0 tool calls · 0 tokens · 5s",
   ]);
 });
 

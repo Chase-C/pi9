@@ -167,17 +167,17 @@ test("subagent run title shows live running/queued/finished counts and elapsed o
 
   const title = titleText(tool, { action: "run", tasks: [{}, {}, {}, {}] }, context);
 
-  assert.match(title, /^subagent run · 2 running · 1 queued · 1 finished · \d/);
+  assert.match(title, /^subagent run  2 running · 1 queued · 1 finished · \d/);
 });
 
 test("subagent run title falls back to the task count before a live result, with or without a render context", () => {
   const tool = registerExtension();
 
   // No render context at all (older call sites / non-TUI re-renders): must not throw.
-  assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }), /^subagent run · 3 tasks\s*$/);
+  assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }), /^subagent run  3 tasks\s*$/);
 
   // Empty row-local state, before the first partial result populates a summary.
-  assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }, { state: {} }), /^subagent run · 3 tasks\s*$/);
+  assert.match(titleText(tool, { action: "run", tasks: [{}, {}, {}] }, { state: {} }), /^subagent run  3 tasks\s*$/);
 });
 
 test("subagent run title omits zero running/queued counts, keeping finished and elapsed", () => {
@@ -196,7 +196,7 @@ test("subagent run title omits zero running/queued counts, keeping finished and 
   );
 
   const title = titleText(tool, { action: "run", tasks: [{}, {}] }, context);
-  assert.match(title, /^subagent run · 2 finished · \d/);
+  assert.match(title, /^subagent run  2 finished · \d/);
   assert.doesNotMatch(title, /running|queued/);
 });
 
@@ -216,7 +216,7 @@ test("subagent run title derives finished counts from a completed results envelo
   );
 
   const title = titleText(tool, { action: "run" }, context);
-  assert.match(title, /^subagent run · 2 finished · /);
+  assert.match(title, /^subagent run  2 finished · /);
   assert.doesNotMatch(title, /running|queued/);
 });
 
@@ -235,5 +235,5 @@ test("subagent run title counts the subtree through the shared state path when n
   );
 
   // Flat sessions alone would read "1 running"; the subtree adds the queued + finished descendants.
-  assert.match(titleText(tool, { action: "run", tasks: [{}] }, context), /^subagent run · 1 running · 1 queued · 1 finished · /);
+  assert.match(titleText(tool, { action: "run", tasks: [{}] }, context), /^subagent run  1 running · 1 queued · 1 finished · /);
 });
