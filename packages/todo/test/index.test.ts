@@ -93,7 +93,7 @@ describe("todoExtension", () => {
       name: "todo",
       parameters: expect.objectContaining({ type: "object" }),
     }));
-    for (const event of ["session_start", "session_tree", "session_compact", "before_agent_start", "turn_end", "context"]) {
+    for (const event of ["session_start", "session_tree", "session_compact", "before_agent_start", "agent_start", "agent_settled", "turn_end", "context"]) {
       expect(pi.on).toHaveBeenCalledWith(event, expect.any(Function));
     }
     expect(pi.on).not.toHaveBeenCalledWith("session_before_compact", expect.any(Function));

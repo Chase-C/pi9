@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
 import { countTodos, formatTodoProgress, todoTasks } from "./format.js";
-import { todoGlyph } from "./glyphs.js";
+import { TODO_EXPAND_GLYPH, TODO_SEPARATOR_GLYPH, todoGlyph } from "./glyphs.js";
 import { currentTodoPhaseIndex, todoAddressKey } from "./state.js";
 import { isTerminalTodo, todoTaskPriority, type Todo, type TodoAddress, type TodoToolDetails } from "./types.js";
 
@@ -41,16 +41,16 @@ export function renderResult(
 
 function todoHeader(counts: ReturnType<typeof countTodos>, title = "Todo"): string {
   return [
-    `${title} · ${counts.open} open`,
+    `${title} ${TODO_SEPARATOR_GLYPH} ${counts.open} open`,
     ...(counts.completed ? [`${counts.completed} completed`] : []),
     ...(counts.cancelled ? [`${counts.cancelled} cancelled`] : []),
-  ].join(" · ");
+  ].join(` ${TODO_SEPARATOR_GLYPH} `);
 }
 
 function collapsedText(header: string, tasks: readonly Todo[], theme: ThemeLike | undefined, options: TodoRendererOptions): string {
   const active = tasks.find((task) => task.status === "in_progress");
   const activeText = active ? `Active: ${todoGlyph(active.status, options.fallbackGlyphs)} ${active.name}` : undefined;
-  return [paint(theme, "muted", header), ...(activeText ? [paint(theme, "warning", activeText)] : []), paint(theme, "dim", "↵ expand")].join(" · ");
+  return [paint(theme, "muted", header), ...(activeText ? [paint(theme, "warning", activeText)] : []), paint(theme, "dim", `${TODO_EXPAND_GLYPH} expand`)].join(` ${TODO_SEPARATOR_GLYPH} `);
 }
 
 function orderedTasks(tasks: readonly Todo[]): Todo[] {
