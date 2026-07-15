@@ -1,6 +1,8 @@
 import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
+import { TOOL_FRAME_STATE_GLYPHS } from "./glyphs.js";
+
 export type TodoToolFrameState = "pending" | "success" | "error";
 export type TodoToolFrameContent = Component | string | readonly (Component | string)[] | null | undefined;
 export type TodoToolFrameTheme = Partial<Pick<Theme, "fg" | "bg" | "bold">>;
@@ -28,17 +30,17 @@ const FRAME_STYLES: Record<TodoToolFrameState, FrameStyle> = {
   pending: {
     state: "warning",
     background: "toolPendingBg",
-    marker: "●",
+    marker: TOOL_FRAME_STATE_GLYPHS.pending,
   },
   success: {
     state: "success",
     background: "toolSuccessBg",
-    marker: "✓",
+    marker: TOOL_FRAME_STATE_GLYPHS.success,
   },
   error: {
     state: "error",
     background: "toolErrorBg",
-    marker: "✗",
+    marker: TOOL_FRAME_STATE_GLYPHS.error,
   },
 };
 

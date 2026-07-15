@@ -136,6 +136,12 @@ export function registerTodoTool(pi: ExtensionAPI): void {
   pi.on("before_agent_start", () => {
     reminderCadence = beginReminderAgentRun(reminderCadence);
   });
+  pi.on("agent_start", (_event, ctx) => {
+    updateTodoWidget(ctx, state, settings);
+  });
+  pi.on("agent_settled", (_event, ctx) => {
+    updateTodoWidget(ctx, state, settings);
+  });
   pi.on("turn_end", (event) => {
     reminderCadence = interactedWithTodoThisTurn
       ? noteTodoInteraction(reminderCadence)

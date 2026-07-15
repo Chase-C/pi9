@@ -1,4 +1,4 @@
-import { todoGlyph } from "./glyphs.js";
+import { TODO_DESCRIPTION_SEPARATOR_GLYPH, TODO_SEPARATOR_GLYPH, todoGlyph } from "./glyphs.js";
 import type { Todo, TodoState, TodoStatus } from "./types.js";
 
 export interface TodoCounts {
@@ -19,7 +19,7 @@ export function formatTodoSummary(state: TodoState | undefined, includeDescripti
     `${counts.open} open`,
     ...(counts.completed ? [`${counts.completed} completed`] : []),
     ...(counts.cancelled ? [`${counts.cancelled} cancelled`] : []),
-  ].join(" · ");
+  ].join(` ${TODO_SEPARATOR_GLYPH} `);
 
   return [
     `Todo: ${summary}`,
@@ -36,7 +36,7 @@ export function formatTodoTaskLines(state: TodoState | undefined, includeDescrip
     if (phase.tasks.length === 0) continue;
     lines.push(`${phase.name}:`);
     lines.push(...phase.tasks.map((task) =>
-      `  ${taskMarker(task)} ${task.name}${includeDescriptions ? ` — ${task.description}` : ""}`,
+      `  ${taskMarker(task)} ${task.name}${includeDescriptions ? ` ${TODO_DESCRIPTION_SEPARATOR_GLYPH} ${task.description}` : ""}`,
     ));
   }
   return lines;
@@ -86,7 +86,7 @@ export function formatTodoProgress(label: string, tasks: readonly Todo[]): strin
     ...(counts.pending ? [`${counts.pending} pending`] : []),
     ...(counts.completed ? [`${counts.completed} completed`] : []),
     ...(counts.cancelled ? [`${counts.cancelled} cancelled`] : []),
-  ].join(" · ");
+  ].join(` ${TODO_SEPARATOR_GLYPH} `);
 }
 
 export function taskMarker(task: Pick<Todo, "status">): string {

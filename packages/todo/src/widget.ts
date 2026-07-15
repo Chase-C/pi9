@@ -28,6 +28,7 @@ const widgetLifecycles = new WeakMap<TodoWidgetUI, TodoWidgetLifecycle>();
 
 export type TodoWidgetContext = {
   hasUI?: boolean;
+  isIdle?: () => boolean;
   ui?: TodoWidgetUI;
 };
 
@@ -56,6 +57,7 @@ export function updateTodoWidget(ctx: TodoWidgetContext | undefined, state: Todo
           maxVisible: settings.maxVisibleTasks,
           fallbackGlyphs: settings.fallbackGlyphs,
           blankLineBelow: placement === "aboveEditor",
+          animateWorkingMarker: ctx.isIdle ? !ctx.isIdle() : true,
         }, tui)
       : undefined;
     ui.setWidget!("todo", factory, { placement });

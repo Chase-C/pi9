@@ -1,7 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import { todoGlyph } from "./glyphs.js";
+import { TODO_SEPARATOR_GLYPH, TODO_TRUNCATION_GLYPH, WORKING_SPINNER_FRAMES, todoGlyph } from "./glyphs.js";
 import { currentTodoPhaseIndex } from "./state.js";
 import { isTerminalTodo, todoTaskPriority, type Todo, type TodoPhase, type TodoState } from "./types.js";
 
@@ -56,11 +56,12 @@ export function renderTodoWidgetLines(
 
   if (state?.workingOn) {
     lines.push("");
-    const text = theme?.fg ? theme.fg("dim", state.workingOn) : state.workingOn;
-    lines.push(fit(`  ${options.workingMarker ?? "⠋"} ${text}`, safeWidth));
+    const working = `${options.workingMarker ?? WORKING_SPINNER_FRAMES[0]} ${state.workingOn}`;
+    const text = theme?.fg ? theme.fg("muted", working) : working;
+    lines.push(fit(`  ${text}`, safeWidth));
   }
 
-  return lines;
+  return lines.map((line) => line ? fit(` ${line}`, safeWidth) : line);
 }
 
 function lastNonEmptyPhaseIndex(phases: readonly TodoPhase[]): number {
@@ -78,7 +79,7 @@ function boundedMaxVisible(value: number | undefined): number {
 function phaseTitle(phase: TodoPhase, phaseIndex: number, selected: boolean, theme: ThemeLike | undefined): string {
   const title = `  ${phaseIndex + 1}. ${phase.name}`;
   const terminal = phase.tasks.filter(isTerminalTodo).length;
-  const progress = `· ${terminal}/${phase.tasks.length}`;
+  const progress = `${TODO_SEPARATOR_GLYPH} ${terminal}/${phase.tasks.length}`;
   if (!selected) {
     const line = `${title} ${progress}`;
     return theme?.fg ? theme.fg("dim", line) : line;
@@ -108,7 +109,11 @@ function taskLine(task: Todo, theme: ThemeLike | undefined, fallbackGlyphs = fal
     ? theme.strikethrough(task.name)
     : task.name;
   const line = `    ${marker} ${name}`;
-  return theme?.fg ? theme.fg(color, line) : line;
+  if (!theme?.fg) return line;
+  if (task.status === "in_progress") {
+    return `${theme.fg("dim", `    ${marker}`)} ${theme.fg("text", name)}`;
+  }
+  return theme.fg(color, line);
 }
 
 function terminalTaskSummary(tasks: readonly Todo[]): string | undefined {
@@ -118,7 +123,7 @@ function terminalTaskSummary(tasks: readonly Todo[]): string | undefined {
     ...(completed ? [`${completed} complete ${completed === 1 ? "task" : "tasks"}`] : []),
     ...(cancelled ? [`${cancelled} cancelled ${cancelled === 1 ? "task" : "tasks"}`] : []),
   ];
-  return parts.length > 0 ? parts.join(" · ") : undefined;
+  return parts.length > 0 ? parts.join(` ${TODO_SEPARATOR_GLYPH} `) : undefined;
 }
 
 function isActive(task: Todo): boolean {
@@ -126,5 +131,5 @@ function isActive(task: Todo): boolean {
 }
 
 function fit(line: string, width: number): string {
-  return visibleWidth(line) <= width ? line : truncateToWidth(line, width, "…");
+  return visibleWidth(line) <= width ? line : truncateToWidth(line, width, TODO_TRUNCATION_GLYPH);
 }
