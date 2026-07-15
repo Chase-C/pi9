@@ -6,29 +6,18 @@ This changelog starts with version `v0.2.1`.
 
 ### Breaking
 
-- Drop compatibility with persisted tool details and custom-message payloads from earlier releases; old subagent rows and notifications are no longer re-rendered.
-- Remove deprecated deep-module APIs, legacy lifecycle shapes, direct action-handler call signatures, and migration handling for removed tool fields.
+- Remove compatibility with legacy persisted render/notification payloads and deprecated deep-module APIs.
 
 ### Changed
 
-- Make attempt kind, requested configuration, and catalog retention the canonical owners of resume state, task overrides, and session persistence.
-- Move task resolution out of `Agent`, model preflight failures directly, centralize tool invocation parsing, and eliminate source import cycles.
-- Report task-level skill overrides consistently in session and preflight snapshots, including explicit empty skill lists.
-- Require non-blank agent descriptions and validate definition thinking levels against `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
-- Unify command- and model-facing safe removal capability as `canRemove`: terminal cataloged background and resumable sessions are removable, while active sessions are not advertised as removable. Details payloads retain deprecated `canClear` as an equivalent alias.
-- Consolidate settings updates and background-completion message projection while keeping current tool, event, and message shapes unchanged.
-- Reject non-boolean `run.background` and `results.remove` values at the runtime parsing boundary.
-- Refine tool-call titles with a bold tool name and a dimmed run/results summary.
-- Redesign run and results rows around task labels, tool-call counts, token usage, elapsed time, recent activity, and lightweight nested-agent rails.
+- Tighten agent and tool-input validation for descriptions, thinking levels, and boolean flags.
+- Make task-level skill overrides authoritative, including `skills: []`, and inject selected skills' full instructions into child system prompts.
+- Consistently expose removal capability for terminal cataloged sessions across the tool and `/subagents` UI.
+- Redesign run, result, and background-completion rows around task labels, activity, usage, elapsed time, and nested-agent structure.
 
 ### Fixed
 
-- Render pending `results` entries consistently with run rows while using a static running glyph instead of a frozen spinner frame.
-- Keep top-level tool activity, nested connectors, wrapped continuation lines, and tree-rail colors aligned consistently.
-
-### Tests
-
-- Add lifecycle, retention, task-resolution, parser, settings, notification, and recursive orchestration characterization coverage.
+- Render pending results and agent activity with consistent statuses, rails, wrapping, and alignment.
 
 ## [0.3.1] - 2026-07-11
 

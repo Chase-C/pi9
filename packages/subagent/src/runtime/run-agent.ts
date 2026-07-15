@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -5,10 +6,10 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   ExtensionContext,
-  formatSkillsForPrompt,
   getAgentDir,
   loadSkills,
   SessionManager,
+  stripFrontmatter,
   SettingsManager,
   type AgentSession,
   type ModelRegistry,
@@ -30,6 +31,7 @@ export interface RunAgentDependencies {
   sessionManager: typeof SessionManager.inMemory;
   settingsManager: typeof SettingsManager.create;
   loadSkills: typeof loadSkills;
+  readSkillFile: typeof readFileSync;
   loadExtensionPaths: (cwd: string, agentDir: string) => Promise<string[]>;
   childToolFor?: (agent: Agent) => ToolDefinition;
 }
@@ -41,6 +43,7 @@ export const DefaultRunAgentDependencies: RunAgentDependencies = {
   sessionManager: SessionManager.inMemory,
   settingsManager: SettingsManager.create,
   loadSkills,
+  readSkillFile: readFileSync,
   loadExtensionPaths: discoverInheritedExtensionPaths,
 };
 
@@ -79,8 +82,18 @@ export async function RunAttempt(
       matched.push({ ...found, disableModelInvocation: false });
     }
     if (missingSkill) return errorRun(agent, `Unknown skill: ${missingSkill}`);
-    const skillBlock = formatSkillsForPrompt(matched);
-    if (skillBlock) systemPrompt = `${systemPrompt}\n\n${skillBlock}`;
+
+    try {
+      const skillBlocks = matched.map(skill => {
+        const content = dependencies.readSkillFile(skill.filePath, "utf-8");
+        const body = stripFrontmatter(content).trim();
+        return `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
+      });
+      systemPrompt = `${systemPrompt}\n\n${skillBlocks.join("\n\n")}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return errorRun(agent, `Could not load requested skill: ${message}`);
+    }
   }
 
   const inheritedExtensionPaths = await dependencies.loadExtensionPaths(cwd, agentDir);
