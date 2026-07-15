@@ -1,0 +1,77 @@
+{
+  "name": "@pi9/ask",
+  "version": "0.1.0",
+  "description": "Preview-rich, replayable Pi questions with multi-select and comments.",
+  "license": "MIT",
+  "author": "Chase Cummings <chaseecummings@gmail.com>",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chase-C/pi9.git",
+    "directory": "packages/ask"
+  },
+  "bugs": {
+    "url": "https://github.com/Chase-C/pi9/issues"
+  },
+  "homepage": "https://github.com/Chase-C/pi9/tree/main/packages/ask#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "pi9",
+    "ask"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc",
+    "test": "npm run build && npm run test:unit && npm run test:package",
+    "test:unit": "vitest run",
+    "test:package": "node test/package-smoke.mjs",
+    "test:watch": "vitest",
+    "release": "node ../../scripts/release.mjs ask",
+    "release:patch": "node ../../scripts/release.mjs ask patch",
+    "release:minor": "node ../../scripts/release.mjs ask minor",
+    "release:major": "node ../../scripts/release.mjs ask major",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "skills": [],
+    "prompts": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@earendil-works/pi-tui": "^0.80.6",
+    "typebox": "^1.0.55",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

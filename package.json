@@ -12,6 +12,7 @@
     "test": "npm test --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present",
     "check": "npm run typecheck && npm test",
+    "release:ask": "node scripts/release.mjs ask",
     "release:context": "node scripts/release.mjs context",
     "release:subagent": "node scripts/release.mjs subagent",
     "release:todo": "node scripts/release.mjs todo",
