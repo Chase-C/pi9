@@ -4,6 +4,10 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Render unanswered question text with the muted theme color instead of dim styling.
+
 ## [0.1.0] - 2026-07-14
 
 ### Added

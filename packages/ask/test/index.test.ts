@@ -161,7 +161,7 @@ describe("ask extension integration", () => {
     const context = { state, args, lastComponent: undefined };
     const call = tool.renderCall(args, styledTheme, context);
 
-    expect(call.render(80).map((line: string) => line.trimEnd())).toEqual(["[toolTitle]ask [dim]Choose?", "[dim]╰ options:2"]);
+    expect(call.render(80).map((line: string) => line.trimEnd())).toEqual(["[toolTitle]ask [muted]Choose?", "[dim]╰ options:2"]);
 
     const answered = tool.renderResult({
       content: [{ type: "text", text: "Selected: Beta" }],

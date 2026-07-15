@@ -32,7 +32,7 @@ type AskReplayState =
     };
 
 function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): string {
-  const questionColor = state.status === "answered" ? "text" : "dim";
+  const questionColor = state.status === "answered" ? "text" : "muted";
   const title = `${theme.fg("toolTitle", "ask")} ${theme.fg(questionColor, args.question)}`;
   if (state.status) return title;
 
