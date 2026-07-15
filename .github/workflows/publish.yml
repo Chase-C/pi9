@@ -37,6 +37,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
         run: |
           case "$RELEASE_TAG" in
+            ask-v*)
+              echo "workspace=@pi9/ask" >> "$GITHUB_OUTPUT"
+              echo "path=packages/ask" >> "$GITHUB_OUTPUT"
+              echo "version=${RELEASE_TAG#ask-v}" >> "$GITHUB_OUTPUT"
+              ;;
             context-v*)
               echo "workspace=@pi9/context" >> "$GITHUB_OUTPUT"
               echo "path=packages/context" >> "$GITHUB_OUTPUT"

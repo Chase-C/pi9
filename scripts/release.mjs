@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RELEASE_BRANCH = "main";
 const PACKAGES = {
+  ask: { workspace: "@pi9/ask", dir: "packages/ask", tagPrefix: "ask-v" },
   context: { workspace: "@pi9/context", dir: "packages/context", tagPrefix: "context-v" },
   subagent: { workspace: "@pi9/subagent", dir: "packages/subagent", tagPrefix: "subagent-v" },
   todo: { workspace: "@pi9/todo", dir: "packages/todo", tagPrefix: "todo-v" },
@@ -105,7 +106,7 @@ function prepareChangelog(content, version, date, newTag) {
 }
 
 if (!target || !bump) {
-  abort("Usage: node scripts/release.mjs <context|subagent|todo|whisper> <patch|minor|major|x.y.z> [--dry-run] [--skip-checks]");
+  abort("Usage: node scripts/release.mjs <ask|context|subagent|todo|whisper> <patch|minor|major|x.y.z> [--dry-run] [--skip-checks]");
 }
 const explicitVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(bump);
 if (!KEYWORDS.includes(bump) && !explicitVersion) abort(`Invalid version bump: ${bump}`);
