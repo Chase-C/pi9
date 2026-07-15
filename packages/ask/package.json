@@ -1,12 +1,19 @@
 {
   "name": "@pi9/ask",
   "version": "0.1.0",
-  "description": "Pi extension that lets agents ask users focused questions.",
+  "description": "Preview-rich, replayable Pi questions with multi-select and comments.",
   "license": "MIT",
   "author": "Chase Cummings <chaseecummings@gmail.com>",
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Chase-C/pi9.git",
@@ -17,7 +24,7 @@
   },
   "homepage": "https://github.com/Chase-C/pi9/tree/main/packages/ask#readme",
   "files": [
-    "src",
+    "dist",
     "README.md",
     "LICENSE"
   ],
@@ -35,8 +42,12 @@
     "access": "public"
   },
   "scripts": {
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
     "typecheck": "tsc",
-    "test": "vitest run",
+    "test": "npm run build && npm run test:unit && npm run test:package",
+    "test:unit": "vitest run",
+    "test:package": "node test/package-smoke.mjs",
     "test:watch": "vitest",
     "release": "node ../../scripts/release.mjs ask",
     "release:patch": "node ../../scripts/release.mjs ask patch",
@@ -46,7 +57,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.js"
     ],
     "skills": [],
     "prompts": []

@@ -16,3 +16,28 @@ export const AskParamsSchema = Type.Object({
   allowFreeform: Type.Optional(Type.Boolean({ default: true, description: "Allow a typed response. Defaults to true." })),
   timeout: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_TIMEOUT_MS, description: "Timeout in ms for answers that would go stale; the call returns unanswered on expiry. Zero disables any default." })),
 }, { additionalProperties: false });
+
+export const AskSelectionSchema = Type.Object({
+  label: Type.String({ minLength: 1 }),
+  description: Type.Optional(Type.String({ minLength: 1 })),
+  comment: Type.Optional(Type.String({ minLength: 1 })),
+}, { additionalProperties: false });
+
+export const AskAnswerSchema = Type.Object({
+  selections: Type.Array(AskSelectionSchema),
+  freeform: Type.Optional(Type.String({ minLength: 1 })),
+}, { additionalProperties: false });
+
+export const AskReplayDetailsSchema = Type.Object({
+  toolCallId: Type.String({ minLength: 1 }),
+  question: Type.String({ minLength: 1 }),
+  context: Type.Optional(Type.String({ minLength: 1 })),
+  allowMultiple: Type.Boolean(),
+  answer: AskAnswerSchema,
+}, { additionalProperties: false });
+
+export const AskAnsweredDetailsSchema = Type.Object({
+  status: Type.Literal("answered"),
+  question: Type.String({ minLength: 1 }),
+  answer: AskAnswerSchema,
+}, { additionalProperties: false });

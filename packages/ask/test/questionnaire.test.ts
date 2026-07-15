@@ -31,17 +31,11 @@ function uiHarness(action: "submit" | "cancel" = "submit") {
 }
 
 describe("launchQuestionnaire", () => {
-  it("returns undefined without opening custom UI outside TUI mode", async () => {
-    const { ui, custom } = uiHarness();
-    await expect(launchQuestionnaire({ mode: "rpc", ui }, params)).resolves.toBeUndefined();
-    expect(custom).not.toHaveBeenCalled();
-  });
-
   it("launches a fresh custom component and returns its answer", async () => {
     const first = uiHarness();
     const second = uiHarness();
-    await expect(launchQuestionnaire({ mode: "tui", ui: first.ui }, params)).resolves.toEqual({ selections: [{ label: "A" }] });
-    await launchQuestionnaire({ mode: "tui", ui: second.ui }, params);
+    await expect(launchQuestionnaire({ ui: first.ui }, params)).resolves.toEqual({ selections: [{ label: "A" }] });
+    await launchQuestionnaire({ ui: second.ui }, params);
 
     expect(components.at(-2)).not.toBe(components.at(-1));
     expect(components.at(-1)?.options).toMatchObject({ tui: "tui", theme: "theme", keybindings: "keys", ...params });
@@ -50,7 +44,12 @@ describe("launchQuestionnaire", () => {
 
   it("returns null when the component cancels", async () => {
     const { ui } = uiHarness("cancel");
-    await expect(launchQuestionnaire({ mode: "tui", ui }, params)).resolves.toBeNull();
+    await expect(launchQuestionnaire({ ui }, params)).resolves.toBeNull();
+  });
+
+  it("normalizes an unexpected undefined custom result to null", async () => {
+    const custom = vi.fn().mockResolvedValue(undefined);
+    await expect(launchQuestionnaire({ ui: { custom } }, params)).resolves.toBeNull();
   });
 
   it.each(["success", "cancel", "error"])("removes its abort listener after %s", async outcome => {
@@ -63,7 +62,7 @@ describe("launchQuestionnaire", () => {
       throw new Error("UI failed");
     });
 
-    const result = launchQuestionnaire({ mode: "tui", ui: harness.ui }, params, signal);
+    const result = launchQuestionnaire({ ui: harness.ui }, params, signal);
     if (outcome === "error") await expect(result).rejects.toThrow("UI failed");
     else await result;
 
@@ -76,7 +75,7 @@ describe("launchQuestionnaire", () => {
     const custom = vi.fn((factory: any) => new Promise<any>(resolve => {
       factory("tui", "theme", "keys", resolve);
     }));
-    const result = launchQuestionnaire({ mode: "tui", ui: { custom } }, params, controller.signal);
+    const result = launchQuestionnaire({ ui: { custom } }, params, controller.signal);
     controller.abort();
     await expect(result).resolves.toBeNull();
     expect(components.at(-1)?.cancel).toHaveBeenCalledOnce();

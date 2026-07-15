@@ -1,24 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { rewriteAskContext } from "../src/context.js";
 
+const rewrite = (messages: readonly unknown[]) => rewriteAskContext(messages as never);
+
 const call = (args: unknown, id = "ask-1", name = "ask") => ({
   role: "assistant",
   content: [{ type: "text", text: "before" }, { type: "toolCall", id, name, arguments: args }],
+  timestamp: 100,
 });
 
-const result = (details: unknown, id = "ask-1", timestamp?: number) => ({
+const result = (details: unknown, id = "ask-1", timestamp = 200) => ({
   role: "toolResult",
   toolCallId: id,
   toolName: "ask",
   content: [{ type: "text", text: "the original verbose result" }],
   details,
-  ...(timestamp === undefined ? {} : { timestamp }),
+  isError: false,
+  timestamp,
 });
 
 const answered = (question: string, answer: unknown) => ({ status: "answered", question, answer });
-const replay = (details: unknown, timestamp?: number) => ({
-  role: "custom", customType: "ask:reanswer", content: "replayed", details,
-  ...(timestamp === undefined ? {} : { timestamp }),
+const replay = (details: unknown, timestamp = 300) => ({
+  role: "custom", customType: "ask:reanswer", content: "replayed", display: false, details, timestamp,
 });
 const replayDetails = (overrides: Record<string, unknown> = {}) => ({
   toolCallId: "ask-1",
@@ -36,12 +39,18 @@ const summary = (payload: unknown, timestamp: number) => ({
   timestamp,
 });
 
-const payload = (question: string, selectionMode: "single" | "multi", answer: unknown[], context?: string) => ({
+const payload = (
+  question: string,
+  selectionMode: "single" | "multi",
+  selections: unknown[],
+  context?: string,
+  freeform?: string,
+) => ({
   type: "ask_response",
   question,
   ...(context === undefined ? {} : { context }),
   selectionMode,
-  answer,
+  answer: { selections, ...(freeform === undefined ? {} : { freeform }) },
 });
 
 describe("rewriteAskContext", () => {
@@ -68,19 +77,18 @@ describe("rewriteAskContext", () => {
     ];
     const snapshot = structuredClone(messages);
 
-    expect(rewriteAskContext(messages)).toEqual([
+    expect(rewrite(messages)).toEqual([
       summary(payload("Choose", "multi", [
         { label: "Beta", description: "Second", comment: "Safest" },
         { label: "Gamma", description: "Third" },
-        { freeform: "Ship Friday" },
-      ], "For the release"), 500),
+      ], "For the release", "Ship Friday"), 500),
     ]);
     expect(messages).toEqual(snapshot);
   });
 
   it("never projects authored preview content into the compact context summary", () => {
     const previewSentinel = "CONTEXT_PREVIEW_SENTINEL";
-    const rewritten = rewriteAskContext([
+    const rewritten = rewrite([
       call({
         question: "Choose",
         options: [{ label: "A", preview: previewSentinel }],
@@ -90,7 +98,7 @@ describe("rewriteAskContext", () => {
 
     expect(JSON.stringify(rewritten)).not.toContain(previewSentinel);
     const projectedPayload = JSON.parse((rewritten[0] as any).content);
-    expect(projectedPayload.answer).toEqual([{ label: "A" }]);
+    expect(projectedPayload.answer).toEqual({ selections: [{ label: "A" }] });
   });
 
   it("uses single mode and omits absent optional payload fields", () => {
@@ -99,14 +107,14 @@ describe("rewriteAskContext", () => {
       result(answered("Choose", { selections: [{ label: "A" }] }), "ask-1", 600),
     ];
 
-    const rewritten = rewriteAskContext(messages);
+    const rewritten = rewrite(messages);
     expect(rewritten).toEqual([
       summary(payload("Choose", "single", [{ label: "A" }]), 600),
     ]);
     const projectedPayload = JSON.parse((rewritten[0] as any).content);
     expect(projectedPayload).not.toHaveProperty("context");
-    expect(projectedPayload.answer[0]).not.toHaveProperty("description");
-    expect(projectedPayload.answer[0]).not.toHaveProperty("comment");
+    expect(projectedPayload.answer.selections[0]).not.toHaveProperty("description");
+    expect(projectedPayload.answer.selections[0]).not.toHaveProperty("comment");
     expect(projectedPayload).not.toHaveProperty("declined");
   });
 
@@ -153,7 +161,7 @@ describe("rewriteAskContext", () => {
 
     for (const [_label, messages] of cases) {
       const snapshot = structuredClone(messages);
-      expect(rewriteAskContext(messages as any)).toEqual(messages);
+      expect(rewrite(messages as any)).toEqual(messages);
       expect(messages).toEqual(snapshot);
     }
   });
@@ -169,21 +177,21 @@ describe("rewriteAskContext", () => {
     ];
     const snapshot = structuredClone(messages);
 
-    expect(rewriteAskContext(messages)).toEqual([
+    expect(rewrite(messages)).toEqual([
       summary(payload("Choose", "single", [{ label: "B", description: "Second" }], "Release"), 1_234),
     ]);
     expect(messages).toEqual(snapshot);
   });
 
   it("keeps a branch summary after the projected Ask summary", () => {
-    const branchSummary = { role: "branchSummary", content: "Earlier branch" };
+    const branchSummary = { role: "branchSummary", content: "Earlier branch", timestamp: 50 };
     const messages = [
       call({ question: "Choose", context: "Release", options: [{ label: "B" }] }),
       branchSummary,
       replay(replayDetails(), 55),
     ];
 
-    expect(rewriteAskContext(messages)).toEqual([
+    expect(rewrite(messages)).toEqual([
       summary(payload("Choose", "single", [{ label: "B" }], "Release"), 55),
       branchSummary,
     ]);
@@ -195,12 +203,12 @@ describe("rewriteAskContext", () => {
       replay(replayDetails({ answer: { selections: [] } }), 99),
     ];
 
-    expect(rewriteAskContext(messages)).toEqual([
+    expect(rewrite(messages)).toEqual([
       summary(payload("Choose", "single", [], "Release"), 99),
     ]);
   });
 
-  it("retains replay comments and puts freeform after selected objects", () => {
+  it("retains replay comments and canonical freeform", () => {
     const answer = {
       selections: [{ label: "A", comment: "because" }, { label: "B" }],
       freeform: "extra",
@@ -215,12 +223,11 @@ describe("rewriteAskContext", () => {
       replay(replayDetails({ allowMultiple: true, answer }), 44),
     ];
 
-    expect(rewriteAskContext(messages)).toEqual([
+    expect(rewrite(messages)).toEqual([
       summary(payload("Choose", "multi", [
         { label: "A", description: "First", comment: "because" },
         { label: "B" },
-        { freeform: "extra" },
-      ], "Release"), 44),
+      ], "Release", "extra"), 44),
     ]);
   });
 
@@ -275,7 +282,7 @@ describe("rewriteAskContext", () => {
       { ...replay(replayDetails()), role: "user" },
     ]],
   ] as const)("leaves an ambiguous, malformed, or impossible replay unchanged: %s", (_label, messages) => {
-    expect(rewriteAskContext(messages as any)).toEqual(messages);
+    expect(rewrite(messages as any)).toEqual(messages);
   });
 
   it("uses a revised replay answer instead of the native result", () => {
@@ -285,7 +292,7 @@ describe("rewriteAskContext", () => {
       replay(replayDetails(), 800),
     ];
 
-    expect(rewriteAskContext(messages)).toEqual([
+    expect(rewrite(messages)).toEqual([
       summary(payload("Choose", "single", [{ label: "B", description: "Second" }], "Release"), 800),
     ]);
   });
@@ -303,7 +310,7 @@ describe("rewriteAskContext", () => {
       replay(replayDetails(), 800),
     ];
 
-    expect(rewriteAskContext(messages)).toEqual([
+    expect(rewrite(messages)).toEqual([
       summary(payload("Choose", "single", [{ label: "B", description: "Second" }], "Release"), 800),
     ]);
   });

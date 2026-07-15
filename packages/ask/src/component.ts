@@ -1,7 +1,6 @@
 import {
   CURSOR_MARKER,
   Editor,
-  getKeybindings,
   Key,
   matchesKey,
   parseKey,
@@ -24,17 +23,22 @@ import {
 } from "./state.js";
 import { CHECKED_BOX, EMPTY_BOX } from "./glyphs.js";
 import {
-  combinePreviewPanes,
+  composePreviewRow,
   getPreviewPaneLayout,
   renderPreviewMarkdown,
+  type PreviewPaneLayout,
 } from "./preview.js";
-import { fitViewport, type FocusRange } from "./viewport.js";
+import {
+  fitViewport,
+  type FocusRange,
+  type ViewportOverflow,
+} from "./viewport.js";
 import type { AskAnswer, ValidatedAskParams } from "./types.js";
 
 type AskComponentOptions = ValidatedAskParams & {
   tui: TUI;
   theme: Theme;
-  keybindings?: KeybindingsManager;
+  keybindings: KeybindingsManager;
   onSubmit?: (answer: AskAnswer) => void;
   onCancel?: () => void;
 };
@@ -48,9 +52,7 @@ export class AskComponent implements Component, Focusable {
   private _focused = false;
 
   constructor(private readonly config: AskComponentOptions) {
-    this.keybindings = config.keybindings && typeof config.keybindings.matches === "function"
-      ? config.keybindings
-      : getKeybindings();
+    this.keybindings = config.keybindings;
     this.questionnaireState = createQuestionnaireState({
       options: config.options,
       allowMultiple: config.allowMultiple,
@@ -59,11 +61,11 @@ export class AskComponent implements Component, Focusable {
 
     this.editor = new Editor(config.tui, editorTheme(config.theme));
     this.editor.onChange = (value) => {
-      if (this.questionnaireState.mode === "select") return;
+      if (this.questionnaireState.editor.kind === "select") return;
       this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "edit", value }));
     };
     this.editor.onSubmit = (value) => {
-      if (this.questionnaireState.mode === "select") return;
+      if (this.questionnaireState.editor.kind === "select") return;
       const next = transitionQuestionnaire(
         transitionQuestionnaire(this.questionnaireState, { type: "edit", value }),
         { type: "saveEditor" },
@@ -95,7 +97,7 @@ export class AskComponent implements Component, Focusable {
 
   set focused(value: boolean) {
     this._focused = value;
-    this.editor.focused = value && this.questionnaireState.mode !== "select";
+    this.editor.focused = value && this.questionnaireState.editor.kind !== "select";
   }
 
   invalidate(): void {
@@ -105,7 +107,7 @@ export class AskComponent implements Component, Focusable {
   handleInput(data: string): void {
     if (this.questionnaireState.answer || this.cancelled) return;
 
-    if (this.questionnaireState.mode !== "select") {
+    if (this.questionnaireState.editor.kind !== "select") {
       // Escape is intentionally an editor operation: it discards the draft,
       // while Ctrl+C remains the conventional way to cancel the whole ask.
       if (matchesKey(data, Key.escape)) {
@@ -147,21 +149,13 @@ export class AskComponent implements Component, Focusable {
       this.move(-this.questionnaireState.highlightedRow);
     }
     else if (matchesKey(data, Key.end)) {
-      const rowCount = this.rowCount();
-      this.move(rowCount - 1 - this.questionnaireState.highlightedRow);
+      this.move(this.questionnaireState.rows.length - 1 - this.questionnaireState.highlightedRow);
     }
     else if (isLiteral(data, "c")) {
       this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "openComment" }));
     }
     else if (matchesKey(data, Key.space)) {
-      if (this.isSubmitRow()) {
-        this.submit();
-      } else if (this.isFreeformRow() && this.questionnaireState.config.allowMultiple) {
-        this.applyState(transitionQuestionnaire(this.questionnaireState, { type: "toggleFreeform" }));
-        this.requestRender();
-      } else {
-        this.toggle();
-      }
+      this.dispatchCurrentRow("toggle");
     }
     else if (isLiteral(data, "k")) {
       this.move(-1);
@@ -191,15 +185,22 @@ export class AskComponent implements Component, Focusable {
 
     let focus: FocusRange | undefined;
     let footerStart: number;
-    let projectWidePreview: ((visibleLines: readonly string[]) => string[]) | undefined;
+    let wideBody: {
+      start: number;
+      end: number;
+      previewLines: readonly string[];
+      layout: PreviewPaneLayout;
+    } | undefined;
     const addFooter = (prefix: string, text: string) => {
       // Keep the footer to one physical row. It is fixed chrome, so wrapping
       // it could consume the entire viewport on a narrow terminal.
       add(fit(`${prefix}${text}`, renderWidth));
     };
-    if (this.questionnaireState.mode === "select") {
+    if (this.questionnaireState.editor.kind === "select") {
       const preview = this.highlightedPreview();
-      const hasPreviews = this.questionnaireState.config.options.some(option => option.preview?.trim());
+      const hasPreviews = this.questionnaireState.rows.some(
+        row => row.kind === "option" && row.option.preview?.trim(),
+      );
       const paneLayout = hasPreviews ? getPreviewPaneLayout(renderWidth) : undefined;
       if (paneLayout) {
         const optionLines: string[] = [];
@@ -207,20 +208,14 @@ export class AskComponent implements Component, Focusable {
         const submitFocus = this.renderSubmit(optionLines, paneLayout.leftWidth);
         const sectionStart = lines.length;
         const previewLines = this.renderPreview(preview, paneLayout.rightWidth);
-        const separator = this.config.theme.fg("dim", "│");
-        projectWidePreview = visibleLines => overlayPreviewPane(
-          visibleLines,
+        const bodyHeight = Math.max(optionLines.length, previewLines.length);
+        lines.push(...optionLines, ...Array.from({ length: bodyHeight - optionLines.length }, () => ""));
+        wideBody = {
+          start: sectionStart,
+          end: sectionStart + bodyHeight,
           previewLines,
-          paneLayout.leftWidth,
-          paneLayout.rightWidth,
-          separator,
-        );
-        lines.push(...combinePreviewPanes(
-          optionLines,
-          previewLines,
-          paneLayout,
-          separator,
-        ));
+          layout: paneLayout,
+        };
         const sectionFocus = submitFocus ?? optionFocus;
         if (sectionFocus) {
           focus = {
@@ -282,12 +277,30 @@ export class AskComponent implements Component, Focusable {
     const maxRows = Number.isFinite(this.config.tui.terminal.rows)
       ? this.config.tui.terminal.rows
       : lines.length;
-    const viewport = fitViewport(lines, focus, maxRows, 1, lines.length - footerStart);
-    // fitViewport prefixes overflow rows with an indicator. Preserve a
-    // cursor-bearing editor row over that indicator when projecting narrow
-    // viewports, so fitting cannot clip the cursor or the current input.
-    const visibleLines = projectWidePreview ? projectWidePreview(viewport.lines) : viewport.lines;
-    return visibleLines.map(line => fitCursorLine(line, renderWidth));
+    const rows: LayoutRow[] = wideBody
+      ? [
+          ...lines.slice(0, wideBody.start).map(line => fullRow(line)),
+          ...lines.slice(wideBody.start, wideBody.end).map(left => splitRow(left)),
+          ...lines.slice(wideBody.end).map(line => fullRow(line)),
+        ]
+      : lines.map(line => fullRow(line));
+    const visibleRows = fitViewport(rows, focus, maxRows, 1, lines.length - footerStart);
+    let previewIndex = 0;
+
+    return visibleRows.map(({ value: row, overflow }) => {
+      if (row.kind === "full") {
+        return projectFullRow(row.line, overflow, renderWidth);
+      }
+
+      const left = `${overflowPrefix(overflow)}${row.left}`;
+      const previewLine = wideBody?.previewLines[previewIndex++] ?? "";
+      return composePreviewRow(
+        left,
+        previewLine,
+        wideBody!.layout,
+        this.config.theme.fg("dim", "│"),
+      );
+    });
   }
 
   /** Submit the current multi-select answer programmatically. */
@@ -314,52 +327,46 @@ export class AskComponent implements Component, Focusable {
     };
 
     let focus: FocusRange | undefined;
-    const options = this.questionnaireState.config.options;
-    for (let index = 0; index < options.length; index += 1) {
-      const source = options[index];
+    for (const [index, row] of this.questionnaireState.rows.entries()) {
+      if (row.kind === "submit") continue;
       const selected = this.questionnaireState.highlightedRow === index;
       const start = lines.length;
-      const checked = this.questionnaireState.checked.has(source.label);
       const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
-      const check = this.questionnaireState.config.allowMultiple
-        ? `${this.config.theme.fg(checked ? "success" : "muted", checked ? CHECKED_BOX : EMPTY_BOX)} `
-        : "";
-      const comment = this.questionnaireState.comments.has(source.label)
-        ? this.config.theme.fg("warning", " ✎")
-        : "";
-      const label = `${marker}${check}${source.label}${comment}`;
-      addPrefixed("", label, selected ? "accent" : "text");
 
-      if (source.description) {
-        addPrefixed("     ", source.description, "muted");
+      if (row.kind === "option") {
+        const source = row.option;
+        const checked = this.questionnaireState.checked.has(source.label);
+        const check = this.questionnaireState.config.allowMultiple
+          ? `${this.config.theme.fg(checked ? "success" : "muted", checked ? CHECKED_BOX : EMPTY_BOX)} `
+          : "";
+        const comment = this.questionnaireState.comments.has(source.label)
+          ? this.config.theme.fg("warning", " ✎")
+          : "";
+        addPrefixed("", `${marker}${check}${source.label}${comment}`, selected ? "accent" : "text");
+        if (source.description) addPrefixed("     ", source.description, "muted");
+        if (selected) {
+          const commentText = this.questionnaireState.comments.get(source.label);
+          if (commentText) addPrefixed("     ", `✎ ${commentText}`, "dim");
+        }
+      } else {
+        const checked = this.questionnaireState.freeformChecked;
+        const check = this.questionnaireState.config.allowMultiple
+          ? `${this.config.theme.fg(checked ? "success" : "muted", checked ? CHECKED_BOX : EMPTY_BOX)} `
+          : "";
+        const suffix = this.questionnaireState.freeformDraft
+          ? ` — ${this.questionnaireState.freeformDraft}`
+          : "";
+        addPrefixed("", `${marker}${check}${this.config.theme.fg(selected ? "accent" : "text", `Type a response…${suffix}`)}`);
       }
-      if (selected) {
-        const commentText = this.questionnaireState.comments.get(source.label);
-        if (commentText) addPrefixed("     ", `✎ ${commentText}`, "dim");
-        focus = { start, end: lines.length };
-      }
-    }
-
-    if (this.questionnaireState.config.allowFreeform) {
-      const row = options.length;
-      const selected = this.questionnaireState.highlightedRow === row;
-      const start = lines.length;
-      const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
-      const checked = this.questionnaireState.freeformChecked;
-      const check = this.questionnaireState.config.allowMultiple
-        ? `${this.config.theme.fg(checked ? "success" : "muted", checked ? CHECKED_BOX : EMPTY_BOX)} `
-        : "";
-      const draft = this.questionnaireState.freeformDraft;
-      const suffix = draft ? ` — ${draft}` : "";
-      addPrefixed("", `${marker}${check}${this.config.theme.fg(selected ? "accent" : "text", `Type a response…${suffix}`)}`);
       if (selected) focus = { start, end: lines.length };
     }
     return focus;
   }
 
   private renderSubmit(lines: string[], width: number): FocusRange | undefined {
-    if (!this.questionnaireState.config.allowMultiple) return undefined;
-    const selected = this.isSubmitRow();
+    const submitIndex = this.questionnaireState.rows.findIndex(row => row.kind === "submit");
+    if (submitIndex < 0) return undefined;
+    const selected = this.questionnaireState.highlightedRow === submitIndex;
     const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
     lines.push("");
     const start = lines.length;
@@ -394,52 +401,34 @@ export class AskComponent implements Component, Focusable {
   }
 
   private keyText(keybinding: Keybinding, fallback: string): string {
-    const keys = typeof this.keybindings.getKeys === "function"
-      ? this.keybindings.getKeys(keybinding)
-      : [];
+    const keys = this.keybindings.getKeys(keybinding);
     return keys.length > 0 ? keys.map(formatKey).join("/") : fallback;
   }
 
   private editorHelpText(): string {
     const submit = this.keyText("tui.input.submit", "Enter");
-    return this.questionnaireState.mode === "comment"
+    return this.questionnaireState.editor.kind === "comment"
       ? `${submit} save comment · Esc discard`
       : `${submit} save response · Esc discard`;
   }
 
   private highlightedPreview(): string | undefined {
-    if (this.questionnaireState.mode !== "select") return undefined;
-    const option = this.questionnaireState.config.options[this.questionnaireState.highlightedRow];
-    return option?.preview?.trim() ? option.preview : undefined;
+    if (this.questionnaireState.editor.kind !== "select") return undefined;
+    const row = this.questionnaireState.rows[this.questionnaireState.highlightedRow];
+    return row?.kind === "option" && row.option.preview?.trim() ? row.option.preview : undefined;
   }
 
   private renderPreview(preview: string | undefined, width: number): string[] {
     const lines = preview ? renderPreviewMarkdown(preview, width) : [];
     let height = this.previewHeightByWidth.get(width);
     if (height === undefined) {
-      height = this.questionnaireState.config.options.reduce((max, option) => {
-        if (!option.preview?.trim()) return max;
-        return Math.max(max, renderPreviewMarkdown(option.preview, width).length);
+      height = this.questionnaireState.rows.reduce((max, row) => {
+        if (row.kind !== "option" || !row.option.preview?.trim()) return max;
+        return Math.max(max, renderPreviewMarkdown(row.option.preview, width).length);
       }, 0);
       this.previewHeightByWidth.set(width, height);
     }
     return [...lines, ...Array.from({ length: height - lines.length }, () => "")];
-  }
-
-  private isFreeformRow(): boolean {
-    return this.questionnaireState.config.allowFreeform
-      && this.questionnaireState.highlightedRow === this.questionnaireState.config.options.length;
-  }
-
-  private isSubmitRow(): boolean {
-    return this.questionnaireState.config.allowMultiple
-      && this.questionnaireState.highlightedRow === this.rowCount() - 1;
-  }
-
-  private rowCount(): number {
-    return this.questionnaireState.config.options.length
-      + (this.questionnaireState.config.allowFreeform ? 1 : 0)
-      + (this.questionnaireState.config.allowMultiple ? 1 : 0);
   }
 
   private move(delta: number): void {
@@ -448,38 +437,24 @@ export class AskComponent implements Component, Focusable {
   }
 
   private confirm(): void {
-    if (this.isSubmitRow()) {
-      this.submit();
-    } else if (this.isFreeformRow()) {
-      this.openFreeform();
-    } else {
-      this.toggle();
-    }
+    this.dispatchCurrentRow("activate");
   }
 
-  private toggle(): void {
-    const next = transitionQuestionnaire(this.questionnaireState, { type: "toggle" });
+  private dispatchCurrentRow(type: "activate" | "toggle"): void {
+    const next = transitionQuestionnaire(this.questionnaireState, { type });
     this.applyState(next);
     this.finishIfAnswered(next);
     this.requestRender();
   }
 
-  private openFreeform(): void {
-    if (!this.isFreeformRow()) return;
-    const next = transitionQuestionnaire(this.questionnaireState, { type: "openFreeform" });
-    this.applyState(next);
-    this.editor.focused = this._focused;
-    this.requestRender();
-  }
-
   private applyState(next: QuestionnaireState): void {
-    const previousMode = this.questionnaireState.mode;
-    const modeChanged = next.mode !== previousMode;
+    const previousEditor = this.questionnaireState.editor;
+    const editorChanged = next.editor.kind !== previousEditor.kind;
     this.questionnaireState = next;
-    if (modeChanged) {
-      this.editor.focused = this._focused && next.mode !== "select";
-      if (previousMode === "select" && next.mode !== "select") {
-        this.editor.setText(next.editorDraft);
+    if (editorChanged) {
+      this.editor.focused = this._focused && next.editor.kind !== "select";
+      if (previousEditor.kind === "select" && next.editor.kind !== "select") {
+        this.editor.setText(next.editor.draft);
       }
     }
   }
@@ -536,37 +511,41 @@ function formatKey(key: string): string {
   return key.split("+").map(part => aliases[part] ?? part).join("+");
 }
 
-function overlayPreviewPane(
-  lines: readonly string[],
-  previewLines: readonly string[],
-  leftWidth: number,
-  rightWidth: number,
-  separator: string,
-): string[] {
-  let previewRow = 0;
-  return lines.map((line) => {
-    if (!line.includes("│")) return line;
-    const left = padToWidth(truncateToWidth(line, leftWidth, ""), leftWidth);
-    const right = padToWidth(previewLines[previewRow] ?? "", rightWidth);
-    previewRow += 1;
-    return `${left}${separator}${right}`;
-  });
+type LayoutRow =
+  | { kind: "full"; line: string }
+  | { kind: "split"; left: string };
+
+function fullRow(line: string): LayoutRow {
+  return { kind: "full", line };
 }
 
-function padToWidth(line: string, width: number): string {
-  return line + " ".repeat(Math.max(0, width - visibleWidth(line)));
+function splitRow(left: string): LayoutRow {
+  return { kind: "split", left };
+}
+
+function overflowPrefix(overflow: ViewportOverflow | undefined): string {
+  if (overflow === "above") return "↑ ";
+  if (overflow === "below") return "↓ ";
+  if (overflow === "both") return "↕ ";
+  return "";
 }
 
 function safeWidth(width: number): number {
   return Math.max(1, Number.isFinite(width) ? Math.floor(width) : 1);
 }
 
-function fitCursorLine(line: string, width: number): string {
-  if (visibleWidth(line) > width && line.includes(CURSOR_MARKER)) {
-    const withoutOverflowMarker = line.replace(/^(?:↑ |↓ |↕ )/, "");
-    if (withoutOverflowMarker !== line) return fit(withoutOverflowMarker, width);
+function projectFullRow(
+  line: string,
+  overflow: ViewportOverflow | undefined,
+  width: number,
+): string {
+  const prefixed = `${overflowPrefix(overflow)}${line}`;
+  // The cursor and current input take precedence over an overflow indicator
+  // when both cannot fit on a narrow terminal row.
+  if (overflow && visibleWidth(prefixed) > width && line.includes(CURSOR_MARKER)) {
+    return fit(line, width);
   }
-  return fit(line, width);
+  return fit(prefixed, width);
 }
 
 function fit(line: string, width: number): string {

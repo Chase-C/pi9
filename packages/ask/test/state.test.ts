@@ -17,7 +17,7 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "move", delta: 1 });
     state = transitionQuestionnaire(state, { type: "toggle" });
     expect([...state.checked]).toEqual(["Rust"]);
-    expect(state.mode).toBe("select");
+    expect(state.editor.kind).toBe("select");
   });
 
   it("single-select finalizes the highlighted option", () => {
@@ -46,12 +46,12 @@ describe("questionnaire state", () => {
   it("opens a comment without selecting and saves trimmed comments", () => {
     let state = createQuestionnaireState(config);
     state = transitionQuestionnaire(state, { type: "openComment" });
-    expect(state.mode).toBe("comment");
+    expect(state.editor.kind).toBe("comment");
     expect(state.checked.size).toBe(0);
     state = transitionQuestionnaire(state, { type: "edit", value: "  safer types  " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
     expect(state.comments.get("TypeScript")).toBe("safer types");
-    expect(state.mode).toBe("select");
+    expect(state.editor.kind).toBe("select");
   });
 
   it("removes a saved comment when an empty edit is saved", () => {
@@ -74,13 +74,13 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "edit", value: "discard me" });
     state = transitionQuestionnaire(state, { type: "cancelEditor" });
     expect(state.comments.get("TypeScript")).toBe("saved");
-    expect(state.editorDraft).toBe("");
-    expect(state.mode).toBe("select");
+    expect(state.editor).toEqual({ kind: "select" });
   });
 
   it("single-select freeform saves and finalizes a trimmed response", () => {
     let state = createQuestionnaireState({ ...config, allowMultiple: false });
-    state = transitionQuestionnaire(state, { type: "openFreeform" });
+    state = transitionQuestionnaire(state, { type: "move", delta: 2 });
+    state = transitionQuestionnaire(state, { type: "activate" });
     state = transitionQuestionnaire(state, { type: "edit", value: "  Zig  " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
     expect(state.freeformDraft).toBe("Zig");
@@ -89,10 +89,11 @@ describe("questionnaire state", () => {
 
   it("keeps empty freeform open for single-select questions with options", () => {
     let state = createQuestionnaireState({ ...config, allowMultiple: false });
-    state = transitionQuestionnaire(state, { type: "openFreeform" });
+    state = transitionQuestionnaire(state, { type: "move", delta: 2 });
+    state = transitionQuestionnaire(state, { type: "activate" });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
     expect(state.answer).toBeNull();
-    expect(state.mode).toBe("select");
+    expect(state.editor.kind).toBe("select");
   });
 
   it("multi-select freeform saves a draft and combines it on submit", () => {
@@ -101,7 +102,8 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "openComment" });
     state = transitionQuestionnaire(state, { type: "edit", value: "preferred" });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
-    state = transitionQuestionnaire(state, { type: "openFreeform" });
+    state = transitionQuestionnaire(state, { type: "move", delta: 2 });
+    state = transitionQuestionnaire(state, { type: "activate" });
     state = transitionQuestionnaire(state, { type: "edit", value: "  and Zig  " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
     expect(state.answer).toBeNull();
@@ -114,26 +116,56 @@ describe("questionnaire state", () => {
     });
   });
 
-  it("submits an empty multi-select freeform-only answer from the submit row", () => {
-    let state = createQuestionnaireState({ options: [], allowMultiple: true, allowFreeform: true });
-    state = transitionQuestionnaire(state, { type: "openFreeform" });
-    state = transitionQuestionnaire(state, { type: "saveEditor" });
-    expect(state.answer).toBeNull();
+  it("owns canonical row order without retaining options in config", () => {
+    const single = createQuestionnaireState({ ...config, allowMultiple: false, allowFreeform: false });
+    const multi = createQuestionnaireState({ ...config, allowFreeform: false });
+    const freeform = createQuestionnaireState(config);
+
+    expect(single.rows.map(row => row.kind)).toEqual(["option", "option"]);
+    expect(multi.rows.map(row => row.kind)).toEqual(["option", "option", "submit"]);
+    expect(freeform.rows.map(row => row.kind)).toEqual(["option", "option", "freeform", "submit"]);
+    expect(freeform.config).toEqual({ allowMultiple: true, allowFreeform: true });
+    expect(freeform.config).not.toHaveProperty("options");
+  });
+
+  it("wraps movement over canonical rows", () => {
+    let state = createQuestionnaireState(config);
+    state = transitionQuestionnaire(state, { type: "move", delta: -1 });
+    expect(state.highlightedRow).toBe(3);
     state = transitionQuestionnaire(state, { type: "move", delta: 1 });
-    state = transitionQuestionnaire(state, { type: "submit" });
+    expect(state.highlightedRow).toBe(0);
+  });
+
+  it("distinguishes freeform activate from multi-select toggle", () => {
+    let state = createQuestionnaireState(config);
+    state = transitionQuestionnaire(state, { type: "move", delta: 2 });
+    state = transitionQuestionnaire(state, { type: "toggle" });
+    expect(state.freeformChecked).toBe(true);
+    expect(state.editor.kind).toBe("select");
+    state = transitionQuestionnaire(state, { type: "activate" });
+    expect(state.editor).toEqual({ kind: "freeform", target: state.rows[2], draft: "" });
+  });
+
+  it("activates the submit row", () => {
+    let state = createQuestionnaireState(config);
+    state = transitionQuestionnaire(state, { type: "move", delta: 3 });
+    state = transitionQuestionnaire(state, { type: "toggle" });
     expect(state.answer).toEqual({ selections: [] });
   });
 
-  it("selects saved multi-select freeform text and omits it when unchecked", () => {
-    let state = createQuestionnaireState({ options: [], allowMultiple: true, allowFreeform: true });
-    state = transitionQuestionnaire(state, { type: "openFreeform" });
-    state = transitionQuestionnaire(state, { type: "edit", value: "  and Zig  " });
+  it("saves comments to their explicit canonical editor target", () => {
+    let state = createQuestionnaireState(config);
+    state = transitionQuestionnaire(state, { type: "openComment" });
+    expect(state.editor).toEqual({ kind: "comment", target: state.rows[0], draft: "" });
+    state.highlightedRow = 1;
+    state = transitionQuestionnaire(state, { type: "edit", value: "first option" });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
-    expect(state.answer).toBeNull();
-    expect(state.freeformChecked).toBe(true);
-    state = transitionQuestionnaire(state, { type: "toggleFreeform" });
-    state = transitionQuestionnaire(state, { type: "submit" });
-    expect(state.answer).toEqual({ selections: [] });
+    expect(state.comments.get("TypeScript")).toBe("first option");
+    expect(state.comments.has("Rust")).toBe(false);
+  });
+
+  it("rejects construction without an option", () => {
+    expect(() => createQuestionnaireState({ ...config, options: [] })).toThrow("at least one option");
   });
 
   it("final answers omit comments belonging to unselected options", () => {

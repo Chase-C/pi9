@@ -1,20 +1,14 @@
 import type { SessionEntry, SessionTreeEvent } from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
 
-import { AskParamsSchema } from "./schema.js";
+import { AskAnswerSchema, AskParamsSchema, AskReplayDetailsSchema } from "./schema.js";
 import { formatAskAnswer } from "./response.js";
-import type { AskAnswer, AskParams, ValidatedAskParams } from "./types.js";
+import type { AskAnswer, AskParams, AskReplayDetails, ValidatedAskParams } from "./types.js";
 import { validateAskParams } from "./validation.js";
 
 export const ASK_REPLAY_CUSTOM_TYPE = "ask:reanswer" as const;
 
-export type AskReplayDetails = {
-  toolCallId: string;
-  question: string;
-  context?: string;
-  allowMultiple: boolean;
-  answer: AskAnswer;
-};
+export type { AskReplayDetails } from "./types.js";
 
 export type AskReplayMessage = {
   customType: typeof ASK_REPLAY_CUSTOM_TYPE;
@@ -25,54 +19,16 @@ export type AskReplayMessage = {
 
 /** Parse the canonical answer shape used by native results and replay details. */
 export function parseAskAnswer(value: unknown): AskAnswer | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["selections"], ["freeform"]) || !Array.isArray(value.selections)) {
-    return undefined;
-  }
-
-  const selections: AskAnswer["selections"] = [];
-  for (const rawSelection of value.selections) {
-    if (!isRecord(rawSelection)
-      || !hasOnlyKeys(rawSelection, ["label"], ["description", "comment"])
-      || typeof rawSelection.label !== "string"
-      || (rawSelection.description !== undefined && typeof rawSelection.description !== "string")
-      || (rawSelection.comment !== undefined && typeof rawSelection.comment !== "string")) return undefined;
-    selections.push({
-      label: rawSelection.label,
-      ...(rawSelection.description !== undefined ? { description: rawSelection.description } : {}),
-      ...(rawSelection.comment !== undefined ? { comment: rawSelection.comment } : {}),
-    });
-  }
-
-  if (value.freeform !== undefined && typeof value.freeform !== "string") return undefined;
-  return {
-    selections,
-    ...(value.freeform !== undefined ? { freeform: value.freeform } : {}),
-  };
+  return Check(AskAnswerSchema, value) ? value : undefined;
 }
 
 /** Parse canonical replay details, without validating the containing message. */
 export function parseAskReplayDetails(value: unknown): AskReplayDetails | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["toolCallId", "question", "allowMultiple", "answer"], ["context"])) {
-    return undefined;
-  }
-  if (typeof value.toolCallId !== "string"
-    || typeof value.question !== "string"
-    || typeof value.allowMultiple !== "boolean"
-    || (value.context !== undefined && typeof value.context !== "string")) return undefined;
-
-  const answer = parseAskAnswer(value.answer);
-  if (!answer) return undefined;
-  return {
-    toolCallId: value.toolCallId,
-    question: value.question,
-    ...(value.context !== undefined ? { context: value.context } : {}),
-    allowMultiple: value.allowMultiple,
-    answer,
-  };
+  return Check(AskReplayDetailsSchema, value) ? value : undefined;
 }
 
 export type AskReplayResolution =
-  | { status: "resolved"; sourceEntryId: string; toolCallId: string; params: ValidatedAskParams }
+  | { status: "resolved"; toolCallId: string; params: ValidatedAskParams }
   | {
       status: "not-replayable";
       reason: "no-entry" | "not-assistant" | "not-ask" | "multiple-tool-calls" | "mixed-tools" | "invalid-arguments";
@@ -127,7 +83,7 @@ export function resolveAskReplayTarget(
 
   const params = validateStoredArgs(call.arguments);
   if (!params) return rejected("invalid-arguments");
-  return { status: "resolved", sourceEntryId: entry.id, toolCallId: call.id, params };
+  return { status: "resolved", toolCallId: call.id, params };
 }
 
 export function validateStoredArgs(value: unknown): ValidatedAskParams | undefined {
@@ -137,16 +93,6 @@ export function validateStoredArgs(value: unknown): ValidatedAskParams | undefin
   } catch {
     return undefined;
   }
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
-  const keys = Object.keys(value);
-  return required.every(key => keys.includes(key))
-    && keys.every(key => required.includes(key) || optional.includes(key));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function rejected(reason: Exclude<AskReplayResolution, { status: "resolved" }>["reason"]): AskReplayResolution {

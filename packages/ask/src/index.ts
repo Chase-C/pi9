@@ -137,12 +137,6 @@ export default function askExtension(pi: ExtensionAPI) {
       return;
     }
 
-    const source = byId.get(resolution.sourceEntryId);
-    const call = source?.type === "message" && source.message.role === "assistant"
-      ? source.message.content.find(item => item.type === "toolCall" && item.id === resolution.toolCallId && item.name === "ask")
-      : undefined;
-    if (!call || call.type !== "toolCall") return;
-
     // Pi restores selected custom-message content after this hook returns. Keep
     // the editor temporarily non-empty until the replay turn settles so the
     // selected marker text cannot replace the guard.
@@ -157,7 +151,7 @@ export default function askExtension(pi: ExtensionAPI) {
     try {
       const answer = await launchQuestionnaire(ctx, resolution.params, deadline.signal);
       if (!answer) return;
-      const message = buildAskReplayMessage(call.id, resolution.params, answer);
+      const message = buildAskReplayMessage(resolution.toolCallId, resolution.params, answer);
       pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
       applyRevision(message.details.toolCallId, message.details.answer);
       replayState = { status: "dispatched", details: message.details, clearEditor: guardEditor };
@@ -191,8 +185,9 @@ export default function askExtension(pi: ExtensionAPI) {
         resolveTimeoutMs(params.timeout, process.env),
       );
       try {
-        let answer: AskAnswer | null | undefined = await launchQuestionnaire(ctx, params, deadline.signal);
-        if (answer === undefined) answer = await askWithRpc(ctx.ui, params, deadline.signal);
+        const answer = ctx.mode === "tui"
+          ? await launchQuestionnaire(ctx, params, deadline.signal)
+          : await askWithRpc(ctx.ui, params, deadline.signal);
         if (answer === null) {
           if (deadline.timedOut) {
             const result = buildUnansweredResponse(params.question);

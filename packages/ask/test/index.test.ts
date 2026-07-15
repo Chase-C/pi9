@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import askExtension from "../src/index.js";
 
 function register(initialActiveTools: string[] = []) {
@@ -41,9 +42,13 @@ async function withTimeoutEnv<T>(value: string | undefined, action: () => Promis
   }
 }
 
+function keybindings() {
+  return new KeybindingsManager(TUI_KEYBINDINGS, {});
+}
+
 function pendingTui() {
   return vi.fn((factory: any) => new Promise(resolve => {
-    factory({ requestRender: vi.fn() }, theme(), {}, resolve);
+    factory({ requestRender: vi.fn() }, theme(), keybindings(), resolve);
   }));
 }
 
@@ -111,13 +116,13 @@ describe("ask extension integration", () => {
     const { tool, contextHandler } = register();
     expect(tool.parameters.additionalProperties).toBe(false);
     expect(tool.executionMode).toBe("sequential");
-    const rendererContext = { state: {}, args: { question: "Choose?", options: [] }, lastComponent: undefined };
+    const rendererContext = { state: {}, args: { question: "Choose?", options: [{ label: "Yes" }] }, lastComponent: undefined };
     expect(tool.renderCall(rendererContext.args, theme(), rendererContext).render(80).join("\n")).toContain("Choose?");
     expect(tool.renderResult({ content: [{ type: "text", text: "Selected: Yes" }] }, {}, theme(), rendererContext).render(80).join("\n")).toContain("Selected: Yes");
 
     const messages: any[] = [
       { role: "assistant", content: [{ type: "toolCall", id: "a", name: "ask", arguments: { question: "Choose", options: [{ label: "Yes" }, { label: "No" }] } }] },
-      { role: "toolResult", toolCallId: "a", toolName: "ask", details: { status: "answered", question: "Choose", answer: { selections: [{ label: "Yes" }] } }, content: [{ type: "text", text: "original verbose result" }] },
+      { role: "toolResult", toolCallId: "a", toolName: "ask", details: { status: "answered", question: "Choose", answer: { selections: [{ label: "Yes" }] } }, content: [{ type: "text", text: "original verbose result" }], isError: false, timestamp: 2 },
     ];
     const rewritten = contextHandler({ messages }).messages as any[];
     expect(rewritten).toHaveLength(1);
@@ -131,7 +136,7 @@ describe("ask extension integration", () => {
       type: "ask_response",
       question: "Choose",
       selectionMode: "single",
-      answer: [{ label: "Yes" }],
+      answer: { selections: [{ label: "Yes" }] },
     });
     expect(messages[0].content[0].arguments.options).toHaveLength(2);
   });
@@ -199,10 +204,10 @@ describe("ask extension integration", () => {
       bg: (_color: string, text: string) => text,
       bold: (text: string) => text,
     } as any;
-    const timeoutContext = { state: {}, args: { question: "Choose?", options: [], timeout: 1500 }, lastComponent: undefined };
+    const timeoutContext = { state: {}, args: { question: "Choose?", options: [{ label: "Yes" }], timeout: 1500 }, lastComponent: undefined };
     expect(tool.renderCall(timeoutContext.args, styledTheme, timeoutContext).render(80).join("\n")).toContain("timeout:1.5s");
 
-    const zeroContext = { state: {}, args: { question: "Choose?", options: [], timeout: 0 }, lastComponent: undefined };
+    const zeroContext = { state: {}, args: { question: "Choose?", options: [{ label: "Yes" }], timeout: 0 }, lastComponent: undefined };
     expect(tool.renderCall(zeroContext.args, styledTheme, zeroContext).render(80).join("\\n")).not.toContain("timeout:");
   });
 
@@ -212,7 +217,7 @@ describe("ask extension integration", () => {
     const custom = vi.fn(async (factory, options) => {
       expect(options).toBeUndefined();
       let completed: unknown;
-      const component = await factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { completed = value; });
+      const component = await factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { completed = value; });
       component.handleInput("\r");
       return completed;
     });
@@ -253,7 +258,7 @@ describe("ask extension integration", () => {
       const { tool } = register();
       const custom = vi.fn(async (factory: any) => {
         let completed: unknown;
-        const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { completed = value; });
+        const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { completed = value; });
         component.handleInput(action === "answer" ? "\r" : "\x1b");
         return completed;
       });
@@ -408,11 +413,10 @@ describe("ask extension integration", () => {
     }
   });
 
-  it.each(["rpc", "tui"])("uses RPC dialogs in %s mode when rich UI is unavailable", async (mode) => {
+  it("uses RPC dialogs in RPC mode", async () => {
     const { tool } = register();
     const ui = rpcUi();
-    if (mode === "tui") Object.assign(ui, { custom: vi.fn().mockResolvedValue(undefined) });
-    const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, undefined, undefined, { mode, hasUI: true, ui });
+    const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, undefined, undefined, { mode: "rpc", hasUI: true, ui });
     expect(result.details.status).toBe("answered");
     expect(ui.select).toHaveBeenCalled();
   });
@@ -458,7 +462,7 @@ describe("ask extension integration", () => {
     const remove = vi.spyOn(controller.signal, "removeEventListener");
     const custom = vi.fn(async (factory) => {
       let completed: unknown;
-      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { completed = value; });
+      const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { completed = value; });
       if (cancel) component.handleInput("\x1b");
       else component.handleInput("\r");
       return completed;
@@ -473,7 +477,7 @@ describe("ask extension integration", () => {
     const controller = new AbortController();
     controller.abort();
     const add = vi.spyOn(controller.signal, "addEventListener");
-    const custom = vi.fn((factory) => new Promise((resolve) => factory({ requestRender: vi.fn() }, theme(), {}, resolve)));
+    const custom = vi.fn((factory) => new Promise((resolve) => factory({ requestRender: vi.fn() }, theme(), keybindings(), resolve)));
     const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
     expect(result.details.status).toBe("cancelled");
     expect(add).not.toHaveBeenCalled();
@@ -483,7 +487,7 @@ describe("ask extension integration", () => {
     const { tool, emit } = register();
     const controller = new AbortController();
     const custom = vi.fn((factory) => new Promise((resolve) => {
-      factory({ requestRender: vi.fn() }, theme(), {}, resolve);
+      factory({ requestRender: vi.fn() }, theme(), keybindings(), resolve);
       controller.abort();
     }));
     const result = await tool.execute("id", { question: "Continue?", options: [{ label: "Yes" }] }, controller.signal, undefined, { mode: "tui", hasUI: true, ui: { custom } });
@@ -499,7 +503,7 @@ describe("ask extension integration", () => {
     const summary = { type: "branch_summary", id: "summary", parentId: "ask-entry", timestamp: "now", fromId: "x", summary: "s" };
     const custom = vi.fn(async (factory: any) => {
       let result: unknown;
-      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+      const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { result = value; });
       component.handleInput("\r");
       return result;
     });
@@ -531,7 +535,7 @@ describe("ask extension integration", () => {
 
     const custom = vi.fn(async (factory: any) => {
       let answer: unknown;
-      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { answer = value; });
+      const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { answer = value; });
       component.handleInput("\x1b[B");
       component.handleInput("\r");
       return answer;
@@ -580,7 +584,7 @@ describe("ask extension integration", () => {
       const setEditorText = vi.fn((text: string) => { editorText = text; });
       const custom = vi.fn(async (factory: any) => {
         let result: unknown;
-        const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+        const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { result = value; });
         component.handleInput("\r");
         return result;
       });
@@ -614,7 +618,7 @@ describe("ask extension integration", () => {
     const { handlers, sendMessage, emit } = register();
     const custom = vi.fn(async (factory: any) => {
       let result: unknown;
-      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+      const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { result = value; });
       component.handleInput("\r");
       return result;
     });
@@ -637,7 +641,7 @@ describe("ask extension integration", () => {
     sendMessage.mockImplementationOnce(() => { throw new Error("delivery failed"); });
     const custom = vi.fn(async (factory: any) => {
       let result: unknown;
-      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+      const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { result = value; });
       component.handleInput("\r");
       return result;
     });
@@ -653,7 +657,7 @@ describe("ask extension integration", () => {
     const { handlers, sendMessage, emit } = register();
     const custom = vi.fn(async (factory: any) => {
       let result: unknown;
-      const component = factory({ requestRender: vi.fn() }, theme(), {}, (value: unknown) => { result = value; });
+      const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { result = value; });
       component.handleInput("\x1b");
       return result;
     });
@@ -671,7 +675,7 @@ describe("ask extension integration", () => {
       await withTimeoutEnv(envTimeout, async () => {
         const { handlers, sendMessage } = register();
         const custom = vi.fn((factory: any) => new Promise(resolve => {
-          factory({ requestRender: vi.fn() }, theme(), {}, resolve);
+          factory({ requestRender: vi.fn() }, theme(), keybindings(), resolve);
         }));
         const ctx = replayContext([assistantEntry("ask-entry", [{ name: "ask", arguments: arguments_ }])], custom);
         const replay = handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
@@ -711,7 +715,7 @@ describe("ask extension integration", () => {
     const { contextHandler } = register();
     const firstCall = { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "Choose?", options: [{ label: "Yes" }] } }] };
     const laterCall = { role: "assistant", content: [{ type: "toolCall", id: "call-2", name: "ask", arguments: { question: "Later?", options: [{ label: "Later" }] } }] };
-    const laterResult = { role: "toolResult", toolCallId: "call-2", toolName: "ask", content: [{ type: "text", text: "verbose" }], details: { status: "answered", question: "Later?", answer: { selections: [{ label: "Later" }] } } };
+    const laterResult = { role: "toolResult", toolCallId: "call-2", toolName: "ask", content: [{ type: "text", text: "verbose" }], details: { status: "answered", question: "Later?", answer: { selections: [{ label: "Later" }] } }, isError: false, timestamp: 43 };
     const marker = { role: "custom", customType: "ask:reanswer", content: "Replay", timestamp: 42, details: { toolCallId: "call-1", question: "Choose?", allowMultiple: false, answer: { selections: [{ label: "Yes" }] } } };
     const branchSummary = { role: "branchSummary", content: "Earlier branch" };
     const messages = [firstCall, ...(withSummary ? [branchSummary] : []), laterCall, laterResult, marker];
@@ -720,13 +724,13 @@ describe("ask extension integration", () => {
     expect(rewritten).toHaveLength(withSummary ? 3 : 2);
     expect(rewritten[0]).toMatchObject({ role: "custom", customType: "ask:summary", display: false, timestamp: 42 });
     expect(JSON.parse(rewritten[0].content)).toEqual({
-      type: "ask_response", question: "Choose?", selectionMode: "single", answer: [{ label: "Yes" }],
+      type: "ask_response", question: "Choose?", selectionMode: "single", answer: { selections: [{ label: "Yes" }] },
     });
     if (withSummary) expect(rewritten[1]).toEqual(branchSummary);
     const laterSummary = rewritten[withSummary ? 2 : 1];
     expect(laterSummary).toMatchObject({ role: "custom", customType: "ask:summary", display: false, timestamp: expect.any(Number) });
     expect(JSON.parse(laterSummary.content)).toEqual({
-      type: "ask_response", question: "Later?", selectionMode: "single", answer: [{ label: "Later" }],
+      type: "ask_response", question: "Later?", selectionMode: "single", answer: { selections: [{ label: "Later" }] },
     });
   });
 
@@ -746,7 +750,7 @@ describe("ask extension integration", () => {
         question: "Choose?",
         context: "Release",
         selectionMode: "single",
-        answer: [{ label: "Yes" }],
+        answer: { selections: [{ label: "Yes" }] },
       }),
       timestamp: 77,
     }]);

@@ -8,7 +8,13 @@ import {
   formatAskAnswer,
 } from "../src/response.js";
 import { MAX_TIMEOUT_MS } from "../src/config.js";
-import { AskParamsSchema } from "../src/schema.js";
+import {
+  AskAnswerSchema,
+  AskAnsweredDetailsSchema,
+  AskParamsSchema,
+  AskReplayDetailsSchema,
+  AskSelectionSchema,
+} from "../src/schema.js";
 import type { AskAnswer } from "../src/types.js";
 import { validateAskParams } from "../src/validation.js";
 
@@ -32,6 +38,39 @@ describe("AskParamsSchema", () => {
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: MAX_TIMEOUT_MS })).toBe(true);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: MAX_TIMEOUT_MS + 1 })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A", unknown: true }] })).toBe(false);
+  });
+});
+
+describe("canonical stored-data schemas", () => {
+  const answer = {
+    selections: [{ label: "Blue", description: "Calm", comment: "Best fit" }],
+    freeform: "Ship today",
+  };
+
+  it("checks selections, answers, replay details, and answered native details strictly", () => {
+    expect(Check(AskSelectionSchema, answer.selections[0])).toBe(true);
+    expect(Check(AskAnswerSchema, answer)).toBe(true);
+    expect(Check(AskReplayDetailsSchema, {
+      toolCallId: "ask-1",
+      question: "Which color?",
+      allowMultiple: false,
+      answer,
+    })).toBe(true);
+    expect(Check(AskAnsweredDetailsSchema, {
+      status: "answered",
+      question: "Which color?",
+      answer,
+    })).toBe(true);
+
+    expect(Check(AskAnswerSchema, { selections: [{ label: "Blue", preview: "hidden" }] })).toBe(false);
+    expect(Check(AskReplayDetailsSchema, {
+      toolCallId: "ask-1",
+      question: "Which color?",
+      allowMultiple: false,
+      answer,
+      unknown: true,
+    })).toBe(false);
+    expect(Check(AskAnsweredDetailsSchema, { status: "cancelled", question: "Which color?", answer })).toBe(false);
   });
 });
 

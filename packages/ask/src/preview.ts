@@ -31,24 +31,18 @@ export function renderPreviewMarkdown(preview: string, width: number): string[] 
   return lines.map(line => fitAndPad(line, safeWidth(width)));
 }
 
-/** Combine two independently wrapped panes, preserving a dim separator column. */
-export function combinePreviewPanes(
-  left: readonly string[],
-  right: readonly string[],
+/** Compose one visible option row with its corresponding preview row. */
+export function composePreviewRow(
+  left: string,
+  preview: string,
   layout: PreviewPaneLayout,
   separator: string,
-): string[] {
-  const rows = Math.max(left.length, right.length);
-  const separatorCell = fitAndPad(separator, 1);
-  const result: string[] = [];
-  for (let row = 0; row < rows; row += 1) {
-    result.push([
-      fitAndPad(left[row] ?? "", layout.leftWidth),
-      separatorCell,
-      fitAndPad(right[row] ?? "", layout.rightWidth),
-    ].join(""));
-  }
-  return result;
+): string {
+  return [
+    fitAndPad(left, layout.leftWidth),
+    fitAndPad(separator, 1),
+    fitAndPad(preview, layout.rightWidth),
+  ].join("");
 }
 
 function safeWidth(width: number): number {

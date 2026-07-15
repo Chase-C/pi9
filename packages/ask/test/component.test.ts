@@ -31,6 +31,7 @@ function make(options: Partial<ConstructorParameters<typeof AskComponent>[0]> = 
     ],
     allowMultiple: false,
     allowFreeform: true,
+    keybindings: new KeybindingsManager(TUI_KEYBINDINGS, {}),
     onSubmit,
     onCancel,
     ...options,
@@ -91,12 +92,12 @@ describe("AskComponent", () => {
   it("opens a comment with literal c without selecting, previews it, and saves with Enter", () => {
     const { component } = make({ allowMultiple: true });
     component.handleInput("c");
-    expect(component.state.mode).toBe("comment");
+    expect(component.state.editor.kind).toBe("comment");
     expect(component.state.checked.size).toBe(0);
 
     component.handleInput("Safer rollout");
     component.handleInput("\r");
-    expect(component.state.mode).toBe("select");
+    expect(component.state.editor.kind).toBe("select");
     expect(component.state.comments.get("Staging")).toBe("Safer rollout");
     expect(component.render(80).join("\n")).toContain("✎ Safer rollout");
     expect(component.state.checked.size).toBe(0);
@@ -107,7 +108,7 @@ describe("AskComponent", () => {
     component.handleInput("c");
     component.handleInput("discarded");
     component.handleInput("\x1b");
-    expect(component.state.mode).toBe("select");
+    expect(component.state.editor.kind).toBe("select");
     expect(component.state.comments.size).toBe(0);
 
     component.handleInput("\x1b");
@@ -115,35 +116,31 @@ describe("AskComponent", () => {
     expect(component.isCancelled).toBe(true);
   });
 
-  it("opens the freeform row by default and submits a single freeform answer", () => {
-    const { component, onSubmit } = make({ options: [] });
+  it("opens a valid freeform row and submits a single freeform answer", () => {
+    const { component, onSubmit } = make({ options: [{ label: "Use default" }] });
+    component.handleInput("\x1b[B");
     component.handleInput("\r");
-    expect(component.state.mode).toBe("freeform");
+    expect(component.state.editor.kind).toBe("freeform");
 
     const lines = component.render(80);
-    const optionLine = lines.findIndex(line => line.includes("Type a response"));
-    expect(lines[optionLine + 1]).toMatch(/^    ↳ /);
+    const freeformRow = lines.findIndex(line => line.includes("Type a response"));
+    expect(lines[freeformRow + 1]).toMatch(/^    ↳ /);
     expect(lines.filter(line => /^─+$/.test(line))).toHaveLength(2);
-    expect(lines.join("\n")).not.toContain("Your response");
 
     component.handleInput("Use the fallback");
     component.handleInput("\r");
-
     expect(onSubmit).toHaveBeenCalledWith({ selections: [], freeform: "Use the fallback" });
   });
 
-  it("checks, toggles, and submits a multi-select freeform response", () => {
-    const { component, onSubmit } = make({ options: [], allowMultiple: true });
+  it("checks, toggles, and submits a valid multi-select freeform response", () => {
+    const { component, onSubmit } = make({
+      options: [{ label: "Use default" }],
+      allowMultiple: true,
+    });
+    component.handleInput("\x1b[B");
     expect(component.render(80).join("\n")).toContain("󰄱 Type a response");
 
     component.handleInput("\r");
-    const editingLines = component.render(80);
-    const freeformRow = editingLines.findIndex(line => line.includes("Type a response"));
-    const inputRow = editingLines.findIndex(line => line.includes("↳"));
-    const submitRow = editingLines.findIndex(line => line.includes("[ Submit ]"));
-    expect(inputRow).toBe(freeformRow + 1);
-    expect(submitRow).toBeGreaterThan(inputRow);
-
     component.handleInput("Use the fallback");
     component.handleInput("\r");
     expect(onSubmit).not.toHaveBeenCalled();
@@ -154,17 +151,18 @@ describe("AskComponent", () => {
     component.handleInput(" ");
     component.handleInput("\x1b[B");
     component.handleInput("\r");
-
     expect(onSubmit).toHaveBeenCalledWith({ selections: [], freeform: "Use the fallback" });
   });
 
-  it("submits an empty freeform-only answer", () => {
-    const { component, onSubmit } = make({ options: [] });
+  it("keeps a blank single-select freeform response open", () => {
+    const { component, onSubmit } = make({ options: [{ label: "Use default" }] });
+    component.handleInput("\x1b[B");
     component.handleInput("\r");
     component.handleInput("\r");
 
-    expect(onSubmit).toHaveBeenCalledWith({ selections: [] });
-    expect(component.answer).toEqual({ selections: [] });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(component.answer).toBeNull();
+    expect(component.state.editor.kind).toBe("select");
   });
 
   it("propagates focus to Pi Editor for IME cursor placement", () => {
@@ -243,7 +241,8 @@ describe("AskComponent", () => {
 
   it("preserves a full-width cursor row when the short viewport adds an overflow marker", () => {
     const tui = { terminal: { rows: 4 }, requestRender: vi.fn() };
-    const { component } = make({ tui: tui as never, options: [] });
+    const { component } = make({ tui: tui as never, options: [{ label: "Only" }] });
+    component.handleInput("\x1b[B");
     const value = "x".repeat(23);
     component.handleInput("\r");
     component.focused = true;
@@ -274,6 +273,20 @@ describe("AskComponent", () => {
     expect(output).toContain("ASCII: +--+");
     expect(lines.some(line => line.includes("│"))).toBe(true);
     expect(lines.every(line => visibleWidth(line) <= 100)).toBe(true);
+  });
+
+  it("does not treat literal pane glyphs in prompt text as wide-layout structure", () => {
+    const { component } = make({
+      question: "Choose carefully │ this is part of the question",
+      context: "Deployment context │ keep this literal suffix",
+      options: [{ label: "Staging", preview: "PREVIEW_CONTENT" }],
+      allowFreeform: false,
+    });
+
+    const output = component.render(100).join("\n");
+    expect(output).toContain("Choose carefully │ this is part of the question");
+    expect(output).toContain("Deployment context │ keep this literal suffix");
+    expect(output.match(/PREVIEW_CONTENT/g)).toHaveLength(1);
   });
 
   it("starts a wide preview at the top of its pane regardless of the highlighted option", () => {
@@ -400,6 +413,8 @@ describe("AskComponent", () => {
     expect(lines.length).toBeLessThanOrEqual(8);
     expect(lines.join("\n")).toContain("Option 10");
     expect(lines.join("\n")).toContain("BOTTOM_PREVIEW_SENTINEL");
+    expect(lines.findIndex(line => line.includes("BOTTOM_PREVIEW_SENTINEL")))
+      .toBe(lines.findIndex(line => line.includes("│")));
     expect(lines.every(line => visibleWidth(line) <= 100)).toBe(true);
   });
 
@@ -407,8 +422,9 @@ describe("AskComponent", () => {
     const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
       "tui.input.submit": "ctrl+s",
     });
-    const { component } = make({ keybindings, options: [] });
+    const { component } = make({ keybindings, options: [{ label: "Only" }] });
 
+    component.handleInput("\x1b[B");
     component.handleInput("\r");
 
     const output = component.render(80).join("\n");
@@ -423,7 +439,7 @@ describe("AskComponent", () => {
     const navigated = make({ keybindings: navigateWithC, allowMultiple: true });
     navigated.component.handleInput("c");
     expect(navigated.component.state.highlightedRow).toBe(1);
-    expect(navigated.component.state.mode).toBe("select");
+    expect(navigated.component.state.editor.kind).toBe("select");
     expect(navigated.component.render(120).join("\n")).not.toContain("c comment");
 
     const confirmWithC = new KeybindingsManager(TUI_KEYBINDINGS, {
@@ -432,7 +448,7 @@ describe("AskComponent", () => {
     const confirmed = make({ keybindings: confirmWithC });
     confirmed.component.handleInput("c");
     expect(confirmed.onSubmit).toHaveBeenCalledOnce();
-    expect(confirmed.component.state.mode).toBe("select");
+    expect(confirmed.component.state.editor.kind).toBe("select");
 
     const confirmWithSpace = new KeybindingsManager(TUI_KEYBINDINGS, {
       "tui.select.confirm": "space",
@@ -445,7 +461,7 @@ describe("AskComponent", () => {
     });
     freeform.component.handleInput("\x1b[B");
     freeform.component.handleInput(" ");
-    expect(freeform.component.state.mode).toBe("freeform");
+    expect(freeform.component.state.editor.kind).toBe("freeform");
     expect(freeform.component.state.freeformChecked).toBe(false);
     expect(freeform.component.render(120).join("\n")).not.toContain("Space/Space");
   });

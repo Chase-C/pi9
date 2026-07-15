@@ -1,6 +1,8 @@
 import type { SessionEntry, SessionTreeEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { rewriteAskContext } from "../src/context.js";
+
+const rewrite = (messages: readonly unknown[]) => rewriteAskContext(messages as never);
 import { renderAskReanswerMessage } from "../src/replay-renderer.js";
 import {
   ASK_REPLAY_CUSTOM_TYPE,
@@ -59,7 +61,7 @@ describe("replay records", () => {
       },
     });
 
-    const projected = rewriteAskContext([
+    const projected = rewrite([
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: args }] },
       { role: "custom", timestamp: 12, ...message },
     ]) as any[];
@@ -71,7 +73,7 @@ describe("replay records", () => {
         type: "ask_response",
         question: "Choose?",
         selectionMode: "single",
-        answer: [{ label: "A" }],
+        answer: { selections: [{ label: "A" }] },
       }),
       timestamp: 12,
     }]);
@@ -83,7 +85,7 @@ describe("resolveAskReplayTarget", () => {
   it("resolves a direct assistant Ask leaf and normalizes its stored arguments", () => {
     const entry = assistant("ask-1", [{ name: "ask", arguments: args }]);
     expect(resolveAskReplayTarget(event("ask-1"), lookup([entry]))).toEqual({
-      status: "resolved", sourceEntryId: "ask-1", toolCallId: "call-0",
+      status: "resolved", toolCallId: "call-0",
       params: { question: "Choose?", options: [{ label: "A" }], allowMultiple: false, allowFreeform: true },
     });
   });
@@ -95,14 +97,14 @@ describe("resolveAskReplayTarget", () => {
       message: { role: "toolResult", toolCallId: "call-0", toolName: "ask" } as never,
     } satisfies SessionEntry;
     expect(resolveAskReplayTarget(event("result-1"), lookup([selected, result]))).toMatchObject({
-      status: "resolved", sourceEntryId: "ask-1", toolCallId: "call-0",
+      status: "resolved", toolCallId: "call-0",
     });
   });
 
   it("resolves only the parent of a branch-summary leaf", () => {
     const selected = assistant("ask-1", [{ name: "ask", arguments: args }]);
     const summary = { type: "branch_summary", id: "summary", parentId: "ask-1", timestamp: "now", fromId: "x", summary: "s" } as const;
-    expect(resolveAskReplayTarget(event("summary", summary), lookup([selected]))).toMatchObject({ status: "resolved", sourceEntryId: "ask-1" });
+    expect(resolveAskReplayTarget(event("summary", summary), lookup([selected]))).toMatchObject({ status: "resolved", toolCallId: "call-0" });
     expect(resolveAskReplayTarget(event("summary", { ...summary, parentId: "middle" }), lookup([
       { type: "custom", id: "middle", parentId: "ask-1", timestamp: "now", customType: "x" }, selected,
     ]))).toEqual({ status: "not-replayable", reason: "not-assistant" });
@@ -113,7 +115,7 @@ describe("resolveAskReplayTarget", () => {
     const message = buildAskReplayMessage("call-1", params, {
       selections: [{ label: "B" }],
     });
-    const projected = rewriteAskContext([
+    const projected = rewrite([
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "Choose?", options: [{ label: "A" }, { label: "B" }] } }] },
       { role: "toolResult", toolCallId: "call-1", toolName: "ask", content: [{ type: "text", text: "Selected: A" }], details: { status: "answered", question: "Choose?", answer: { selections: [{ label: "A" }] } }, isError: false },
       { role: "custom", timestamp: 12, ...message },
@@ -127,7 +129,7 @@ describe("resolveAskReplayTarget", () => {
         type: "ask_response",
         question: "Choose?",
         selectionMode: "single",
-        answer: [{ label: "B" }],
+        answer: { selections: [{ label: "B" }] },
       }),
       timestamp: 12,
     }]);

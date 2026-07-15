@@ -1,20 +1,25 @@
+import type { ContextEvent } from "@earendil-works/pi-coding-agent";
+import { Check } from "typebox/value";
+
+import { AskAnsweredDetailsSchema } from "./schema.js";
 import {
   ASK_REPLAY_CUSTOM_TYPE,
-  parseAskAnswer,
   parseAskReplayDetails,
   validateStoredArgs,
 } from "./replay.js";
-import type { AskAnswer } from "./types.js";
-import type { AskReplayDetails } from "./replay.js";
+import type { AskAnswer, AskReplayDetails, ValidatedAskParams } from "./types.js";
 
-type RecordValue = Record<string, unknown>;
-type AskCall<T> = {
-  args: RecordValue;
-  message: T;
+type AgentMessage = ContextEvent["messages"][number];
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
+type AskCall = {
+  args: ValidatedAskParams;
+  message: AssistantMessage;
   standalone: boolean;
 };
-type ReplayRecord<T> = {
-  message: T;
+type ReplayRecord = {
+  message: CustomMessage;
   details?: AskReplayDetails;
 };
 
@@ -25,7 +30,7 @@ type AskSummaryPayload = {
   question: string;
   context?: string;
   selectionMode: "single" | "multi";
-  answer: Array<RecordValue>;
+  answer: AskAnswer;
 };
 
 /**
@@ -33,13 +38,13 @@ type AskSummaryPayload = {
  * to the model. The session still contains the original protocol messages; the
  * projection must not leave a tool call without its result.
  */
-export function rewriteAskContext<T>(messages: readonly T[]): T[] {
+export function rewriteAskContext(messages: readonly AgentMessage[]): AgentMessage[] {
   const calls = collectCalls(messages);
   const nativeResults = collectNativeResults(messages);
   const replayRecords = collectReplayRecords(messages);
 
-  const summaries = new Map<T, T>();
-  const removals = new Set<T>();
+  const summaries = new Map<AgentMessage, AgentMessage>();
+  const removals = new Set<AgentMessage>();
   for (const [toolCallId, call] of calls) {
     if (!call || !call.standalone) continue;
 
@@ -49,7 +54,7 @@ export function rewriteAskContext<T>(messages: readonly T[]): T[] {
 
     const replays = replayRecords.get(toolCallId) ?? [];
     let answer: AskAnswer | undefined;
-    let replay: ReplayRecord<T> | undefined;
+    let replay: ReplayRecord | undefined;
     if (replays.length > 0) {
       // A replay is a revision only when it is the one well-formed marker for
       // this call. In particular, do not hide malformed or duplicate markers.
@@ -67,8 +72,7 @@ export function rewriteAskContext<T>(messages: readonly T[]): T[] {
       // A valid replay is the latest answer and takes precedence regardless
       // of whether the earlier native attempt completed successfully.
       if (!replay) {
-        if (result.isError === true
-          || (result.isError !== undefined && typeof result.isError !== "boolean")) continue;
+        if (result.isError) continue;
         const details = parseNativeDetails(result.details);
         if (!details
           || details.question !== call.args.question
@@ -76,24 +80,19 @@ export function rewriteAskContext<T>(messages: readonly T[]): T[] {
         answer = details.answer;
       }
     } else if (!replay) {
-      // A native Ask is complete only when its result is present. A replay is
-      // allowed to be the only completion record because it can be projected
-      // after the original result has fallen out of context.
       continue;
     }
 
     if (!answer) continue;
-    const timestamp = replay
-      ? timestampOf(replay.message) ?? timestampOf(result) ?? timestampOf(call.message) ?? Date.now()
-      : timestampOf(result) ?? timestampOf(call.message) ?? Date.now();
+    const timestamp = replay ? replay.message.timestamp : result!.timestamp;
     const summary = makeSummary(call, answer, timestamp);
-    summaries.set(call.message, summary as T);
+    summaries.set(call.message, summary);
     removals.add(call.message);
-    if (result) removals.add(result as T);
+    if (result) removals.add(result);
     if (replay) removals.add(replay.message);
   }
 
-  const rewritten: T[] = [];
+  const rewritten: AgentMessage[] = [];
   for (const message of messages) {
     const summary = summaries.get(message);
     if (summary) {
@@ -105,13 +104,13 @@ export function rewriteAskContext<T>(messages: readonly T[]): T[] {
   return rewritten;
 }
 
-function collectCalls<T>(messages: readonly T[]): Map<string, AskCall<T> | undefined> {
-  const calls = new Map<string, AskCall<T> | undefined>();
+function collectCalls(messages: readonly AgentMessage[]): Map<string, AskCall | undefined> {
+  const calls = new Map<string, AskCall | undefined>();
   for (const message of messages) {
-    if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    const toolCalls = message.content.filter((block): block is RecordValue => isRecord(block) && block.type === "toolCall");
+    if (message.role !== "assistant") continue;
+    const toolCalls = message.content.filter(block => block.type === "toolCall");
     for (const block of toolCalls) {
-      if (block.name !== "ask" || typeof block.id !== "string") continue;
+      if (block.name !== "ask") continue;
       const args = validateStoredArgs(block.arguments);
       const call = args
         ? { args, message, standalone: toolCalls.length === 1 }
@@ -124,12 +123,10 @@ function collectCalls<T>(messages: readonly T[]): Map<string, AskCall<T> | undef
   return calls;
 }
 
-function collectNativeResults<T>(messages: readonly T[]): Map<string, RecordValue[]> {
-  const results = new Map<string, RecordValue[]>();
+function collectNativeResults(messages: readonly AgentMessage[]): Map<string, ToolResultMessage[]> {
+  const results = new Map<string, ToolResultMessage[]>();
   for (const message of messages) {
-    if (!isRecord(message)
-      || message.role !== "toolResult"
-      || typeof message.toolCallId !== "string") continue;
+    if (message.role !== "toolResult") continue;
     const matching = results.get(message.toolCallId) ?? [];
     matching.push(message);
     results.set(message.toolCallId, matching);
@@ -137,16 +134,14 @@ function collectNativeResults<T>(messages: readonly T[]): Map<string, RecordValu
   return results;
 }
 
-function collectReplayRecords<T>(messages: readonly T[]): Map<string, ReplayRecord<T>[]> {
-  const records = new Map<string, ReplayRecord<T>[]>();
+function collectReplayRecords(messages: readonly AgentMessage[]): Map<string, ReplayRecord[]> {
+  const records = new Map<string, ReplayRecord[]>();
   for (const message of messages) {
-    if (!isRecord(message)
-      || message.role !== "custom"
-      || message.customType !== ASK_REPLAY_CUSTOM_TYPE) continue;
+    if (message.role !== "custom" || message.customType !== ASK_REPLAY_CUSTOM_TYPE) continue;
     const rawDetails = isRecord(message.details) && typeof message.details.toolCallId === "string"
       ? message.details.toolCallId
       : undefined;
-    const details = parseReplayMessage(message);
+    const details = parseAskReplayDetails(message.details);
     const toolCallId = details?.toolCallId ?? rawDetails;
     if (toolCallId === undefined) continue;
     const matching = records.get(toolCallId) ?? [];
@@ -156,35 +151,21 @@ function collectReplayRecords<T>(messages: readonly T[]): Map<string, ReplayReco
   return records;
 }
 
-function parseReplayMessage(value: unknown): AskReplayDetails | undefined {
-  if (!isRecord(value)
-    || value.role !== "custom"
-    || value.customType !== ASK_REPLAY_CUSTOM_TYPE) return undefined;
-  return parseAskReplayDetails(value.details);
-}
-
 function parseNativeDetails(value: unknown): { question: string; answer: AskAnswer } | undefined {
-  if (!isRecord(value) || value.status !== "answered" || typeof value.question !== "string") return undefined;
-  const answer = parseAskAnswer(value.answer);
-  if (!answer || Object.keys(value).some(key => !["status", "question", "answer"].includes(key))) return undefined;
-  return { question: value.question, answer };
+  return Check(AskAnsweredDetailsSchema, value) ? value : undefined;
 }
 
-function matchesCall(replay: AskReplayDetails, args: RecordValue): boolean {
+function matchesCall(replay: AskReplayDetails, args: ValidatedAskParams): boolean {
   return replay.question === args.question
     && replay.context === args.context
-    && replay.allowMultiple === (args.allowMultiple === true);
+    && replay.allowMultiple === args.allowMultiple;
 }
 
-function answerMatchesCall(answer: AskAnswer, args: RecordValue): boolean {
-  if (answer.selections.length > 1 && args.allowMultiple !== true) return false;
-  if (answer.freeform !== undefined && args.allowFreeform !== true) return false;
+function answerMatchesCall(answer: AskAnswer, args: ValidatedAskParams): boolean {
+  if (answer.selections.length > 1 && !args.allowMultiple) return false;
+  if (answer.freeform !== undefined && !args.allowFreeform) return false;
 
-  const labels = new Set(
-    Array.isArray(args.options)
-      ? args.options.filter(isRecord).map(option => option.label).filter((label): label is string => typeof label === "string")
-      : [],
-  );
+  const labels = new Set(args.options.map(option => option.label));
   const selected = new Set<string>();
   for (const selection of answer.selections) {
     if (!labels.has(selection.label) || selected.has(selection.label)) return false;
@@ -193,17 +174,16 @@ function answerMatchesCall(answer: AskAnswer, args: RecordValue): boolean {
   return true;
 }
 
-function makeSummary<T>(call: AskCall<T>, answer: AskAnswer, timestamp: number): RecordValue {
-  const selected = answer.selections.map(selection => selectedOption(selection, call.args));
+function makeSummary(call: AskCall, answer: AskAnswer, timestamp: number): AgentMessage {
   const payload: AskSummaryPayload = {
     type: "ask_response",
-    question: call.args.question as string,
-    ...(typeof call.args.context === "string" ? { context: call.args.context } : {}),
-    selectionMode: call.args.allowMultiple === true ? "multi" : "single",
-    answer: [
-      ...selected,
-      ...(answer.freeform !== undefined ? [{ freeform: answer.freeform }] : []),
-    ],
+    question: call.args.question,
+    ...(call.args.context !== undefined ? { context: call.args.context } : {}),
+    selectionMode: call.args.allowMultiple ? "multi" : "single",
+    answer: {
+      selections: answer.selections.map(selection => selectedOption(selection, call.args)),
+      ...(answer.freeform !== undefined ? { freeform: answer.freeform } : {}),
+    },
   };
   return {
     role: "custom",
@@ -214,12 +194,9 @@ function makeSummary<T>(call: AskCall<T>, answer: AskAnswer, timestamp: number):
   };
 }
 
-function selectedOption(selection: AskAnswer["selections"][number], args: RecordValue): RecordValue {
-  const original = Array.isArray(args.options)
-    ? args.options.find(option => isRecord(option) && option.label === selection.label)
-    : undefined;
-  const description = selection.description
-    ?? (isRecord(original) && typeof original.description === "string" ? original.description : undefined);
+function selectedOption(selection: AskAnswer["selections"][number], args: ValidatedAskParams): AskAnswer["selections"][number] {
+  const original = args.options.find(option => option.label === selection.label);
+  const description = selection.description ?? original?.description;
   return {
     label: selection.label,
     ...(description !== undefined ? { description } : {}),
@@ -227,10 +204,6 @@ function selectedOption(selection: AskAnswer["selections"][number], args: Record
   };
 }
 
-function timestampOf(value: unknown): number | undefined {
-  return isRecord(value) && typeof value.timestamp === "number" ? value.timestamp : undefined;
-}
-
-function isRecord(value: unknown): value is RecordValue {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

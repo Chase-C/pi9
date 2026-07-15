@@ -4,7 +4,6 @@ import { AskComponent } from "./component.js";
 import type { AskAnswer, ValidatedAskParams } from "./types.js";
 
 interface QuestionnaireLaunchContext {
-  mode: string;
   ui: Pick<ExtensionUIContext, "custom">;
 }
 
@@ -12,12 +11,10 @@ export async function launchQuestionnaire(
   ctx: QuestionnaireLaunchContext,
   params: ValidatedAskParams,
   signal?: AbortSignal,
-): Promise<AskAnswer | null | undefined> {
-  if (ctx.mode !== "tui") return undefined;
-
+): Promise<AskAnswer | null> {
   let abortListener: (() => void) | undefined;
   try {
-    return await ctx.ui.custom<AskAnswer | null>((tui, theme, keybindings, done) => {
+    const answer = await ctx.ui.custom<AskAnswer | null>((tui, theme, keybindings, done) => {
       const component = new AskComponent({
         ...params,
         tui,
@@ -33,6 +30,7 @@ export async function launchQuestionnaire(
 
       return component;
     });
+    return answer ?? null;
   } finally {
     if (abortListener) signal?.removeEventListener("abort", abortListener);
   }

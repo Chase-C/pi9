@@ -1,59 +1,52 @@
 export interface FocusRange {
-  /** Inclusive absolute row index in the full logical line list. */
+  /** Inclusive absolute row index in the full logical row list. */
   start: number;
-  /** Exclusive absolute row index in the full logical line list. */
+  /** Exclusive absolute row index in the full logical row list. */
   end: number;
 }
 
-export interface ViewportResult {
-  lines: string[];
-  hiddenAbove: boolean;
-  hiddenBelow: boolean;
+export type ViewportOverflow = "above" | "below" | "both";
+
+export interface ViewportRow<T> {
+  value: T;
+  overflow?: ViewportOverflow;
 }
 
 /**
- * Fit logical lines into a terminal-height viewport.
+ * Fit logical rows into a terminal-height viewport.
  *
- * Fixed rows are taken from the beginning and end of `lines`. The rows between
- * them form the scrollable region. Overflow markers prefix boundary rows in
- * that region, so they never consume an additional terminal row.
+ * Fixed rows are taken from the beginning and end of `rows`. The rows between
+ * them form the scrollable region. Overflow is metadata on boundary rows, so
+ * it never consumes an additional terminal row.
  *
  * If the viewport is smaller than the fixed chrome, the first top row wins a
  * one-row viewport. With two or more rows, at least one row from each fixed
  * edge is retained, then remaining space is assigned to the top edge first.
  */
-export function fitViewport(
-  lines: readonly string[],
+export function fitViewport<T>(
+  rows: readonly T[],
   focus: FocusRange | undefined,
   maxRows: number,
   fixedTopRows: number,
   fixedBottomRows: number,
-): ViewportResult {
-  const limit = rowLimit(maxRows, lines.length);
-  if (limit === 0 || lines.length === 0) {
-    return { lines: [], hiddenAbove: false, hiddenBelow: lines.length > 0 };
-  }
+): ViewportRow<T>[] {
+  const limit = rowLimit(maxRows, rows.length);
+  if (limit === 0 || rows.length === 0) return [];
 
-  if (lines.length <= limit) {
-    return { lines: [...lines], hiddenAbove: false, hiddenBelow: false };
-  }
+  if (rows.length <= limit) return rows.map(value => ({ value }));
 
-  const topSize = fixedSize(fixedTopRows, lines.length);
-  const bottomSize = fixedSize(fixedBottomRows, lines.length - topSize);
+  const topSize = fixedSize(fixedTopRows, rows.length);
+  const bottomSize = fixedSize(fixedBottomRows, rows.length - topSize);
   const middleStart = topSize;
-  const middleEnd = lines.length - bottomSize;
+  const middleEnd = rows.length - bottomSize;
   const chromeSize = topSize + bottomSize;
 
   if (limit < chromeSize) {
     const { topVisible, bottomVisible } = degradedChrome(limit, topSize, bottomSize);
-    return {
-      lines: [
-        ...lines.slice(0, topVisible),
-        ...lines.slice(lines.length - bottomVisible),
-      ],
-      hiddenAbove: false,
-      hiddenBelow: middleEnd > middleStart,
-    };
+    return [
+      ...rows.slice(0, topVisible),
+      ...rows.slice(rows.length - bottomVisible),
+    ].map(value => ({ value }));
   }
 
   const middleCapacity = limit - chromeSize;
@@ -61,26 +54,24 @@ export function fitViewport(
   const visibleCount = Math.min(middleCapacity, middleSize);
   const windowStart = chooseWindowStart(
     focus,
-    lines.length,
+    rows.length,
     middleStart,
     middleEnd,
     visibleCount,
   );
   const hiddenAbove = windowStart > middleStart;
   const hiddenBelow = windowStart + visibleCount < middleEnd;
-  const middle = lines.slice(windowStart, windowStart + visibleCount);
+  const middle = rows
+    .slice(windowStart, windowStart + visibleCount)
+    .map(value => ({ value } as ViewportRow<T>));
 
   markOverflow(middle, hiddenAbove, hiddenBelow);
 
-  return {
-    lines: [
-      ...lines.slice(0, topSize),
-      ...middle,
-      ...lines.slice(middleEnd),
-    ],
-    hiddenAbove,
-    hiddenBelow,
-  };
+  return [
+    ...rows.slice(0, topSize).map(value => ({ value })),
+    ...middle,
+    ...rows.slice(middleEnd).map(value => ({ value })),
+  ];
 }
 
 function rowLimit(value: number, contentLength: number): number {
@@ -112,13 +103,13 @@ function degradedChrome(
 
 function chooseWindowStart(
   focus: FocusRange | undefined,
-  lineCount: number,
+  rowCount: number,
   middleStart: number,
   middleEnd: number,
   visibleCount: number,
 ): number {
   const latestStart = middleEnd - visibleCount;
-  const range = normalizeFocus(focus, lineCount);
+  const range = normalizeFocus(focus, rowCount);
   if (!range) return middleStart;
 
   if (range.end <= middleStart) return middleStart;
@@ -134,20 +125,24 @@ function chooseWindowStart(
   return Math.max(middleStart, Math.min(focusStart - contextBefore, latestStart));
 }
 
-function normalizeFocus(focus: FocusRange | undefined, lineCount: number): FocusRange | undefined {
+function normalizeFocus(focus: FocusRange | undefined, rowCount: number): FocusRange | undefined {
   if (!focus || !Number.isFinite(focus.start) || !Number.isFinite(focus.end)) return undefined;
-  const start = Math.max(0, Math.min(Math.floor(focus.start), lineCount));
-  const end = Math.max(0, Math.min(Math.floor(focus.end), lineCount));
+  const start = Math.max(0, Math.min(Math.floor(focus.start), rowCount));
+  const end = Math.max(0, Math.min(Math.floor(focus.end), rowCount));
   if (end <= start) return undefined;
   return { start, end };
 }
 
-function markOverflow(middle: string[], hiddenAbove: boolean, hiddenBelow: boolean): void {
+function markOverflow<T>(
+  middle: ViewportRow<T>[],
+  hiddenAbove: boolean,
+  hiddenBelow: boolean,
+): void {
   if (middle.length === 0) return;
   if (middle.length === 1 && hiddenAbove && hiddenBelow) {
-    middle[0] = `↕ ${middle[0]}`;
+    middle[0]!.overflow = "both";
     return;
   }
-  if (hiddenAbove) middle[0] = `↑ ${middle[0]}`;
-  if (hiddenBelow) middle[middle.length - 1] = `↓ ${middle[middle.length - 1]}`;
+  if (hiddenAbove) middle[0]!.overflow = "above";
+  if (hiddenBelow) middle[middle.length - 1]!.overflow = "below";
 }
