@@ -264,6 +264,22 @@ describe("context report component", () => {
     }
   });
 
+  it("preserves full compaction details at 80 columns", () => {
+    const compactionReport: ContextReport = {
+      ...graphReport,
+      usage: { contextWindow: 5_000, tokens: 4_200, percent: 84 },
+      compaction: { enabled: true, reserveTokens: 1_000 },
+    };
+    const component = createContextReportComponent(compactionReport, {
+      theme: plainTheme as never,
+      tui: { terminal: { rows: 40 }, requestRender: vi.fn() } as never,
+      onClose: vi.fn(),
+    });
+    const text = component.render(80).join("\n");
+
+    expect(text).toContain("● Compaction reserve: 1K tokens · 20.0% · 800 unoccupied");
+  });
+
   it("renders keyboard controls in the top border", () => {
     const component = createContextReportComponent(report, {
       theme: plainTheme as never,

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Make the usage graph responsive to the available rows and columns, with a dynamic per-block token scale and at least one block for every non-zero category.
+- Restyle the estimated breakdown with highlighted token values, muted percentages, and color-coded category markers.
+- Use filled circles for most graph categories, a fisheye for conversation, and an outlined circle for free space.
+- Move the keyboard controls into the bold report border and make the top content padding scroll away with the report.
+- Refresh the README screenshot and responsive-graph verification guidance.
+
+### Fixed
+
+- Preserve complete breakdown values in side-by-side layouts by sizing the graph against the rendered summary width.
+
 ## [0.1.0] - 2026-07-09
 
 ### Added

@@ -37,4 +37,4 @@ To verify the TUI end-to-end:
 
 1. Start pi with this extension in a terminal at least 80 columns wide.
 2. Run `/context` on a session with several messages so the report exceeds the viewport.
-3. Confirm keyboard scrolling, help text, the 1K-token-per-character graph, section token totals, and **Esc** closes the inline view without injecting report text into the chat.
+3. Confirm keyboard scrolling, help text, the responsive graph and displayed per-block token scale, section token totals, and **Esc** closes the inline view without injecting report text into the chat.

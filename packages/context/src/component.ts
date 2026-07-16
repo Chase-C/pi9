@@ -10,7 +10,6 @@ const VIEW_HEIGHT_FRACTION = 0.9;
 const GRAPH_CELL_GAP = " ";
 const GRAPH_GAP = 4;
 const STACKED_GRAPH_ROWS = 7;
-const SUMMARY_MIN_WIDTH = 28;
 const GRAPH_STYLE = {
   prompt: { glyph: "●", color: "text" },
   tools: { glyph: "●", color: "warning" },
@@ -227,14 +226,20 @@ function formatUsageOverview(report: ContextReport, theme: Theme, width: number)
   const visibleGraphCategories = graphCategories.length > 0
     ? graphCategories
     : [{ label: "Free space", tokens: totalGraphTokens, ...GRAPH_STYLE.free }];
-  const columns = graphColumnCount(width);
-  const sideBySide = shouldRenderSideBySide(width, columns);
-  const summaryRowCount = 6
-    + usedCategories.length
-    + Number(freeTokens > 0)
-    + Number(unknownTokens > 0)
-    + Number(configuredReserve > 0);
-  const targetRows = sideBySide ? summaryRowCount : STACKED_GRAPH_ROWS;
+  const summaryProbe = formatUsageSummary(
+    report,
+    usedCategories,
+    freeTokens,
+    unknownTokens,
+    configuredReserve,
+    compactionTokens,
+    totalGraphTokens,
+    theme,
+  );
+  const summaryWidth = Math.max(...summaryProbe.map(visibleWidth));
+  const columns = graphColumnCount(width, summaryWidth);
+  const sideBySide = shouldRenderSideBySide(width, columns, summaryWidth);
+  const targetRows = sideBySide ? summaryProbe.length : STACKED_GRAPH_ROWS;
   const graphRows = Math.max(targetRows, Math.ceil(visibleGraphCategories.length / columns));
   const cellCount = columns * graphRows;
   const tokensPerCell = totalGraphTokens / cellCount;
@@ -417,9 +422,9 @@ function allocateGraphCells(categories: GraphCategory[], cellCount: number): Gra
   );
 }
 
-function graphColumnCount(width: number): number {
+function graphColumnCount(width: number, summaryWidth: number): number {
   const target = width >= 112 ? 36 : width >= 88 ? 32 : width >= 68 ? 24 : 20;
-  const sideBySideWidth = width - GRAPH_GAP - SUMMARY_MIN_WIDTH;
+  const sideBySideWidth = width - GRAPH_GAP - summaryWidth;
   const maxWidth = sideBySideWidth >= 10 ? sideBySideWidth : width;
   return Math.max(1, Math.min(target, maxGraphColumnsForWidth(maxWidth)));
 }
@@ -429,9 +434,9 @@ function maxGraphColumnsForWidth(width: number): number {
   return Math.max(1, Math.floor((Math.max(1, width) + gapWidth) / (1 + gapWidth)));
 }
 
-function shouldRenderSideBySide(width: number, columns: number): boolean {
+function shouldRenderSideBySide(width: number, columns: number, summaryWidth: number): boolean {
   const graphWidth = columns + (columns - 1) * visibleWidth(GRAPH_CELL_GAP);
-  return width - graphWidth - GRAPH_GAP >= SUMMARY_MIN_WIDTH;
+  return width - graphWidth - GRAPH_GAP >= summaryWidth;
 }
 
 function padAnsi(text: string, width: number): string {
