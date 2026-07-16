@@ -49,7 +49,7 @@ describe("buildContextReport", () => {
       conversation: {
         stats: { compactions: 0 },
         tokens: 0,
-        history: [],
+        toolCallCounts: new Map(),
       },
     });
   });
@@ -80,6 +80,74 @@ describe("buildContextReport", () => {
     } as never);
 
     expect(details.stats.compactions).toBe(2);
+  });
+
+  it("aggregates conversation and tool-call stats without retaining message history", () => {
+    const branch = [
+      {
+        type: "message",
+        id: "user",
+        parentId: null,
+        timestamp: "2026-07-09T00:00:00.000Z",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Question" },
+            { type: "image", data: "image-data", mimeType: "image/png" },
+          ],
+          timestamp: 1,
+        },
+      },
+      {
+        type: "message",
+        id: "assistant",
+        parentId: "user",
+        timestamp: "2026-07-09T00:01:00.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Consider options" },
+            { type: "text", text: "Answer" },
+            { type: "toolCall", id: "read-1", name: "read", arguments: {} },
+            { type: "toolCall", id: "read-2", name: "read", arguments: {} },
+            { type: "toolCall", id: "bash-1", name: "bash", arguments: {} },
+          ],
+          timestamp: 2,
+        },
+      },
+      {
+        type: "message",
+        id: "result",
+        parentId: "assistant",
+        timestamp: "2026-07-09T00:02:00.000Z",
+        message: {
+          role: "toolResult",
+          toolCallId: "read-1",
+          toolName: "read",
+          content: [{ type: "image", data: "result-image", mimeType: "image/png" }],
+          isError: false,
+          timestamp: 3,
+        },
+      },
+    ];
+
+    const details = collectConversationDetails({
+      sessionManager: { getBranch: () => branch },
+    } as never);
+
+    expect(details.stats).toEqual({
+      userMessages: 1,
+      assistantMessages: 1,
+      toolResults: 1,
+      thinkingBlocks: 1,
+      imageBlocks: 2,
+      compactions: 0,
+    });
+    expect(details.toolCallCounts).toEqual(new Map([
+      ["read", 2],
+      ["bash", 1],
+    ]));
+    expect(details.tokens).toBeGreaterThan(0);
   });
 
   it("attributes active tool definitions, snippets, and guidelines to the tool", () => {

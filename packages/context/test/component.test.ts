@@ -38,14 +38,11 @@ const report: ContextReport = {
       userMessages: 2,
       assistantMessages: 2,
       toolResults: 1,
-      toolCalls: 1,
       thinkingBlocks: 0,
       imageBlocks: 0,
       compactions: 2,
     },
-    history: [
-      { kind: "tool-call", tool: "bash", tokens: 10 },
-    ],
+    toolCallCounts: new Map([["bash", 1]]),
   },
 };
 
@@ -108,9 +105,11 @@ describe("context report formatting", () => {
     expect(text).toContain("◉ Conversation: 340 tokens · 34.0%");
     expect(text).toContain("○ Free space: 360 tokens · 36.0%");
     expect(text).toContain("Conversation (estimated) · 340 tokens");
+    expect(text).toContain("blocks: tool calls 1 · thinking 0 · images 0");
     expect(text).toContain("compactions: 2");
     expect(text).toContain("Memory files (estimated) · 50 tokens");
     expect(text).toContain("Tools (estimated) · 120 tokens");
+    expect(text).toContain("bash: 80 tokens · active · builtin · 1 call");
     expect(text).not.toContain("definition 70");
     expect(text).not.toContain("prompt 10");
     expect(text).not.toContain("Snapshot:");

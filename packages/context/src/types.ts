@@ -71,7 +71,7 @@ export interface SnapshotDetails {
 
 export interface ConversationDetails {
   stats: ConversationStats;
-  history: ConversationTurn[];
+  toolCallCounts: Map<string, number>;
   tokens: number;
 }
 
@@ -79,27 +79,7 @@ export interface ConversationStats {
   userMessages: number;
   assistantMessages: number;
   toolResults: number;
-  toolCalls: number;
   thinkingBlocks: number;
   imageBlocks: number;
   compactions: number;
 }
-
-export type ConversationTurn =
-  | {
-      kind: "user" | "assistant" | "thinking" | "bash" | "custom" | "compact" | "branch";
-      tokens: number;
-    }
-  | {
-      kind: "tool-call";
-      tool: string;
-      tokens: number;
-      callId?: string;
-    }
-  | {
-      kind: "tool-result";
-      tool: string;
-      tokens: number;
-      callId?: string;
-      isError?: boolean;
-    };

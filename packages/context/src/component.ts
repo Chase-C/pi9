@@ -453,7 +453,7 @@ function formatConversationSection(report: Extract<ContextReport, { kind: "conve
   return [
     heading(theme, "Conversation (estimated)", report.conversation.tokens),
     `${branch(theme, "├")}messages: user ${stats.userMessages} · assistant ${stats.assistantMessages} · tool results ${stats.toolResults}`,
-    `${branch(theme, "├")}blocks: tool calls ${stats.toolCalls} · thinking ${stats.thinkingBlocks} · images ${stats.imageBlocks}`,
+    `${branch(theme, "├")}blocks: tool calls ${sum([...report.conversation.toolCallCounts.values()])} · thinking ${stats.thinkingBlocks} · images ${stats.imageBlocks}`,
     `${branch(theme, "├")}compactions: ${stats.compactions}`,
     `${branch(theme, "└")}message tokens: ${theme.fg("accent", formatTokens(report.conversation.tokens))}`,
   ];
@@ -463,7 +463,7 @@ function formatToolsSection(report: ContextReport, theme: Theme): string[] {
   if (report.tools.length === 0) return [];
 
   const callCounts = report.kind === "conversation"
-    ? collectToolCallCounts(report.conversation.history)
+    ? report.conversation.toolCallCounts
     : new Map<string, number>();
   const groups: Array<{ title: string; kind: ToolSource["kind"] }> = [
     { title: "Built-in tools", kind: "builtin" },
@@ -512,16 +512,6 @@ function formatToolSource(source: ToolSource): string {
 
 function formatCallCount(count: number): string {
   return count === 1 ? "1 call" : `${count.toLocaleString()} calls`;
-}
-
-function collectToolCallCounts(history: Extract<ContextReport, { kind: "conversation" }>["conversation"]["history"]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const turn of history) {
-    if (turn.kind === "tool-call") {
-      counts.set(turn.tool, (counts.get(turn.tool) ?? 0) + 1);
-    }
-  }
-  return counts;
 }
 
 function pushSection(lines: string[], section: string[]): void {

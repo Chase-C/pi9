@@ -13,7 +13,6 @@ import type {
   ContextReport,
   ConversationDetails,
   ConversationStats,
-  ConversationTurn,
   MemoryDetails,
   ModelDetails,
   SkillDetails,
@@ -248,90 +247,51 @@ export function collectConversationDetails(ctx: ExtensionCommandContext): Conver
     userMessages: 0,
     assistantMessages: 0,
     toolResults: 0,
-    toolCalls: 0,
     thinkingBlocks: 0,
     imageBlocks: 0,
     compactions: branch.filter((entry) => entry.type === "compaction").length,
   };
-  const history: ConversationTurn[] = [];
+  const toolCallCounts = new Map<string, number>();
   let tokens = 0;
 
   for (const message of messages) {
-    const messageTokens = estimateMessageTokens(message);
-    tokens += messageTokens;
+    tokens += estimateMessageTokens(message);
 
     switch (message.role) {
       case "user":
         stats.userMessages += 1;
         stats.imageBlocks += countImageBlocks(message.content);
-        history.push({ kind: "user", tokens: messageTokens });
         break;
       case "assistant":
         stats.assistantMessages += 1;
-        addAssistantTurns(message, history, stats, messageTokens);
+        collectAssistantStats(message, stats, toolCallCounts);
         break;
       case "toolResult":
         stats.toolResults += 1;
         stats.imageBlocks += countImageBlocks(message.content);
-        history.push({
-          kind: "tool-result",
-          tool: message.toolName ?? "unknown",
-          tokens: messageTokens,
-          callId: message.toolCallId,
-          isError: message.isError,
-        });
         break;
       case "custom":
         stats.imageBlocks += countImageBlocks(message.content);
-        history.push({ kind: "custom", tokens: messageTokens });
-        break;
-      default:
-        history.push({ kind: "custom", tokens: messageTokens });
         break;
     }
   }
 
-  return { stats, history, tokens };
+  return { stats, toolCallCounts, tokens };
 }
 
-function addAssistantTurns(
+function collectAssistantStats(
   message: AssistantMessage,
-  history: ConversationTurn[],
   stats: ConversationStats,
-  fallbackTokens: number,
+  toolCallCounts: Map<string, number>,
 ): void {
-  if (!Array.isArray(message.content)) {
-    history.push({ kind: "assistant", tokens: fallbackTokens });
-    return;
-  }
+  if (!Array.isArray(message.content)) return;
 
-  let emitted = false;
   for (const block of message.content) {
-    if (!block || typeof block !== "object" || !("type" in block)) {
-      continue;
-    }
-
-    if (block.type === "text") {
-      history.push({ kind: "assistant", tokens: estimateTokens("text" in block ? block.text : "") });
-      emitted = true;
-    } else if (block.type === "thinking") {
+    if (block.type === "thinking") {
       stats.thinkingBlocks += 1;
-      history.push({ kind: "thinking", tokens: estimateTokens("thinking" in block ? block.thinking : "") });
-      emitted = true;
     } else if (block.type === "toolCall") {
-      stats.toolCalls += 1;
-      history.push({
-        kind: "tool-call",
-        tool: "name" in block && typeof block.name === "string" ? block.name : "unknown",
-        tokens: estimateTokens(block),
-        callId: "id" in block && typeof block.id === "string" ? block.id : undefined,
-      });
-      emitted = true;
+      toolCallCounts.set(block.name, (toolCallCounts.get(block.name) ?? 0) + 1);
     }
-  }
-
-  if (!emitted) {
-    history.push({ kind: "assistant", tokens: fallbackTokens });
   }
 }
 
