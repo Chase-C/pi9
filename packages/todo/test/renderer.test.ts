@@ -37,14 +37,18 @@ describe("todo renderer", () => {
       .toBe("1 phase · 1 task");
   });
 
-  it("renders phases, statuses, and changed task emphasis without IDs", () => {
-    const text = renderResult({ details }, { expanded: true }, plainTheme).render(120).join("\n");
-    expect(text).toContain("*Todos · 1 active · 1 pending · 1 completed*");
-    expect(text).toContain("1. Planning · 1 pending");
-    expect(text).toContain("󰄰 Plan release announcement");
-    expect(text).toContain("*  2. Build · 1 active · 1 completed*");
-    expect(text).toContain("*    󰻃 Implement renderer*");
-    expect(text).toContain("󰄴 Publish package");
+  it("matches widget phase and task styling without a Todos header", () => {
+    const themed = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+      bold: (text: string) => `<bold>${text}</bold>`,
+    };
+    const text = renderResult({ details }, { expanded: true }, themed).render(120).join("\n");
+    expect(text).toContain("<muted>  1. Planning · 0/1</muted>");
+    expect(text).toContain("<muted>    󰄰 Plan release announcement</muted>");
+    expect(text).toContain("<toolTitle><bold>  2. Build</bold></toolTitle> <muted>· 1/2</muted>");
+    expect(text).toContain("<muted>    󰻃</muted> <text>Implement renderer</text>");
+    expect(text).toContain("<success>    󰄴 Publish package</success>");
+    expect(text).not.toContain("Todos");
     expect(text).not.toContain("[task-");
   });
 
@@ -86,10 +90,11 @@ describe("todo renderer", () => {
       ] }], workingOn: "Handling the active task" },
       changedTasks: [],
     } }, { expanded: true }, themed, { fallbackGlyphs: true }).render(80).join("\n");
-    expect(text).toContain("<dim>    ○ Pending</dim>");
-    expect(text).toContain("<text>    ▶ Active</text>");
+    expect(text).toContain("<toolTitle>  1. Tasks</toolTitle> <muted>· 2/4</muted>");
+    expect(text).toContain("<muted>    ○ Pending</muted>");
+    expect(text).toContain("<muted>    ▶</muted> <text>Active</text>");
     expect(text).toContain("<success>    ✓ ~Done~</success>");
-    expect(text).toContain("<dim>    × ~Cancelled~</dim>");
+    expect(text).toContain("<muted>    × ~Cancelled~</muted>");
   });
 
   it("handles narrow and empty states safely", () => {

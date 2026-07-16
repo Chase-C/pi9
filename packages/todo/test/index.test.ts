@@ -428,7 +428,7 @@ describe("todoExtension", () => {
     const text = live.render(120).join("\n");
     expect(text).toContain("Implement feature");
     expect(text).toContain("Add tests");
-    expect(text).toContain("1 completed");
+    expect(text).toContain("1. Build · 1/2");
     expect(invalidate).toHaveBeenCalledTimes(2);
     expect(set.details).toEqual(historical);
   });
