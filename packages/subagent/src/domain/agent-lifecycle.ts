@@ -15,4 +15,4 @@ export type AgentRunOutcome =
   | { readonly status: Exclude<AgentRunStatus, "completed">; readonly output?: never; readonly error?: string };
 
 /** Coarse updates emitted while an agent attempt progresses. */
-export type AgentUpdateKind = "status" | "message" | "tool" | "turn" | "usage" | "compaction";
+export type AgentUpdateKind = "status" | "retention" | "message" | "tool" | "turn" | "usage" | "compaction";

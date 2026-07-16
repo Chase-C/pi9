@@ -52,8 +52,10 @@ export function resolveTask(args: ResolveTaskArgs) {
     error = `Unknown resumable subagent session: ${task.sessionId}`;
   } else if (target.hasCurrentAttempt) {
     error = `Cannot resume subagent session ${task.sessionId}: it is already resuming.`;
-  } else if (!target.resumableEnabled) {
-    error = `Cannot resume subagent session ${task.sessionId}: it was created with resumable: false.`;
+  } else if (!target.conversationRetentionEnabled) {
+    error = target.resumableEnabled
+      ? `Cannot resume subagent session ${task.sessionId}: its conversation is not retained.`
+      : `Cannot resume subagent session ${task.sessionId}: it was created with resumable: false.`;
   } else if (!target.canResume) {
     error = `Cannot resume subagent session ${task.sessionId} while it is ${target.status.kind === "done" ? target.status.outcome : target.status.kind}.`;
   } else {

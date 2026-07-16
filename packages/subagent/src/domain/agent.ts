@@ -27,6 +27,7 @@ export class Agent {
   private _retainedSession?: AgentSession;
   private _label: string | undefined;
   private _appliedResumableOverride: boolean | undefined;
+  private _attachmentPinned = false;
   private _unsubscribe?: () => void;
   private _background: boolean;
   private _effectiveConfig: AgentEffectiveConfig | undefined;
@@ -136,6 +137,22 @@ export class Agent {
     return this._appliedResumableOverride ?? this._requestedConfig.resumable;
   }
 
+  get conversationRetentionEnabled(): boolean {
+    return this.resumableEnabled || this._attachmentPinned;
+  }
+
+  pinForAttachment(): void {
+    if (this._attachmentPinned) return;
+    this._attachmentPinned = true;
+    this._emit("retention");
+  }
+
+  unpinAttachment(): void {
+    if (!this._attachmentPinned) return;
+    this._attachmentPinned = false;
+    this._emit("retention");
+  }
+
   /** Whether a current attempt or retained conversation exists, independent of policy. */
   get hasCurrentOrRetainedConversation(): boolean {
     return this._current !== undefined || this._retainedSession !== undefined;
@@ -143,12 +160,12 @@ export class Agent {
 
   /** Whether the current policy keeps the current/retained conversation available. */
   get shouldRetainConversation(): boolean {
-    return this.resumableEnabled === true && this.hasCurrentOrRetainedConversation;
+    return this.conversationRetentionEnabled && this.hasCurrentOrRetainedConversation;
   }
 
   /** True iff this agent is eligible to be resumed right now. */
   get canResume(): boolean {
-    if (!this.resumableEnabled) return false;
+    if (!this.conversationRetentionEnabled) return false;
     if (this._current) return false;
     if (!this._retainedSession) return false;
     const last = this._lastAttempt;

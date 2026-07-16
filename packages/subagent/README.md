@@ -106,7 +106,7 @@ subagent({
 })
 ```
 
-Retention lasts for the current Pi process only — restart or extension reload releases it. Setting `resumable: false` on a follow-up prevents further follow-ups and releases its conversation context after that attempt; a foreground session then leaves inventory, while a background session remains listed for result retrieval or removal. Resume from the tool, or interactively from `/subagents`.
+Retention lasts for the current Pi process only — restart or extension reload releases it. Setting `resumable: false` on a follow-up prevents further tool-driven follow-ups and releases its conversation context after that attempt unless the user has explicitly attached to it in `/subagents`; a foreground session then leaves inventory, while a background session remains listed for result retrieval or removal. Resume from the tool, or interactively from `/subagents`.
 
 ## Background dispatch
 
@@ -185,18 +185,15 @@ Beyond runtime, the settings file also has an `agentDiscovery` section (toggles 
 
 ## `/subagents` command
 
-Run `/subagents` to inspect and manage subagents from the UI. This is a separate interactive surface; its inspection view may show richer diagnostic details than the model-facing `list` action.
+Run `/subagents` to open a single overlay with Sessions, Agents, Attached, and Settings pages. Its inspectors may show richer diagnostic details than the model-facing `list` action, and page state remains intact while switching tabs.
 
-When active or retained sessions exist, it opens the Sessions view, where you can:
+Sessions is a filterable inventory of every active or retained runtime session. Its Flat mode shows one level; Tree mode nests a child beneath its parent only while that child is running, leaving queued and terminal retained sessions at the top level. From this page you can inspect task-first summaries, attach to a session, stop running work, or remove terminal inventory.
 
-- Inspect status, agent metadata, prompt preview, counters, timestamps, usage, and output/error snippets.
-- Resume a completed resumable session (or a resume attempt that failed before re-attaching). The command asks for a follow-up prompt, runs with a cancellable loader, updates the widget live, and appends a concise result message to the main conversation.
-- Remove any non-running session still in inventory, including completed non-resumable background results.
-- Open Settings with `s`, or switch to the Agents browser with `tab` when discovery is available.
+Attaching pins the child conversation in process-local retained mode, including agents that were originally non-resumable. The Attached page contains only sessions explicitly attached by the user, always as a flat list. Its live inspector follows child messages and tools; the same inline composer steers a running child or starts a tracked resume after it completes. Detaching releases only the attachment pin, so sessions retained by their original resumable or background policy remain available.
 
-If no sessions exist, `/subagents` opens the read-only Agents browser, which lists discovered agent definitions and their metadata. It does not launch agents.
+Agents is a filterable, read-only browser for discovered definitions; it does not launch agents. Settings keeps the existing runtime and widget controls inside the same overlay. If no sessions exist, `/subagents` starts on Agents.
 
-Run `/subagents settings` to open Settings directly, or `/subagents agents` / `/subagents sessions` to jump straight to a view. All views share the same movement keys, including configured select keybindings and `j`/`k`.
+Run `/subagents settings` to start on Settings, or `/subagents agents` / `/subagents sessions` to choose an initial page. Use `tab` to cycle pages, `/` to filter Sessions or Agents, `t` to switch Flat/Tree mode, and the configured select keys (plus `j`/`k`) to move.
 
 ## Events and persistence
 
@@ -258,7 +255,7 @@ src/
 │   ├── run-agent.ts      — Builds and runs the underlying SDK AgentSession for one attempt.
 │   └── ...               — Attempt dispatch, background notifier, extension cache, timing.
 ├── tool/            — The `subagent` tool: definition, action handlers, and the factory injected into children.
-├── command/         — The `/subagents` slash command: registration, multi-step flows, and a `components/` subfolder with Sessions/Agents/Settings/resume-loader TUI components.
+├── command/         — The `/subagents` overlay, its filter/tree view models, settings integration, and TUI components.
 ├── ui/widget.ts     — The persistent progress widget shown outside the tool row.
 └── view/            — Rendering helpers shared by tool, command, and widget.
     ├── tool-result-lines.ts — Collapsed/expanded line generation for the tool row.

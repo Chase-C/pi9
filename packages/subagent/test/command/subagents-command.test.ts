@@ -19,6 +19,89 @@ function registerCommand(dependencies: any = {}) {
   return commands;
 }
 
+test("/subagents opens one persistent overlay for all pages", async () => {
+  const manager = {
+    listSessions: () => [fakeAgent({ status: { kind: "running" } })],
+    listAttachedSessions: () => [],
+    onAgentUpdate: () => () => {},
+  };
+  const commands = registerCommand({
+    agentManager: manager,
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+  });
+  let calls = 0;
+  let options: any;
+  await commands.get("subagents").handler("sessions", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      custom(factory: any, receivedOptions: any) {
+        calls += 1;
+        options = receivedOptions;
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        component.handleInput("\t");
+        component.handleInput("\t");
+        component.handleInput("\x1b[27u");
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(options.overlay, true);
+  assert.equal(options.overlayOptions.anchor, "center");
+});
+
+test("completed attached sessions resume through AgentManager.startRun inside the overlay", async () => {
+  const session = fakeAgent({ id: "s1", retention: "persistent", capabilities: { canResume: true }, config: { resumable: true } });
+  const attached: any[] = [];
+  const runs: any[] = [];
+  const manager = {
+    listSessions: () => [session],
+    listAttachedSessions: () => attached,
+    attachToSession() { attached.push(session); return session; },
+    onAgentUpdate: () => () => {},
+    configure() {},
+    startRun(_ctx: any, _signal: any, tasks: any[]) {
+      runs.push(tasks[0]);
+      return {
+        sessions: [],
+        resultsPromise: Promise.resolve([fakeAgent({
+          id: "s1",
+          retention: "persistent",
+          config: { resumable: true },
+          prompt: tasks[0].prompt,
+          status: { kind: "completed", response: "resumed", resumed: true },
+        })]),
+      };
+    },
+  };
+  const commands = registerCommand({
+    agentManager: manager,
+    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
+  });
+  await commands.get("subagents").handler("sessions", {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: {
+      notify() {},
+      setWidget() {},
+      custom(factory: any) {
+        const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
+        component.handleInput("a");
+        component.handleInput("\r");
+        for (const character of "Follow up") component.handleInput(character);
+        component.handleInput("\r");
+        return Promise.resolve(undefined);
+      },
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(runs, [{ kind: "resume", sessionId: "s1", prompt: "Follow up" }]);
+});
+
 test("/subagents command exposes argument completions for direct views", () => {
   const commands = registerCommand({
     agentManager: { listSessions: () => [] },
@@ -391,7 +474,7 @@ test("/subagents settings accepts j/k navigation like the other subagents views"
   assert.equal(last.widgetLayout, "columns");
 });
 
-test("/subagents sessions view can open settings", async () => {
+test("/subagents switches from Sessions to Settings inside one overlay", async () => {
   const session = fakeAgent({ status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
   const saved: any[] = [];
   const commands = registerCommand({
@@ -404,7 +487,7 @@ test("/subagents sessions view can open settings", async () => {
   });
 
   let customCalls = 0;
-  let sessionsText = "";
+  let settingsText = "";
   await commands.get("subagents").handler("", {
     cwd: process.cwd(),
     hasUI: true,
@@ -414,20 +497,19 @@ test("/subagents sessions view can open settings", async () => {
       custom(factory: any) {
         customCalls += 1;
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
-        if (customCalls === 1) {
-          sessionsText = component.render(120).join("\n");
-          component.handleInput("s");
-          return Promise.resolve({ action: "settings" });
-        }
+        component.handleInput("\t");
+        component.handleInput("\t");
+        component.handleInput("\t");
+        settingsText = component.render(120).join("\n");
         component.handleInput("\r");
         return Promise.resolve(undefined);
       },
     },
   });
 
-  assert.match(sessionsText, /Subagent Sessions/);
-  assert.match(sessionsText, /s settings/);
-  assert.equal(customCalls, 2);
+  assert.match(settingsText, /\[ Settings \]/);
+  assert.match(settingsText, /Widget placement/);
+  assert.equal(customCalls, 1);
   assert.equal(saved.at(-1).widgetPlacement, "aboveEditor");
 });
 
@@ -456,24 +538,19 @@ test("/subagents can switch between sessions and agents views", async () => {
         customCalls += 1;
         const component = factory({ requestRender() {} }, passthroughTheme, {}, () => {});
         renders.push(component.render(120).join("\n"));
-        if (customCalls === 1) {
-          component.handleInput("\t");
-          return Promise.resolve({ action: "agents" });
-        }
-        if (customCalls === 2) {
-          component.handleInput("\t");
-          return Promise.resolve({ action: "sessions" });
-        }
+        component.handleInput("\t");
+        renders.push(component.render(120).join("\n"));
+        component.handleInput("\t");
+        renders.push(component.render(120).join("\n"));
         return Promise.resolve(undefined);
       },
     },
   });
 
-  assert.match(renders[0], /Subagent Sessions/);
-  assert.match(renders[0], /tab agents/);
-  assert.match(renders[1], /Subagent Agents/);
-  assert.match(renders[1], /tab sessions/);
-  assert.match(renders[2], /Subagent Sessions/);
+  assert.match(renders[0], /\[ Sessions \]/);
+  assert.match(renders[1], /\[ Agents \]/);
+  assert.match(renders[2], /\[ Attached \]/);
+  assert.equal(customCalls, 1);
   assert.deepEqual(reloadCalls, ["/repo"]);
 });
 
@@ -524,13 +601,13 @@ test("subagents command opens agents browser by default when sessions are empty"
   });
 
   assert.deepEqual(reloadCalls, ["/repo"]);
-  assert.match(listText, /Subagent Agents/);
+  assert.match(listText, /\[ Agents \]/);
   assert.match(listText, /helper/);
   assert.match(listText, /Helps with implementation/);
   assert.match(listText, /project/);
   assert.match(listText, /resumable/);
   assert.match(listText, /reviewer/);
-  assert.match(listText, /settings/);
+  assert.match(listText, /Settings/);
   assert.match(listText, /close/);
   assert.doesNotMatch(listText, /launch|start/i);
   assert.match(inspectText, /Agent Definition/);
@@ -631,17 +708,6 @@ test("/subagents sessions command keeps notifications metadata-only and uses con
     settingsStore,
   });
 
-  const notifications: any[] = [];
-  await commands.get("subagents").handler("", {
-    cwd: process.cwd(),
-    hasUI: true,
-    ui: { notify: (...args: any[]) => notifications.push(args) },
-  });
-
-  assert.match(notifications.at(-1)[0], /✗ helper/);
-  assert.match(notifications.at(-1)[0], /session:s1/);
-  assert.doesNotMatch(notifications.at(-1)[0], /0123456789|abcdefghijklmnopqrstuvwxyz/);
-
   let inspectText = "";
   await commands.get("subagents").handler("", {
     cwd: process.cwd(),
@@ -714,15 +780,15 @@ test("subagents command opens a sessions view from serialized DTOs", async () =>
   });
 
   const text = rendered.join("\n");
-  assert.match(text, /Subagent Sessions/);
+  assert.match(text, /\[ Sessions \]/);
   assert.match(text, /helper/);
   assert.match(text, /completed/);
   assert.match(text, /resumable/);
-  assert.match(text, /session:s1/);
+  assert.match(text, /Session s1/);
   assert.doesNotMatch(text, /"config"/);
 });
 
-test("/subagents resume reports an editor failure (missing or throwing) without invoking the runner", async () => {
+test("/subagents does not invoke the legacy external-editor resume flow", async () => {
   const cases: Array<{ label: string; editor?: () => never; matchNotification: RegExp }> = [
     { label: "missing", matchNotification: /Resume UI is unavailable/ },
     { label: "throws", editor: () => { throw new Error("editor unavailable"); }, matchNotification: /editor unavailable/ },
@@ -756,11 +822,11 @@ test("/subagents resume reports an editor failure (missing or throwing) without 
     }), `${label}: handler rejected`);
 
     assert.equal(runCalls, 0, `${label}: runner was invoked`);
-    assert.match(notifications.at(-1)[0], matchNotification, `${label}: notification did not match`);
+    assert.deepEqual(notifications, [], `${label}: legacy editor flow should not run`);
   }
 });
 
-test("subagents command resumes completed retained session with editor loader and visible concise message", async () => {
+test("pressing the legacy resume key does not open a second dialog", async () => {
   const resumeCalls: any[] = [];
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
@@ -816,20 +882,13 @@ test("subagents command resumes completed retained session with editor loader an
     },
   });
 
-  assert.equal(customCalls, 2);
-  assert.equal(editorCalls[0].title, "Resume subagent helper");
-  assert.deepEqual(resumeCalls.map(call => [call.sessionId, call.prompt]), [["s1", "follow\nup"]]);
-  assert.ok(resumeCalls[0].signal instanceof AbortSignal);
-  assert.equal(sentMessages.length, 1);
-  assert.notEqual(sentMessages[0].options?.deliverAs, "nextTurn");
-  assert.equal(sentMessages[0].message.customType, "subagent-resume");
-  assert.equal(sentMessages[0].message.display, true);
-  assert.match(sentMessages[0].message.content, /Subagent resume completed/);
-  assert.equal(sentMessages[0].message.content.includes("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"), false);
-  assert.equal(sentMessages[0].message.details.result.output.startsWith("Result z"), true);
+  assert.equal(customCalls, 1);
+  assert.deepEqual(editorCalls, []);
+  assert.deepEqual(resumeCalls, []);
+  assert.deepEqual(sentMessages, []);
 });
 
-test("subagents command resume cancellation aborts the child and reports interruption", async () => {
+test("closing the overlay does not start or cancel a legacy resume loader", async () => {
   const fakeManager = {
     listSessions(): any[] { return this.sessions; },
     sessions: [fakeAgent({ retention: "persistent", capabilities: { canResume: true, canRemove: true, canClear: true }, config: { resumable: true } })],
@@ -873,19 +932,16 @@ test("subagents command resume cancellation aborts the child and reports interru
         customCalls += 1;
         return new Promise<any>(resolve => {
           const component = factory({ requestRender() {} }, passthroughTheme, {}, resolve);
-          if (customCalls === 1) component.handleInput("r");
-          if (customCalls === 2) component.handleInput("\x1b[27u");
+          component.handleInput("r");
+          component.handleInput("\x1b[27u");
         });
       },
     },
   });
 
-  assert.equal(customCalls, 2);
-  assert.equal(sentMessages.length, 1);
-  assert.match(sentMessages[0].content, /Subagent resume interrupted/);
-  assert.match(sentMessages[0].content, /error: Agent interrupted/);
-  assert.equal(sentMessages[0].details.status, "interrupted");
-  assert.match(notifications.at(-1)[0], /resume interrupted/);
+  assert.equal(customCalls, 1);
+  assert.deepEqual(sentMessages, []);
+  assert.deepEqual(notifications, []);
 });
 
 test("subagents command inspect view removes a completed non-resumable background result", async () => {

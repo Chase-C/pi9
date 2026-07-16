@@ -4,6 +4,16 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Added
+
+- Add process-local session attachments that pin child conversations for live steering and later resume, including originally non-resumable agents.
+- Add filterable flat/tree session projections, with running descendants nested under their parents and retained terminal sessions kept at the root.
+
+### Changed
+
+- Replace the separate `/subagents` dialogs with one balanced master-detail overlay for Sessions, Agents, Attached, and Settings.
+- Move steering and tracked resume into the Attached page's unified inline composer.
+
 ## [0.5.1] - 2026-07-16
 
 ### Changed

@@ -197,6 +197,259 @@ test("AgentManager does not expose skipped resumable tasks as sessions", async (
   assert.deepEqual(manager.listSessions(), []);
 });
 
+test("attaching to a transient running session pins it for retention", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    await gate;
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { background: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+
+  assert.equal(manager.listSessions()[0].retention, "transient");
+  assert.equal(manager.attachToSession(sessionId).id, sessionId);
+  assert.equal(manager.listSessions()[0].retention, "persistent");
+  assert.equal(manager.listSessions()[0].config.resumable, true);
+
+  release();
+  await batch.resultsPromise;
+});
+
+test("an attached non-resumable session remains cataloged and resumable after completion", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    await gate;
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { background: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+  manager.attachToSession(sessionId);
+
+  release();
+  await batch.resultsPromise;
+
+  assert.equal(manager.listSessions()[0].id, sessionId);
+  assert.equal(manager.listSessions()[0].capabilities.canResume, true);
+  assert.deepEqual(manager.listAttachedSessions().map(session => session.id), [sessionId]);
+});
+
+test("an attached originally non-resumable session can run a tracked resume", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    await gate;
+    return completedRun(agent, "done");
+  };
+  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
+    agent.attach(agent.retainedSession()!);
+    return completedRun(agent, `resumed:${attempt.prompt}`);
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { background: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+  manager.attachToSession(sessionId);
+  release();
+  await batch.resultsPromise;
+
+  const [resumed] = await run(manager, baseCtx(), undefined, [
+    { kind: "resume", sessionId, prompt: "follow up" },
+  ]);
+
+  assert.equal(resumed.status, "completed");
+  assert.equal(resumed.output, "resumed:follow up");
+});
+
+test("detaching a terminal attachment-only session removes its retention pin and prunes it", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    await gate;
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { background: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+  manager.attachToSession(sessionId);
+  release();
+  await batch.resultsPromise;
+
+  assert.equal(manager.detachFromSession(sessionId), true);
+  assert.deepEqual(manager.listAttachedSessions(), []);
+  assert.deepEqual(manager.listSessions(), []);
+});
+
+test("detaching does not release a session retained by its original resumable policy", async () => {
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const [result] = await run(manager, baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "work" },
+  ]);
+  manager.attachToSession(result.sessionId!);
+
+  manager.detachFromSession(result.sessionId!);
+
+  assert.deepEqual(manager.listAttachedSessions(), []);
+  assert.equal(manager.listSessions()[0].id, result.sessionId);
+  assert.equal(manager.listSessions()[0].capabilities.canResume, true);
+});
+
+test("steering an attached running session delegates to its real AgentSession", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const steered: string[] = [];
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach({
+      ...makeSession(),
+      async steer(text: string) { steered.push(text); },
+    });
+    await gate;
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { background: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+  manager.attachToSession(sessionId);
+
+  await manager.steerSession(sessionId, "Focus on the parser");
+
+  assert.deepEqual(steered, ["Focus on the parser"]);
+  release();
+  await batch.resultsPromise;
+});
+
+test("attached session details project conversation messages without exposing AgentSession", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach({
+      ...makeSession(),
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Inspect the parser" }] },
+        { role: "assistant", content: [{ type: "text", text: "I found the issue." }, { type: "toolCall", name: "read", arguments: { path: "parser.ts" } }] },
+        { role: "toolResult", toolName: "read", content: [{ type: "text", text: "source" }], isError: false },
+      ],
+    });
+    await gate;
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { background: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+  manager.attachToSession(sessionId);
+
+  const detail = manager.attachedSessionDetail(sessionId);
+
+  assert.equal(detail.session.id, sessionId);
+  assert.deepEqual(detail.messages.map(message => [message.role, message.text, message.toolName]), [
+    ["user", "Inspect the parser", undefined],
+    ["assistant", "I found the issue.", undefined],
+    ["tool", "read {\"path\":\"parser.ts\"}", "read"],
+    ["toolResult", "source", "read"],
+  ]);
+  assert.equal("steer" in (detail as any), false);
+  release();
+  await batch.resultsPromise;
+});
+
+test("stopping an attached running session aborts it without detaching it", async () => {
+  let abortCalls = 0;
+  const runner = async (_ctx: any, agent: any) => {
+    let release!: () => void;
+    const stopped = new Promise<void>(resolve => { release = resolve; });
+    agent.attach({
+      ...makeSession(),
+      abort() { abortCalls += 1; release(); },
+    });
+    await stopped;
+    return interruptedRun(agent, "stopped");
+  };
+  const registry = {
+    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const batch = manager.startRun(baseCtx(), undefined, [
+    { kind: "spawn", agent: "oneshot", prompt: "work" },
+  ], undefined, { background: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sessionId = manager.listSessions()[0].id;
+  manager.attachToSession(sessionId);
+
+  await manager.stopSession(sessionId);
+  await batch.resultsPromise;
+
+  assert.equal(abortCalls, 1);
+  assert.deepEqual(manager.listAttachedSessions().map(session => session.id), [sessionId]);
+});
+
+test("removing a session clears its explicit attachment", async () => {
+  const runner = async (_ctx: any, agent: any) => {
+    agent.attach(makeSession());
+    return completedRun(agent, "done");
+  };
+  const registry = {
+    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
+  };
+  const manager = makeManager(registry as any, 1, runner);
+  const [result] = await run(manager, baseCtx(), undefined, [
+    { kind: "spawn", agent: "chatty", prompt: "work" },
+  ]);
+  manager.attachToSession(result.sessionId!);
+
+  await manager.remove({ sessionIds: [result.sessionId!] });
+
+  assert.deepEqual(manager.listAttachedSessions(), []);
+});
+
 test("AgentManager does not expose or resume non-resumable completed sessions", async () => {
   const runner = async (_ctx: any, agent: any) => {
     agent.attach(makeSession());

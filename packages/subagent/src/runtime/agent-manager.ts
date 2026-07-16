@@ -25,6 +25,19 @@ export interface StartRunOptions {
   parentId?: string;
 }
 
+export interface AttachedSessionMessage {
+  readonly role: "user" | "assistant" | "tool" | "toolResult";
+  readonly text: string;
+  readonly toolName?: string;
+  readonly isError?: boolean;
+}
+
+export interface AttachedSessionDetail {
+  readonly session: AgentSnapshot;
+  readonly messages: readonly AttachedSessionMessage[];
+  readonly pending: { readonly steering: readonly string[]; readonly followUp: readonly string[] };
+}
+
 export interface RunHandle {
   /** Root sessions in input order, captured at handle creation. */
   readonly sessions: AgentSnapshot[];
@@ -41,6 +54,7 @@ export class AgentManager {
   private readonly _groups = new Map<string, RunGroup>();
   private readonly _removingSessionIds = new Set<string>();
   private readonly _acknowledgedResultIds = new Set<string>();
+  private readonly _attachedSessionIds: string[] = [];
   private readonly _descendantsByAncestor = new Map<string, Map<string, AgentSnapshot>>();
   /** In-flight cancellation fanouts keyed by the finalized parent's session id. */
   private readonly _pendingFinalize = new Map<string, Promise<void>>();
@@ -65,6 +79,74 @@ export class AgentManager {
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
+  }
+
+  attachToSession(sessionId: string): AgentSnapshot {
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) throw new Error(lookup.error);
+    if (!this._attachedSessionIds.includes(sessionId)) this._attachedSessionIds.push(sessionId);
+    lookup.agent.pinForAttachment();
+    return lookup.agent.snapshot();
+  }
+
+  listAttachedSessions(): AgentSnapshot[] {
+    return this._attachedSessionIds.flatMap(id => {
+      const lookup = this._resolveSession(id);
+      return "agent" in lookup ? [lookup.agent.snapshot()] : [];
+    });
+  }
+
+  detachFromSession(sessionId: string): boolean {
+    const index = this._attachedSessionIds.indexOf(sessionId);
+    if (index === -1) return false;
+    this._attachedSessionIds.splice(index, 1);
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) return true;
+    lookup.agent.unpinAttachment();
+    if (!lookup.agent.catalogRetention.shouldRemainCataloged) {
+      this._agents = this._agents.filter(agent => agent.id !== sessionId);
+      this._acknowledgedResultIds.delete(sessionId);
+      this._descendantsByAncestor.delete(sessionId);
+      for (const descendants of this._descendantsByAncestor.values()) descendants.delete(sessionId);
+    }
+    return true;
+  }
+
+  attachedSessionDetail(sessionId: string): AttachedSessionDetail {
+    if (!this._attachedSessionIds.includes(sessionId)) {
+      throw new Error(`Subagent session ${sessionId} is not attached.`);
+    }
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) throw new Error(lookup.error);
+    const runtime = lookup.agent.retainedSession();
+    return {
+      session: lookup.agent.snapshot(),
+      messages: projectAttachedMessages(runtime?.messages ?? []),
+      pending: {
+        steering: runtime?.getSteeringMessages?.() ?? [],
+        followUp: runtime?.getFollowUpMessages?.() ?? [],
+      },
+    };
+  }
+
+  async stopSession(sessionId: string): Promise<void> {
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) throw new Error(lookup.error);
+    await lookup.agent.abort("Stopped by user.");
+  }
+
+  async steerSession(sessionId: string, text: string): Promise<void> {
+    if (!this._attachedSessionIds.includes(sessionId)) {
+      throw new Error(`Subagent session ${sessionId} is not attached.`);
+    }
+    const lookup = this._resolveSession(sessionId);
+    if ("error" in lookup) throw new Error(lookup.error);
+    if (lookup.agent.status.kind !== "running") {
+      throw new Error(`Cannot steer subagent session ${sessionId} while it is not running.`);
+    }
+    const session = lookup.agent.retainedSession();
+    if (!session) throw new Error(`Subagent session ${sessionId} has not started.`);
+    await session.steer(text);
   }
 
   configure(options: { maxRunning?: number }) {
@@ -145,6 +227,8 @@ export class AgentManager {
       for (const id of removedIds) {
         this._acknowledgedResultIds.delete(id);
         this._descendantsByAncestor.delete(id);
+        const attachedIndex = this._attachedSessionIds.indexOf(id);
+        if (attachedIndex !== -1) this._attachedSessionIds.splice(attachedIndex, 1);
       }
       for (const descendants of this._descendantsByAncestor.values()) {
         for (const id of removedIds) descendants.delete(id);
@@ -320,5 +404,61 @@ export class AgentManager {
         fanoutEnd({});
       });
     this._pendingFinalize.set(agent.id, promise);
+  }
+}
+
+function projectAttachedMessages(messages: readonly unknown[]): AttachedSessionMessage[] {
+  const projected: AttachedSessionMessage[] = [];
+  for (const value of messages) {
+    if (!value || typeof value !== "object") continue;
+    const message = value as Record<string, unknown>;
+    const role = message.role;
+    const content = Array.isArray(message.content) ? message.content : [];
+    if (role === "user" || role === "assistant") {
+      const text = content
+        .filter(part => part && typeof part === "object" && (part as Record<string, unknown>).type === "text")
+        .map(part => String((part as Record<string, unknown>).text ?? ""))
+        .filter(Boolean)
+        .join("\n");
+      if (text) projected.push({ role, text });
+      if (role === "assistant") {
+        for (const part of content) {
+          if (!part || typeof part !== "object") continue;
+          const block = part as Record<string, unknown>;
+          if (block.type !== "toolCall" || typeof block.name !== "string") continue;
+          const argumentsText = summarizeToolArguments(block.arguments);
+          projected.push({
+            role: "tool",
+            text: argumentsText ? `${block.name} ${argumentsText}` : block.name,
+            toolName: block.name,
+          });
+        }
+      }
+    } else if (role === "toolResult") {
+      const text = content
+        .filter(part => part && typeof part === "object" && (part as Record<string, unknown>).type === "text")
+        .map(part => String((part as Record<string, unknown>).text ?? ""))
+        .filter(Boolean)
+        .join("\n");
+      const toolName = typeof message.toolName === "string" ? message.toolName : undefined;
+      projected.push({
+        role: "toolResult",
+        text: text || toolName || "Tool result",
+        ...(toolName ? { toolName } : {}),
+        ...(typeof message.isError === "boolean" ? { isError: message.isError } : {}),
+      });
+    }
+  }
+  return projected;
+}
+
+function summarizeToolArguments(value: unknown): string {
+  if (value === undefined) return "";
+  try {
+    const text = JSON.stringify(value);
+    if (!text) return "";
+    return text.length > 160 ? `${text.slice(0, 159)}…` : text;
+  } catch {
+    return "";
   }
 }
