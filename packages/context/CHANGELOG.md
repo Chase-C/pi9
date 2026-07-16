@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-16
+
 ### Changed
 
 - Make the usage graph responsive to the available rows and columns, with a dynamic per-block token scale and at least one block for every non-zero category.
@@ -38,5 +40,6 @@
 - Simplify tool detail lines and remove the report capture-age line.
 - Align development dependencies with Pi 0.80 and remove the unused `typebox` peer.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/context-v0.1.0...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/context-v0.2.0...HEAD
+[0.2.0]: https://github.com/Chase-C/pi9/compare/context-v0.1.0...context-v0.2.0
 [0.1.0]: https://github.com/Chase-C/pi9/releases/tag/context-v0.1.0
