@@ -111,50 +111,22 @@ test("subagent action=remove keeps isError false when manager.remove reports per
   assert.deepEqual(result.details.summary.errors, [{ sessionId: "unknown", error: "Unknown subagent session: unknown" }]);
 });
 
-test("subagent action=remove rejects a bare call with no sessionIds or scope", async () => {
-  const tool = registerExtension({
-    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
-    agentManager: { sessions: [], listSessions() { return this.sessions; } },
-  });
-
-  const result = await tool.execute("tool-call", { action: "remove" }, undefined, undefined, baseCtx());
-
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /remove requires either sessionIds or scope\./);
-});
-
-test("subagent action=remove rejects a call that supplies both sessionIds and scope", async () => {
-  const tool = registerExtension({
-    agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
-    agentManager: { sessions: [], listSessions() { return this.sessions; } },
-  });
-
-  const result = await tool.execute("tool-call", {
-    action: "remove",
-    sessionIds: ["s1"],
-    scope: "retained",
-  }, undefined, undefined, baseCtx());
-
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /exactly one of sessionIds or scope/);
-});
-
-test("subagent action=remove rejects an invalid scope without calling manager.remove", async () => {
+test("subagent action=remove requires explicit sessionIds", async () => {
   let removeCalls = 0;
   const tool = registerExtension({
     agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
     agentManager: { sessions: [], listSessions() { return this.sessions; }, async remove() { removeCalls += 1; throw new Error("should not remove"); } },
   });
 
-  const result = await tool.execute("tool-call", { action: "remove", scope: "retianed" }, undefined, undefined, baseCtx());
+  const result = await tool.execute("tool-call", { action: "remove" }, undefined, undefined, baseCtx());
 
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /scope must be "background", "retained", or "non-running"/);
+  assert.match(result.content[0].text, /remove requires sessionIds\./);
   assert.equal(removeCalls, 0);
 });
 
 test("subagent action=remove rejects malformed or empty sessionIds without calling manager.remove", async () => {
-  for (const sessionIds of ["s1", ["s1", 42], []] as const) {
+  for (const sessionIds of ["s1", ["s1", 42], [], ["   "]] as const) {
     let removeCalls = 0;
     const tool = registerExtension({
       agentRegistry: { agents: new Map(), async reload() {}, summarizeAgent() { return ""; } },
@@ -164,7 +136,7 @@ test("subagent action=remove rejects malformed or empty sessionIds without calli
     const result = await tool.execute("tool-call", { action: "remove", sessionIds }, undefined, undefined, baseCtx());
 
     assert.equal(result.isError, true, `sessionIds=${JSON.stringify(sessionIds)}: expected error`);
-    assert.match(result.content[0].text, /sessionIds must be an array of strings|requires at least one sessionId/);
+    assert.match(result.content[0].text, /sessionIds must be an array of strings|sessionIds must be an array of non-empty strings|requires at least one sessionId/);
     assert.equal(removeCalls, 0);
   }
 });

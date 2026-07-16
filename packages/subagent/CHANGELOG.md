@@ -6,8 +6,20 @@ This changelog starts with version `v0.2.1`.
 
 ### Breaking
 
-- Separate the subagent actions: `agents` discovers definitions, `list` returns a lightweight status-filterable runtime inventory without elapsed/tool/token data, `run` starts or resumes, `results` retrieves full untruncated output/error by handle without blocking pending sessions, and `remove` aborts or discards. `list` now shares the icon-bearing agent rows used by `results`. Background `run` results collapse to a count and expand to agent, task label, and handle rows. This is a clean break with no legacy `list` fields or compatibility aliases.
-- Change public session IDs from UUIDs to adjective-noun handles such as `quiet-otter`. Handles are unique within the current subagent runtime and must be passed unchanged to resume, results, and remove; existing UUID IDs are not migrated or supported.
+- Replace UUID session IDs with process-local adjective-noun handles such as `quiet-otter`; existing UUIDs cannot be resumed, queried, or removed.
+- Limit `list` entries to session identity, normalized status, dispatch mode, and resume/remove capabilities; use `results` for full output and errors.
+- Require every new-session task to include a non-empty `label`; labels remain optional when resuming a session.
+- Remove scope-based cleanup; `remove` now requires explicit `sessionIds` for every session to abort or discard.
+
+### Changed
+
+- Render `list` as concise status-and-identity rows, with session metadata shown when expanded.
+- Collapse background `run` results to a started count, with agent names, labels, and session handles shown when expanded.
+- Clarify tool metadata and schema descriptions for agent discovery, context isolation, concurrent tasks, background dispatch, result retrieval, and cleanup.
+
+### Documentation
+
+- Update the README introduction, examples, and tool reference for readable handles, required labels, lightweight inventory, and explicit cleanup.
 
 ## [0.4.0] - 2026-07-15
 

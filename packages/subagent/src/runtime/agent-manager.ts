@@ -122,11 +122,9 @@ export class AgentManager {
   }
 
   async remove(
-    args: { sessionIds: string[] } | { scope: "background" | "retained" | "non-running" },
+    args: { sessionIds: string[] },
   ): Promise<{ removed: number; aborted: number; sessionIds: string[]; errors: Array<{ sessionId: string; error: string }> }> {
-    const targets = ("sessionIds" in args)
-      ? args.sessionIds.map(id => this._resolveSession(id))
-      : this._matchScope(args.scope).map(agent => ({ agent }));
+    const targets = args.sessionIds.map(id => this._resolveSession(id));
 
     const agents = targets.filter(t => "agent" in t).map(({ agent }) => agent);
     const errors = targets.filter(t => "error" in t);
@@ -234,16 +232,6 @@ export class AgentManager {
     const agent = this._agents.find(a => a.id === id && !this._removingSessionIds.has(a.id));
     if (agent) return { agent };
     return { sessionId: id, error: `Unknown subagent session: ${id}` };
-  }
-
-  private _matchScope(scope: "background" | "retained" | "non-running"): Agent[] {
-    const available = this._agents.filter(agent => !this._removingSessionIds.has(agent.id));
-    if (scope === "background") return available.filter(a => a.background);
-    if (scope === "retained") {
-      return available.filter(a => !a.background && a.status.kind !== "running" && a.catalogRetention.retention === "persistent");
-    }
-    if (scope === "non-running") return available.filter(a => a.status.kind !== "running");
-    throw new Error(`Unknown remove scope: ${String(scope)}`);
   }
 
   /**

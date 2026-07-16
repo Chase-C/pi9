@@ -34,7 +34,7 @@ function matrixAgent(status: "queued" | "running" | "completed" | "error", backg
   return agent;
 }
 
-test("catalog retention matrix preserves list, cleanup eligibility, and retained removal", async () => {
+test("catalog retention matrix preserves inventory and post-run cleanup behavior", async () => {
   const statuses = ["queued", "running", "completed", "error"] as const;
   const dispatches = [false, true] as const;
   const states = ["enabled", "disabled", "retained"] as const;
@@ -44,8 +44,8 @@ test("catalog retention matrix preserves list, cleanup eligibility, and retained
       for (const state of states) {
         const agent = matrixAgent(status, background, state, `${status}-${background}-${state}`);
         const manager = makeManager({ agents: new Map() } as any);
-        // This injects a prepared lifecycle row so all matrix arms can use the manager's public
-        // inventory and scope operations without adding a second production construction path.
+        // Inject a prepared lifecycle row so all matrix arms can exercise public inventory
+        // without adding a second production construction path.
         (manager as any)._agents = [agent];
 
         const active = status === "queued" || status === "running";
@@ -54,11 +54,6 @@ test("catalog retention matrix preserves list, cleanup eligibility, and retained
         assert.equal(agent.catalogRetention.shouldRemainCataloged, expectedListed, `${status}/${background}/${state}`);
         assert.equal(agent.snapshot().retention, persistent ? "persistent" : "transient", `${status}/${background}/${state} retention`);
         assert.equal(manager.listSessions().length, expectedListed ? 1 : 0, `${status}/${background}/${state} list`);
-
-        const expectedRetainedRemoval = !background && status !== "running" && persistent;
-        const removed = await manager.remove({ scope: "retained" });
-        assert.equal(removed.removed, expectedRetainedRemoval ? 1 : 0, `${status}/${background}/${state} remove`);
-        assert.equal(manager.listSessions().length, expectedListed && !expectedRetainedRemoval ? 1 : 0, `${status}/${background}/${state} after remove`);
 
         if (!active) {
           // Exercise the real post-run cleanup path for every terminal matrix arm as well as the
@@ -83,8 +78,6 @@ test("catalog retention matrix preserves list, cleanup eligibility, and retained
           );
           await cleanupBatch.resultsPromise;
           assert.equal(cleanupManager.listSessions().length, expectedListed ? 1 : 0, `${status}/${background}/${state} cleanup`);
-          const cleanupRemoved = await cleanupManager.remove({ scope: "retained" });
-          assert.equal(cleanupRemoved.removed, expectedRetainedRemoval ? 1 : 0, `${status}/${background}/${state} cleanup remove`);
         }
       }
     }
@@ -202,7 +195,6 @@ test("AgentManager does not expose skipped resumable tasks as sessions", async (
   assert.equal(results[1].resumable, false);
   assert.equal(Object.prototype.hasOwnProperty.call(results[1], "sessionId"), false);
   assert.deepEqual(manager.listSessions(), []);
-  assert.deepEqual(await manager.remove({ scope: "non-running" }), { removed: 0, aborted: 0, sessionIds: [], errors: [] });
 });
 
 test("AgentManager does not expose or resume non-resumable completed sessions", async () => {
@@ -455,42 +447,6 @@ test("AgentManager.remove with an unknown sessionId returns the unknown-id error
   assert.match(result.errors![0].error, /Unknown.*session/i);
 });
 
-test("AgentManager.remove scope=non-running removes terminal and queued sessions but leaves running ones", async () => {
-  let unblockRunning: () => void;
-  const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
-  const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
-    if (attempt.prompt === "block") await runningGate;
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([
-      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
-      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
-    ]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-  await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "retain me" },
-  ]);
-  const pending = run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "block" },
-    { kind: "spawn", agent: "oneshot", prompt: "queued" },
-  ]);
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.deepEqual(manager.listSessions().map(s => s.status.kind).sort(), ["done", "queued", "running"]);
-
-  const result = await manager.remove({ scope: "non-running" });
-
-  assert.equal(result.removed, 2);
-  assert.equal(result.aborted, 0);
-  assert.equal(manager.listSessions().length, 1);
-  assert.equal(manager.listSessions()[0].status.kind, "running");
-
-  unblockRunning!();
-  await pending;
-});
-
 test("AgentManager.remove with a queued sessionId prevents the queued spawn from later invoking the runner", async () => {
   let unblockRunning: () => void;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
@@ -594,79 +550,6 @@ test("AgentManager.remove on a second pass of the same sessionId returns the unk
   assert.match(secondResult.errors![0].error, /Unknown.*session/i);
 });
 
-test("AgentManager.remove scope=retained removes retained resumable sessions and leaves running and queued alone", async () => {
-  let unblockRunning: () => void;
-  const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
-  const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
-    if (attempt.prompt === "block") await runningGate;
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([
-      ["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }],
-      ["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", resumable: false }],
-    ]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-
-  await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "remember me" },
-  ]);
-  assert.equal(manager.listSessions().length, 1);
-
-  const pending = run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "block" },
-    { kind: "spawn", agent: "oneshot", prompt: "queued" },
-  ]);
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.deepEqual(manager.listSessions().map(s => s.status.kind).sort(), ["done", "queued", "running"]);
-
-  const result = await manager.remove({ scope: "retained" });
-
-  assert.equal(result.removed, 1);
-  assert.equal(result.aborted, 0);
-  assert.equal(result.sessionIds.length, 1);
-  assert.deepEqual(manager.listSessions().map(s => s.status.kind).sort(), ["queued", "running"]);
-
-  unblockRunning!();
-  await pending;
-});
-
-test("AgentManager.remove scope=retained leaves resumable background sessions while removing foreground retained sessions", async () => {
-  const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.attach(makeSession());
-    return completedRun(agent, `done:${attempt.prompt}`);
-  };
-  const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
-  };
-  const manager = makeManager(registry as any, 2, runner);
-
-  const [foreground] = await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "foreground" },
-  ]);
-  const bgBatch = manager.startRun(
-    baseCtx(),
-    undefined,
-    [{ kind: "spawn", agent: "chatty", prompt: "background" }],
-    undefined,
-    { background: true },
-  );
-  const [background] = await bgBatch.resultsPromise;
-
-  assert.deepEqual(manager.listSessions().map(s => s.dispatch).sort(), ["background", "foreground"]);
-
-  const result = await manager.remove({ scope: "retained" });
-
-  assert.equal(result.removed, 1);
-  assert.deepEqual(result.sessionIds, [foreground.sessionId]);
-  const remaining = manager.listSessions();
-  assert.equal(remaining.length, 1);
-  assert.equal(remaining[0].id, background.id);
-  assert.equal(remaining[0].dispatch, "background");
-});
-
 test("AgentManager.remove with a running sessionId aborts the underlying session and removes it", async () => {
   let abortCalls = 0;
   const runner = async (_ctx: any, agent: any) => {
@@ -706,26 +589,6 @@ test("AgentManager.remove with a running sessionId aborts the underlying session
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("AgentManager.remove rejects an unknown internal scope without removing sessions", async () => {
-  const runner = async (_ctx: any, agent: any) => {
-    agent.attach(makeSession());
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", resumable: true }]]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-  await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "work" },
-  ]);
-
-  await assert.rejects(
-    () => manager.remove({ scope: "retianed" as any }),
-    /Unknown remove scope: retianed/,
-  );
-  assert.equal(manager.listSessions().length, 1);
-});
-
 test("AgentManager background non-resumable agents stay listed with terminal status after settlement", async () => {
   const runner = async (_ctx: any, agent: any) => {
     agent.attach(makeSession());
@@ -752,7 +615,7 @@ test("AgentManager background non-resumable agents stay listed with terminal sta
   assert.equal(listed[0].status.kind === "done" && listed[0].status.outcome, "completed");
 });
 
-test("AgentManager.remove scope=background aborts running background sessions", async () => {
+test("AgentManager.remove by sessionId aborts a running background session", async () => {
   let unblockRunning: (() => void) | undefined;
   const runningGate = new Promise<void>(resolve => { unblockRunning = resolve; });
   let abortCalls = 0;
@@ -780,9 +643,10 @@ test("AgentManager.remove scope=background aborts running background sessions", 
     { background: true },
   );
   await new Promise(resolve => setTimeout(resolve, 20));
+  const runningId = manager.listSessions()[0].id;
   assert.equal(manager.listSessions()[0].status.kind, "running");
 
-  const result = await manager.remove({ scope: "background" });
+  const result = await manager.remove({ sessionIds: [runningId] });
   await bgBatch.resultsPromise;
 
   assert.equal(result.removed, 1);

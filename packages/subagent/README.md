@@ -1,6 +1,6 @@
 # @pi9/subagent
 
-A Pi package that adds subagent delegation: a single `subagent` tool the main agent uses to spawn isolated child `AgentSession`s, watch their progress live, and pick up where they left off. Reach for it when work would crowd the parent conversation or benefits from an independent perspective — focused research, planning, review, bug investigation, test analysis, and implementation handoffs.
+Delegate focused work from Pi to context-isolated child sessions with a single `subagent` tool. Use it for research, planning, review, investigation, test analysis, and implementation without crowding the parent conversation.
 
 ![A subagent run with nested children rendering live progress, tool calls, and per-child counters](media/subagent-overview.png)
 
@@ -44,7 +44,7 @@ The agent translates that into a `subagent` tool call:
 ```ts
 subagent({
   action: "run",
-  tasks: [{ agent: "scout", prompt: "Find the auth entry points and summarize the relevant files." }]
+  tasks: [{ agent: "scout", label: "auth entry points", prompt: "Find the auth entry points and summarize the relevant files." }]
 })
 ```
 
@@ -99,7 +99,7 @@ subagent({
   action: "run",
   tasks: [
     { sessionId: "quiet-otter", prompt: "Use your earlier findings to propose the smallest implementation plan." },
-    { agent: "reviewer", prompt: "Independently review the new plan once it lands." }
+    { agent: "reviewer", label: "independent plan review", prompt: "Independently review the new plan once it lands." }
   ]
 })
 ```
@@ -114,7 +114,7 @@ By default (`background: false`), a run waits for every task and returns their r
 subagent({
   action: "run",
   background: true,
-  tasks: [{ agent: "scout", prompt: "Map auth code; respond when complete." }]
+  tasks: [{ agent: "scout", label: "auth map", prompt: "Map auth code; respond when complete." }]
 })
 ```
 
@@ -210,7 +210,7 @@ The tool takes one required `action`. Actions are deliberately separate; their p
 | `list` | Return a lightweight runtime inventory. An optional `status` filter selects normalized statuses. |
 | `run` | Start new sessions via `agent` and/or resume retained sessions via `sessionId`. `background: true` dispatches without blocking. |
 | `results` | Retrieve full, untruncated output or error by `sessionIds`; pending sessions are reported without blocking. |
-| `remove` | Abort running sessions and discard queued or retained session state by `sessionIds` or `scope`. |
+| `remove` | Abort running sessions and discard queued or retained session state by `sessionIds`. |
 
 ### List summaries
 
@@ -231,9 +231,9 @@ The canonical background flow is: `agents` (optional if known) → `run(backgrou
 
 `run(background: true)` returns session handles immediately. Its collapsed result shows only the started count; expand it to see each agent, task label, and handle. Use `list` only when a lightweight status check or status filter is useful; if handles are already known, call `results` directly. `results` remains nonblocking for pending sessions and returns their current status until they settle. `results.remove` remains an atomic terminal collect-and-clean convenience: it returns the requested entries and removes terminal sessions in the same operation, while pending sessions remain available. Use `remove` when sessions should be aborted or discarded without collecting their full result.
 
-Spawn tasks accept `label`, `model`, `thinking`, `cwd`, `skills`, and `resumable` overrides. Resume tasks accept only `label` and `resumable` overrides; `model`, `thinking`, `cwd`, and `skills` are fixed when the child session is created. Selected skills are resolved by name and their full instruction bodies are injected into the child system prompt; an unknown or unreadable skill fails the run before the child session starts. Agent discovery applies the configured default `defaultResumable` because a task can override it. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. A foreground `run` returns settled results directly; background handles and `results` entries include a session ID for retrieval or removal even when conversation context is not resumable.
+Spawn tasks require `label` and accept `model`, `thinking`, `cwd`, `skills`, and `resumable` overrides. Resume tasks accept optional `label` and `resumable` overrides; `model`, `thinking`, `cwd`, and `skills` are fixed when the child session is created. Selected skills are resolved by name and their full instruction bodies are injected into the child system prompt; an unknown or unreadable skill fails the run before the child session starts. Agent discovery applies the configured default `defaultResumable` because a task can override it. Sessions move through `queued → running → completed`, or end in `error`, `aborted`, `interrupted`, or `skipped`; only a `completed` resumable session (or a resume that failed before re-attaching) can be resumed. A foreground `run` returns settled results directly; background handles and `results` entries include a session ID for retrieval or removal even when conversation context is not resumable.
 
-Inventory advertises `canRemove` only for terminal sessions that remain cataloged; queued and running sessions report `false`. This is the safe interactive capability, not authorization: an explicit `remove` call can still remove a queued session or abort a running one. Removal scopes select: `background` for all background-dispatched sessions, `retained` for non-running resumable foreground sessions, and `non-running` for every queued or terminal session.
+Inventory advertises `canRemove` only for terminal sessions that remain cataloged; queued and running sessions report `false`. This is the safe interactive capability, not authorization: an explicit `remove` call can still remove a queued session or abort a running one.
 
 This action separation is a clean breaking change. There are no legacy `list` fields or compatibility aliases; callers must use the separated actions and current inventory fields.
 

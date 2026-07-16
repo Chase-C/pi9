@@ -4,7 +4,7 @@ import { Check } from "typebox/value";
 
 import { SubagentParams, TaskSchema, parseSubagentInvocation, parseTask } from "../src/schema.js";
 
-test("TaskSchema accepts an optional label string and rejects non-string values", () => {
+test("TaskSchema keeps label optional for the flat provider schema and rejects non-string values", () => {
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work" }), true);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", label: "researcher" }), true);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", label: 42 }), false);
@@ -23,15 +23,15 @@ test("TaskSchema accepts an optional skills string array and rejects non-string-
   assert.equal(Check(TaskSchema, { agent: "helper", skills: ["tdd", "review"], prompt: "do work" }), true);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", skills: "tdd" }), false);
   assert.equal(Check(TaskSchema, { agent: "helper", skills: [42], prompt: "do work" }), false);
-  assert.equal(Check(TaskSchema, { agent: "helper", skills: [""], prompt: "do work" }), false);
+  assert.equal(Check(TaskSchema, { agent: "helper", skills: [""], prompt: "do work" }), true);
 });
 
-test("TaskSchema rejects empty strings and unsupported thinking levels", () => {
-  assert.equal(Check(TaskSchema, { agent: "", prompt: "do work" }), false);
-  assert.equal(Check(TaskSchema, { sessionId: "", prompt: "follow up" }), false);
-  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "" }), false);
-  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", model: "" }), false);
-  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", cwd: "" }), false);
+test("TaskSchema leaves blank-string validation to runtime and constrains thinking levels", () => {
+  assert.equal(Check(TaskSchema, { agent: "", prompt: "do work" }), true);
+  assert.equal(Check(TaskSchema, { sessionId: "", prompt: "follow up" }), true);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "" }), true);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", model: "" }), true);
+  assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", cwd: "" }), true);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "extreme" }), false);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "xhigh" }), true);
   assert.equal(Check(TaskSchema, { agent: "helper", prompt: "do work", thinking: "max" }), true);
@@ -76,7 +76,7 @@ test("parseTask classifies spawn vs resume by which key is present and preserves
 });
 
 test("parseTask rejects a task that carries both agent and sessionId", () => {
-  const result = parseTask({ agent: "helper", sessionId: "s", prompt: "p" });
+  const result = parseTask({ agent: "helper", sessionId: "s", prompt: "p", label: "work" });
   assert.ok("error" in result);
   assert.match(result.error, /both agent and sessionId/);
 });
@@ -96,28 +96,56 @@ test("parseTask rejects a resume task that carries spawn-only fields", () => {
   }
 });
 
-test("parseTask rejects an empty prompt and unstructured tasks", () => {
-  const empty = parseTask({ agent: "helper", prompt: "   " });
-  assert.ok("error" in empty);
-  assert.match(empty.error, /non-empty/);
+test("parseTask rejects blank identifiers and prompts", () => {
+  for (const task of [
+    { agent: "   ", prompt: "work", label: "work" },
+    { sessionId: "   ", prompt: "follow up" },
+    { agent: "helper", prompt: "   ", label: "work" },
+  ]) {
+    const result = parseTask(task);
+    assert.ok("error" in result);
+    assert.match(result.error, /non-empty/);
+  }
 
   const noObj = parseTask(null);
   assert.ok("error" in noObj);
   assert.match(noObj.error, /must be an object/);
 });
 
+test("parseTask requires a non-empty label for spawns and accepts an omitted resume label", () => {
+  for (const label of [undefined, "", "   "]) {
+    const result = parseTask({ agent: "helper", prompt: "p", ...(label !== undefined ? { label } : {}) });
+    assert.ok("error" in result);
+    assert.match(result.error, /Spawn task label|Task label/);
+  }
+
+  assert.deepEqual(parseTask({ sessionId: "s", prompt: "follow up" }), {
+    kind: "resume",
+    sessionId: "s",
+    prompt: "follow up",
+  });
+});
+
+test("parseTask rejects blank spawn-only string overrides", () => {
+  for (const field of ["model", "cwd"] as const) {
+    const result = parseTask({ agent: "helper", prompt: "p", label: "work", [field]: "   " });
+    assert.ok("error" in result);
+    assert.match(result.error, new RegExp(`${field} must be a non-empty string`));
+  }
+});
+
 test("parseTask rejects skills entries that are not non-empty strings", () => {
-  const result = parseTask({ agent: "helper", skills: ["", "x"], prompt: "p" });
+  const result = parseTask({ agent: "helper", skills: ["", "x"], prompt: "p", label: "work" });
   assert.ok("error" in result);
   assert.match(result.error, /skills entries/);
 
-  const notArray = parseTask({ agent: "helper", prompt: "p", skills: "tdd" });
+  const notArray = parseTask({ agent: "helper", prompt: "p", label: "work", skills: "tdd" });
   assert.ok("error" in notArray);
   assert.match(notArray.error, /skills must be an array/);
 });
 
 test("parseTask rejects unsupported thinking levels", () => {
-  const result = parseTask({ agent: "helper", prompt: "p", thinking: "extreme" });
+  const result = parseTask({ agent: "helper", prompt: "p", label: "work", thinking: "extreme" });
   assert.ok("error" in result);
   assert.match(result.error, /thinking must be one of/);
 });
@@ -129,16 +157,16 @@ test("parseSubagentInvocation narrows every action arm without carrying extra fi
     { action: "list", status: ["running"] },
   );
   assert.deepEqual(
-    parseSubagentInvocation({ action: "run", tasks: [{ agent: "helper", prompt: "do work" }], extra: "ignored" }),
-    { action: "run", tasks: [{ kind: "spawn", agent: "helper", prompt: "do work" }] },
+    parseSubagentInvocation({ action: "run", tasks: [{ agent: "helper", prompt: "do work", label: "work" }], extra: "ignored" }),
+    { action: "run", tasks: [{ kind: "spawn", agent: "helper", prompt: "do work", label: "work" }] },
   );
   assert.deepEqual(
     parseSubagentInvocation({ action: "results", sessionIds: ["s1"], remove: true, extra: "ignored" }),
     { action: "results", sessionIds: ["s1"], remove: true },
   );
   assert.deepEqual(
-    parseSubagentInvocation({ action: "remove", scope: "retained", extra: "ignored" }),
-    { action: "remove", scope: "retained" },
+    parseSubagentInvocation({ action: "remove", sessionIds: ["s1"], extra: "ignored" }),
+    { action: "remove", sessionIds: ["s1"] },
   );
 });
 
@@ -173,9 +201,13 @@ test("parseSubagentInvocation centralizes action field validation", () => {
   assert.ok("error" in results);
   assert.match(results.error, /non-empty strings/);
 
-  const remove = parseSubagentInvocation({ action: "remove", sessionIds: ["s1"], scope: "retained" });
-  assert.ok("error" in remove);
-  assert.match(remove.error, /exactly one of sessionIds or scope/);
+  const removeMissing = parseSubagentInvocation({ action: "remove" });
+  assert.ok("error" in removeMissing);
+  assert.match(removeMissing.error, /requires sessionIds/);
+
+  const removeBlank = parseSubagentInvocation({ action: "remove", sessionIds: ["   "] });
+  assert.ok("error" in removeBlank);
+  assert.match(removeBlank.error, /non-empty strings/);
 });
 
 test("parseSubagentInvocation requires current boolean fields", () => {
@@ -195,54 +227,50 @@ test("SubagentParams accepts results action with sessionIds and optional remove 
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: false }), true);
 });
 
-test("SubagentParams rejects empty task and session ID arrays", () => {
+test("SubagentParams rejects empty arrays but leaves blank session IDs to runtime", () => {
   assert.equal(Check(SubagentParams, { action: "run", tasks: [] }), false);
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: [] }), false);
-  assert.equal(Check(SubagentParams, { action: "results", sessionIds: [""] }), false);
+  assert.equal(Check(SubagentParams, { action: "results", sessionIds: [""] }), true);
 });
 
 test("SubagentParams rejects results action when remove is not a boolean", () => {
   assert.equal(Check(SubagentParams, { action: "results", sessionIds: ["s1"], remove: "yes" }), false);
 });
 
-test("schema describes definitions, lightweight inventory, and full results", () => {
+test("schema describes labels, inventory filters, and result cleanup", () => {
   assert.equal(
-    (SubagentParams.properties.action as any).description,
-    "agents=definitions; list=lightweight inventory; run=spawn/resume; results=full output/error retrieval; remove=delete or abort.",
+    (TaskSchema.properties.label as any).description,
+    "Display label for distinguishing tasks; required for new session.",
   );
   assert.equal(
     (SubagentParams.properties.status as any).description,
-    "For list. Normalized session statuses to include in the lightweight inventory.",
+    "list only: statuses to include.",
   );
   assert.equal(
     (SubagentParams.properties.remove as any).description,
-    "For results. Remove terminal sessions after returning their full output/error.",
+    "results only: remove terminal sessions once returned; pending sessions remain.",
   );
 });
 
-test("schema distinguishes result retention from conversation resumability", () => {
+test("schema concisely distinguishes foreground waiting, background retrieval, and resumability", () => {
   assert.equal(
     (TaskSchema.properties.resumable as any).description,
-    "Override conversation follow-ups. true retains context; false releases it after this attempt (foreground sessions then leave inventory).",
+    "true keeps child context for follow-ups; false releases it after this attempt.",
   );
   assert.equal(
     (SubagentParams.properties.background as any).description,
-    "For run. false (default) waits for all tasks and returns results; true returns handles immediately. Background results remain retrievable until removed, regardless of resumable.",
+    "run only: true returns handles immediately; false (default) waits for results. Background results remain available until removed.",
   );
 });
 
-test("schema defines every remove scope", () => {
-  assert.equal(
-    (SubagentParams.properties.scope as any).description,
-    "For remove. background=all background sessions; retained=non-running resumable foreground sessions; non-running=all queued or terminal sessions. Mutually exclusive with sessionIds.",
-  );
+test("schema exposes explicit-ID removal without a scope field", () => {
+  assert.equal(Object.prototype.hasOwnProperty.call(SubagentParams.properties, "scope"), false);
+  assert.equal(Check(SubagentParams, { action: "remove", sessionIds: ["s1"] }), true);
 });
 
-test("SubagentParams constrains action, status, and scope values", () => {
+test("SubagentParams constrains action and status values", () => {
   assert.equal(Check(SubagentParams, { action: "bogus" }), false);
   assert.equal(Check(SubagentParams, { action: "list", status: ["running", "completed"] }), true);
   assert.equal(Check(SubagentParams, { action: "list", status: ["stale"] }), false);
-  assert.equal(Check(SubagentParams, { action: "remove", scope: "background" }), true);
-  assert.equal(Check(SubagentParams, { action: "remove", scope: "everything" }), false);
 });
 

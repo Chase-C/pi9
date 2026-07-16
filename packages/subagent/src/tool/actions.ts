@@ -96,9 +96,7 @@ export async function resultsAction(deps: ActionDeps, invocation: InvocationFor<
 }
 
 export async function removeAction(deps: ActionDeps, invocation: InvocationFor<"remove">, ctx?: ExtensionContext): Promise<ActionResult> {
-  const summary = "sessionIds" in invocation
-    ? await deps.agentManager.remove({ sessionIds: invocation.sessionIds })
-    : await deps.agentManager.remove({ scope: invocation.scope });
+  const summary = await deps.agentManager.remove({ sessionIds: invocation.sessionIds });
   if (ctx) updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
   return toolResult({ view: "remove-summary", summary });
 }

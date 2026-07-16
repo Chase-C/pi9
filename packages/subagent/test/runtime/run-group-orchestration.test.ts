@@ -219,7 +219,7 @@ test("orchestrator.startBatch background:true ignores parent signal abort and le
   assert.notEqual(seenSignals[0], controller.signal);
 });
 
-test("orchestrator.startBatch background:true promotes resumed sessions to background and remove scope=background selects them", async () => {
+test("orchestrator.startBatch background:true promotes resumed sessions and supports explicit-ID removal", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
     agent.attach(session);
@@ -258,7 +258,7 @@ test("orchestrator.startBatch background:true promotes resumed sessions to backg
   assert.equal(listed[0].id, seed.sessionId);
   assert.equal(listed[0].dispatch, "background");
 
-  const result = await manager.remove({ scope: "background" });
+  const result = await manager.remove({ sessionIds: [seed.sessionId!] });
   assert.equal(result.removed, 1);
   assert.deepEqual(result.sessionIds, [seed.sessionId]);
   assert.deepEqual(manager.listSessions(), []);

@@ -35,11 +35,11 @@ test("subagent tool action=list with status filter [completed, error] returns te
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
   nextRunner = (agent) => completedRun(agent, "ok");
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "good task" }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "good task", label: "good task" }] }, undefined, undefined, baseCtx());
   nextRunner = (agent) => errorRun(agent, "failed");
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "bad", prompt: "bad task" }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "bad", prompt: "bad task", label: "bad task" }] }, undefined, undefined, baseCtx());
   nextRunner = (agent) => interruptedRun(agent, "cancelled");
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "cut", prompt: "cut task" }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "cut", prompt: "cut task", label: "cut task" }] }, undefined, undefined, baseCtx());
 
   const result = await tool.execute("tool-call", { action: "list", status: ["completed", "error"] }, undefined, undefined, baseCtx());
 
@@ -63,7 +63,7 @@ test("subagent tool action=list with empty status filter returns no sessions dis
   const manager = new AgentManager(fakeRegistry as any, 1, runner);
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "go" }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "good", prompt: "go", label: "good task" }] }, undefined, undefined, baseCtx());
 
   const noFilter = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
   assert.equal(noFilter.details.sessions.length, 1);
@@ -107,7 +107,7 @@ test("subagent tool action=list with no filter returns retained sessions with no
   const manager = new AgentManager(fakeRegistry as any, 1, runner);
   const tool = registerExtension({ agentRegistry: fakeRegistry, agentManager: manager });
 
-  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "chatty", prompt: "Remember this work.", skills: ["requested-skill"] }] }, undefined, undefined, baseCtx());
+  await tool.execute("tool-call", { action: "run", tasks: [{ agent: "chatty", prompt: "Remember this work.", label: "remember work", skills: ["requested-skill"] }] }, undefined, undefined, baseCtx());
 
   const result = await tool.execute("tool-call", { action: "list" }, undefined, undefined, baseCtx());
 
@@ -131,12 +131,14 @@ test("subagent tool action=list with no filter returns retained sessions with no
   assert.equal(modelSession.agent, "chatty");
   assert.equal(modelSession.status, "completed");
   assert.equal(modelSession.dispatch, "foreground");
+  assert.equal(modelSession.label, "remember work");
   assert.equal("elapsedMs" in modelSession, false);
   assert.deepEqual(modelSession.capabilities, { canResume: true, canRemove: true });
   assert.deepEqual(Object.keys(modelSession).sort(), [
     "agent",
     "capabilities",
     "dispatch",
+    "label",
     "sessionId",
     "status",
   ]);

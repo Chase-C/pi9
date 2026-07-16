@@ -6,66 +6,37 @@ import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thin
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thinking-level.js";
 
 export const TaskSchema = Type.Object({
-  agent: Type.Optional(Type.String({
-    minLength: 1,
-    description: "Spawn: agent name; mutually exclusive with sessionId.",
-  })),
-  sessionId: Type.Optional(Type.String({
-    minLength: 1,
-    description: "Resume: retained session ID; mutually exclusive with agent.",
-  })),
-  prompt: Type.String({
-    minLength: 1,
-    description: "Self-contained task or follow-up: goal, relevant context/files, constraints, and expected output.",
-  }),
-  label: Type.Optional(Type.String({
-    description: "Display label for UI/logs.",
-  })),
-  resumable: Type.Optional(Type.Boolean({
-    description: "Override conversation follow-ups. true retains context; false releases it after this attempt (foreground sessions then leave inventory).",
-  })),
-  model: Type.Optional(Type.String({ minLength: 1, description: "Spawn-only model override." })),
-  thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS, { description: "Spawn-only thinking override." })),
-  cwd: Type.Optional(Type.String({ minLength: 1, description: "Spawn-only working directory." })),
-  skills: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
-    description: "Spawn-only skills; replaces defaults ([] disables).",
-  })),
+  agent: Type.Optional(Type.String({ description: "New session only: agent name." })),
+  sessionId: Type.Optional(Type.String({ description: "Resume only: retained session handle." })),
+  prompt: Type.String({ description: "Delegated task or follow-up; resumes retain prior child context." }),
+  label: Type.Optional(Type.String({ description: "Display label for distinguishing tasks; required for new session." })),
+  resumable: Type.Optional(Type.Boolean({ description: "true keeps child context for follow-ups; false releases it after this attempt." })),
+  model: Type.Optional(Type.String({ description: "New session model override." })),
+  thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS, { description: "New session thinking override." })),
+  cwd: Type.Optional(Type.String({ description: "New session working directory; relative paths use the parent cwd." })),
+  skills: Type.Optional(Type.Array(Type.String(), { description: "New session skills; replaces agent defaults ([] disables)." })),
 });
 
 export const SUBAGENT_ACTIONS = ["agents", "list", "run", "results", "remove"] as const;
 export const SESSION_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
-export const REMOVAL_SCOPES = ["background", "retained", "non-running"] as const;
 
 export const SubagentParams = Type.Object({
-  action: StringEnum(SUBAGENT_ACTIONS, {
-    description: "agents=definitions; list=lightweight inventory; run=spawn/resume; results=full output/error retrieval; remove=delete or abort.",
-  }),
+  action: StringEnum(SUBAGENT_ACTIONS),
   tasks: Type.Optional(Type.Array(TaskSchema, {
     minItems: 1,
-    description: "For run. One or more spawn/resume tasks. Tasks execute concurrently; do not assign overlapping file writes.",
+    description: "run only: tasks execute concurrently; avoid dependencies and overlapping writes.",
   })),
   background: Type.Optional(Type.Boolean({
-    description: "For run. false (default) waits for all tasks and returns results; true returns handles immediately. Background results remain retrievable until removed, regardless of resumable.",
+    description: "run only: true returns handles immediately; false (default) waits for results. Background results remain available until removed.",
   })),
-  status: Type.Optional(Type.Array(StringEnum(SESSION_STATUSES), {
-    description: "For list. Normalized session statuses to include in the lightweight inventory.",
-  })),
-  sessionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
-    minItems: 1,
-    description: "For results/remove. Session handles returned by background dispatch, results, or resumable runs.",
-  })),
-  scope: Type.Optional(StringEnum(REMOVAL_SCOPES, {
-    description: "For remove. background=all background sessions; retained=non-running resumable foreground sessions; non-running=all queued or terminal sessions. Mutually exclusive with sessionIds.",
-  })),
-  remove: Type.Optional(Type.Boolean({
-    description: "For results. Remove terminal sessions after returning their full output/error.",
-  })),
+  status: Type.Optional(Type.Array(StringEnum(SESSION_STATUSES), { minItems: 1, description: "list only: statuses to include." })),
+  sessionIds: Type.Optional(Type.Array(Type.String(), { minItems: 1, description: "results/remove: session handles to target." })),
+  remove: Type.Optional(Type.Boolean({ description: "results only: remove terminal sessions once returned; pending sessions remain." })),
 });
 
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = typeof SUBAGENT_ACTIONS[number];
 export type SessionStatus = typeof SESSION_STATUSES[number];
-export type RemovalScope = typeof REMOVAL_SCOPES[number];
 
 export function isSessionStatus(value: unknown): value is SessionStatus {
   return typeof value === "string" && (SESSION_STATUSES as readonly string[]).includes(value);
@@ -103,8 +74,7 @@ export type SubagentInvocation =
   | { action: "list"; status?: SessionStatus[] }
   | { action: "run"; tasks: TaskRequest[]; background?: boolean }
   | { action: "results"; sessionIds: string[]; remove?: boolean }
-  | { action: "remove"; sessionIds: string[] }
-  | { action: "remove"; scope: RemovalScope };
+  | { action: "remove"; sessionIds: string[] };
 
 export type SubagentInvocationParseError = {
   error: string;
@@ -202,21 +172,10 @@ export function parseSubagentInvocation(
     }
 
     case "remove": {
-      const sessionIds = params.sessionIds;
-      const scope = params.scope;
-      const hasIds = sessionIds !== undefined;
-      const hasScope = scope !== undefined;
-      if (hasIds && hasScope) return { error: "remove requires exactly one of sessionIds or scope.", action };
-      if (!hasIds && !hasScope) return { error: "remove requires either sessionIds or scope.", action };
-      if (hasIds) {
-        if (!isStringArray(sessionIds)) return { error: "remove sessionIds must be an array of strings.", action };
-        if ((sessionIds as string[]).length === 0) return { error: "remove requires at least one sessionId.", action };
-        return { action, sessionIds: sessionIds as string[] };
-      }
-      if (!isRemovalScope(scope)) {
-        return { error: 'remove scope must be "background", "retained", or "non-running".', action };
-      }
-      return { action, scope };
+      if (params.sessionIds === undefined) return { error: "remove requires sessionIds.", action };
+      const sessionIds = parseSessionIds(params.sessionIds, "remove");
+      if ("error" in sessionIds) return { ...sessionIds, action };
+      return { action, sessionIds };
     }
   }
 }
@@ -232,7 +191,7 @@ function validateTaskCount(tasks: unknown, maxTasks: number | undefined): string
   return undefined;
 }
 
-function parseSessionIds(value: unknown, action: "results"): string[] | { error: string } {
+function parseSessionIds(value: unknown, action: "results" | "remove"): string[] | { error: string } {
   if (!isStringArray(value)) return { error: `${action} sessionIds must be an array of strings.` };
   if (!isNonEmptyStringArray(value)) return { error: `${action} sessionIds must be an array of non-empty strings.` };
   if (value.length === 0) return { error: `${action} requires at least one sessionId.` };
@@ -245,10 +204,6 @@ function isStringArray(value: unknown): value is string[] {
 
 function isNonEmptyStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(entry => typeof entry === "string" && entry.trim() !== "");
-}
-
-function isRemovalScope(value: unknown): value is RemovalScope {
-  return typeof value === "string" && (REMOVAL_SCOPES as readonly string[]).includes(value);
 }
 
 export function parseTask(raw: unknown): ParsedTask {
@@ -269,8 +224,8 @@ export function parseTask(raw: unknown): ParsedTask {
     return { error: "Task prompt must be a non-empty string." };
   }
 
-  if (task.label !== undefined && typeof task.label !== "string") {
-    return { error: "Task label must be a string when present." };
+  if (task.label !== undefined && (typeof task.label !== "string" || task.label.trim() === "")) {
+    return { error: "Task label must be a non-empty string when present." };
   }
 
   if (task.resumable !== undefined && typeof task.resumable !== "boolean") {
@@ -281,6 +236,9 @@ export function parseTask(raw: unknown): ParsedTask {
     if (typeof task.agent !== "string" || task.agent.trim() === "") {
       return { error: "Task agent must be a non-empty string." };
     }
+    if (task.label === undefined) {
+      return { error: "Spawn task label must be a non-empty string." };
+    }
     if (task.skills !== undefined) {
       if (!Array.isArray(task.skills)) return { error: "Task skills must be an array of strings." };
       for (const name of task.skills) {
@@ -289,14 +247,14 @@ export function parseTask(raw: unknown): ParsedTask {
         }
       }
     }
-    if (task.model !== undefined && typeof task.model !== "string") {
-      return { error: "Task model must be a string when present." };
+    if (task.model !== undefined && (typeof task.model !== "string" || task.model.trim() === "")) {
+      return { error: "Task model must be a non-empty string when present." };
     }
     if (task.thinking !== undefined && !isModelThinkingLevel(task.thinking)) {
       return { error: `Task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.` };
     }
-    if (task.cwd !== undefined && typeof task.cwd !== "string") {
-      return { error: "Task cwd must be a string when present." };
+    if (task.cwd !== undefined && (typeof task.cwd !== "string" || task.cwd.trim() === "")) {
+      return { error: "Task cwd must be a non-empty string when present." };
     }
     const spawn: TaskRequest = {
       kind: "spawn",

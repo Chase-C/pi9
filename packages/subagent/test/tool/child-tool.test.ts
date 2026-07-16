@@ -52,7 +52,7 @@ test("child subagent tool delegates action=run to the shared manager with parent
 
   const result = await tool.execute(
     "call-1",
-    { action: "run", tasks: [{ agent: "worker", prompt: "delegate" }] },
+    { action: "run", tasks: [{ agent: "worker", prompt: "delegate", label: "delegated work" }] },
     undefined,
     undefined,
     baseCtx(),
@@ -103,7 +103,7 @@ test("recursive foreground subagent spawn completes with a single shared queue s
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "child-call",
-        { action: "run", tasks: [{ agent: "worker", prompt: "leaf" }] },
+        { action: "run", tasks: [{ agent: "worker", prompt: "leaf", label: "leaf work" }] },
         undefined,
         undefined,
         ctx,
@@ -136,7 +136,7 @@ test("recursive foreground subagent chain can exceed the shared queue cap withou
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         `child-${remaining}`,
-        { action: "run", tasks: [{ agent: "worker", prompt: remaining > 1 ? `spawn-${remaining - 1}` : "leaf" }] },
+        { action: "run", tasks: [{ agent: "worker", prompt: remaining > 1 ? `spawn-${remaining - 1}` : "leaf", label: `recursive step ${remaining}` }] },
         undefined,
         undefined,
         ctx,
@@ -170,7 +170,7 @@ test("recursive subagent spawn: root → child → grandchild all live under one
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "c-call",
-        { action: "run", tasks: [{ agent: "worker", prompt: "spawn-grandchild" }] },
+        { action: "run", tasks: [{ agent: "worker", prompt: "spawn-grandchild", label: "grandchild work" }] },
         undefined,
         undefined,
         ctx,
@@ -182,7 +182,7 @@ test("recursive subagent spawn: root → child → grandchild all live under one
       const tool = captureChildTool(manager, registry, agent);
       const result = await tool.execute(
         "g-call",
-        { action: "run", tasks: [{ agent: "worker", prompt: "leaf" }] },
+        { action: "run", tasks: [{ agent: "worker", prompt: "leaf", label: "leaf work" }] },
         undefined,
         undefined,
         ctx,
