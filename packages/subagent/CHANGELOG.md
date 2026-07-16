@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-16
+
 ### Breaking
 
 - Replace UUID session IDs with process-local adjective-noun handles such as `quiet-otter`; existing UUIDs cannot be resumed, queried, or removed.
@@ -101,7 +103,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.4.0...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.5.0...HEAD
+[0.5.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.4.0...subagent-v0.5.0
 [0.4.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.3.1...subagent-v0.4.0
 [0.3.1]: https://github.com/Chase-C/pi9/compare/v0.3.0...subagent-v0.3.1
 [0.3.0]: https://github.com/Chase-C/pi9/compare/v0.2.1...v0.3.0
