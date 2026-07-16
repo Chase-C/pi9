@@ -4,6 +4,10 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Simplify Todo tool calls by removing lifecycle labels and expansion hints, and show a muted live phase/task summary while arguments stream and after completion.
+
 ## [0.3.1] - 2026-07-15
 
 ### Changed

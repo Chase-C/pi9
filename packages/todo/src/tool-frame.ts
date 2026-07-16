@@ -1,8 +1,6 @@
 import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import { TOOL_FRAME_STATE_GLYPHS } from "./glyphs.js";
-
 export type TodoToolFrameState = "pending" | "success" | "error";
 export type TodoToolFrameContent = Component | string | readonly (Component | string)[] | null | undefined;
 export type TodoToolFrameTheme = Partial<Pick<Theme, "fg" | "bg" | "bold">>;
@@ -20,28 +18,10 @@ export interface TodoToolFrameOptions {
 type FrameColor = Parameters<Theme["fg"]>[0];
 type FrameBackground = Parameters<Theme["bg"]>[0];
 
-type FrameStyle = {
-  state: FrameColor;
-  background: FrameBackground;
-  marker: string;
-};
-
-const FRAME_STYLES: Record<TodoToolFrameState, FrameStyle> = {
-  pending: {
-    state: "warning",
-    background: "toolPendingBg",
-    marker: TOOL_FRAME_STATE_GLYPHS.pending,
-  },
-  success: {
-    state: "success",
-    background: "toolSuccessBg",
-    marker: TOOL_FRAME_STATE_GLYPHS.success,
-  },
-  error: {
-    state: "error",
-    background: "toolErrorBg",
-    marker: TOOL_FRAME_STATE_GLYPHS.error,
-  },
+const FRAME_BACKGROUNDS: Record<TodoToolFrameState, FrameBackground> = {
+  pending: "toolPendingBg",
+  success: "toolSuccessBg",
+  error: "toolErrorBg",
 };
 
 const DEFAULT_TITLE = "todo";
@@ -69,17 +49,17 @@ export class TodoToolFrame implements Component {
     if (!hasContent && this.options.empty !== "frame") return [];
 
     const state = this.options.state ?? "pending";
-    const style = FRAME_STYLES[state];
+    const background = FRAME_BACKGROUNDS[state];
     const boxPaddingX = Math.min(paddingX, Math.floor(safeWidth / 2));
     const box = new Box(
       boxPaddingX,
       paddingY,
       this.theme?.bg
-        ? (text: string) => this.theme!.bg!(style.background, text)
+        ? (text: string) => this.theme!.bg!(background, text)
         : undefined,
     );
 
-    box.addChild(new Text(this.renderHeader(state, style), 0, 0));
+    box.addChild(new Text(this.renderHeader(), 0, 0));
     if (hasContent) {
       for (const entry of contentEntries(content)) {
         box.addChild(typeof entry === "string"
@@ -91,14 +71,12 @@ export class TodoToolFrame implements Component {
     return box.render(safeWidth);
   }
 
-  private renderHeader(state: TodoToolFrameState, style: FrameStyle): string {
+  private renderHeader(): string {
     const title = normalizeLabel(this.options.title === undefined ? DEFAULT_TITLE : this.options.title);
     const action = normalizeLabel(this.options.action);
-    const label = [title ? this.paint("toolTitle", this.bold(title)) : "", action ? this.paint("muted", action) : ""]
+    return [title ? this.paint("toolTitle", this.bold(title)) : "", action ? this.paint("muted", action) : ""]
       .filter(Boolean)
       .join(" ");
-    const marker = this.paint(style.state, `${style.marker} ${state}`);
-    return [label, marker].filter(Boolean).join("  ");
   }
 
   private paint(color: FrameColor, text: string): string {

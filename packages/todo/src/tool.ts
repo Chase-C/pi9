@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Container, type Component } from "@earendil-works/pi-tui";
-import { formatTodoCompactionContext, formatTodoSummary } from "./format.js";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { formatTodoCompactionContext, formatTodoSize, formatTodoSummary, todoTasks } from "./format.js";
 import { restoreTodoState } from "./persistence.js";
 import {
   beginReminderAgentRun,
@@ -29,6 +29,31 @@ function taskAddresses(state: TodoState): TodoAddress[] {
     phase: phase.name,
     task: task.name,
   })));
+}
+
+function pendingTodoSummary(args: unknown, state: TodoState): string {
+  const input = args as { action?: unknown; phases?: unknown };
+  const phases = Array.isArray(input.phases) ? input.phases : [];
+  const inputTaskCount = phases.reduce((count, phase) => {
+    const tasks = phase && typeof phase === "object" && Array.isArray((phase as { tasks?: unknown }).tasks)
+      ? (phase as { tasks: unknown[] }).tasks.length
+      : 0;
+    return count + tasks;
+  }, 0);
+
+  if (input.action === "set") return formatTodoSize(phases.length, inputTaskCount);
+  if (input.action !== "add") return formatTodoSize(state.phases.length, todoTasks(state).length);
+
+  const phaseNames = new Set(state.phases.map((phase) => phase.name));
+  let phaseCount = state.phases.length;
+  for (const phase of phases) {
+    const name = phase && typeof phase === "object" ? (phase as { name?: unknown }).name : undefined;
+    if (typeof name !== "string" || !phaseNames.has(name)) {
+      phaseCount += 1;
+      if (typeof name === "string") phaseNames.add(name);
+    }
+  }
+  return formatTodoSize(phaseCount, todoTasks(state).length + inputTaskCount);
 }
 
 function changedTasks(previous: TodoState, next: TodoState): TodoAddress[] {
@@ -229,7 +254,8 @@ export function registerTodoTool(pi: ExtensionAPI): void {
       if (!context.isPartial || context.isError || !shouldRenderTodoAction(args.action, settings.toolVisibility)) {
         return new Container();
       }
-      return createTodoFrame("pending", args.action, undefined, theme);
+      const summary = new Text(theme.fg("muted", pendingTodoSummary(args, state)), 0, 0);
+      return createTodoFrame("pending", args.action, summary, theme);
     },
 
     renderResult(result, options, theme, context) {

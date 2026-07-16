@@ -1,8 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
-import { countTodos, formatTodoProgress, todoTasks } from "./format.js";
-import { TODO_EXPAND_GLYPH, TODO_SEPARATOR_GLYPH, todoGlyph } from "./glyphs.js";
+import { formatTodoProgress, formatTodoSize, todoTasks } from "./format.js";
+import { todoGlyph } from "./glyphs.js";
 import { currentTodoPhaseIndex, todoAddressKey } from "./state.js";
 import { isTerminalTodo, todoTaskPriority, type Todo, type TodoAddress, type TodoToolDetails } from "./types.js";
 
@@ -21,10 +21,10 @@ export function renderResult(
   if (!state) return new Text(fallbackText(result), 0, 0);
 
   const tasks = todoTasks(state);
+  if (options.expanded !== true) {
+    return new Text(paint(theme, "muted", formatTodoSize(state.phases.length, tasks.length)), 0, 0);
+  }
   if (tasks.length === 0 && state.phases.length === 0) return new Text(paint(theme, "muted", "No todo tasks."), 0, 0);
-
-  const header = todoHeader(countTodos(tasks));
-  if (options.expanded !== true) return new Text(collapsedText(header, tasks, theme, rendererOptions), 0, 0);
 
   const changed = new Set((result.details?.changedTasks ?? []).map(addressKey));
   const selectedPhase = currentTodoPhaseIndex(state.phases);
@@ -37,20 +37,6 @@ export function renderResult(
     }
   }
   return new Text(lines.join("\n"), 0, 0);
-}
-
-function todoHeader(counts: ReturnType<typeof countTodos>, title = "Todo"): string {
-  return [
-    `${title} ${TODO_SEPARATOR_GLYPH} ${counts.open} open`,
-    ...(counts.completed ? [`${counts.completed} completed`] : []),
-    ...(counts.cancelled ? [`${counts.cancelled} cancelled`] : []),
-  ].join(` ${TODO_SEPARATOR_GLYPH} `);
-}
-
-function collapsedText(header: string, tasks: readonly Todo[], theme: ThemeLike | undefined, options: TodoRendererOptions): string {
-  const active = tasks.find((task) => task.status === "in_progress");
-  const activeText = active ? `Active: ${todoGlyph(active.status, options.fallbackGlyphs)} ${active.name}` : undefined;
-  return [paint(theme, "muted", header), ...(activeText ? [paint(theme, "warning", activeText)] : []), paint(theme, "dim", `${TODO_EXPAND_GLYPH} expand`)].join(` ${TODO_SEPARATOR_GLYPH} `);
 }
 
 function orderedTasks(tasks: readonly Todo[]): Todo[] {

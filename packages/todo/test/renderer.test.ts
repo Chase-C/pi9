@@ -21,12 +21,20 @@ const details: TodoToolDetails = {
 };
 
 describe("todo renderer", () => {
-  it("renders compact counts, active work, and expansion hint", () => {
-    const collapsed = renderResult({ details }, { expanded: false }, plainTheme).render(120).join("\n");
-    expect(collapsed).toContain("2 open");
-    expect(collapsed).toContain("1 completed");
-    expect(collapsed).toContain("Implement renderer");
-    expect(collapsed).toContain("↵ expand");
+  it("renders compact phase and task totals without an expansion hint", () => {
+    const collapsed = renderResult({ details }, { expanded: false }, plainTheme).render(120).join("\n").trimEnd();
+    expect(collapsed).toBe("2 phases · 3 tasks");
+    expect(collapsed).not.toContain("expand");
+  });
+
+  it("uses singular labels for one phase and task", () => {
+    const single: TodoToolDetails = {
+      action: "set",
+      state: { phases: [{ name: "Build", tasks: [todo("Implement renderer")] }] },
+      changedTasks: [],
+    };
+    expect(renderResult({ details: single }, { expanded: false }, plainTheme).render(80).join("\n").trimEnd())
+      .toBe("1 phase · 1 task");
   });
 
   it("renders phases, statuses, and changed task emphasis without IDs", () => {

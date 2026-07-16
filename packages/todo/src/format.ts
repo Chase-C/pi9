@@ -78,6 +78,10 @@ export function countTodos(tasks: readonly Todo[]): TodoCounts {
   };
 }
 
+export function formatTodoSize(phaseCount: number, taskCount: number): string {
+  return `${phaseCount} ${phaseCount === 1 ? "phase" : "phases"} ${TODO_SEPARATOR_GLYPH} ${taskCount} ${taskCount === 1 ? "task" : "tasks"}`;
+}
+
 export function formatTodoProgress(label: string, tasks: readonly Todo[]): string {
   const counts = countTodoStatuses(tasks);
   return [

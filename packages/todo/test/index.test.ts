@@ -382,22 +382,31 @@ describe("todoExtension", () => {
 
   it("uses self-rendered lifecycle shells and preserves visibility", async () => {
     const { tool } = setupTodoTool();
+    const styledTheme = {
+      ...theme,
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    };
     const partial = { args: { action: "set" }, isPartial: true, isError: false };
     expect(tool.renderShell).toBe("self");
     expect(tool.renderCall({ action: "add" }, theme, { ...partial, args: { action: "add" } }).render(80)).toHaveLength(0);
     const pending = tool.renderCall({
       action: "set",
-      phases: [{ name: "Build", tasks: [describedTask("Implement feature")] }],
-    }, theme, partial);
+      phases: [
+        { name: "Build", tasks: [describedTask("Implement feature"), describedTask("Add tests")] },
+        { name: "Verify", tasks: [describedTask("Run checks")] },
+      ],
+    }, styledTheme, partial);
     expect(pending).toBeInstanceOf(TodoToolFrame);
-    expect(pending.render(80).join("\n")).toContain("pending");
+    expect(pending.render(80).join("\n")).toContain("<muted>2 phases · 3 tasks</muted>");
+    expect(pending.render(80).join("\n")).not.toContain("pending");
 
     const result = await tool.execute("set", {
       action: "set", phases: [{ name: "Build", tasks: [describedTask("Implement feature")] }],
     }, undefined, undefined, executionContext);
-    const rendered = tool.renderResult(result, { expanded: false, isPartial: false }, theme, renderContext("set"));
+    const rendered = tool.renderResult(result, { expanded: false, isPartial: false }, styledTheme, renderContext("set"));
     expect(rendered).toBeInstanceOf(TodoToolFrame);
-    expect(rendered.render(80).join("\n")).toContain("success");
+    expect(rendered.render(80).join("\n")).toContain("<muted>1 phase · 1 task</muted>");
+    expect(rendered.render(80).join("\n")).not.toContain("success");
   });
 
   it("keeps the latest expanded set result live through additions and transitions", async () => {

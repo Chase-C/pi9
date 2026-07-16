@@ -50,22 +50,22 @@ describe("TodoToolFrame", () => {
     expect(lines.at(-1)?.trim()).toBe("");
     expect(output).toContain("todo");
     expect(output).toContain("plan");
-    expect(output).toContain("pending");
+    expect(output).not.toContain("pending");
     expect(output).toContain("component content");
     expect(output).not.toMatch(/[\u2500-\u257f]/);
     assertWidth(lines, 32);
     expect(calls).toEqual(expect.arrayContaining([
       { kind: "fg", color: "toolTitle" },
       { kind: "fg", color: "muted" },
-      { kind: "fg", color: "warning" },
       { kind: "bg", color: "toolPendingBg" },
     ]));
+    expect(calls).not.toContainEqual({ kind: "fg", color: "warning" });
     expect(calls).not.toEqual(expect.arrayContaining([
       { kind: "fg", color: "borderMuted" },
     ]));
   });
 
-  it("uses native background callbacks for each state without changing content", () => {
+  it("uses native background callbacks without displaying each state", () => {
     for (const [state, background, foreground] of [
       ["pending", "toolPendingBg", "warning"],
       ["success", "toolSuccessBg", "success"],
@@ -77,11 +77,9 @@ describe("TodoToolFrame", () => {
       const output = lines.join("\n");
 
       expect(output).toContain("keep this");
-      expect(output).toContain(state);
-      expect(calls).toEqual(expect.arrayContaining([
-        { kind: "fg", color: foreground },
-        { kind: "bg", color: background },
-      ]));
+      expect(output).not.toContain(state);
+      expect(calls).toContainEqual({ kind: "bg", color: background });
+      expect(calls).not.toContainEqual({ kind: "fg", color: foreground });
       expect(calls).not.toEqual(expect.arrayContaining([
         { kind: "fg", color: "borderMuted" },
       ]));
@@ -114,7 +112,7 @@ describe("TodoToolFrame", () => {
     const output = lines.join("\n");
     expect(output).toContain("todo");
     expect(output).toContain("view");
-    expect(output).toContain("pending");
+    expect(output).not.toContain("pending");
     expect(output).not.toMatch(/[\u2500-\u257f]/);
     assertWidth(lines, 24);
   });
