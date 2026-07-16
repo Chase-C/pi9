@@ -97,11 +97,17 @@ export function runSummary(details: SubagentDetails, now = Date.now()): RunSumma
     return summarizeSnapshots(sessions, details.runStartedAt, now);
   }
   if (details.view === "results") {
-    const snapshots = details.results.flatMap(entry => ("snapshot" in entry ? [entry.snapshot] : []));
+    const roots = details.results.flatMap(entry => ("snapshot" in entry ? [entry.snapshot] : []));
+    const byId = new Map<string, AgentSnapshot>();
+    for (const root of roots) {
+      byId.set(root.id, root);
+      for (const subagent of root.subagents ?? []) byId.set(subagent.id, subagent);
+    }
+    const snapshots = Array.from(byId.values());
     // A settled run has no more "now" to measure against, so freeze the header elapsed at the last
     // completion; a background poll still carrying active entries keeps tracking wall-clock time.
     const summary = summarizeSnapshots(snapshots, undefined, resultsUpperBound(snapshots, now));
-    summary.finished += details.results.length - snapshots.length;
+    summary.finished += details.results.length - roots.length;
     return summary;
   }
   return undefined;
@@ -165,7 +171,8 @@ function formatSubagentToolDisplayLines(
       const ordered = details.subtree && details.subtree.length > 0
         ? orderAsTree(details.subtree)
         : details.sessions.map(agent => ({ agent, depth: 0 }));
-      return expandRows(ordered, expanded, now, bold, display, runRow, true, true);
+      if (!expanded) return expandRows(ordered, false, now, bold, display, runRow, true, true);
+      return formatExpandedRunLines(details.sessions, details.subtree ?? [], now, bold, display);
     }
     case "inventory": {
       const { sessions } = details;
@@ -217,6 +224,38 @@ type RowRenderer = (row: AgentSnapshot, now: number, bold: Bold | undefined, dis
 
 const runRow: RowRenderer = (row, now, bold) => formatRunSessionLine(row, now, bold);
 
+function formatExpandedRunLines(
+  roots: readonly AgentSnapshot[],
+  subtree: readonly AgentSnapshot[],
+  now: number,
+  bold: Bold | undefined,
+  display: SubagentDisplaySettings,
+): DisplayLine[] {
+  const byId = new Map(subtree.map(agent => [agent.id, agent]));
+  const descendantsOf = (rootId: string) => subtree.filter(agent => {
+    let parentId = agent.parentSessionId;
+    while (parentId !== undefined) {
+      if (parentId === rootId) return true;
+      parentId = byId.get(parentId)?.parentSessionId;
+    }
+    return false;
+  });
+
+  return roots.flatMap((root, index) => {
+    const subagents = descendantsOf(root.id);
+    const row = subagents.length ? { ...root, subagents } : root;
+    return expandedLines(
+      formatRunSessionLine(row, now, bold),
+      row,
+      true,
+      index < roots.length - 1,
+      display,
+      now,
+      true,
+    );
+  });
+}
+
 /** Inventory and results share the same icon-bearing identity row; expansion adds metadata only. */
 function formatInventoryLines(
   ordered: Array<{ agent: AgentSnapshot; depth: number }>,
@@ -252,11 +291,9 @@ function formatInventoryLines(
 }
 
 /**
- * The tree-expansion path used by the `run` view and collapsed `inventory` rows. Run rows are
- * rendered by {@link RowRenderer}, depth-indented, and — when expanded — followed by their
- * prompt, tool history, and optional snippet via {@link expandedLines}. With `richToolHistory`,
- * rows carry per-tool lines (recent ones collapsed, the full chronology expanded) instead of
- * aggregate counts.
+ * The tree path used by collapsed `run` rows. Rows are depth-indented and active agents carry
+ * their three most recent tool calls plus an additional-call count. Expanded runs use the
+ * root-oriented labeled-section renderer so descendants can appear as compact summary rows.
  */
 function expandRows(
   ordered: Array<{ agent: AgentSnapshot; depth: number }>,
@@ -371,7 +408,7 @@ function recentToolLines(
  * The completed/`results` view, rendered to mirror the live `run` view (your changes 3 & 4): the
  * header is the tool-call title line, and the body is one run-style row per entry — collapsed shows
  * just the rows (no per-row tool lines), expanded reuses {@link expandedLines} so each entry adds
- * its prompt, previous runs, tool history, and trailing result/error snippet. The same renderer
+ * labeled task, previous-run, recent-tool, subagent, and answer sections. The same renderer
  * serves the explicit `results` action and background polls, so pending and bad-id entries appear
  * here too.
  */
@@ -388,8 +425,8 @@ function resultRow(entry: ResultEntry, now: number, bold: Bold | undefined, _dis
 
 /**
  * One expanded result entry. Snapshot entries render through the same {@link expandedLines} path as
- * the live run — prompt, previous runs, tool history — and, because the snapshot is terminal, the
- * trailing result/error snippet. Bad-id entries collapse to a single error line.
+ * the live run — labeled compact sections and retained subagent summaries — plus its terminal
+ * answer snippet. Bad-id entries collapse to a single error line.
  */
 function resultExpanded(entry: ResultEntry, trailingBlank: boolean, now: number, bold: Bold | undefined, display: SubagentDisplaySettings): DisplayLine[] {
   if ("error" in entry) {

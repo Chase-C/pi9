@@ -94,6 +94,8 @@ export interface AgentSnapshot {
   readonly activity: AgentActivitySnapshot;
   /** Completed prior attempts of a resumed agent, chronological. Absent for a single-run agent. */
   readonly previousRuns?: readonly AgentRunSection[];
+  /** Recursive agents spawned during this attempt, retained for compact result rendering. */
+  readonly subagents?: readonly AgentSnapshot[];
   readonly usage: Usage | undefined;
   readonly dispatch: AgentDispatch;
   readonly retention: AgentRetention;

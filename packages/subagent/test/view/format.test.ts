@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   backgroundStartedDetails,
+  createSubagentTextComponent,
   formatSubagentSessionInspect,
   formatSubagentSessionSummary,
   formatSubagentToolLines,
@@ -356,7 +357,7 @@ test("collapsed subagent run row shows only the active subagent tool line when p
   ]);
 });
 
-test("expanded subagent run renders the prompt and each current-run tool as a rich line below it", () => {
+test("expanded subagent run renders labeled prompt and recent-tool sections", () => {
   const session = fakeAgent({
     config: { name: "reviewer" },
     label: "auth review",
@@ -372,15 +373,14 @@ test("expanded subagent run renders the prompt and each current-run tool as a ri
 
   const lines = formatSubagentToolLines(runDetails([session]), true, 15_000);
 
-  // Prompt still renders below the head row.
-  assert.match(lines.join("\n"), /Review the auth changes and summarize risks\./);
+  assert.match(lines.join("\n"), /┌ Task\n    │ Review the auth changes and summarize risks\./);
+  assert.match(lines.join("\n"), /┌ Tools · 3 calls/);
 
-  // One rich line per tool, chronological with newest at the bottom, and no "Tools:" header.
-  assert.doesNotMatch(lines.join("\n"), /Tools:/);
-  const readIdx = lines.indexOf("    read(packages/subagent/src/view/tool-result-lines.ts) · 0s");
-  assert.notEqual(readIdx, -1);
-  assert.equal(lines[readIdx + 1], "    bash(npm test --workspace=@pi9/subagent) · 3s");
-  assert.equal(lines[readIdx + 2], "    edit(packages/subagent/src/view/session-lines.ts) · 4s");
+  // Expanded activity now matches collapsed ordering: newest first, capped at three.
+  const editIdx = lines.indexOf("    │ edit(packages/subagent/src/view/session-lines.ts) · 4s");
+  assert.notEqual(editIdx, -1);
+  assert.equal(lines[editIdx + 1], "    │ bash(npm test --workspace=@pi9/subagent) · 3s");
+  assert.equal(lines[editIdx + 2], "    │ read(packages/subagent/src/view/tool-result-lines.ts) · 0s");
 });
 
 test("expanded subagent run no longer renders the aggregate tool-count line", () => {
@@ -401,7 +401,7 @@ test("expanded subagent run no longer renders the aggregate tool-count line", ()
   assert.doesNotMatch(joined, /×/);
 });
 
-test("expanded subagent run renders every tool call, not just the most recent three", () => {
+test("expanded subagent run caps tools at the newest three and counts additional calls", () => {
   const toolHistory = Array.from({ length: 5 }, (_, i) => ({
     id: `t${i}`,
     name: "read",
@@ -416,11 +416,13 @@ test("expanded subagent run renders every tool call, not just the most recent th
   });
 
   const lines = formatSubagentToolLines(runDetails([session]), true, 20_000);
-  const toolLines = lines.filter(line => /^    read\(file-\d\.ts\) · \d+s$/.test(line));
+  const toolLines = lines.filter(line => /^    │ read\(file-\d\.ts\) · \d+s$/.test(line));
 
-  assert.equal(toolLines.length, 5);
-  assert.match(toolLines[0], /file-0\.ts/);
-  assert.match(toolLines[4], /file-4\.ts/);
+  assert.equal(toolLines.length, 3);
+  assert.match(toolLines[0], /file-4\.ts/);
+  assert.match(toolLines[2], /file-2\.ts/);
+  assert.match(lines.join("\n"), /\+2 additional tool calls/);
+  assert.doesNotMatch(lines.join("\n"), /file-[01]\.ts/);
 });
 
 test("expanded subagent run keeps the result snippet for a terminal row, after prompt and tools", () => {
@@ -437,15 +439,15 @@ test("expanded subagent run keeps the result snippet for a terminal row, after p
   const lines = formatSubagentToolLines(runDetails([session]), true, 8_000);
   const joined = lines.join("\n");
 
-  assert.match(joined, /Summarize the risks\./);
-  assert.doesNotMatch(joined, /Tools:/);
-  const readIdx = lines.indexOf("    read(auth.ts) · 0s");
-  assert.notEqual(readIdx, -1);
-  const bashIdx = lines.indexOf("    bash(npm test) · 2s");
-  assert.equal(bashIdx, readIdx + 1);
+  assert.match(joined, /┌ Task\n    │ Summarize the risks\./);
+  const bashIdx = lines.indexOf("    │ bash(npm test) · 2s");
+  assert.notEqual(bashIdx, -1);
+  const readIdx = lines.indexOf("    │ read(auth.ts) · 0s");
+  assert.equal(readIdx, bashIdx + 1);
 
   const resultIdx = lines.findIndex(line => /Found two issues\./.test(line));
-  assert.ok(resultIdx > bashIdx, "result snippet should follow the tools");
+  assert.ok(resultIdx > readIdx, "answer should follow the tools");
+  assert.match(joined, /┌ Answer/);
 });
 
 test("expanded subagent run renders a previous run section above the current run for a resumed agent", () => {
@@ -472,19 +474,16 @@ test("expanded subagent run renders a previous run section above the current run
   const lines = formatSubagentToolLines(runDetails([session]), true, 19_000);
   const joined = lines.join("\n");
 
-  // A clearly-marked previous run section with its status and elapsed time.
-  const prevIdx = lines.findIndex(line => /Previous run 1 · completed · 42s/.test(line));
-  assert.notEqual(prevIdx, -1);
-
-  // The previous run's own prompt, tool history, and result snippet.
-  assert.match(joined, /Previous prompt: start the review\./);
-  assert.match(joined, /read\(packages\/subagent\/src\/domain\/agent\.ts\) · 1s/);
-  assert.match(joined, /bash\(npm test --workspace=@pi9\/subagent\) · 12s/);
-  assert.match(joined, /previous output snippet/);
-
-  // The current run still renders its own prompt and tool below the previous section.
   const currentPromptIdx = lines.findIndex(line => /Current prompt: finish the review\./.test(line));
-  assert.ok(currentPromptIdx > prevIdx, "current run renders below the previous run section");
+  const prevIdx = lines.findIndex(line => /Previous Run 1 · completed · 42s/.test(line));
+  assert.notEqual(prevIdx, -1);
+  assert.ok(currentPromptIdx < prevIdx, "the current Task section renders first");
+
+  // A previous run is exactly its compact prompt and response; its tools are omitted.
+  assert.match(joined, /Previous prompt: start the review\./);
+  assert.match(joined, /previous output snippet/);
+  assert.doesNotMatch(joined, /read\(packages\/subagent\/src\/domain\/agent\.ts\) · 1s/);
+  assert.doesNotMatch(joined, /bash\(npm test --workspace=@pi9\/subagent\) · 12s/);
   assert.match(joined, /edit\(packages\/subagent\/src\/domain\/agent\.ts\)/);
 });
 
@@ -511,11 +510,9 @@ test("the current run tool history excludes previous run tools for a resumed age
   const currentPromptIdx = lines.findIndex(line => /Current work\./.test(line));
   const currentRunLines = lines.slice(currentPromptIdx);
 
-  // The current run lists its own tool but never the previous run's tool.
+  // The current run lists its own tool; previous-run tool history is omitted entirely.
   assert.ok(currentRunLines.some(line => /edit\(current\.ts\)/.test(line)));
-  assert.ok(!currentRunLines.some(line => /read\(previous\.ts\)/.test(line)));
-  // The previous tool renders only in the previous section, above the current prompt.
-  assert.ok(lines.slice(0, currentPromptIdx).some(line => /read\(previous\.ts\)/.test(line)));
+  assert.ok(!lines.some(line => /read\(previous\.ts\)/.test(line)));
 });
 
 test("expanded subagent run renders multiple previous run sections in chronological order", () => {
@@ -531,14 +528,89 @@ test("expanded subagent run renders multiple previous run sections in chronologi
 
   const lines = formatSubagentToolLines(runDetails([session]), true, 4_000);
 
-  const firstIdx = lines.findIndex(line => /Previous run 1 · completed/.test(line));
-  const secondIdx = lines.findIndex(line => /Previous run 2 · error/.test(line));
+  const firstIdx = lines.findIndex(line => /Previous Run 1 · completed/.test(line));
+  const secondIdx = lines.findIndex(line => /Previous Run 2 · error/.test(line));
   const currentIdx = lines.findIndex(line => /Third prompt\./.test(line));
 
   assert.notEqual(firstIdx, -1);
   assert.notEqual(secondIdx, -1);
   assert.ok(firstIdx < secondIdx, "earlier run renders above the later run");
-  assert.ok(secondIdx < currentIdx, "all previous runs render above the current run");
+  assert.ok(currentIdx < firstIdx, "the current Task section renders before previous runs");
+});
+
+test("previous run sections render at most one truncated prompt line and one response line", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    prompt: "Current task.",
+    status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" },
+    previousRuns: [fakeRunSection({
+      prompt: `A long previous prompt ${"p".repeat(180)}\nsecond prompt line`,
+      status: { kind: "completed", startedAt: 1, completedAt: 2, response: `A long previous response ${"r".repeat(180)}\nsecond response line` },
+    })],
+  });
+
+  const rendered = createSubagentTextComponent(runDetails([session]), true, undefined, 2)!.render(52);
+  const header = rendered.findIndex(line => line.includes("Previous Run 1"));
+  const close = rendered.indexOf("    └", header);
+  const section = rendered.slice(header, close + 1);
+
+  assert.equal(section.length, 4);
+  assert.match(section[1], /…/);
+  assert.match(section[2], /…/);
+});
+
+test("wrapped bracket content repeats a muted bar independently of content color", () => {
+  const session = fakeAgent({
+    config: { name: "reviewer" },
+    prompt: `Long task ${"prompt ".repeat(18)}`,
+    status: { kind: "completed", startedAt: 1, completedAt: 2, response: `Long answer ${"response ".repeat(18)}` },
+  });
+  const theme = {
+    fg(color: string, text: string) {
+      const code = color === "muted" ? 90 : color === "success" ? 32 : 37;
+      return `\x1b[${code}m${text}\x1b[0m`;
+    },
+  };
+
+  const rendered = createSubagentTextComponent(runDetails([session]), true, theme as any, 2)!.render(38);
+  const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/g, "");
+  const sectionContent = (label: string) => {
+    const header = rendered.findIndex(line => plain(line).includes(`┌ ${label}`));
+    const close = rendered.findIndex((line, index) => index > header && plain(line) === "    └");
+    return rendered.slice(header + 1, close);
+  };
+  const task = sectionContent("Task");
+  const answer = sectionContent("Answer");
+
+  assert.ok(task.length > 1);
+  assert.ok(answer.length > 1);
+  for (const line of [...task, ...answer]) {
+    assert.match(line, /^    \x1b\[90m│\x1b\[0m /);
+  }
+  assert.ok(answer.every(line => line.includes("\x1b[32m")), "answer text remains success-colored");
+});
+
+test("expanded recursive runs summarize descendants in a Subagents section", () => {
+  const root = fakeAgent({ id: "root", config: { name: "root" }, status: { kind: "running", startedAt: 1 } });
+  const child = fakeAgent({ id: "child", parentSessionId: "root", config: { name: "child" }, label: "delegated check", prompt: "CHILD PROMPT", status: { kind: "running", startedAt: 2 } });
+  const grandchild = fakeAgent({ id: "grand", parentSessionId: "child", config: { name: "grand" }, prompt: "GRANDCHILD PROMPT", status: { kind: "completed", startedAt: 3, completedAt: 4, response: "child output" } });
+
+  const rendered = formatSubagentToolLines(runDetails([root], { subtree: [root, child, grandchild] }), true, 5).join("\n");
+
+  assert.match(rendered, /┌ Subagents · 2/);
+  assert.match(rendered, /⠋ child  delegated check  0 tool calls · 0 tokens · 0s/);
+  assert.match(rendered, /  ✓ grand  0 tool calls · 0 tokens · 0s/);
+  assert.doesNotMatch(rendered, /CHILD PROMPT|GRANDCHILD PROMPT|child output/);
+});
+
+test("expanded results render retained recursive subagent summaries", () => {
+  const child = fakeAgent({ id: "child", parentSessionId: "root", config: { name: "child" }, status: { kind: "completed", startedAt: 1, completedAt: 2 } });
+  const root = fakeAgent({ id: "root", config: { name: "root" }, status: { kind: "completed", startedAt: 1, completedAt: 3, response: "done" }, subagents: [child] });
+
+  const rendered = formatSubagentToolLines(resultsDetails([{ snapshot: root }]), true, 3).join("\n");
+
+  assert.match(rendered, /┌ Subagents · 1/);
+  assert.match(rendered, /✓ child/);
 });
 
 test("collapsed subagent run does not render previous run sections for a resumed agent", () => {
@@ -586,7 +658,7 @@ test("results expanded mirrors the running view for a resumed snapshot, includin
   assert.match(expanded, /Final prompt\./);
   assert.match(expanded, /final output/);
   // Completed expanded now matches the running expanded view, so previous-run sections render too.
-  assert.match(expanded, /Previous run 1 · completed/);
+  assert.match(expanded, /Previous Run 1 · completed/);
   assert.match(expanded, /First prompt\./);
   assert.match(expanded, /earlier output/);
 });
@@ -601,6 +673,18 @@ test("subagent session inspect output uses remove terminology", () => {
   const inspectLines = formatSubagentSessionInspect(retainedSession).join("\n");
   assert.match(inspectLines, /Actions: inspect, resume, remove/);
   assert.doesNotMatch(inspectLines, /clear/);
+});
+
+test("runSummary counts retained result subagents without double-counting ids", () => {
+  const child = fakeAgent({ id: "child", parentSessionId: "root", status: { kind: "completed", startedAt: 2, completedAt: 3 } });
+  const root = fakeAgent({ id: "root", subagents: [child], status: { kind: "completed", startedAt: 1, completedAt: 4 } });
+
+  const summary = runSummary(resultsDetails([{ snapshot: root }, { snapshot: child }]), 4);
+
+  assert.deepEqual(
+    { running: summary?.running, queued: summary?.queued, finished: summary?.finished },
+    { running: 0, queued: 0, finished: 2 },
+  );
 });
 
 test("runSummary elapsed measures wall-clock from the parent run start, not summed child runtime", () => {

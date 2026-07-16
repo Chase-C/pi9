@@ -7,6 +7,7 @@ import {
   getQueuedAt,
   getSnippet,
   getStartedAt,
+  getToolUseCount,
 } from "../domain/agent-decisions.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../config/settings.js";
 import { compact, compactMultiline } from "./view-helpers.js";
@@ -146,30 +147,73 @@ export function expandedLines(
   richToolHistory = false,
 ): DisplayLine[] {
   const lines = [head];
-  // Previous runs only surface in the rich (run-view) expansion, above the current run.
-  if (richToolHistory && row.previousRuns?.length) appendPreviousRuns(lines, row.previousRuns, display, now);
-  appendPrompt(lines, row);
-  if (richToolHistory) appendToolHistory(lines, row, now, display);
-  else appendToolCounts(lines, row);
-  if (includeSnippet) appendSnippet(lines, row, display);
+  appendBracket(lines, "Task", promptLines(row.prompt));
+  if (richToolHistory) {
+    appendPreviousRuns(lines, row.previousRuns ?? [], display, now);
+    appendRecentTools(lines, row, now, display);
+    appendSubagents(lines, row.subagents ?? [], now);
+  }
+  if (includeSnippet) appendAnswer(lines, row, display);
   if (trailingBlank) lines.push({ text: "" });
   return lines;
 }
 
-function appendPreviousRuns(lines: DisplayLine[], sections: readonly AgentRunSection[], display: SubagentDisplaySettings, now: number) {
+function appendBracket(lines: DisplayLine[], label: string, content: DisplayLine[]) {
+  if (content.length === 0) return;
+  lines.push({ text: `    ┌ ${label}`, color: "muted", hangingIndent: 4 });
+  for (const line of content) {
+    const contentSegments = line.segments ?? [{ text: line.text, ...(line.color ? { color: line.color } : {}) }];
+    lines.push({
+      ...line,
+      text: `    │ ${line.text}`,
+      color: undefined,
+      hangingIndent: 6,
+      segments: [
+        { text: "    " },
+        { text: "│", color: "muted" },
+        { text: " " },
+        ...contentSegments,
+      ],
+      continuationPrefix: [
+        { text: "    " },
+        { text: "│", color: "muted" },
+        { text: " " },
+      ],
+    });
+  }
+  lines.push({ text: "    └", color: "muted", hangingIndent: 4 });
+}
+
+function promptLines(prompt: string | undefined): DisplayLine[] {
+  if (!prompt) return [];
+  return prompt.split(/\r?\n/).map(text => ({ text, color: "text" }));
+}
+
+function appendPreviousRuns(
+  lines: DisplayLine[],
+  sections: readonly AgentRunSection[],
+  display: SubagentDisplaySettings,
+  now: number,
+) {
   sections.forEach((section, index) => {
-    lines.push({ text: "" });
-    lines.push(previousRunHeader(section, index, now));
-    appendPrompt(lines, section);
-    appendToolHistory(lines, section, now, display);
-    appendSnippet(lines, section, display);
+    const elapsed = sectionElapsed(section, now);
+    const label = [
+      `Previous Run ${index + 1}`,
+      effectiveStatus(section.status),
+      ...(elapsed ? [elapsed] : []),
+    ].join(" · ");
+    const prompt = compactRunLine(section.prompt, display.outputSnippetLength);
+    const response = compactRunLine(getSnippet(section.status), display.outputSnippetLength);
+    appendBracket(lines, label, [
+      ...(prompt ? [{ text: prompt, color: "text" as const, truncate: true }] : []),
+      ...(response ? [{ text: response, color: statusPresentation(section.status, now).color, truncate: true }] : []),
+    ]);
   });
 }
 
-function previousRunHeader(section: AgentRunSection, index: number, now: number): DisplayLine {
-  const elapsed = sectionElapsed(section, now);
-  const parts = [`Previous run ${index + 1}`, effectiveStatus(section.status), ...(elapsed ? [elapsed] : [])];
-  return { text: `    ${parts.join(" · ")}`, color: statusPresentation(section.status, now).color, hangingIndent: 4 };
+function compactRunLine(value: string | undefined, maxLength: number): string | undefined {
+  if (!value) return undefined;
+  return compact(value, maxLength);
 }
 
 function sectionElapsed(section: AgentRunSection, now: number): string | undefined {
@@ -178,40 +222,60 @@ function sectionElapsed(section: AgentRunSection, now: number): string | undefin
   return formatElapsed(startedAt, getCompletedAt(section.status) ?? now);
 }
 
-function appendSnippet(lines: DisplayLine[], row: RunBody, display: SubagentDisplaySettings) {
-  const snippet = getSnippet(row.status);
-  if (!snippet) return;
-  lines.push({ text: "" });
-  lines.push(...snippetLines(snippet, 4, statusPresentation(row.status).color, display));
-}
-
-function appendPrompt(lines: DisplayLine[], row: RunBody) {
-  if (!row.prompt) return;
-  lines.push({ text: "" });
-  for (const part of [...row.prompt.split(/\r?\n/), ""]) {
-    lines.push({ text: `    ${part}`, color: "text", hangingIndent: 4 });
-  }
-}
-
-function appendToolHistory(lines: DisplayLine[], row: RunBody, now: number, display: SubagentDisplaySettings) {
+function appendRecentTools(
+  lines: DisplayLine[],
+  row: AgentSnapshot,
+  now: number,
+  display: SubagentDisplaySettings,
+) {
   const history = row.activity.toolHistory;
   if (history.length === 0) return;
-  for (const tool of history) lines.push(formatToolUseLine(tool, 4, now, display.toolInputSummaryLength));
+  const recent = history.slice(-3).reverse();
+  const content = recent.map(tool => formatToolUseLine(tool, 0, now, display.toolInputSummaryLength));
+  const additional = history.length - recent.length;
+  if (additional > 0) {
+    content.push({
+      text: `+${additional} additional tool call${additional === 1 ? "" : "s"}`,
+      color: "muted",
+    });
+  }
+  appendBracket(lines, `Tools · ${plural(history.length, "call")}`, content);
 }
 
-function appendToolCounts(lines: DisplayLine[], row: AgentSnapshot) {
-  const counts = aggregateToolCounts(row.activity.toolHistory);
-  if (counts.length === 0) return;
-  const summary = counts.map(({ name, count }) => `${name} ×${count}`).join(", ");
-  lines.push({ text: "" });
-  lines.push({ text: `    Tools: ${summary}`, hangingIndent: 4 });
+function appendSubagents(lines: DisplayLine[], subagents: readonly AgentSnapshot[], now: number) {
+  if (subagents.length === 0) return;
+  const byId = new Map(subagents.map(agent => [agent.id, agent]));
+  const content = subagents.map(agent => {
+    let depth = 0;
+    let parentId = agent.parentSessionId;
+    while (parentId !== undefined && byId.has(parentId)) {
+      depth++;
+      parentId = byId.get(parentId)?.parentSessionId;
+    }
+    const { glyph, color } = statusPresentation(agent.status, now);
+    const label = agent.label ? `  ${agent.label}` : "";
+    const metadata = [
+      plural(getToolUseCount(agent), "tool call"),
+      plural(agent.usage?.totalTokens ?? 0, "token"),
+      formatElapsed(getStartedAt(agent.status) ?? getQueuedAt(agent.status) ?? agent.createdAt, getCompletedAt(agent.status) ?? now),
+    ].join(" · ");
+    const indent = "  ".repeat(depth);
+    return {
+      text: `${indent}${glyph} ${agent.config.name}${label}  ${metadata}`,
+      hangingIndent: depth * 2,
+      segments: [
+        { text: indent },
+        { text: glyph, color },
+        { text: ` ${agent.config.name}${label}`, color: "text" as const },
+        { text: `  ${metadata}`, color: "dim" as const },
+      ],
+    };
+  });
+  appendBracket(lines, `Subagents · ${subagents.length}`, content);
 }
 
-function aggregateToolCounts(
-  history: AgentSnapshot["activity"]["toolHistory"],
-): Array<{ name: string; count: number }> {
-  const counts = new Map<string, number>();
-  for (const tool of history) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
-  return Array.from(counts, ([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+function appendAnswer(lines: DisplayLine[], row: RunBody, display: SubagentDisplaySettings) {
+  const snippet = getSnippet(row.status);
+  if (!snippet) return;
+  appendBracket(lines, "Answer", snippetLines(snippet, 0, statusPresentation(row.status).color, display));
 }

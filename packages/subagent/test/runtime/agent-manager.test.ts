@@ -1239,7 +1239,11 @@ test("run updates walk a root → child → grandchild chain via descendant runs
   );
 
   release();
-  await Promise.all([rootHandle.resultsPromise, childHandle.resultsPromise, grandHandle.resultsPromise]);
+  const [[rootResult]] = await Promise.all([rootHandle.resultsPromise, childHandle.resultsPromise, grandHandle.resultsPromise]);
+  assert.deepEqual(
+    manager.snapshotWithSubagents(rootResult).subagents?.map(snapshot => snapshot.id),
+    [childId, tree[2].id],
+  );
 });
 
 test("run updates order siblings by createdAt and multiple roots by input order within a single run", async () => {

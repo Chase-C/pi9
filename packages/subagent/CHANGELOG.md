@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Redesign expanded foreground and result rows around labeled Task, Previous Run, Tools, Subagents, and Answer sections; cap tools to the three newest calls and retain recursive child summaries in final results.
+
 ### Fixed
 
 - Restore compatibility with Pi 0.80.8 and later by removing the retired `CreateAgentSessionOptions.modelRegistry` option from child-session creation.

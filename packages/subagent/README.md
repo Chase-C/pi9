@@ -48,7 +48,9 @@ subagent({
 })
 ```
 
-4. **Watch it run** live in the tool row. Foreground results return from the call; for background runs, use `subagent results` with the returned session handles.
+4. **Watch it run** live in the tool row. Foreground results return from the call; for background runs, use `subagent results` with the returned session handles. Expanding the tool call stays concise while surfacing the task, compact previous runs, recent tool activity, recursive subagents, and the final answer in clearly labeled sections.
+
+![An expanded foreground subagent result with labeled task, tools, recursive subagents, and answer sections](media/expanded-subagent-result.png)
 
 ## Define agents
 
@@ -140,7 +142,7 @@ While a `run` is executing, the tool row shows one line per child with status, a
     +1 additional tool call
 ```
 
-Expanding the tool call shows each child's prompt and full tool history. For resumed sessions, every previous run is shown as its own section above the current run, with its own prompt, tool history, and output. Mixed child failures still preserve successful results.
+Expanding the tool call shows labeled Task, Tools, and Answer sections. Tools use the same compact activity view as the collapsed row: the three newest calls plus an additional-call count. For resumed sessions, each previous run gets a two-line Previous Run section containing a truncated prompt and response. Recursive children appear as collapsed-style rows in a Subagents section. Mixed child failures still preserve successful results.
 
 ### Progress widget
 

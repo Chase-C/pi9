@@ -41,6 +41,7 @@ export class AgentManager {
   private readonly _groups = new Map<string, RunGroup>();
   private readonly _removingSessionIds = new Set<string>();
   private readonly _acknowledgedResultIds = new Set<string>();
+  private readonly _descendantsByAncestor = new Map<string, Map<string, AgentSnapshot>>();
   /** In-flight cancellation fanouts keyed by the finalized parent's session id. */
   private readonly _pendingFinalize = new Map<string, Promise<void>>();
 
@@ -111,7 +112,7 @@ export class AgentManager {
     return sessionIds.map(id => {
       const lookup = this._resolveSession(id);
       if ("error" in lookup) return lookup;
-      const snapshot = lookup.agent.snapshot();
+      const snapshot = this.snapshotWithSubagents(lookup.agent.snapshot());
       if (snapshot.status.kind === "done") this._acknowledgedResultIds.add(id);
       return { snapshot };
     });
@@ -141,7 +142,13 @@ export class AgentManager {
 
       const removedIds = new Set(agents.map(a => a.id));
       this._agents = this._agents.filter(a => !removedIds.has(a.id));
-      for (const id of removedIds) this._acknowledgedResultIds.delete(id);
+      for (const id of removedIds) {
+        this._acknowledgedResultIds.delete(id);
+        this._descendantsByAncestor.delete(id);
+      }
+      for (const descendants of this._descendantsByAncestor.values()) {
+        for (const id of removedIds) descendants.delete(id);
+      }
       for (const group of this._groups.values()) {
         if (agents.some(a => group.contains(a.id))) group.emit();
       }
@@ -202,6 +209,7 @@ export class AgentManager {
       }
 
       group.addAgent(result.agent, inputIndex);
+      this._descendantsByAncestor.delete(result.agent.id);
       touched.add(result.agent.id);
       return this._runner.run(ctx, childSignal, result.agent, result.agent.requireCurrentAttempt());
     });
@@ -225,6 +233,29 @@ export class AgentManager {
       sessions: initialSessions,
       resultsPromise,
     };
+  }
+
+  snapshotWithSubagents(snapshot: AgentSnapshot): AgentSnapshot {
+    const descendants = this._descendantsByAncestor.get(snapshot.id);
+    if (!descendants?.size) return snapshot;
+    const childrenByParent = new Map<string, AgentSnapshot[]>();
+    for (const descendant of descendants.values()) {
+      const parentId = descendant.parentSessionId ?? snapshot.id;
+      const children = childrenByParent.get(parentId) ?? [];
+      children.push(descendant);
+      childrenByParent.set(parentId, children);
+    }
+    for (const children of childrenByParent.values()) children.sort((a, b) => a.createdAt - b.createdAt);
+    const subagents: AgentSnapshot[] = [];
+    const visit = (parentId: string) => {
+      for (const child of childrenByParent.get(parentId) ?? []) {
+        subagents.push(child);
+        visit(child.id);
+      }
+    };
+    visit(snapshot.id);
+    if (!this._agents.some(agent => agent.id === snapshot.id)) this._descendantsByAncestor.delete(snapshot.id);
+    return { ...snapshot, subagents };
   }
 
   /** Looks up an agent by sessionId or returns the standard not-found error entry. */
@@ -259,6 +290,17 @@ export class AgentManager {
 
   private _agentUpdate(agent: Agent, kind: AgentUpdateKind) {
     const status = agent.status;
+    const snapshot = agent.snapshot();
+    let ancestorId = agent.parentId;
+    while (ancestorId !== undefined) {
+      let descendants = this._descendantsByAncestor.get(ancestorId);
+      if (!descendants) {
+        descendants = new Map();
+        this._descendantsByAncestor.set(ancestorId, descendants);
+      }
+      descendants.set(agent.id, snapshot);
+      ancestorId = this._agents.find(candidate => candidate.id === ancestorId)?.parentId;
+    }
 
     for (const listener of this._updateListeners) listener(agent, kind);
     for (const group of this._groups.values()) group.handleAgentUpdate(agent.id, kind);

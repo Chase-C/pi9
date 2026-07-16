@@ -70,6 +70,7 @@ export interface FakeAgentOptions {
   totalUsage?: Usage;
   capabilities?: Partial<AgentViewCapabilities>;
   previousRuns?: AgentRunSection[];
+  subagents?: AgentSnapshot[];
 }
 
 export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
@@ -182,6 +183,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
       toolHistory,
     },
     ...(rest.previousRuns !== undefined ? { previousRuns: rest.previousRuns } : {}),
+    ...(rest.subagents !== undefined ? { subagents: rest.subagents } : {}),
     usage: rest.totalUsage ?? rest.usage ?? ZERO_USAGE,
     capabilities,
   };

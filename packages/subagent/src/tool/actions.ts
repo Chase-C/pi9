@@ -138,7 +138,9 @@ export async function runAction(
   updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
   // The terminal snapshot is the result: each settled run is a ready entry, the same shape a
   // background poll yields, so both feed the one `results` renderer and the one JSON projection.
-  const entries: ResultEntry[] = settled.map(snapshot => ({ snapshot }));
+  const entries: ResultEntry[] = settled.map(snapshot => ({
+    snapshot: deps.agentManager.snapshotWithSubagents?.(snapshot) ?? snapshot,
+  }));
   const isError = settled.some(s => s.status.kind === "done" && s.status.outcome !== "completed");
   return toolResult(resultsDetails(entries), { isError, json: resultsJson(entries) });
 }

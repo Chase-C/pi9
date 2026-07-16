@@ -752,16 +752,17 @@ test("a late-arriving descendant status change triggers a partial re-emit with t
   );
 });
 
-test("partial tool results carry the full descendant subtree; final tool result stays flat", async () => {
+test("partial tool results carry the full descendant subtree; final results retain compact subagent data", async () => {
   const partials: any[] = [];
   const rootView = fakeAgent({ id: "root", config: { name: "root" }, createdAt: 1, status: { kind: "running", startedAt: 1 } });
   const childView = fakeAgent({ id: "child", parentSessionId: "root", config: { name: "child" }, createdAt: 2, status: { kind: "running", startedAt: 1 } });
 
   const fakeManager = {
     listSessions(): any[] { return [rootView, childView]; },
+    snapshotWithSubagents(snapshot: any) { return { ...snapshot, subagents: [childView] }; },
     runner: { suspendAgentSlotDuring<T>(_id: string, fn: () => Promise<T>) { return fn(); } },
     startRun(_ctx: any, _signal: any, _tasks: any[], onUpdate: any) {
-      // Drive one partial update with the full tree, then resolve with the final flat result.
+      // Drive one partial update with the full tree, then resolve with the final root result.
       Promise.resolve().then(() => onUpdate({ sessions: [rootView], tree: [rootView, childView], active: true }));
       const resultsPromise = new Promise<any[]>(resolve => {
         setTimeout(() => resolve([fakeAgent({ id: "root", config: { name: "root" }, prompt: "go", status: { kind: "completed", response: "ok" } })]), 10);
@@ -791,9 +792,11 @@ test("partial tool results carry the full descendant subtree; final tool result 
     ["root", "child"],
   );
 
-  // Final result is the slim results view; no subtree, no per-session AgentSnapshot dump
+  // The final envelope remains root-oriented while renderer details retain child summaries.
   assert.equal(final.details.view, "results");
   assert.equal(final.details.subtree, undefined);
   assert.equal(final.details.sessions, undefined);
+  assert.deepEqual(final.details.results[0].snapshot.subagents.map((s: any) => s.id), ["child"]);
   assert.deepEqual(resultsJson(final).map((o: any) => o.result.agent), ["root"]);
+  assert.equal(resultsJson(final)[0].result.subagents, undefined);
 });
