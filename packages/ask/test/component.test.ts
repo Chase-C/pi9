@@ -67,10 +67,10 @@ describe("AskComponent", () => {
 
   it("toggles multi-select options with Space and Enter, then submits from the button", () => {
     const { component, onSubmit } = make({ allowMultiple: true });
-    expect(component.render(80).join("\n")).toContain("󰄱 Staging");
+    expect(component.render(80).join("\n")).not.toContain("Staging [selected]");
 
     component.handleInput(" ");
-    expect(component.render(80).join("\n")).toContain("󰄵 Staging");
+    expect(component.render(80).join("\n")).toContain("Staging [selected]");
 
     component.handleInput("\x1b[B");
     component.handleInput("\r");
@@ -78,7 +78,7 @@ describe("AskComponent", () => {
 
     component.handleInput("\x1b[B");
     component.handleInput("\x1b[B");
-    expect(component.render(80).join("\n")).toContain("› [ Submit ]");
+    expect(component.render(80).join("\n")).toContain("┃ [ Submit ]");
     component.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledWith({
@@ -101,6 +101,20 @@ describe("AskComponent", () => {
     expect(component.state.comments.get("Staging")).toBe("Safer rollout");
     expect(component.render(80).join("\n")).toContain("✎ Safer rollout");
     expect(component.state.checked.size).toBe(0);
+  });
+
+  it("renders the comment editor directly below its target option", () => {
+    const { component } = make();
+    component.handleInput("c");
+
+    const lines = component.render(80);
+    const optionIndex = lines.findIndex(line => line.includes("Staging"));
+    const editorIndex = lines.findIndex(line => line.includes("↳"));
+    const freeformIndex = lines.findIndex(line => line.includes("Type a response"));
+
+    expect(optionIndex).toBeGreaterThan(-1);
+    expect(editorIndex).toBeGreaterThan(optionIndex);
+    expect(editorIndex).toBeLessThan(freeformIndex);
   });
 
   it("discards comment edits with Escape and cancels from select mode", () => {
@@ -138,16 +152,16 @@ describe("AskComponent", () => {
       allowMultiple: true,
     });
     component.handleInput("\x1b[B");
-    expect(component.render(80).join("\n")).toContain("󰄱 Type a response");
+    expect(component.render(80).join("\n")).not.toContain("Type a response… [selected]");
 
     component.handleInput("\r");
     component.handleInput("Use the fallback");
     component.handleInput("\r");
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(component.render(80).join("\n")).toContain("󰄵 Type a response… — Use the fallback");
+    expect(component.render(80).join("\n")).toContain("Type a response… — Use the fallback [selected]");
 
     component.handleInput(" ");
-    expect(component.render(80).join("\n")).toContain("󰄱 Type a response… — Use the fallback");
+    expect(component.render(80).join("\n")).not.toContain("Type a response… — Use the fallback [selected]");
     component.handleInput(" ");
     component.handleInput("\x1b[B");
     component.handleInput("\r");
@@ -195,6 +209,22 @@ describe("AskComponent", () => {
     expect(lines.length).toBeLessThanOrEqual(6);
     expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
     expect(lines.join("\n")).toContain("Third");
+  });
+
+  it("hangs wrapped option labels under their first-line text", () => {
+    const { component } = make({
+      options: [{ label: "A very long option label that must wrap" }],
+      allowMultiple: true,
+      allowFreeform: false,
+    });
+
+    const lines = component.render(20);
+    const firstLine = lines.findIndex(line => line.includes("A very long"));
+    const textIndex = lines[firstLine].indexOf("A very long");
+    const textColumn = visibleWidth(lines[firstLine].slice(0, textIndex));
+
+    expect(firstLine).toBeGreaterThan(-1);
+    expect(lines[firstLine + 1]).toMatch(new RegExp(`^ {${textColumn}}\\S`));
   });
 
   it("keeps a selected submit row visible in a small terminal", () => {
@@ -271,7 +301,12 @@ describe("AskComponent", () => {
     expect(output).toContain("[release]");
     expect(output).toContain("target");
     expect(output).toContain("ASCII: +--+");
-    expect(lines.some(line => line.includes("│"))).toBe(true);
+    const header = lines.find(line => line.includes("PREVIEW · FOCUSED OPTION"));
+    expect(header).toMatch(/^│ {2}OPTIONS/);
+    expect(header).toContain("│ PREVIEW · FOCUSED OPTION");
+    expect(lines[0]).toMatch(/^╭─+╮$/);
+    expect(lines.at(-1)).toMatch(/^╰─+╯$/);
+    expect(lines.some(line => line.includes("┃ Staging") && line.includes("│"))).toBe(true);
     expect(lines.every(line => visibleWidth(line) <= 100)).toBe(true);
   });
 
@@ -283,10 +318,12 @@ describe("AskComponent", () => {
       allowFreeform: false,
     });
 
-    const output = component.render(100).join("\n");
+    const lines = component.render(100);
+    const output = lines.join("\n");
     expect(output).toContain("Choose carefully │ this is part of the question");
     expect(output).toContain("Deployment context │ keep this literal suffix");
     expect(output.match(/PREVIEW_CONTENT/g)).toHaveLength(1);
+    expect(lines.find(line => line.includes("PREVIEW_CONTENT"))).toContain("│ PREVIEW_CONTENT");
   });
 
   it("starts a wide preview at the top of its pane regardless of the highlighted option", () => {
@@ -301,8 +338,10 @@ describe("AskComponent", () => {
     component.handleInput("\x1b[B");
     const lines = component.render(100);
 
-    expect(lines.findIndex(line => line.includes("TOP_ALIGNED_PREVIEW")))
-      .toBe(lines.findIndex(line => line.includes("First")));
+    const headerIndex = lines.findIndex(line => line.includes("PREVIEW · FOCUSED OPTION"));
+    const previewIndex = lines.findIndex(line => line.includes("TOP_ALIGNED_PREVIEW"));
+    expect(headerIndex).toBeGreaterThan(-1);
+    expect(previewIndex).toBeGreaterThan(headerIndex);
   });
 
   it.each([80, 100])("keeps the dialog height stable between differently sized previews at width %i", (width) => {
@@ -362,6 +401,22 @@ describe("AskComponent", () => {
     expect(submitLines.some(line => line.includes("│"))).toBe(width >= 88);
   });
 
+  it("keeps wide column headers visible while editing a freeform response", () => {
+    const { component } = make({
+      options: [{ label: "Staging", preview: "PREVIEW_SENTINEL" }],
+      allowFreeform: true,
+    });
+
+    component.handleInput("\x1b[B");
+    component.handleInput("\r");
+    const output = component.render(100).join("\n");
+
+    expect(component.state.editor.kind).toBe("freeform");
+    expect(output).toContain("OPTIONS");
+    expect(output).toContain("PREVIEW · FOCUSED OPTION");
+    expect(output).toContain("Type a response");
+  });
+
   it("keeps the selected option and fixed chrome visible while clipping long previews", () => {
     const tui = { terminal: { rows: 8 }, requestRender: vi.fn() };
     const { component } = make({
@@ -413,8 +468,9 @@ describe("AskComponent", () => {
     expect(lines.length).toBeLessThanOrEqual(8);
     expect(lines.join("\n")).toContain("Option 10");
     expect(lines.join("\n")).toContain("BOTTOM_PREVIEW_SENTINEL");
-    expect(lines.findIndex(line => line.includes("BOTTOM_PREVIEW_SENTINEL")))
-      .toBe(lines.findIndex(line => line.includes("│")));
+    expect(lines.join("\n")).toContain("PREVIEW · FOCUSED OPTION");
+    expect(lines[0]).toMatch(/^╭─+╮$/);
+    expect(lines.at(-1)).toMatch(/^╰─+╯$/);
     expect(lines.every(line => visibleWidth(line) <= 100)).toBe(true);
   });
 

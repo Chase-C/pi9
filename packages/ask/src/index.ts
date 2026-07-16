@@ -1,5 +1,5 @@
 import type { ExtensionAPI, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import { rewriteAskContext } from "./context.js";
 import { resolveTimeoutMs } from "./config.js";
@@ -32,7 +32,7 @@ type AskReplayState =
     };
 
 function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): string {
-  const questionColor = state.status === "answered" ? "text" : "dim";
+  const questionColor = state.status === "answered" ? "text" : "muted";
   const title = `${theme.fg("toolTitle", "ask")} ${theme.fg(questionColor, args.question)}`;
   if (state.status) return title;
 
@@ -41,7 +41,7 @@ function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): 
   const timeout = args.timeout !== undefined && args.timeout > 0
     ? ` · timeout:${formatTimeout(args.timeout)}`
     : "";
-  return `${title}\n${theme.fg("dim", `╰ ${mode}options:${optionCount}${timeout}`)}`;
+  return `${title}\n${theme.fg("muted", `╰ ${mode}options:${optionCount}${timeout}`)}`;
 }
 
 function formatTimeout(timeoutMs: number): string {
@@ -50,21 +50,51 @@ function formatTimeout(timeoutMs: number): string {
   return `${Number.isInteger(seconds) ? seconds : Number(seconds.toFixed(2))}s`;
 }
 
-function renderAnsweredOptions(args: AskParams, answer: AskAnswer, theme: Theme): string {
-  const selections = new Map(answer.selections.map(selection => [selection.label, selection]));
-  const checkedGlyph = args.allowMultiple === true ? CHECKED_BOX : CHECKED_CIRCLE;
-  const emptyGlyph = args.allowMultiple === true ? EMPTY_BOX : EMPTY_CIRCLE;
-  const lines = args.options.map(option => {
-    const label = option.label.trim();
-    const selection = selections.get(label);
-    const comment = selection?.comment ? ` (${selection.comment})` : "";
-    const text = `${label}${comment}`;
-    return selection
-      ? `${theme.fg("success", checkedGlyph)} ${theme.fg("text", text)}`
-      : theme.fg("dim", `${emptyGlyph} ${text}`);
-  });
-  if (answer.freeform) lines.push(`${theme.fg("success", checkedGlyph)} ${theme.fg("text", answer.freeform)}`);
-  return lines.map((line, index) => `${index === 0 ? `${theme.fg("dim", "╰")} ` : "  "}${line}`).join("\n");
+class AnsweredOptions implements Component {
+  constructor(
+    private readonly args: AskParams,
+    private readonly answer: AskAnswer,
+    private readonly theme: Theme,
+  ) {}
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const selections = new Map(this.answer.selections.map(selection => [selection.label, selection]));
+    const checkedGlyph = this.args.allowMultiple === true ? CHECKED_BOX : CHECKED_CIRCLE;
+    const emptyGlyph = this.args.allowMultiple === true ? EMPTY_BOX : EMPTY_CIRCLE;
+    const rows = this.args.options.map(option => {
+      const label = option.label.trim();
+      const selection = selections.get(label);
+      const comment = selection?.comment ? ` (${selection.comment})` : "";
+      return {
+        marker: this.theme.fg(selection ? "success" : "muted", selection ? checkedGlyph : emptyGlyph),
+        text: this.theme.fg(selection ? "text" : "muted", `${label}${comment}`),
+      };
+    });
+    if (this.answer.freeform) {
+      rows.push({
+        marker: this.theme.fg("success", checkedGlyph),
+        text: this.theme.fg("text", this.answer.freeform),
+      });
+    }
+
+    return rows.flatMap((row, index) => wrapAnsweredRow(
+      `${index === 0 ? `${this.theme.fg("muted", "╰")} ` : "  "}${row.marker} `,
+      row.text,
+      width,
+    ));
+  }
+}
+
+function wrapAnsweredRow(prefix: string, text: string, width: number): string[] {
+  const safeWidth = Math.max(1, Number.isFinite(width) ? Math.floor(width) : 1);
+  const prefixWidth = visibleWidth(prefix);
+  if (prefixWidth >= safeWidth) return wrapTextWithAnsi(`${prefix}${text}`, safeWidth);
+
+  const wrapped = wrapTextWithAnsi(text, safeWidth - prefixWidth);
+  const continuation = " ".repeat(prefixWidth);
+  return wrapped.map((line, index) => `${index === 0 ? prefix : continuation}${line}`);
 }
 
 export default function askExtension(pi: ExtensionAPI) {
@@ -220,7 +250,7 @@ export default function askExtension(pi: ExtensionAPI) {
         ?? (result.details?.status === "answered" ? result.details.answer : undefined);
       context.state.status = answer === undefined ? "settled" : "answered";
       context.state.callComponent?.setText(renderAskCall(context.args, theme, context.state));
-      if (answer) return new Text(renderAnsweredOptions(context.args, answer, theme), 0, 0);
+      if (answer) return new AnsweredOptions(context.args, answer, theme);
       const text = result.content.find((item) => item.type === "text")?.text ?? "Ask completed.";
       const color = result.details?.status === "cancelled" || result.details?.status === "unanswered"
         ? "muted"

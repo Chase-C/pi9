@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
+import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import askExtension from "../src/index.js";
 
 function register(initialActiveTools: string[] = []) {
@@ -161,7 +161,7 @@ describe("ask extension integration", () => {
     const context = { state, args, lastComponent: undefined };
     const call = tool.renderCall(args, styledTheme, context);
 
-    expect(call.render(80).map((line: string) => line.trimEnd())).toEqual(["[toolTitle]ask [dim]Choose?", "[dim]╰ options:2"]);
+    expect(call.render(80).map((line: string) => line.trimEnd())).toEqual(["[toolTitle]ask [muted]Choose?", "[muted]╰ options:2"]);
 
     const answered = tool.renderResult({
       content: [{ type: "text", text: "Selected: Beta" }],
@@ -173,7 +173,7 @@ describe("ask extension integration", () => {
     }, {}, styledTheme, context);
     expect(call.render(80).map((line: string) => line.trimEnd())).toEqual(["[toolTitle]ask [text]Choose?"]);
     expect(answered.render(80).map((line: string) => line.trimEnd())).toEqual([
-      "[dim]╰ [dim]󰄰 Alpha",
+      "[muted]╰ [muted]󰄰 [muted]Alpha",
       "  [success]󰄴 [text]Beta (Best fit)",
       "  [success]󰄴 [text]Something else",
     ]);
@@ -186,15 +186,42 @@ describe("ask extension integration", () => {
 
     const multiArgs = { question: "Choose several", options: [{ label: "Alpha" }, { label: "Beta" }], allowMultiple: true };
     const multiContext = { state: {}, args: multiArgs, lastComponent: undefined };
-    expect(tool.renderCall(multiArgs, styledTheme, multiContext).render(80)[1].trimEnd()).toBe("[dim]╰ multi · options:2");
+    expect(tool.renderCall(multiArgs, styledTheme, multiContext).render(80)[1].trimEnd()).toBe("[muted]╰ multi · options:2");
     const multiAnswered = tool.renderResult({
       content: [{ type: "text", text: "Selected: Beta" }],
       details: { status: "answered", question: "Choose several", answer: { selections: [{ label: "Beta" }] } },
     }, {}, styledTheme, multiContext);
     expect(multiAnswered.render(80).map((line: string) => line.trimEnd())).toEqual([
-      "[dim]╰ [dim]󰄱 Alpha",
+      "[muted]╰ [muted]󰄱 [muted]Alpha",
       "  [success]󰄵 [text]Beta",
     ]);
+  });
+
+  it("hangs wrapped freeform answer text under its first line", () => {
+    const { tool } = register();
+    const args = {
+      question: "Choose?",
+      options: [{ label: "Alpha" }],
+      allowMultiple: true,
+      allowFreeform: true,
+    };
+    const context = { state: {}, args, lastComponent: undefined };
+    tool.renderCall(args, theme(), context);
+    const answered = tool.renderResult({
+      content: [{ type: "text", text: "Selected: Alpha" }],
+      details: {
+        status: "answered",
+        question: "Choose?",
+        answer: { selections: [{ label: "Alpha" }], freeform: "one two three four five six seven eight nine" },
+      },
+    }, {}, theme(), context);
+
+    const lines = answered.render(20);
+    const firstFreeformLine = lines.findIndex((line: string) => line.includes("one"));
+    const textIndex = lines[firstFreeformLine].indexOf("one");
+    const textColumn = visibleWidth(lines[firstFreeformLine].slice(0, textIndex));
+    expect(firstFreeformLine).toBeGreaterThan(-1);
+    expect(lines[firstFreeformLine + 1]).toMatch(new RegExp(`^ {${textColumn}}\\S`));
   });
 
   it("renders an explicitly supplied positive timeout in pending metadata", () => {

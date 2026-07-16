@@ -19,9 +19,9 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   createQuestionnaireState,
   transitionQuestionnaire,
+  type QuestionnaireRow,
   type QuestionnaireState,
 } from "./state.js";
-import { CHECKED_BOX, EMPTY_BOX } from "./glyphs.js";
 import {
   composePreviewRow,
   getPreviewPaneLayout,
@@ -34,6 +34,8 @@ import {
   type ViewportOverflow,
 } from "./viewport.js";
 import type { AskAnswer, ValidatedAskParams } from "./types.js";
+
+const FRAME_WIDE_PREVIEW = true; // Set to false to compare the same layout without its outer frame.
 
 type AskComponentOptions = ValidatedAskParams & {
   tui: TUI;
@@ -166,7 +168,14 @@ export class AskComponent implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    const renderWidth = safeWidth(width);
+    const availableWidth = safeWidth(width);
+    const hasAuthoredPreviews = this.questionnaireState.rows.some(
+      row => row.kind === "option" && row.option.preview?.trim(),
+    );
+    const framed = FRAME_WIDE_PREVIEW
+      && hasAuthoredPreviews
+      && getPreviewPaneLayout(availableWidth - 4) !== undefined;
+    const renderWidth = framed ? availableWidth - 4 : availableWidth;
     const lines: string[] = [];
     const add = (line: string) => lines.push(fit(line, renderWidth));
     const addPrefixed = (prefix: string, text: string, color?: "text" | "muted" | "dim" | "accent") => {
@@ -176,11 +185,8 @@ export class AskComponent implements Component, Focusable {
 
     add(this.config.theme.fg("border", "─".repeat(renderWidth)));
 
-    if (this.config.context) {
-      addPrefixed(" ", this.config.context, "muted");
-      add("");
-    }
     addPrefixed(" ", this.config.theme.bold(this.config.question), "text");
+    if (this.config.context) addPrefixed(" ", this.config.context, "muted");
     add("");
 
     let focus: FocusRange | undefined;
@@ -198,16 +204,18 @@ export class AskComponent implements Component, Focusable {
     };
     if (this.questionnaireState.editor.kind === "select") {
       const preview = this.highlightedPreview();
-      const hasPreviews = this.questionnaireState.rows.some(
-        row => row.kind === "option" && row.option.preview?.trim(),
-      );
-      const paneLayout = hasPreviews ? getPreviewPaneLayout(renderWidth) : undefined;
+      const paneLayout = hasAuthoredPreviews ? getPreviewPaneLayout(renderWidth) : undefined;
       if (paneLayout) {
-        const optionLines: string[] = [];
+        const optionLines = [this.config.theme.fg("dim", " OPTIONS"), ""];
         const optionFocus = this.renderOptions(optionLines, paneLayout.leftWidth);
         const submitFocus = this.renderSubmit(optionLines, paneLayout.leftWidth);
         const sectionStart = lines.length;
-        const previewLines = this.renderPreview(preview, paneLayout.rightWidth);
+        const previewLines = [
+          this.config.theme.fg("dim", " PREVIEW · FOCUSED OPTION"),
+          this.config.theme.fg("dim", "─".repeat(paneLayout.rightWidth)),
+          "",
+          ...this.renderPreview(preview, paneLayout.rightWidth - 1).map(line => ` ${line}`),
+        ];
         const bodyHeight = Math.max(optionLines.length, previewLines.length);
         lines.push(...optionLines, ...Array.from({ length: bodyHeight - optionLines.length }, () => ""));
         wideBody = {
@@ -226,7 +234,7 @@ export class AskComponent implements Component, Focusable {
       } else {
         const optionFocus = this.renderOptions(lines, renderWidth);
         focus = optionFocus;
-        if (hasPreviews) {
+        if (hasAuthoredPreviews) {
           const previewStart = lines.length;
           const previewLines = this.renderPreview(preview, renderWidth);
           lines.push(...previewLines);
@@ -247,28 +255,57 @@ export class AskComponent implements Component, Focusable {
       footerStart = lines.length;
       addFooter(" ", this.config.theme.fg("dim", this.helpText()));
     } else {
+      const activeEditor = this.questionnaireState.editor;
       // Keep the options visible while editing so the comment remains tied to
       // the option it belongs to, and so freeform editing does not feel like a
       // separate prompt.
-      this.renderOptions(lines, renderWidth);
+      const paneLayout = hasAuthoredPreviews ? getPreviewPaneLayout(renderWidth) : undefined;
+      const optionLines = paneLayout
+        ? [this.config.theme.fg("dim", " OPTIONS"), ""]
+        : lines;
+      const optionWidth = paneLayout?.leftWidth ?? renderWidth;
       const inputPrefix = `    ${this.config.theme.fg("accent", "↳")} `;
       const continuationPrefix = " ".repeat(visibleWidth(inputPrefix));
-      const inputWidth = Math.max(1, renderWidth - visibleWidth(inputPrefix));
+      const inputWidth = Math.max(1, optionWidth - visibleWidth(inputPrefix));
       const editorLines = this.editor.render(inputWidth).filter(line => visibleWidth(line) > 0);
-      const editorStart = lines.length;
-      for (const [index, line] of editorLines.entries()) {
-        add(`${index === 0 ? inputPrefix : continuationPrefix}${line}`);
-      }
-      const editorEnd = lines.length;
+      let editorStart = -1;
+      let editorEnd = -1;
+      this.renderOptions(optionLines, optionWidth, (row) => {
+        if (row !== activeEditor.target) return;
+        editorStart = optionLines.length;
+        for (const [index, line] of editorLines.entries()) {
+          optionLines.push(fit(`${index === 0 ? inputPrefix : continuationPrefix}${line}`, optionWidth));
+        }
+        editorEnd = optionLines.length;
+      });
       if (editorEnd > editorStart) {
         const cursorLine = editorLines.findIndex(line => line.includes(CURSOR_MARKER));
         const focusedRow = cursorLine >= 0 ? editorStart + cursorLine : editorEnd - 1;
         focus = { start: focusedRow, end: focusedRow + 1 };
       }
 
+      this.renderSubmit(optionLines, optionWidth);
+      if (paneLayout) {
+        const sectionStart = lines.length;
+        const previewLines = [
+          this.config.theme.fg("dim", " PREVIEW · FOCUSED OPTION"),
+          this.config.theme.fg("dim", "─".repeat(paneLayout.rightWidth)),
+          "",
+          ...this.renderPreview(undefined, paneLayout.rightWidth - 1).map(line => ` ${line}`),
+        ];
+        const bodyHeight = Math.max(optionLines.length, previewLines.length);
+        lines.push(...optionLines, ...Array.from({ length: bodyHeight - optionLines.length }, () => ""));
+        wideBody = {
+          start: sectionStart,
+          end: sectionStart + bodyHeight,
+          previewLines,
+          layout: paneLayout,
+        };
+        if (focus) focus = { start: sectionStart + focus.start, end: sectionStart + focus.end };
+      }
+
       // The help line is the footer. Keep it adjacent to the bottom border so
       // fitViewport can keep both rows fixed while the editor is focused.
-      this.renderSubmit(lines, renderWidth);
       footerStart = lines.length;
       addFooter(continuationPrefix, this.config.theme.fg("dim", this.editorHelpText()));
     }
@@ -287,7 +324,7 @@ export class AskComponent implements Component, Focusable {
     const visibleRows = fitViewport(rows, focus, maxRows, 1, lines.length - footerStart);
     let previewIndex = 0;
 
-    return visibleRows.map(({ value: row, overflow }) => {
+    const projected = visibleRows.map(({ value: row, overflow }) => {
       if (row.kind === "full") {
         return projectFullRow(row.line, overflow, renderWidth);
       }
@@ -301,6 +338,7 @@ export class AskComponent implements Component, Focusable {
         this.config.theme.fg("dim", "│"),
       );
     });
+    return framed ? frameDialog(projected, availableWidth, this.config.theme) : projected;
   }
 
   /** Submit the current multi-select answer programmatically. */
@@ -320,7 +358,11 @@ export class AskComponent implements Component, Focusable {
     this.config.onCancel?.();
   }
 
-  private renderOptions(lines: string[], width: number): FocusRange | undefined {
+  private renderOptions(
+    lines: string[],
+    width: number,
+    afterRow?: (row: QuestionnaireRow) => void,
+  ): FocusRange | undefined {
     const addPrefixed = (prefix: string, text: string, color?: "text" | "muted" | "dim" | "accent") => {
       const styled = color ? this.config.theme.fg(color, text) : text;
       addWrappedWithPrefix(lines, prefix, styled, width);
@@ -331,34 +373,34 @@ export class AskComponent implements Component, Focusable {
       if (row.kind === "submit") continue;
       const selected = this.questionnaireState.highlightedRow === index;
       const start = lines.length;
-      const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
+      const marker = selected ? this.config.theme.fg("accent", "┃ ") : "  ";
 
       if (row.kind === "option") {
         const source = row.option;
         const checked = this.questionnaireState.checked.has(source.label);
-        const check = this.questionnaireState.config.allowMultiple
-          ? `${this.config.theme.fg(checked ? "success" : "muted", checked ? CHECKED_BOX : EMPTY_BOX)} `
+        const badge = this.questionnaireState.config.allowMultiple && checked
+          ? this.config.theme.fg("success", " [selected]")
           : "";
         const comment = this.questionnaireState.comments.has(source.label)
           ? this.config.theme.fg("warning", " ✎")
           : "";
-        addPrefixed("", `${marker}${check}${source.label}${comment}`, selected ? "accent" : "text");
-        if (source.description) addPrefixed("     ", source.description, "muted");
+        addPrefixed(marker, `${source.label}${badge}${comment}`, selected ? "accent" : "text");
+        if (source.description) addPrefixed("  ", source.description, "muted");
         if (selected) {
           const commentText = this.questionnaireState.comments.get(source.label);
           if (commentText) addPrefixed("     ", `✎ ${commentText}`, "dim");
         }
       } else {
-        const checked = this.questionnaireState.freeformChecked;
-        const check = this.questionnaireState.config.allowMultiple
-          ? `${this.config.theme.fg(checked ? "success" : "muted", checked ? CHECKED_BOX : EMPTY_BOX)} `
+        const badge = this.questionnaireState.config.allowMultiple && this.questionnaireState.freeformChecked
+          ? this.config.theme.fg("success", " [selected]")
           : "";
         const suffix = this.questionnaireState.freeformDraft
           ? ` — ${this.questionnaireState.freeformDraft}`
           : "";
-        addPrefixed("", `${marker}${check}${this.config.theme.fg(selected ? "accent" : "text", `Type a response…${suffix}`)}`);
+        addPrefixed(marker, `Type a response…${suffix}${badge}`, selected ? "accent" : "text");
       }
       if (selected) focus = { start, end: lines.length };
+      afterRow?.(row);
     }
     return focus;
   }
@@ -367,7 +409,7 @@ export class AskComponent implements Component, Focusable {
     const submitIndex = this.questionnaireState.rows.findIndex(row => row.kind === "submit");
     if (submitIndex < 0) return undefined;
     const selected = this.questionnaireState.highlightedRow === submitIndex;
-    const marker = selected ? this.config.theme.fg("accent", "› ") : "  ";
+    const marker = selected ? this.config.theme.fg("accent", "┃ ") : "  ";
     lines.push("");
     const start = lines.length;
     addWrappedWithPrefix(
@@ -528,6 +570,17 @@ function overflowPrefix(overflow: ViewportOverflow | undefined): string {
   if (overflow === "below") return "↓ ";
   if (overflow === "both") return "↕ ";
   return "";
+}
+
+function frameDialog(lines: readonly string[], width: number, theme: Theme): string[] {
+  const border = (text: string) => theme.fg("border", text);
+  const innerWidth = width - 4;
+  return lines.map((line, index) => {
+    if (index === 0) return border(`╭${"─".repeat(width - 2)}╮`);
+    if (index === lines.length - 1) return border(`╰${"─".repeat(width - 2)}╯`);
+    const content = fit(line, innerWidth);
+    return `${border("│")} ${content}${" ".repeat(innerWidth - visibleWidth(content))} ${border("│")}`;
+  });
 }
 
 function safeWidth(width: number): number {

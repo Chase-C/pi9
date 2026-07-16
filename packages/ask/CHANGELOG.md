@@ -4,6 +4,17 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Redesign wide preview questionnaires as framed two-column dialogs with option and preview headers.
+- Use a selection bar for keyboard focus and `[selected]` badges for checked multi-select options.
+- Render secondary Ask tool-call and completed-answer text with the muted theme color instead of dim styling.
+
+### Fixed
+
+- Preserve wide-layout headers while editing freeform responses and place comment editors directly below their target options.
+- Align wrapped option labels and completed freeform responses with their first-line text.
+
 ## [0.1.0] - 2026-07-14
 
 ### Added
