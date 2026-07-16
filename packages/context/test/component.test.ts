@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
+  CONTEXT_REPORT_HELP,
   contentViewportLines,
   createContextReportComponent,
   formatContextReportLines,
@@ -90,15 +91,22 @@ const ansiTheme = {
   bold: (text: string) => `\u001b[1m${text}\u001b[22m`,
 };
 
+const roleTheme = {
+  fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
+  bold: (text: string) => text,
+};
+
 describe("context report formatting", () => {
   it("formats section headers with token totals", () => {
     const text = formatContextReportLines(report, plainTheme as never).join("\n");
 
-    expect(text).toContain("Context Usage");
+    expect(text).not.toContain("Context Usage");
     expect(text).toContain("Estimated breakdown · 640 tokens");
-    expect(text).toContain("● System prompt: 5");
-    expect(text).toContain("◆ Tools: 120");
-    expect(text).toContain("◇ Other: 95");
+    expect(text).toContain("● System prompt: 5 tokens · 0.5%");
+    expect(text).toContain("● Tools: 120 tokens · 12.0%");
+    expect(text).toContain("● Other: 95 tokens · 9.5%");
+    expect(text).toContain("◉ Conversation: 340 tokens · 34.0%");
+    expect(text).toContain("○ Free space: 360 tokens · 36.0%");
     expect(text).toContain("Conversation (estimated) · 340 tokens");
     expect(text).toContain("compactions: 2");
     expect(text).toContain("Memory files (estimated) · 50 tokens");
@@ -107,6 +115,12 @@ describe("context report formatting", () => {
     expect(text).not.toContain("prompt 10");
     expect(text).not.toContain("Snapshot:");
     expect(text).toContain("Skills (estimated) · 30 tokens");
+  });
+
+  it("highlights breakdown tokens and mutes percentages", () => {
+    const text = formatContextReportLines(report, roleTheme as never).join("\n");
+
+    expect(text).toContain("System prompt: <accent>5</accent><text> tokens</text><muted> · 0.5%</muted>");
   });
 
   it("groups tools by source without hiding overflow", () => {
@@ -131,14 +145,54 @@ describe("context report formatting", () => {
     expect(text).not.toMatch(/… \d+ more/);
   });
 
-  it("renders one graph character per thousand context tokens", () => {
-    const text = formatContextReportLines(graphReport, plainTheme as never, 80).join("\n");
+  it("adjusts graph density to the available width", () => {
+    const narrowLines = formatContextReportLines(graphReport, plainTheme as never, 20);
+    const wideLines = formatContextReportLines(graphReport, plainTheme as never, 40);
+    const graphPattern = /^[●○ ]+$/;
+    const narrowGraph = narrowLines.filter((line) => graphPattern.test(line));
+    const wideGraph = wideLines.filter((line) => graphPattern.test(line));
 
-    expect(text).toContain("1 char = 1K tokens");
-    expect(text).toContain("● System prompt: 2K");
-    expect(text).not.toContain("◇ Other: 1K");
-    expect(text).not.toContain("Compaction reserve");
-    expect(text).toMatch(/^● ● ◆ ○ ○ {4}/m);
+    expect(narrowGraph).toHaveLength(7);
+    expect(wideGraph).toHaveLength(7);
+    const narrowCells = narrowGraph.join("").replaceAll(" ", "");
+    expect(narrowCells).toHaveLength(70);
+    expect(wideGraph.join("").replaceAll(" ", "")).toHaveLength(140);
+    const coloredGraph = formatContextReportLines(graphReport, roleTheme as never, 20)
+      .filter((line) => /^(?:<[^>]+>[●○◉]<\/[^>]+>(?: |$))+$/.test(line))
+      .join("");
+    expect(coloredGraph.match(/<text>●<\/text>/g)).toHaveLength(28);
+    expect(coloredGraph.match(/<warning>●<\/warning>/g)).toHaveLength(14);
+    expect(coloredGraph.match(/<borderMuted>○<\/borderMuted>/g)).toHaveLength(28);
+    expect(narrowLines.join("\n")).toContain("1 block ≈ 71 tokens");
+    expect(wideLines.join("\n")).toContain("1 block ≈ 36 tokens");
+  });
+
+  it("matches graph rows to the side-by-side summary", () => {
+    const lines = formatContextReportLines(report, plainTheme as never, 80);
+    const overviewEnd = lines.indexOf("", 1);
+    const overviewLines = lines.slice(1, overviewEnd);
+
+    expect(overviewLines).toHaveLength(13);
+    expect(overviewLines.every((line) => /^[●○◉]/.test(line))).toBe(true);
+  });
+
+  it("shows every non-zero category in the graph with its assigned color", () => {
+    const lines = formatContextReportLines(report, roleTheme as never, 20);
+    const graph = lines
+      .filter((line) => /^(?:<[^>]+>[●○◉]<\/[^>]+>(?: |$))+$/.test(line))
+      .join("");
+
+    for (const marker of [
+      "<text>●</text>",
+      "<warning>●</warning>",
+      "<error>●</error>",
+      "<success>●</success>",
+      "<accent>◉</accent>",
+      "<muted>●</muted>",
+      "<borderMuted>○</borderMuted>",
+    ]) {
+      expect(graph).toContain(marker);
+    }
   });
 
   it("shows enabled compaction reserve in the graph and breakdown", () => {
@@ -146,10 +200,14 @@ describe("context report formatting", () => {
       ...graphReport,
       compaction: { enabled: true, reserveTokens: 1_000 },
     };
-    const text = formatContextReportLines(compactionReport, plainTheme as never, 80).join("\n");
+    const lines = formatContextReportLines(compactionReport, roleTheme as never, 20);
+    const text = lines.join("\n");
+    const graph = lines
+      .filter((line) => /^(?:<[^>]+>[●○◉]<\/[^>]+>(?: |$))+$/.test(line))
+      .join("");
 
-    expect(text).toMatch(/^● ● ◆ ○ ▲ {4}/m);
-    expect(text).toContain("▲ Compaction reserve: 1K — 20.0%");
+    expect(graph.match(/<warning>●<\/warning>/g)).toHaveLength(28);
+    expect(text).toContain("<warning>●</warning> Compaction reserve: <accent>1K</accent><text> tokens</text><muted> · 20.0%</muted>");
   });
 
   it("shows how much reserve remains when usage crosses the compaction threshold", () => {
@@ -160,12 +218,12 @@ describe("context report formatting", () => {
     };
     const text = formatContextReportLines(compactionReport, plainTheme as never, 80).join("\n");
 
-    expect(text).toContain("▲ Compaction reserve: 1K — 20.0% · 800 unoccupied");
+    expect(text).toContain("● Compaction reserve: 1K tokens · 20.0% · 800 unoccupied");
   });
 
   it("counts spaces when wrapping graph cells", () => {
     const lines = formatContextReportLines(largeGraphReport, plainTheme as never, 20);
-    const graphLines = lines.filter((line) => /^[●◆■✦◉◇○▲ ]+$/.test(line));
+    const graphLines = lines.filter((line) => /^[●○ ]+$/.test(line));
 
     expect(graphLines.length).toBeGreaterThan(1);
     expect(graphLines[0]).toContain(" ");
@@ -180,10 +238,14 @@ describe("context report formatting", () => {
       usage: { contextWindow: 5_000, tokens: null, percent: null },
     };
 
-    const text = formatContextReportLines(unknownUsageReport, plainTheme as never, 80).join("\n");
+    const lines = formatContextReportLines(unknownUsageReport, roleTheme as never, 20);
+    const text = lines.join("\n");
+    const graph = lines
+      .filter((line) => /^(?:<[^>]+>[●○◉]<\/[^>]+>(?: |$))+$/.test(line))
+      .join("");
 
-    expect(text).toMatch(/^● ● ◆ \? \? {4}/m);
-    expect(text).toContain("? Unknown capacity: 2K");
+    expect(graph).toContain("<dim>●</dim>");
+    expect(text).toContain("●</dim> Unknown capacity: <accent>2K</accent>");
   });
 });
 
@@ -200,6 +262,30 @@ describe("context report component", () => {
     for (const line of lines) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(48);
     }
+  });
+
+  it("renders keyboard controls in the top border", () => {
+    const component = createContextReportComponent(report, {
+      theme: plainTheme as never,
+      tui: { terminal: { rows: 18 }, requestRender: vi.fn() } as never,
+      onClose: vi.fn(),
+    });
+    const lines = component.render(100);
+
+    expect(lines[0]).toContain(" Context Report ──── ↑↓/jk scroll");
+    const paddingRow = `│${" ".repeat(98)}│`;
+    expect(lines[1]).toBe(paddingRow);
+    expect(lines.slice(1).join("\n")).not.toContain(CONTEXT_REPORT_HELP);
+
+    component.handleInput?.("j");
+    expect(component.render(100)[1]).not.toBe(paddingRow);
+
+    const styledComponent = createContextReportComponent(report, {
+      theme: ansiTheme as never,
+      tui: { terminal: { rows: 18 }, requestRender: vi.fn() } as never,
+      onClose: vi.fn(),
+    });
+    expect(styledComponent.render(100)[0]).toContain("\u001b[1m Context Report \u001b[22m");
   });
 
   it("pages with d and u", () => {
@@ -236,8 +322,8 @@ describe("context report component", () => {
 
 describe("contentViewportLines", () => {
   it("reserves space for the view chrome", () => {
-    expect(contentViewportLines(40)).toBe(32);
-    expect(contentViewportLines(10)).toBe(5);
-    expect(contentViewportLines(6)).toBe(1);
+    expect(contentViewportLines(40)).toBe(33);
+    expect(contentViewportLines(10)).toBe(6);
+    expect(contentViewportLines(6)).toBe(2);
   });
 });

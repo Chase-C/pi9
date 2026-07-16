@@ -1,6 +1,6 @@
 # @pi9/context
 
-Pi extension that registers `/context` — a scrollable breakdown of how your current context window is being used (model, fixed-scale usage graph, compaction reserve, conversation stats, memory files, tools, and skills).
+Pi extension that registers `/context` — a scrollable breakdown of how your current context window is being used (model, responsive usage graph, compaction reserve, conversation stats, memory files, tools, and skills).
 
 ![The context report showing a token-usage graph and detailed breakdown](media/context-report.png)
 

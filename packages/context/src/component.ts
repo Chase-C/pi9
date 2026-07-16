@@ -5,22 +5,22 @@ import type { ContextReport, ToolSource } from "./types.js";
 
 export const CONTEXT_REPORT_HELP = "↑↓/jk scroll · PgUp/PgDn or u/d page · Home/End · q/Esc close";
 
-const CHROME_LINES = 4;
+const CHROME_LINES = 3;
 const VIEW_HEIGHT_FRACTION = 0.9;
-const GRAPH_CELL_TOKENS = 1_000;
 const GRAPH_CELL_GAP = " ";
 const GRAPH_GAP = 4;
+const STACKED_GRAPH_ROWS = 7;
 const SUMMARY_MIN_WIDTH = 28;
 const GRAPH_STYLE = {
-  prompt: { glyph: "●", color: "muted" },
-  tools: { glyph: "◆", color: "warning" },
-  memory: { glyph: "■", color: "error" },
-  skills: { glyph: "✦", color: "success" },
+  prompt: { glyph: "●", color: "text" },
+  tools: { glyph: "●", color: "warning" },
+  memory: { glyph: "●", color: "error" },
+  skills: { glyph: "●", color: "success" },
   conversation: { glyph: "◉", color: "accent" },
-  other: { glyph: "◇", color: "dim" },
+  other: { glyph: "●", color: "muted" },
   free: { glyph: "○", color: "borderMuted" },
-  compaction: { glyph: "▲", color: "warning" },
-  unknown: { glyph: "?", color: "dim" },
+  compaction: { glyph: "●", color: "warning" },
+  unknown: { glyph: "●", color: "dim" },
 } as const satisfies Record<string, { glyph: string; color: ThemeColor }>;
 
 type TreeBranch = "├" | "└";
@@ -119,12 +119,18 @@ export function createContextReportComponent(
 
       const innerWidth = width - 2;
       const border = (text: string) => theme.fg("border", text);
-      const padLine = (text: string) => truncateToWidth(text, innerWidth, "...", true);
+      const padLine = (text: string) => {
+        const clipped = truncateToWidth(text, innerWidth, "...", true);
+        return `${clipped}${" ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)))}`;
+      };
       const title = truncateToWidth(" Context Report ", innerWidth);
-      const titlePad = Math.max(0, innerWidth - visibleWidth(title));
+      const titleWidth = visibleWidth(title);
+      const separator = "─".repeat(Math.min(4, Math.max(0, innerWidth - titleWidth)));
+      const helpWidth = Math.max(0, innerWidth - titleWidth - separator.length);
+      const help = truncateToWidth(` ${CONTEXT_REPORT_HELP} `, helpWidth, "");
+      const titlePad = Math.max(0, helpWidth - visibleWidth(help));
       const result = [
-        border("╭") + theme.fg("accent", title) + border(`${"─".repeat(titlePad)}╮`),
-        border("│") + padLine(` ${theme.fg("dim", CONTEXT_REPORT_HELP)}`) + border("│"),
+        border("╭") + theme.fg("accent", theme.bold(title)) + border(separator) + theme.fg("dim", help) + border(`${"─".repeat(titlePad)}╮`),
       ];
 
       const visible = displayLines.slice(scrollOffset, scrollOffset + viewport);
@@ -137,7 +143,7 @@ export function createContextReportComponent(
 
       const maxOffset = maxScrollOffset(displayLines.length, viewport);
       const scrollHint = maxOffset > 0
-        ? theme.fg("dim", ` ${scrollOffset + 1}-${scrollOffset + visible.length} of ${displayLines.length}`)
+        ? theme.fg("muted", ` ${scrollOffset + 1}-${scrollOffset + visible.length} of ${displayLines.length}`)
         : "";
       result.push(border("│") + padLine(scrollHint) + border("│"));
       result.push(border(`╰${"─".repeat(innerWidth)}╯`));
@@ -167,11 +173,7 @@ export function clampScrollOffset(offset: number, lineCount: number, viewportLin
 }
 
 export function formatContextReportLines(report: ContextReport, theme: Theme, width = 80): string[] {
-  const lines = [
-    theme.fg("customMessageLabel", theme.bold("Context Usage")),
-    "",
-    ...formatUsageOverview(report, theme, width),
-  ];
+  const lines = ["", ...formatUsageOverview(report, theme, width)];
 
   if (report.kind === "conversation") {
     pushSection(lines, formatConversationSection(report, theme));
@@ -221,11 +223,22 @@ function formatUsageOverview(report: ContextReport, theme: Theme, width: number)
   ];
   const totalGraphTokens = contextWindow > 0
     ? contextWindow
-    : Math.max(GRAPH_CELL_TOKENS, sum(graphCategories.map((category) => category.tokens)));
+    : Math.max(1, sum(graphCategories.map((category) => category.tokens)));
   const visibleGraphCategories = graphCategories.length > 0
     ? graphCategories
     : [{ label: "Free space", tokens: totalGraphTokens, ...GRAPH_STYLE.free }];
-  const graphLines = formatGraphGrid(visibleGraphCategories, totalGraphTokens, graphColumnCount(width), theme);
+  const columns = graphColumnCount(width);
+  const sideBySide = shouldRenderSideBySide(width, columns);
+  const summaryRowCount = 6
+    + usedCategories.length
+    + Number(freeTokens > 0)
+    + Number(unknownTokens > 0)
+    + Number(configuredReserve > 0);
+  const targetRows = sideBySide ? summaryRowCount : STACKED_GRAPH_ROWS;
+  const graphRows = Math.max(targetRows, Math.ceil(visibleGraphCategories.length / columns));
+  const cellCount = columns * graphRows;
+  const tokensPerCell = totalGraphTokens / cellCount;
+  const graphLines = formatGraphGrid(visibleGraphCategories, cellCount, columns, theme);
   const summaryLines = formatUsageSummary(
     report,
     usedCategories,
@@ -233,10 +246,11 @@ function formatUsageOverview(report: ContextReport, theme: Theme, width: number)
     unknownTokens,
     configuredReserve,
     compactionTokens,
+    tokensPerCell,
     theme,
   );
 
-  if (!shouldRenderSideBySide(width, graphLines)) {
+  if (!sideBySide) {
     return [
       ...graphLines,
       "",
@@ -260,6 +274,7 @@ function formatUsageSummary(
   unknownTokens: number,
   configuredReserve: number,
   compactionTokens: number,
+  tokensPerCell: number,
   theme: Theme,
 ): string[] {
   const contextWindow = knownTokenValue(report.usage.contextWindow) ?? 0;
@@ -272,25 +287,25 @@ function formatUsageSummary(
     `${theme.fg("text", theme.bold(modelLabel))}${contextWindow > 0 ? theme.fg("muted", ` (${formatTokens(contextWindow)} context)`) : ""}`,
     theme.fg("muted", modelParts.join(" · ")),
     `${theme.fg("accent", formatTokens(currentTotal))}${contextWindow > 0 ? `/${formatTokens(contextWindow)}` : ""} tokens (${formatPercent(report.usage.percent)})`,
-    theme.fg("muted", `1 char = ${formatTokens(GRAPH_CELL_TOKENS)} tokens`),
+    theme.fg("muted", `1 block ≈ ${formatTokens(tokensPerCell)} tokens`),
     "",
     heading(theme, "Estimated breakdown", currentTotal),
   ];
 
   for (const category of categories) {
-    lines.push(`${theme.fg(category.color, category.glyph)} ${category.label}: ${formatTokens(category.tokens)}${formatCategoryPercent(category.tokens, contextWindow)}`);
+    lines.push(`${theme.fg(category.color, category.glyph)} ${category.label}: ${formatBreakdownValue(category.tokens, contextWindow, theme)}`);
   }
   if (freeTokens > 0) {
-    lines.push(`${theme.fg(GRAPH_STYLE.free.color, GRAPH_STYLE.free.glyph)} Free space: ${formatTokens(freeTokens)}${formatCategoryPercent(freeTokens, contextWindow)}`);
+    lines.push(`${theme.fg(GRAPH_STYLE.free.color, GRAPH_STYLE.free.glyph)} Free space: ${formatBreakdownValue(freeTokens, contextWindow, theme)}`);
   }
   if (unknownTokens > 0) {
-    lines.push(`${theme.fg(GRAPH_STYLE.unknown.color, GRAPH_STYLE.unknown.glyph)} Unknown capacity: ${formatTokens(unknownTokens)}${formatCategoryPercent(unknownTokens, contextWindow)}`);
+    lines.push(`${theme.fg(GRAPH_STYLE.unknown.color, GRAPH_STYLE.unknown.glyph)} Unknown capacity: ${formatBreakdownValue(unknownTokens, contextWindow, theme)}`);
   }
   if (configuredReserve > 0) {
     const remaining = compactionTokens < configuredReserve
-      ? theme.fg("dim", ` · ${formatTokens(compactionTokens)} unoccupied`)
+      ? theme.fg("muted", ` · ${formatTokens(compactionTokens)} unoccupied`)
       : "";
-    lines.push(`${theme.fg(GRAPH_STYLE.compaction.color, GRAPH_STYLE.compaction.glyph)} Compaction reserve: ${formatTokens(configuredReserve)}${formatCategoryPercent(configuredReserve, contextWindow)}${remaining}`);
+    lines.push(`${theme.fg(GRAPH_STYLE.compaction.color, GRAPH_STYLE.compaction.glyph)} Compaction reserve: ${formatBreakdownValue(configuredReserve, contextWindow, theme)}${remaining}`);
   }
 
   return lines;
@@ -352,15 +367,14 @@ function scaleCategories(categories: GraphCategory[], targetTokens: number): Gra
 
 function formatGraphGrid(
   categories: GraphCategory[],
-  totalTokens: number,
+  cellCount: number,
   columns: number,
   theme: Theme,
 ): string[] {
-  const cellCount = Math.max(1, Math.ceil(totalTokens / GRAPH_CELL_TOKENS));
   const cells = allocateGraphCells(categories, cellCount);
   const lines: string[] = [];
 
-  for (let start = 0; start < cellCount; start += columns) {
+  for (let start = 0; start < cells.length; start += columns) {
     lines.push(cells
       .slice(start, start + columns)
       .map((category) => theme.fg(category.color, category.glyph))
@@ -371,34 +385,36 @@ function formatGraphGrid(
 }
 
 function allocateGraphCells(categories: GraphCategory[], cellCount: number): GraphCategory[] {
-  const ranges: Array<GraphCategory & { start: number; end: number }> = [];
-  let cursor = 0;
-  for (const category of categories) {
-    const tokens = Math.max(0, category.tokens);
-    if (tokens <= 0) continue;
-    ranges.push({ ...category, tokens, start: cursor, end: cursor + tokens });
-    cursor += tokens;
+  const visibleCategories = categories.filter((category) => category.tokens > 0);
+  if (visibleCategories.length === 0) return [];
+
+  const targetCellCount = Math.max(cellCount, visibleCategories.length);
+  const totalTokens = sum(visibleCategories.map((category) => category.tokens));
+  const allocations = visibleCategories.map((category) => {
+    const ideal = (category.tokens / totalTokens) * targetCellCount;
+    return { category, ideal, count: Math.max(1, Math.floor(ideal)) };
+  });
+  let allocated = sum(allocations.map((allocation) => allocation.count));
+
+  while (allocated > targetCellCount) {
+    const donor = allocations
+      .filter((allocation) => allocation.count > 1)
+      .sort((a, b) => (b.count - b.ideal) - (a.count - a.ideal))[0];
+    if (!donor) break;
+    donor.count -= 1;
+    allocated -= 1;
   }
 
-  const fallback = ranges[ranges.length - 1] ?? { label: "Free space", tokens: 0, start: 0, end: 0, ...GRAPH_STYLE.free };
-  const cells: GraphCategory[] = [];
-  for (let index = 0; index < cellCount; index += 1) {
-    const start = index * GRAPH_CELL_TOKENS;
-    const end = start + GRAPH_CELL_TOKENS;
-    let best = fallback;
-    let bestOverlap = 0;
-
-    for (const range of ranges) {
-      const overlap = Math.max(0, Math.min(end, range.end) - Math.max(start, range.start));
-      if (overlap > bestOverlap) {
-        best = range;
-        bestOverlap = overlap;
-      }
-    }
-
-    cells.push(best);
+  while (allocated < targetCellCount) {
+    const recipient = [...allocations]
+      .sort((a, b) => (b.ideal - b.count) - (a.ideal - a.count))[0]!;
+    recipient.count += 1;
+    allocated += 1;
   }
-  return cells;
+
+  return allocations.flatMap(({ category, count }) =>
+    Array.from({ length: count }, () => category),
+  );
 }
 
 function graphColumnCount(width: number): number {
@@ -413,8 +429,8 @@ function maxGraphColumnsForWidth(width: number): number {
   return Math.max(1, Math.floor((Math.max(1, width) + gapWidth) / (1 + gapWidth)));
 }
 
-function shouldRenderSideBySide(width: number, graphLines: readonly string[]): boolean {
-  const graphWidth = visibleWidth(graphLines[0] ?? "");
+function shouldRenderSideBySide(width: number, columns: number): boolean {
+  const graphWidth = columns + (columns - 1) * visibleWidth(GRAPH_CELL_GAP);
   return width - graphWidth - GRAPH_GAP >= SUMMARY_MIN_WIDTH;
 }
 
@@ -457,11 +473,11 @@ function formatToolsSection(report: ContextReport, theme: Theme): string[] {
     if (tools.length === 0) continue;
 
     const groupTokens = sum(tools.filter((tool) => tool.active).map((tool) => tool.tokens));
-    lines.push(`${theme.fg("muted", "  ")}${theme.fg("text", theme.bold(group.title))}${theme.fg("dim", ` · ${formatTokens(groupTokens)} tokens`)}`);
+    lines.push(`${theme.fg("muted", "  ")}${theme.fg("text", theme.bold(group.title))}${theme.fg("muted", ` · ${formatTokens(groupTokens)} tokens`)}`);
     tools.forEach((tool, index) => {
       const tree = index === tools.length - 1 ? "└" : "├";
       const meta = `${tool.active ? "active" : "inactive"} · ${formatToolSource(tool.source)} · ${formatCallCount(callCounts.get(tool.name) ?? 0)}`;
-      lines.push(`${theme.fg("muted", `    ${tree}─ `)}${theme.fg("text", tool.name)}: ${theme.fg("accent", formatTokens(tool.tokens))} tokens${theme.fg("dim", ` · ${meta}`)}`);
+      lines.push(`${theme.fg("muted", `    ${tree}─ `)}${theme.fg("text", tool.name)}: ${theme.fg("accent", formatTokens(tool.tokens))} tokens${theme.fg("muted", ` · ${meta}`)}`);
     });
   }
 
@@ -477,7 +493,7 @@ function formatDetailSection(
 
   const lines = [heading(theme, title, sum(items.map((item) => item.tokens)))];
   items.forEach((item, index) => {
-    const meta = item.meta ? theme.fg("dim", ` · ${item.meta}`) : "";
+    const meta = item.meta ? theme.fg("muted", ` · ${item.meta}`) : "";
     lines.push(`${branch(theme, index === items.length - 1 ? "└" : "├")}${theme.fg("text", item.label)}: ${theme.fg("accent", formatTokens(item.tokens))} tokens${meta}`);
   });
 
@@ -510,7 +526,7 @@ function pushSection(lines: string[], section: string[]): void {
 }
 
 function heading(theme: Theme, text: string, tokens?: number | null): string {
-  const total = tokens === undefined ? "" : theme.fg("dim", ` · ${formatTokens(tokens)} tokens`);
+  const total = tokens === undefined ? "" : theme.fg("muted", ` · ${formatTokens(tokens)} tokens`);
   return theme.fg("customMessageLabel", theme.bold(text)) + total;
 }
 
@@ -532,8 +548,12 @@ function formatPercent(value: number | null | undefined): string {
   return value === null || value === undefined ? "unknown" : `${value.toFixed(1)}%`;
 }
 
-function formatCategoryPercent(tokens: number | null, contextWindow: number): string {
-  return tokens === null || contextWindow <= 0 ? "" : ` — ${((tokens / contextWindow) * 100).toFixed(1)}%`;
+function formatBreakdownValue(tokens: number, contextWindow: number, theme: Theme): string {
+  const tokenValue = `${theme.fg("accent", formatTokens(tokens))}${theme.fg("text", " tokens")}`;
+  const percent = contextWindow > 0
+    ? theme.fg("muted", ` · ${((tokens / contextWindow) * 100).toFixed(1)}%`)
+    : "";
+  return `${tokenValue}${percent}`;
 }
 
 function sum(values: readonly number[]): number {
