@@ -8,6 +8,7 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 - Simplify Todo tool calls by removing lifecycle labels and expansion hints, and show a muted live phase/task summary while arguments stream and after completion.
 - Use the muted theme color instead of dim for secondary Todo widget text.
+- Match expanded tool output to widget phase progress and task colors, and remove the redundant `Todos` heading.
 
 ## [0.3.1] - 2026-07-15
 

@@ -24,10 +24,7 @@ export function renderTodoWidgetLines(
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width) || 1);
   const phases = state?.phases ?? [];
-  const currentPhaseIndex = currentTodoPhaseIndex(phases);
-  const selectedPhaseIndex = currentPhaseIndex >= 0
-    ? currentPhaseIndex
-    : lastNonEmptyPhaseIndex(phases);
+  const selectedPhaseIndex = selectedTodoPhaseIndex(phases);
   if (selectedPhaseIndex < 0) return [];
   const selectedPhase = phases[selectedPhaseIndex];
   const maxVisible = boundedMaxVisible(options.maxVisible);
@@ -37,11 +34,11 @@ export function renderTodoWidgetLines(
   for (let phaseIndex = 0; phaseIndex < phases.length; phaseIndex++) {
     const phase = phases[phaseIndex];
     const selected = phaseIndex === selectedPhaseIndex;
-    lines.push(fit(phaseTitle(phase, phaseIndex, selected, theme), safeWidth));
+    lines.push(fit(renderTodoPhaseTitle(phase, phaseIndex, selected, theme), safeWidth));
 
     if (selected) {
       for (const task of selectedTasks) {
-        lines.push(fit(taskLine(task, theme, options.fallbackGlyphs), safeWidth));
+        lines.push(fit(renderTodoTaskLine(task, theme, options.fallbackGlyphs), safeWidth));
       }
       const openTasks = phase.tasks.filter(task => !isTerminalTodo(task));
       const hidden = openTasks.length - selectedTasks.length;
@@ -64,6 +61,11 @@ export function renderTodoWidgetLines(
   return lines.map((line) => line ? fit(` ${line}`, safeWidth) : line);
 }
 
+export function selectedTodoPhaseIndex(phases: readonly TodoPhase[]): number {
+  const currentPhaseIndex = currentTodoPhaseIndex(phases);
+  return currentPhaseIndex >= 0 ? currentPhaseIndex : lastNonEmptyPhaseIndex(phases);
+}
+
 function lastNonEmptyPhaseIndex(phases: readonly TodoPhase[]): number {
   for (let index = phases.length - 1; index >= 0; index -= 1) {
     if (phases[index].tasks.length > 0) return index;
@@ -76,7 +78,7 @@ function boundedMaxVisible(value: number | undefined): number {
   return Math.max(1, Math.floor(value));
 }
 
-function phaseTitle(phase: TodoPhase, phaseIndex: number, selected: boolean, theme: ThemeLike | undefined): string {
+export function renderTodoPhaseTitle(phase: TodoPhase, phaseIndex: number, selected: boolean, theme: ThemeLike | undefined): string {
   const title = `  ${phaseIndex + 1}. ${phase.name}`;
   const terminal = phase.tasks.filter(isTerminalTodo).length;
   const progress = `${TODO_SEPARATOR_GLYPH} ${terminal}/${phase.tasks.length}`;
@@ -102,7 +104,7 @@ function visibleTasks(tasks: readonly Todo[], maxVisible: number): DisplayTask[]
   return active.length > maxVisible ? active : ordered.slice(0, maxVisible);
 }
 
-function taskLine(task: Todo, theme: ThemeLike | undefined, fallbackGlyphs = false): string {
+export function renderTodoTaskLine(task: Todo, theme: ThemeLike | undefined, fallbackGlyphs = false): string {
   const marker = todoGlyph(task.status, fallbackGlyphs);
   const color = task.status === "in_progress" ? "text" : task.status === "completed" ? "success" : "muted";
   const name = isTerminalTodo(task) && theme?.strikethrough
