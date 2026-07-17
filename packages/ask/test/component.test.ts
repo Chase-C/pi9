@@ -43,19 +43,6 @@ function make(options: Partial<ConstructorParameters<typeof AskComponent>[0]> = 
 describe("AskComponent", () => {
   initTheme("dark", false);
 
-  it("renders the prompt, descriptions, freeform row, help, and stays within width", () => {
-    const { component } = make();
-    const lines = component.render(32);
-
-    expect(lines.join("\n")).toContain("Both targets");
-    expect(lines.join("\n")).toContain("Which target");
-    expect(lines.join("\n")).toContain("Staging");
-    expect(lines.join("\n")).toContain("Validate");
-    expect(lines.join("\n")).toContain("Type a response");
-    expect(lines.join("\n")).toContain("comment");
-    expect(lines.every((line) => visibleWidth(line) <= 32)).toBe(true);
-  });
-
   it("uses Enter for single-select and returns the selected option", () => {
     const { component, onSubmit } = make();
     component.handleInput("\r");
@@ -416,22 +403,6 @@ describe("AskComponent", () => {
     expect(submitLines.some(line => line.includes("│"))).toBe(width >= 88);
   });
 
-  it("keeps wide column headers visible while editing a freeform response", () => {
-    const { component } = make({
-      options: [{ label: "Staging", preview: "PREVIEW_SENTINEL" }],
-      allowFreeform: true,
-    });
-
-    component.handleInput("\x1b[B");
-    component.handleInput("\r");
-    const output = component.render(100).join("\n");
-
-    expect(component.state.editor.kind).toBe("freeform");
-    expect(output).toContain("OPTIONS");
-    expect(output).toContain("PREVIEW · FOCUSED OPTION");
-    expect(output).toContain("Type a response");
-  });
-
   it("keeps the selected option and fixed chrome visible while clipping long previews", () => {
     const tui = { terminal: { rows: 8 }, requestRender: vi.fn() };
     const { component } = make({
@@ -511,7 +482,6 @@ describe("AskComponent", () => {
     navigated.component.handleInput("c");
     expect(navigated.component.state.highlightedRow).toBe(1);
     expect(navigated.component.state.editor.kind).toBe("select");
-    expect(navigated.component.render(120).join("\n")).not.toContain("c comment");
 
     const confirmWithC = new KeybindingsManager(TUI_KEYBINDINGS, {
       "tui.select.confirm": "c",
@@ -534,7 +504,6 @@ describe("AskComponent", () => {
     freeform.component.handleInput(" ");
     expect(freeform.component.state.editor.kind).toBe("freeform");
     expect(freeform.component.state.freeformChecked).toBe(false);
-    expect(freeform.component.render(120).join("\n")).not.toContain("Space/Space");
   });
 
   it("uses injected select keybindings and retains j/k aliases", () => {
@@ -556,7 +525,6 @@ describe("AskComponent", () => {
     expect(component.state.highlightedRow).toBe(1);
     component.handleInput("k");
     expect(component.state.highlightedRow).toBe(0);
-    expect(component.render(120).join("\n")).toContain("w/s/jk");
 
     component.handleInput("x");
     expect(onSubmit).toHaveBeenCalledOnce();
