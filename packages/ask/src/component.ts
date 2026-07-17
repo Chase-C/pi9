@@ -369,21 +369,23 @@ export class AskComponent implements Component, Focusable {
       addWrappedWithPrefix(lines, prefix, styled, width);
     };
 
+    const multiple = this.questionnaireState.config.allowMultiple;
     let focus: FocusRange | undefined;
     for (const [index, row] of this.questionnaireState.rows.entries()) {
       if (row.kind === "submit") continue;
       const selected = this.questionnaireState.highlightedRow === index;
       const start = lines.length;
       const marker = selected ? this.config.theme.fg("accent", "┃ ") : "  ";
+      const checked = row.kind === "option"
+        ? this.questionnaireState.checked.has(row.index)
+        : this.questionnaireState.freeformChecked;
+      const checkboxColor = checked ? "success" : selected ? "text" : "muted";
+      const checkbox = multiple
+        ? `${this.config.theme.fg(checkboxColor, checked ? CHECKED_BOX : EMPTY_BOX)} `
+        : "";
 
-      const multiple = this.questionnaireState.config.allowMultiple;
       if (row.kind === "option") {
         const source = row.option;
-        const checked = this.questionnaireState.checked.has(row.index);
-        const checkboxColor = checked ? "success" : selected ? "text" : "muted";
-        const checkbox = multiple
-          ? `${this.config.theme.fg(checkboxColor, checked ? CHECKED_BOX : EMPTY_BOX)} `
-          : "";
         const comment = this.questionnaireState.comments.has(row.index)
           ? this.config.theme.fg("warning", " ✎")
           : "";
@@ -394,11 +396,6 @@ export class AskComponent implements Component, Focusable {
           if (commentText) addPrefixed(multiple ? "       " : "     ", `✎ ${commentText}`, "dim");
         }
       } else {
-        const checked = this.questionnaireState.freeformChecked;
-        const checkboxColor = checked ? "success" : selected ? "text" : "muted";
-        const checkbox = multiple
-          ? `${this.config.theme.fg(checkboxColor, checked ? CHECKED_BOX : EMPTY_BOX)} `
-          : "";
         const suffix = this.questionnaireState.freeformDraft
           ? ` — ${this.questionnaireState.freeformDraft}`
           : "";
