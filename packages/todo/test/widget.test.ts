@@ -32,7 +32,7 @@ test("todo widget nests numbered phases and shows tasks only under the active ph
   assert.match(lines[4], /1 complete task · 1 cancelled task/);
   assert.equal(lines[5], "   2. Build · 0/1");
   assert.equal(lines[6], "");
-  assert.equal(lines[7], "   󰅂 Updating the todo widget");
+  assert.equal(lines[7], "   ∼ Updating the todo widget");
   assert.doesNotMatch(lines.join("\n"), /Detailed description|\[1\]|\[2\]|Second pending task/);
 });
 
@@ -48,7 +48,7 @@ test("todo widget summarizes terminal tasks beneath the selected phase", () => {
   assert.doesNotMatch(themed, /<text>    ▶<\/text>|<bold>    ▶ Active task<\/bold>/);
   assert.match(themed, /<muted>    \+ 1 complete task · 1 cancelled task<\/muted>/);
   assert.match(themed, /<muted>  2\. Build · 0\/1<\/muted>/);
-  assert.match(themed, /  <muted>󰅂 Updating the todo widget<\/muted>/);
+  assert.match(themed, /  <muted>∼ Updating the todo widget<\/muted>/);
   assert.doesNotMatch(themed, /<dim>/);
   assert.doesNotMatch(themed, /Finished task|Cancelled task|\[3\]|\[4\]|Working on:/);
 });
@@ -107,14 +107,14 @@ test("todo widget keeps active markers static and animates the working line with
   const component = new TodoWidgetComponent(state, undefined, {}, { requestRender } as never);
 
   const initial = component.render(80).join("\n");
-  assert.match(initial, /󰻃 Active task/);
-  assert.match(initial, /\n\n   󰅂 Updating the todo widget/);
+  assert.match(initial, /󰝥 Active task/);
+  assert.match(initial, /\n\n   ∼ Updating the todo widget/);
   vi.advanceTimersByTime(119);
   assert.equal(requestRender.mock.calls.length, 0);
   vi.advanceTimersByTime(1);
   const next = component.render(80).join("\n");
-  assert.match(next, /󰻃 Active task/);
-  assert.match(next, /\n\n   󰄾 Updating the todo widget/);
+  assert.match(next, /󰝥 Active task/);
+  assert.match(next, /\n\n   ≈ Updating the todo widget/);
   assert.equal(requestRender.mock.calls.length, 1);
 
   component.dispose();
@@ -128,10 +128,10 @@ test("todo widget keeps the working marker static while the agent is idle", () =
   const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` } as never;
   const component = new TodoWidgetComponent(state, theme, { animateWorkingMarker: false }, { requestRender } as never);
 
-  assert.match(component.render(80).join("\n"), /  <muted>󰅂 Updating the todo widget<\/muted>/);
+  assert.match(component.render(80).join("\n"), /  <muted>∼ Updating the todo widget<\/muted>/);
   vi.advanceTimersByTime(1_000);
   assert.equal(requestRender.mock.calls.length, 0);
-  assert.match(component.render(80).join("\n"), /  <muted>󰅂 Updating the todo widget<\/muted>/);
+  assert.match(component.render(80).join("\n"), /  <muted>∼ Updating the todo widget<\/muted>/);
   component.dispose();
 });
 
@@ -142,9 +142,9 @@ test("fallback glyphs do not change the working-line spinner", () => {
 
   const initial = component.render(80).join("\n");
   assert.match(initial, /▶ Active task/);
-  assert.match(initial, /  󰅂 Updating the todo widget/);
+  assert.match(initial, /  ∼ Updating the todo widget/);
   vi.advanceTimersByTime(120);
-  assert.match(component.render(80).join("\n"), /  󰄾 Updating the todo widget/);
+  assert.match(component.render(80).join("\n"), /  ≈ Updating the todo widget/);
   assert.equal(requestRender.mock.calls.length, 1);
   component.dispose();
 });
