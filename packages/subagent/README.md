@@ -4,6 +4,15 @@ Delegate focused work from Pi to context-isolated child conversations with a sin
 
 ![A subagent run with nested children rendering live progress, tool calls, and per-child counters](media/subagent-overview.png)
 
+## Feature overview
+
+- **Retained conversations** let the parent send follow-ups to a successful child while preserving its accumulated context.
+- **Background dispatch** returns session handles immediately so the parent can continue working, with configurable completion notifications and nonblocking result retrieval.
+- **Recursive delegation** lets subagents spawn their own children under one tree-wide concurrency limit.
+- **Live progress** shows status, token usage, tool activity, recursive children, and answers in the tool row, with persistent work tracked in the Background and Retained widget sections.
+- **Unified session management** provides filterable flat and tree views, live conversations, agent discovery and launch, cleanup, and settings through `/subagents`.
+- **Focused tool actions** separate agent discovery, session inventory, dispatch, result retrieval, and cleanup without adding multiple tools to the parent context.
+
 ## Install
 
 ```bash
@@ -80,17 +89,21 @@ Only a successfully completed, available conversation can resume. A failure befo
 
 ## Retention and conversations
 
-Retention is centralized and reports why an agent remains cataloged. Active work, background results, and `retainConversation` policy independently govern inventory, conversation availability, and capabilities.
+Retention is centralized and reports why an agent remains cataloged. Active work, background results, and `retainConversation` policy independently govern inventory, conversation availability, and capabilities. Conversations are process-local and are not restored after restart or extension reload.
 
-`/subagents` opens Sessions, Agents, and Settings pages. Press Enter on a running session to replace the list and inspector with a full-width conversation pane. Its composer sends steering messages directly. Escape returns to Sessions.
+## `/subagents` UI
 
-A successfully completed retained conversation uses the same pane for tracked follow-ups. Conversations are process-local and are not restored after restart or extension reload.
+`/subagents` opens a unified overlay with Sessions, Agents, and Settings pages; `/subagents sessions`, `/subagents agents`, and `/subagents settings` open a page directly.
+
+Sessions can be filtered and switched between flat and tree views. Tree view nests running descendants under their parents while retained terminal sessions stay at the root. From Sessions, stop active work, remove terminal entries, or press Enter on a running or resumable session to open its full-width conversation. Messages steer a running session directly; messages to a successfully completed retained session start a tracked follow-up attempt.
+
+The Agents page filters discovered definitions and can launch a selected agent in the background after prompting for its task.
 
 ## Live display
 
 The tool row shows each child's state, label, tools, tokens, elapsed time, recursive children, and answer. Previous Run sections carry their own attempt kind and dispatch.
 
-The persistent widget has a **Retained** section derived from retention reasons and capabilities. It includes relevant background and conversation-policy entries; transient foreground work remains in the tool row. Configure `widgetPlacement` (`belowEditor`, `aboveEditor`, `off`) and `widgetLayout` (`auto`, `columns`, `stacked`).
+The persistent widget separates **Background** work and other **Retained** sessions. Background attempts stay in the Background section while active or holding a result; persistent non-background sessions appear under Retained. Transient foreground work remains in the tool row, with an optional running count in the widget footer. Configure `widgetPlacement` (`belowEditor`, `aboveEditor`, `off`) and `widgetLayout` (`auto`, `columns`, `stacked`).
 
 ## Settings
 
@@ -114,7 +127,7 @@ Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`:
 | Action | Behavior |
 | --- | --- |
 | `agents` | Discover definitions and their resolved defaults. |
-| `list` | Return lightweight identity, status, current attempt dispatch, and resume/remove capabilities. |
+| `list` | Return lightweight identity, status, attempt, conversation, retention, and capability fields, optionally filtered by status. |
 | `run` | Spawn with `agent` or resume with `sessionId`; `dispatch` selects foreground or background for the whole invocation. |
 | `results` | Nonblocking retrieval of full output/error by `sessionIds`; `remove: true` atomically collects and removes terminal entries. |
 | `remove` | Abort running entries or discard queued/retained entries by `sessionIds`. |
