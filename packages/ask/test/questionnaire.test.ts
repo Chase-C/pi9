@@ -23,7 +23,7 @@ function uiHarness(action: "submit" | "cancel" = "submit") {
   const custom = vi.fn(async (factory: any, options: any) => {
     let result: any;
     const component = factory("tui", "theme", "keys", (value: unknown) => { result = value; });
-    if (action === "submit") component.options.onSubmit({ selections: [{ label: "A" }] });
+    if (action === "submit") component.options.onSubmit({ selections: [{ option: 0 }] });
     else component.options.onCancel();
     return result;
   });
@@ -34,7 +34,7 @@ describe("launchQuestionnaire", () => {
   it("launches a fresh custom component and returns its answer", async () => {
     const first = uiHarness();
     const second = uiHarness();
-    await expect(launchQuestionnaire({ ui: first.ui }, params)).resolves.toEqual({ selections: [{ label: "A" }] });
+    await expect(launchQuestionnaire({ ui: first.ui }, params)).resolves.toEqual({ selections: [{ option: 0 }] });
     await launchQuestionnaire({ ui: second.ui }, params);
 
     expect(components.at(-2)).not.toBe(components.at(-1));

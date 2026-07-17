@@ -1,20 +1,25 @@
 import type { ExtensionAPI, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
-import { rewriteAskContext } from "./context.js";
-import { resolveTimeoutMs } from "./config.js";
 import { createDeadlineSignal } from "./deadline.js";
+import {
+  AskParamsSchema,
+  buildAskResponse,
+  normalizeAsk,
+  parseAskReplayDetails,
+  type AskAnswer,
+  type AskParams,
+  type AskToolDetails,
+} from "./domain.js";
 import { CHECKED_BOX, CHECKED_CIRCLE, EMPTY_BOX, EMPTY_CIRCLE } from "./glyphs.js";
 import { launchQuestionnaire } from "./questionnaire.js";
-import { renderAskReanswerMessage } from "./replay-renderer.js";
-import { ASK_REPLAY_CUSTOM_TYPE, buildAskReplayMessage, parseAskReplayDetails, resolveAskReplayTarget } from "./replay.js";
-import { buildAnsweredResponse, buildCancelledResponse, buildUiUnavailableResponse, buildUnansweredResponse } from "./response.js";
 import { askWithRpc } from "./rpc.js";
-import { AskParamsSchema } from "./schema.js";
-import type { AskAnswer, AskParams, AskToolDetails } from "./types.js";
-import { validateAskParams } from "./validation.js";
-
-const TREE_EDITOR_GUARD = "\u200B";
+import {
+  ASK_REPLAY_CUSTOM_TYPE,
+  buildAskReplayMessage,
+  resolveAskReplayTarget,
+  rewriteAskContext,
+} from "./session.js";
 
 type AskRendererState = {
   callComponent?: Text;
@@ -23,13 +28,8 @@ type AskRendererState = {
 };
 
 type AskReplayState =
-  | { status: "idle" }
-  | { status: "prompting" }
-  | {
-      status: "dispatched";
-      details: ReturnType<typeof buildAskReplayMessage>["details"];
-      clearEditor: boolean;
-    };
+  | { status: "idle" | "prompting" }
+  | { status: "dispatched"; details: ReturnType<typeof buildAskReplayMessage>["details"] };
 
 function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): string {
   const questionColor = state.status === "answered" ? "text" : "muted";
@@ -60,12 +60,12 @@ class AnsweredOptions implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    const selections = new Map(this.answer.selections.map(selection => [selection.label, selection]));
+    const selections = new Map(this.answer.selections.map(selection => [selection.option, selection]));
     const checkedGlyph = this.args.allowMultiple === true ? CHECKED_BOX : CHECKED_CIRCLE;
     const emptyGlyph = this.args.allowMultiple === true ? EMPTY_BOX : EMPTY_CIRCLE;
-    const rows = this.args.options.map(option => {
+    const rows = this.args.options.map((option, index) => {
       const label = option.label.trim();
-      const selection = selections.get(label);
+      const selection = selections.get(index);
       const comment = selection?.comment ? ` (${selection.comment})` : "";
       return {
         marker: this.theme.fg(selection ? "success" : "muted", selection ? checkedGlyph : emptyGlyph),
@@ -99,7 +99,6 @@ function wrapAnsweredRow(prefix: string, text: string, width: number): string[] 
 
 export default function askExtension(pi: ExtensionAPI) {
   let replayState: AskReplayState = { status: "idle" };
-  let replayTreeSelection = false;
   const revisedAnswers = new Map<string, AskAnswer>();
   const rendererStates = new Map<string, AskRendererState>();
 
@@ -130,29 +129,17 @@ export default function askExtension(pi: ExtensionAPI) {
   });
   pi.on("before_agent_start", (_event, ctx) => reconcileAskTool(ctx.hasUI));
   pi.on("context", (event) => ({ messages: rewriteAskContext(event.messages) }));
-  pi.on("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", () => {
     if (replayState.status !== "dispatched") return;
-    if (replayState.clearEditor) {
-      replayState = { ...replayState, clearEditor: false };
-      setTimeout(() => ctx.ui.setEditorText(""), 0);
-    }
     pi.events.emit("ask:reanswered", replayState.details);
     replayState = { status: "idle" };
   });
   pi.on("session_shutdown", () => {
     replayState = { status: "idle" };
-    replayTreeSelection = false;
     revisedAnswers.clear();
     rendererStates.clear();
   });
-  pi.registerMessageRenderer(ASK_REPLAY_CUSTOM_TYPE, renderAskReanswerMessage);
-  pi.on("session_before_tree", (event, ctx) => {
-    const target = ctx.sessionManager.getEntry(event.preparation.targetId);
-    replayTreeSelection = target?.type === "custom_message" && target.customType === ASK_REPLAY_CUSTOM_TYPE;
-  });
   pi.on("session_tree", async (event, ctx) => {
-    const suppressEditorRestore = replayTreeSelection;
-    replayTreeSelection = false;
     if (ctx.mode !== "tui" || replayState.status !== "idle") return;
 
     const entries = ctx.sessionManager.getBranch();
@@ -167,30 +154,18 @@ export default function askExtension(pi: ExtensionAPI) {
       return;
     }
 
-    // Pi restores selected custom-message content after this hook returns. Keep
-    // the editor temporarily non-empty until the replay turn settles so the
-    // selected marker text cannot replace the guard.
-    const guardEditor = suppressEditorRestore && !ctx.ui.getEditorText().trim();
-    if (guardEditor) ctx.ui.setEditorText(TREE_EDITOR_GUARD);
-
     replayState = { status: "prompting" };
-    const deadline = createDeadlineSignal(
-      undefined,
-      resolveTimeoutMs(resolution.params.timeout, process.env),
-    );
+    const deadline = createDeadlineSignal(undefined, resolution.ask.timeout, process.env);
     try {
-      const answer = await launchQuestionnaire(ctx, resolution.params, deadline.signal);
+      const answer = await launchQuestionnaire(ctx, resolution.ask, deadline.signal);
       if (!answer) return;
-      const message = buildAskReplayMessage(resolution.toolCallId, resolution.params, answer);
+      const message = buildAskReplayMessage(resolution.toolCallId, answer);
       pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
       applyRevision(message.details.toolCallId, message.details.answer);
-      replayState = { status: "dispatched", details: message.details, clearEditor: guardEditor };
+      replayState = { status: "dispatched", details: message.details };
     } finally {
       deadline.dispose();
-      if (replayState.status !== "dispatched") {
-        replayState = { status: "idle" };
-        if (guardEditor) setTimeout(() => ctx.ui.setEditorText(""), 0);
-      }
+      if (replayState.status !== "dispatched") replayState = { status: "idle" };
     }
   });
 
@@ -207,29 +182,26 @@ export default function askExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
 
     async execute(_toolCallId, rawParams, signal, _onUpdate, ctx) {
-      const params = validateAskParams(rawParams as AskParams);
-      if (!ctx.hasUI) return buildUiUnavailableResponse(params.question);
+      const params = normalizeAsk(rawParams as AskParams);
+      if (!ctx.hasUI) return buildAskResponse(params, { status: "ui_unavailable" });
 
-      const deadline = createDeadlineSignal(
-        signal,
-        resolveTimeoutMs(params.timeout, process.env),
-      );
+      const deadline = createDeadlineSignal(signal, params.timeout, process.env);
       try {
         const answer = ctx.mode === "tui"
           ? await launchQuestionnaire(ctx, params, deadline.signal)
           : await askWithRpc(ctx.ui, params, deadline.signal);
         if (answer === null) {
           if (deadline.timedOut) {
-            const result = buildUnansweredResponse(params.question);
+            const result = buildAskResponse(params, { status: "unanswered" });
             pi.events.emit("ask:unanswered", result.details);
             return result;
           }
-          const result = buildCancelledResponse(params.question);
+          const result = buildAskResponse(params, { status: "cancelled" });
           pi.events.emit("ask:cancelled", result.details);
           return result;
         }
 
-        const result = buildAnsweredResponse(params.question, answer);
+        const result = buildAskResponse(params, { status: "answered", answer });
         pi.events.emit("ask:answered", result.details);
         return result;
       } finally {

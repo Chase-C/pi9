@@ -1,6 +1,6 @@
-import type { AskAnswer, AskOption, ValidatedAskParams } from "./types.js";
+import type { Ask, AskAnswer, AskOption } from "./domain.js";
 
-export type QuestionnaireOptionRow = { kind: "option"; option: AskOption };
+export type QuestionnaireOptionRow = { kind: "option"; index: number; option: AskOption };
 export type QuestionnaireFreeformRow = { kind: "freeform" };
 export type QuestionnaireSubmitRow = { kind: "submit" };
 export type QuestionnaireRow =
@@ -13,15 +13,15 @@ export type QuestionnaireEditor =
   | { kind: "comment"; target: QuestionnaireOptionRow; draft: string }
   | { kind: "freeform"; target: QuestionnaireFreeformRow; draft: string };
 
-type QuestionnaireConfig = Pick<ValidatedAskParams, "allowMultiple" | "allowFreeform">;
-type QuestionnaireInput = QuestionnaireConfig & Pick<ValidatedAskParams, "options">;
+type QuestionnaireConfig = Pick<Ask, "allowMultiple" | "allowFreeform">;
+type QuestionnaireInput = QuestionnaireConfig & Pick<Ask, "options">;
 
 export interface QuestionnaireState {
   config: QuestionnaireConfig;
   rows: readonly QuestionnaireRow[];
   highlightedRow: number;
-  checked: Set<string>;
-  comments: Map<string, string>;
+  checked: Set<number>;
+  comments: Map<number, string>;
   freeformDraft: string;
   freeformChecked: boolean;
   editor: QuestionnaireEditor;
@@ -80,7 +80,7 @@ export function transitionQuestionnaire(state: QuestionnaireState, event: Questi
       next.editor = {
         kind: "comment",
         target: row,
-        draft: next.comments.get(row.option.label) ?? "",
+        draft: next.comments.get(row.index) ?? "",
       };
       break;
     }
@@ -92,9 +92,9 @@ export function transitionQuestionnaire(state: QuestionnaireState, event: Questi
       const editor = next.editor;
       const saved = editor.draft.trim();
       if (editor.kind === "comment") {
-        const label = editor.target.option.label;
-        if (saved) next.comments.set(label, saved);
-        else next.comments.delete(label);
+        const option = editor.target.index;
+        if (saved) next.comments.set(option, saved);
+        else next.comments.delete(option);
       } else {
         next.freeformDraft = saved;
         if (next.config.allowMultiple) next.freeformChecked = saved.length > 0;
@@ -117,7 +117,7 @@ export function transitionQuestionnaire(state: QuestionnaireState, event: Questi
 
 function createRows(input: QuestionnaireInput): QuestionnaireRow[] {
   return [
-    ...input.options.map((option): QuestionnaireOptionRow => ({ kind: "option", option })),
+    ...input.options.map((option, index): QuestionnaireOptionRow => ({ kind: "option", index, option })),
     ...(input.allowFreeform ? [{ kind: "freeform" } as const] : []),
     ...(input.allowMultiple ? [{ kind: "submit" } as const] : []),
   ];
@@ -131,7 +131,7 @@ function activateRow(state: QuestionnaireState): void {
   const row = currentRow(state);
   switch (row.kind) {
     case "option":
-      toggleOption(state, row.option);
+      toggleOption(state, row.index);
       break;
     case "freeform":
       openFreeform(state, row);
@@ -146,7 +146,7 @@ function toggleRow(state: QuestionnaireState): void {
   const row = currentRow(state);
   switch (row.kind) {
     case "option":
-      toggleOption(state, row.option);
+      toggleOption(state, row.index);
       break;
     case "freeform":
       if (state.config.allowMultiple) state.freeformChecked = !state.freeformChecked;
@@ -158,14 +158,14 @@ function toggleRow(state: QuestionnaireState): void {
   }
 }
 
-function toggleOption(state: QuestionnaireState, option: AskOption): void {
+function toggleOption(state: QuestionnaireState, option: number): void {
   if (!state.config.allowMultiple) {
-    state.checked = new Set([option.label]);
+    state.checked = new Set([option]);
     state.answer = finalAnswer(state);
-  } else if (state.checked.has(option.label)) {
-    state.checked.delete(option.label);
+  } else if (state.checked.has(option)) {
+    state.checked.delete(option);
   } else {
-    state.checked.add(option.label);
+    state.checked.add(option);
   }
 }
 
@@ -175,13 +175,9 @@ function openFreeform(state: QuestionnaireState, target: QuestionnaireFreeformRo
 
 function finalAnswer(state: QuestionnaireState): AskAnswer {
   const selections = state.rows.flatMap((row) => {
-    if (row.kind !== "option" || !state.checked.has(row.option.label)) return [];
-    const comment = state.comments.get(row.option.label);
-    return [{
-      label: row.option.label,
-      ...(row.option.description === undefined ? {} : { description: row.option.description }),
-      ...(comment ? { comment } : {}),
-    }];
+    if (row.kind !== "option" || !state.checked.has(row.index)) return [];
+    const comment = state.comments.get(row.index);
+    return [{ option: row.index, ...(comment ? { comment } : {}) }];
   });
   const freeform = state.config.allowMultiple && !state.freeformChecked ? "" : state.freeformDraft.trim();
   return {

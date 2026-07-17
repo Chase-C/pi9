@@ -4,6 +4,16 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Store selected options by index so the original Ask call is the sole source of labels, descriptions, question text, and selection mode.
+- Reduce answer revisions to hidden records containing only the source tool-call ID and user-authored answer data.
+- Consolidate schemas, normalization, answer formatting, and result construction into one domain module, and session replay and context rewriting into one session module.
+
+### Removed
+
+- Remove the dedicated revision-message renderer and editor-restoration workaround; revision records now have empty hidden content.
+
 ## [0.2.0] - 2026-07-16
 
 ### Changed
