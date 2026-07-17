@@ -5,8 +5,6 @@ import {
   agentsDetails,
   backgroundStartedDetails,
   createSubagentTextComponent,
-  formatSubagentSessionInspect,
-  formatSubagentSessionSummary,
   formatSubagentToolLines,
   formatWidgetLines,
   inventoryDetails,
@@ -79,11 +77,8 @@ test("collapsed inventory renders one results-style identity row per session", (
 });
 
 test("background dispatch stays out of collapsed inventory and appears in expanded metadata", () => {
-  const retained = fakeAgent({ retention: "persistent", config: { name: "helper", retainConversation: true }, status: { kind: "completed", startedAt: 1, completedAt: 2, response: "done" } });
   const background = fakeAgent({ id: "s2", dispatch: "background", retention: "persistent", config: { name: "helper", retainConversation: true }, status: { kind: "running", startedAt: 1 } });
 
-  assert.doesNotMatch(formatSubagentSessionSummary(retained), /dispatch:/);
-  assert.match(formatSubagentSessionSummary(background), /dispatch:background/);
   assert.doesNotMatch(formatSubagentToolLines(inventoryDetails([background]), false, 0).join("\n"), /dispatch:/);
   assert.match(formatSubagentToolLines(inventoryDetails([background]), true, 0).join("\n"), /dispatch:background/);
 });
@@ -686,18 +681,6 @@ test("results expanded mirrors the running view for a resumed snapshot, includin
   assert.match(expanded, /Previous Run 1 · completed/);
   assert.match(expanded, /First prompt\./);
   assert.match(expanded, /earlier output/);
-});
-
-test("subagent session inspect output uses remove terminology", () => {
-  const retainedSession = fakeAgent({
-    retention: "persistent",
-    capabilities: { canResume: true, canRemove: true },
-    config: { retainConversation: true },
-    status: { kind: "completed", startedAt: 2_000, completedAt: 5_000, response: "done" },
-  });
-  const inspectLines = formatSubagentSessionInspect(retainedSession).join("\n");
-  assert.match(inspectLines, /Actions: inspect, resume, remove/);
-  assert.doesNotMatch(inspectLines, /clear/);
 });
 
 test("runSummary counts retained result subagents without double-counting ids", () => {

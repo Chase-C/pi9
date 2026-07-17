@@ -103,7 +103,7 @@ test("AttemptRunner reports resume setup failure as the follow-up prompt error w
   assert.notEqual(resumed.output, first.output);
 });
 
-test("AttemptRunner keeps a retained completed session retryable across one or more pre-attach resume failures", async () => {
+test("AttemptRunner keeps a retained completed session retryable across one or more pre-bind resume failures", async () => {
   const session = makeSession();
   const runner = async (_ctx: any, agent: any, attempt: any) => {
     agent.bindSession(session);

@@ -22,7 +22,6 @@ function registerCommand(dependencies: any = {}) {
 test("/subagents opens one persistent overlay for all pages", async () => {
   const manager = {
     listSessions: () => [fakeAgent({ status: { kind: "running" } })],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const commands = registerCommand({

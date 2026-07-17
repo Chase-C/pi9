@@ -197,201 +197,7 @@ test("AgentManager does not expose skipped retainConversation tasks as sessions"
   assert.deepEqual(manager.listSessions(), []);
 });
 
-test("direct attachment order preserves duplicates and moves reattachments to the end", () => {
-  const config = {
-    name: "worker",
-    description: "",
-    systemPrompt: "",
-    source: "project" as const,
-    retainConversation: false,
-  };
-  const manager = makeManager({ agents: new Map([["worker", config]]) } as any);
-  const a = new Agent("A", config, { kind: "spawn", agent: "worker", prompt: "A" }, () => {});
-  const b = new Agent("B", config, { kind: "spawn", agent: "worker", prompt: "B" }, () => {});
-  (manager as any)._agents = [a, b];
-
-  manager.attachToSession(a.id);
-  manager.attachToSession(b.id);
-  const originalAOrder = a.attachmentOrder;
-  manager.attachToSession(a.id);
-
-  assert.equal(a.attachmentOrder, originalAOrder);
-  assert.deepEqual(manager.listAttachedSessions().map(session => session.id), ["A", "B"]);
-
-  assert.equal(manager.detachFromSession(a.id), true);
-  manager.attachToSession(a.id);
-
-  assert.deepEqual(manager.listAttachedSessions().map(session => session.id), ["B", "A"]);
-});
-
-test("attaching to a transient running session pins it for retention", async () => {
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any) => {
-    agent.bindSession(makeSession());
-    await gate;
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-  const batch = manager.startRun(baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "work" },
-  ], undefined, { dispatch: "foreground" });
-  await new Promise(resolve => setTimeout(resolve, 20));
-  const sessionId = manager.listSessions()[0].id;
-
-  assert.equal(manager.listSessions()[0].retention.catalog, "transient");
-  assert.equal(manager.attachToSession(sessionId).id, sessionId);
-  assert.equal(manager.listSessions()[0].retention.catalog, "persistent");
-  assert.equal(manager.listSessions()[0].conversation.policy, "release");
-
-  release();
-  await batch.resultsPromise;
-});
-
-test("an attached queued session remains cataloged when stopped before runtime attach", async () => {
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any, attempt: any) => {
-    if (attempt.prompt === "block") {
-      agent.bindSession(makeSession());
-      await gate;
-    }
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-  const batch = manager.startRun(baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "block" },
-    { kind: "spawn", agent: "oneshot", prompt: "queued" },
-  ], undefined, { dispatch: "foreground" });
-  await new Promise(resolve => setTimeout(resolve, 20));
-  const queued = manager.listSessions().find(session => session.status.kind === "queued")!;
-  manager.attachToSession(queued.id);
-
-  await manager.stopSession(queued.id);
-  release();
-  await batch.resultsPromise;
-
-  assert.equal(manager.listSessions().find(session => session.id === queued.id)?.status.kind, "done");
-  assert.deepEqual(manager.listAttachedSessions().map(session => session.id), [queued.id]);
-  assert.equal(manager.listAttachedSessions()[0].capabilities.canResume, false);
-  assert.equal(manager.detachFromSession(queued.id), true);
-  assert.equal(manager.listSessions().some(session => session.id === queued.id), false);
-});
-
-test("an attached non-retainConversation session remains cataloged and retainConversation after completion", async () => {
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any) => {
-    agent.bindSession(makeSession());
-    await gate;
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-  const batch = manager.startRun(baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "work" },
-  ], undefined, { dispatch: "foreground" });
-  await new Promise(resolve => setTimeout(resolve, 20));
-  const sessionId = manager.listSessions()[0].id;
-  manager.attachToSession(sessionId);
-
-  release();
-  await batch.resultsPromise;
-
-  assert.equal(manager.listSessions()[0].id, sessionId);
-  assert.equal(manager.listSessions()[0].capabilities.canResume, true);
-  assert.deepEqual(manager.listAttachedSessions().map(session => session.id), [sessionId]);
-});
-
-test("an attached originally non-retainConversation session can run a tracked resume", async () => {
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any) => {
-    agent.bindSession(makeSession());
-    await gate;
-    return completedRun(agent, "done");
-  };
-  const resumeRunner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(agent.retainedSession()!);
-    return completedRun(agent, `resumed:${attempt.prompt}`);
-  };
-  const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
-  };
-  const manager = makeManager(registry as any, 1, mergeRunners(runner, resumeRunner));
-  const batch = manager.startRun(baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "work" },
-  ], undefined, { dispatch: "foreground" });
-  await new Promise(resolve => setTimeout(resolve, 20));
-  const sessionId = manager.listSessions()[0].id;
-  manager.attachToSession(sessionId);
-  release();
-  await batch.resultsPromise;
-
-  const [resumed] = await run(manager, baseCtx(), undefined, [
-    { kind: "resume", sessionId, prompt: "follow up" },
-  ]);
-
-  assert.equal(resumed.status, "completed");
-  assert.equal(resumed.output, "resumed:follow up");
-});
-
-test("detaching a terminal attachment-only session removes its retention pin and prunes it", async () => {
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const runner = async (_ctx: any, agent: any) => {
-    agent.bindSession(makeSession());
-    await gate;
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["oneshot", { name: "oneshot", description: "d", systemPrompt: "s", source: "project", retainConversation: false }]]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-  const batch = manager.startRun(baseCtx(), undefined, [
-    { kind: "spawn", agent: "oneshot", prompt: "work" },
-  ], undefined, { dispatch: "foreground" });
-  await new Promise(resolve => setTimeout(resolve, 20));
-  const sessionId = manager.listSessions()[0].id;
-  manager.attachToSession(sessionId);
-  release();
-  await batch.resultsPromise;
-
-  assert.equal(manager.detachFromSession(sessionId), true);
-  assert.deepEqual(manager.listAttachedSessions(), []);
-  assert.deepEqual(manager.listSessions(), []);
-});
-
-test("detaching does not release a session retained by its original retainConversation policy", async () => {
-  const runner = async (_ctx: any, agent: any) => {
-    agent.bindSession(makeSession());
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-  const [result] = await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "work" },
-  ]);
-  manager.attachToSession(result.sessionId!);
-
-  manager.detachFromSession(result.sessionId!);
-
-  assert.deepEqual(manager.listAttachedSessions(), []);
-  assert.equal(manager.listSessions()[0].id, result.sessionId);
-  assert.equal(manager.listSessions()[0].capabilities.canResume, true);
-});
-
-test("steering a running session delegates without requiring attachment", async () => {
+test("steering a running session delegates directly", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const steered: string[] = [];
@@ -420,7 +226,7 @@ test("steering a running session delegates without requiring attachment", async 
   await batch.resultsPromise;
 });
 
-test("session conversations are readable without attachment", async () => {
+test("session conversations are readable directly", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const runner = async (_ctx: any, agent: any) => {
@@ -483,7 +289,7 @@ test("conversation projection bounds large message and tool-result content", () 
   assert.ok(messages[1].text.length <= 401);
 });
 
-test("stopping an attached running session aborts it without detaching it", async () => {
+test("AgentManager.stopSession aborts a running session", async () => {
   let abortCalls = 0;
   const runner = async (_ctx: any, agent: any) => {
     let release!: () => void;
@@ -503,33 +309,11 @@ test("stopping an attached running session aborts it without detaching it", asyn
     { kind: "spawn", agent: "oneshot", prompt: "work" },
   ], undefined, { dispatch: "foreground" });
   await new Promise(resolve => setTimeout(resolve, 20));
-  const sessionId = manager.listSessions()[0].id;
-  manager.attachToSession(sessionId);
 
-  await manager.stopSession(sessionId);
+  await manager.stopSession(manager.listSessions()[0].id);
   await batch.resultsPromise;
 
   assert.equal(abortCalls, 1);
-  assert.deepEqual(manager.listAttachedSessions().map(session => session.id), [sessionId]);
-});
-
-test("removing a session clears its explicit attachment", async () => {
-  const runner = async (_ctx: any, agent: any) => {
-    agent.bindSession(makeSession());
-    return completedRun(agent, "done");
-  };
-  const registry = {
-    agents: new Map([["chatty", { name: "chatty", description: "d", systemPrompt: "s", source: "project", retainConversation: true }]]),
-  };
-  const manager = makeManager(registry as any, 1, runner);
-  const [result] = await run(manager, baseCtx(), undefined, [
-    { kind: "spawn", agent: "chatty", prompt: "work" },
-  ]);
-  manager.attachToSession(result.sessionId!);
-
-  await manager.remove({ sessionIds: [result.sessionId!] });
-
-  assert.deepEqual(manager.listAttachedSessions(), []);
 });
 
 test("AgentManager does not expose or resume non-retainConversation completed sessions", async () => {

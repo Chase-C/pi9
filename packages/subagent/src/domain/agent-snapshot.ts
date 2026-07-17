@@ -79,7 +79,6 @@ export interface AgentSnapshot {
   readonly conversation: {
     readonly policy: ConversationRetentionPolicy;
     readonly available: boolean;
-    readonly attached: boolean;
   };
   readonly retention: {
     readonly catalog: AgentRetention;

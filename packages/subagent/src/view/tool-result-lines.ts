@@ -1,6 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
 
-import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { ResultEntry } from "../domain/agent-result.js";
 import {
@@ -35,32 +34,6 @@ import {
 } from "./details.js";
 
 const DEFAULT_DISPLAY = DEFAULT_SUBAGENT_SETTINGS.display;
-
-export function formatAgentConfigSummary(config: AgentListingEntry | AgentConfig): string {
-  const badges = [config.source, config.retainConversation ? "retained" : undefined].filter(Boolean);
-  return [config.name, ...badges, config.description].join(" · ");
-}
-
-export function formatAgentConfigInspect(config: AgentListingEntry | AgentConfig): string[] {
-  return [
-    `Name: ${config.name}`,
-    `Description: ${config.description}`,
-    ...agentConfigMetadataLines(config),
-  ];
-}
-
-function agentConfigMetadataLines(config: AgentListingEntry | AgentConfig): string[] {
-  const lines = [
-    `Source: ${config.source}`,
-    `Model: ${config.model ?? "default"}`,
-    `Thinking: ${config.thinking ?? "default"}`,
-    `Tools: ${config.tools?.length ? config.tools.join(", ") : "default"}`,
-    `Skills: ${config.skills?.length ? config.skills.join(", ") : "none"}`,
-    `Retained: ${config.retainConversation}`,
-  ];
-  if (config.sourcePath) lines.push(`Path: ${config.sourcePath}`);
-  return lines;
-}
 
 export function formatSubagentToolLines(
   details: SubagentDetails,

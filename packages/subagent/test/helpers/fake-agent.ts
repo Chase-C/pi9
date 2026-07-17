@@ -59,7 +59,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
     ...(rest.parentSessionId !== undefined ? { parentSessionId: rest.parentSessionId } : {}), ...(rest.label !== undefined ? { label: rest.label } : {}),
     ...(rest.prompt !== undefined ? { prompt: rest.prompt } : {}), createdAt: rest.createdAt ?? 1,
     attempt: { kind: rest.kind ?? "spawn", dispatch },
-    conversation: { policy, available: rest.conversation?.available ?? catalog === "persistent", attached: rest.conversation?.attached ?? false },
+    conversation: { policy, available: rest.conversation?.available ?? catalog === "persistent" },
     retention: { catalog, reasons },
     config: { name: cfg.name, description: cfg.description, source: cfg.source, sourcePath: cfg.sourcePath,
       model: invocation.model ?? cfg.model, thinking: invocation.thinking ?? cfg.thinking, tools: cfg.tools,

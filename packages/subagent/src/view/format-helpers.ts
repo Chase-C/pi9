@@ -137,6 +137,30 @@ export function snippetLines(snippet: string, leadingIndent: number, color: Them
  */
 type RunBody = Pick<AgentSnapshot, "prompt" | "activity" | "status">;
 
+export interface ExpandedRunSections {
+  task: DisplayLine[];
+  details: DisplayLine[];
+}
+
+export function expandedRunSections(
+  row: AgentSnapshot,
+  includeSnippet: boolean,
+  display: SubagentDisplaySettings = DEFAULT_DISPLAY,
+  now = Date.now(),
+  richToolHistory = false,
+): ExpandedRunSections {
+  const task: DisplayLine[] = [];
+  const details: DisplayLine[] = [];
+  appendBracket(task, "Task", promptLines(row.prompt));
+  if (richToolHistory) {
+    appendPreviousRuns(details, row.previousRuns ?? [], display, now);
+    appendRecentTools(details, row, now, display);
+    appendSubagents(details, row.subagents ?? [], now);
+  }
+  if (includeSnippet) appendAnswer(details, row, display);
+  return { task, details };
+}
+
 export function expandedLines(
   head: DisplayLine,
   row: AgentSnapshot,
@@ -146,16 +170,8 @@ export function expandedLines(
   now = Date.now(),
   richToolHistory = false,
 ): DisplayLine[] {
-  const lines = [head];
-  appendBracket(lines, "Task", promptLines(row.prompt));
-  if (richToolHistory) {
-    appendPreviousRuns(lines, row.previousRuns ?? [], display, now);
-    appendRecentTools(lines, row, now, display);
-    appendSubagents(lines, row.subagents ?? [], now);
-  }
-  if (includeSnippet) appendAnswer(lines, row, display);
-  if (trailingBlank) lines.push({ text: "" });
-  return lines;
+  const sections = expandedRunSections(row, includeSnippet, display, now, richToolHistory);
+  return [head, ...sections.task, ...sections.details, ...(trailingBlank ? [{ text: "" }] : [])];
 }
 
 function appendBracket(lines: DisplayLine[], label: string, content: DisplayLine[]) {

@@ -20,7 +20,7 @@ This changelog starts with version `v0.2.1`.
 - Centralize catalog, conversation, result, resume/remove, and widget decisions around retention reasons and capabilities.
 - Replace the separate `/subagents` dialogs with one overlay for Sessions, Agents, and Settings.
 - Rename the widget section to Retained and derive membership from retention reasons and capabilities.
-- Let users enter a conversation from Sessions and message a running subagent without attaching first.
+- Let users enter a conversation from Sessions and message a running subagent directly.
 
 ### Fixed
 

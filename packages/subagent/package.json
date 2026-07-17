@@ -39,8 +39,6 @@
     "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "designs:details": "node scripts/render-detail-designs.mjs",
-    "designs:agent-list": "node scripts/render-agent-list-designs.mjs",
     "release": "node ../../scripts/release.mjs subagent",
     "release:patch": "node ../../scripts/release.mjs subagent patch",
     "release:minor": "node ../../scripts/release.mjs subagent minor",

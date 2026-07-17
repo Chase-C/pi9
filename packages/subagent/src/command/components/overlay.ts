@@ -18,7 +18,7 @@ import type { AgentConfig } from "../../domain/agent-config.js";
 import type { AgentSnapshot } from "../../domain/agent-snapshot.js";
 import { effectiveStatus } from "../../domain/agent-decisions.js";
 import type { AgentManager, SessionConversationMessage } from "../../runtime/agent-manager.js";
-import { expandedLines, formatUsage, plural, rowElapsed } from "../../view/format-helpers.js";
+import { expandedRunSections, formatUsage, plural, rowElapsed } from "../../view/format-helpers.js";
 import { SubagentTextComponent, type DisplayLine, type DisplaySegment } from "../../view/text-component.js";
 import { clamp, isCancelKey, isDownKey, isEnterKey, isUpKey, type SubagentKeybindings } from "../input.js";
 import { filterAgents, projectSessions, type SessionLayoutMode, type SessionRow } from "../overlay-view-model.js";
@@ -130,7 +130,10 @@ export class SubagentOverlayComponent implements Component, Focusable {
       if (!input) return;
       const before = input.getValue();
       input.handleInput(data);
-      if (before !== input.getValue()) this.selected[this.page] = 0;
+      if (before !== input.getValue()) {
+        this.selected[this.page] = 0;
+        if (this.page === "agents") this.clearAgentPrompt();
+      }
       this.requestRender();
       return;
     }
@@ -284,7 +287,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const available = Math.max(4, this.browserHeight - 1 - (hasFilter ? 1 : 0));
       const listHeight = Math.floor(available / 2);
       const inspectorHeight = available - listHeight;
-      const list = fitBodyHeight(selectedViewport(left, Math.max(1, listHeight - 1), this.selectedListLine), Math.max(1, listHeight - 1));
+      const list = fitBodyHeight(left, Math.max(1, listHeight - 1));
       const inspectorContentHeight = Math.max(1, inspectorHeight - 1);
       const right = this.renderInspector(rightContentWidth, inspectorContentHeight);
       const inspector = fitBodyHeight(compactViewport(right, inspectorContentHeight, Math.min(4, inspectorContentHeight - 1)), inspectorContentHeight);
@@ -297,7 +300,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
         ...inspector.map(line => ` ${line}`),
       ];
     }
-    const visibleLeft = compactViewport(left, this.listLineBudget(false), 1);
+    const visibleLeft = left;
     const inspectorHeight = Math.max(1, this.browserHeight - 1);
     const right = this.renderInspector(rightContentWidth, inspectorHeight);
     const visibleRight = compactViewport(right, inspectorHeight, 5);
@@ -322,11 +325,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private renderSessionList(rows: readonly SessionRow[], width: number, narrow: boolean): string[] {
     if (rows.length === 0) return [this.theme.fg?.("dim", " No matching sessions.") ?? " No sessions."];
     this.selected[this.page] = clamp(this.selected[this.page], 0, rows.length - 1);
-    const lineBudget = this.listLineBudget(narrow);
-    const viewSize = Math.max(1, Math.floor(lineBudget / 4));
-    const start = viewportStart(this.selected[this.page], rows.length, viewSize);
+    const { start, end } = listViewport(rows.length, this.selected[this.page], this.listLineBudget(narrow));
     const lines: string[] = [];
-    for (let index = start; index < Math.min(rows.length, start + viewSize); index++) {
+    for (let index = start; index < end; index++) {
       const row = rows[index];
       const session = row.session;
       const chosen = index === this.selected[this.page];
@@ -353,7 +354,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private renderAgentList(agents: readonly AgentConfig[], width: number, narrow: boolean): string[] {
     if (agents.length === 0) return [this.theme.fg?.("dim", " No matching agent definitions.") ?? " No matching agent definitions."];
     this.selected.agents = clamp(this.selected.agents, 0, agents.length - 1);
-    const { start, end } = agentViewport(agents, this.selected.agents, this.listLineBudget(narrow));
+    const { start, end } = listViewport(agents.length, this.selected.agents, this.listLineBudget(narrow));
     return agents.slice(start, end).flatMap((agent, offset) => {
       const index = start + offset;
       const chosen = index === this.selected.agents;
@@ -421,16 +422,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
 
   private renderSessionInspector(session: AgentSnapshot, width: number, now: number): string[] {
-    const expanded = expandedLines(
-      { text: "" },
-      session,
-      true,
-      false,
-      this.currentSettings.display,
-      now,
-      true,
-    );
-    const [task, remainder] = takeLeadingSection(unindentDisplayLines(expanded.slice(1), 4), "Task");
+    const sections = expandedRunSections(session, true, this.currentSettings.display, now, true);
+    const task = unindentDisplayLines(sections.task, 4);
+    const details = unindentDisplayLines(sections.details, 4);
     const sessionMetadata = [
       ...(session.label ? [`Label: ${session.label}`] : []),
       `Status: ${effectiveStatus(session.status)}${session.conversation.policy === "retain" ? " · retained" : ""}${session.capabilities.canResume ? " · resumable" : ""}`,
@@ -450,7 +444,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       ...displaySection(`${agentName} · ${session.id}`, sessionMetadata, "accent"),
       ...task,
       ...displaySection("Activity", activity),
-      ...remainder,
+      ...details,
       { text: `Actions: inspect${session.status.kind === "running" || session.capabilities.canResume ? " · conversation" : ""}${session.capabilities.canRemove ? " · remove" : ""}`, color: "muted" },
     ];
     return new SubagentTextComponent(displayLines, this.theme).render(width);
@@ -632,18 +626,6 @@ export class SubagentOverlayComponent implements Component, Focusable {
     return filterAgents(this.options.agents, this.filters.agents.getValue());
   }
 
-  private get selectedListLine(): number {
-    const lineBudget = this.listLineBudget(true);
-    if (this.page === "agents") {
-      return agentViewport(this.filteredAgents, this.selected.agents, lineBudget).selectedLine;
-    }
-    const rows = this.sessionRows;
-    const selected = this.selected.sessions;
-    const viewSize = Math.max(1, Math.floor(lineBudget / 4));
-    const start = viewportStart(selected, rows.length, viewSize);
-    return Math.max(0, selected - start) * 4;
-  }
-
   private listLineBudget(narrow: boolean): number {
     const hasFilter = this.page === "sessions" || this.page === "agents";
     if (!narrow) return Math.max(1, this.browserHeight - 1 - (hasFilter ? 1 : 0));
@@ -785,18 +767,6 @@ function unindentSegments(segments: readonly DisplaySegment[], amount: number): 
   return result;
 }
 
-function takeLeadingSection(lines: DisplayLine[], label: string): [DisplayLine[], DisplayLine[]] {
-  if (lines[0]?.text !== `┌ ${label}`) return [[], lines];
-  const end = lines.findIndex(line => line.text === "└");
-  return end < 0 ? [lines, []] : [lines.slice(0, end + 1), lines.slice(end + 1)];
-}
-
-function selectedViewport(lines: string[], size: number, selectedLine: number): string[] {
-  if (lines.length <= size) return lines;
-  const start = clamp(selectedLine - 1, 0, Math.max(0, lines.length - size));
-  return lines.slice(start, start + size);
-}
-
 function fitBodyHeight(lines: string[], height: number): string[] {
   return [...lines.slice(0, height), ...Array(Math.max(0, height - lines.length)).fill("")];
 }
@@ -808,45 +778,10 @@ function compactViewport(lines: string[], size: number, tail: number): string[] 
   return [...lines.slice(0, headCount), `… ${lines.length - headCount - tailCount} more`, ...lines.slice(-tailCount)];
 }
 
-function agentViewport(
-  agents: readonly AgentConfig[],
-  selected: number,
-  lineBudget: number,
-): { start: number; end: number; selectedLine: number } {
-  if (agents.length === 0) return { start: 0, end: 0, selectedLine: 0 };
-  const selectedIndex = clamp(selected, 0, agents.length - 1);
-  const rowHeight = (_agent: AgentConfig) => 4;
-  let start = selectedIndex;
-  let end = selectedIndex + 1;
-  let used = rowHeight(agents[selectedIndex]);
-  let beforeBudget = Math.floor(Math.max(0, lineBudget - used) / 2);
-
-  while (start > 0) {
-    const height = rowHeight(agents[start - 1]);
-    if (height > beforeBudget) break;
-    start -= 1;
-    used += height;
-    beforeBudget -= height;
-  }
-  while (end < agents.length) {
-    const height = rowHeight(agents[end]);
-    if (used + height > lineBudget) break;
-    used += height;
-    end += 1;
-  }
-  while (start > 0) {
-    const height = rowHeight(agents[start - 1]);
-    if (used + height > lineBudget) break;
-    start -= 1;
-    used += height;
-  }
-
-  const selectedLine = agents.slice(start, selectedIndex).reduce((line, agent) => line + rowHeight(agent), 0);
-  return { start, end, selectedLine };
-}
-
-function viewportStart(selected: number, count: number, size: number): number {
-  return clamp(selected - Math.floor(size / 2), 0, Math.max(0, count - size));
+function listViewport(count: number, selected: number, lineBudget: number): { start: number; end: number } {
+  const size = Math.max(1, Math.floor(lineBudget / 4));
+  const start = clamp(selected - Math.floor(size / 2), 0, Math.max(0, count - size));
+  return { start, end: Math.min(count, start + size) };
 }
 
 function isActive(session: AgentSnapshot): boolean {

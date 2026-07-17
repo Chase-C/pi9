@@ -8,7 +8,7 @@ export type AgentDispatch = "foreground" | "background";
 export type ConversationRetentionPolicy = "retain" | "release";
 
 export type AgentRetentionReason =
-  "active" | "background-result" | "conversation-policy" | "attachment";
+  "active" | "background-result" | "conversation-policy";
 
 /** The sole domain decision for catalog, conversation, and lifecycle capabilities. */
 export interface AgentRetentionDecision {
@@ -40,4 +40,4 @@ export type AgentRunOutcome =
 
 /** Coarse updates emitted while an agent attempt progresses. */
 export type AgentUpdateKind =
-  "status" | "retention" | "message" | "tool" | "turn" | "usage" | "compaction";
+  "status" | "message" | "tool" | "turn" | "usage" | "compaction";

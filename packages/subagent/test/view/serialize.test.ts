@@ -25,7 +25,7 @@ function snapshot(overrides: Partial<AgentSnapshot> = {}): AgentSnapshot {
     },
     usage: undefined,
     attempt: { kind: "spawn", dispatch: "background" },
-    conversation: { policy: "retain", available: true, attached: false },
+    conversation: { policy: "retain", available: true },
     retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     effectiveConfig: {
       model: "private/model",
@@ -64,7 +64,7 @@ test("serializes a clean lightweight inventory contract with normalized statuses
       config: { ...snapshot().config, name: "queued-agent" },
       status: { kind: "queued", queuedAt: 1_200 },
       attempt: { kind: "spawn", dispatch: "foreground" },
-      conversation: { policy: "release", available: false, attached: false },
+      conversation: { policy: "release", available: false },
       retention: { catalog: "transient", reasons: [] },
       capabilities: { canResume: false, canRemove: false },
     }),

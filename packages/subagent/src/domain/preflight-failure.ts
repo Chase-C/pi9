@@ -54,7 +54,7 @@ export function preflightFailure(
     prompt: task.prompt,
     createdAt,
     attempt: { kind: task.kind, dispatch },
-    conversation: { policy, available: false, attached: false },
+    conversation: { policy, available: false },
     retention: { catalog: "transient", reasons: [] },
     config: {
       name,

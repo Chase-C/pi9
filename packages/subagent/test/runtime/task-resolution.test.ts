@@ -81,7 +81,7 @@ test("unknown preflight failures use canonical spawn and resume snapshots", () =
       prompt: "spawn prompt",
       createdAt: 1_000,
       attempt: { kind: "spawn", dispatch: "background" },
-      conversation: { policy: "retain", available: false, attached: false },
+      conversation: { policy: "retain", available: false },
       retention: { catalog: "transient", reasons: [] },
       config: {
         name: "missing",
@@ -109,7 +109,7 @@ test("unknown preflight failures use canonical spawn and resume snapshots", () =
       prompt: "resume prompt",
       createdAt: 1_000,
       attempt: { kind: "resume", dispatch: "foreground" },
-      conversation: { policy: "release", available: false, attached: false },
+      conversation: { policy: "release", available: false },
       retention: { catalog: "transient", reasons: [] },
       config: {
         name: "(unknown)",
@@ -190,7 +190,7 @@ test("a blocked known resume preserves the spawn label and resolved conversation
       prompt: "blocked",
       createdAt: 1_000,
       attempt: { kind: "resume", dispatch: "background" },
-      conversation: { policy: "retain", available: false, attached: false },
+      conversation: { policy: "retain", available: false },
       retention: { catalog: "transient", reasons: [] },
       config: {
         name: "known",

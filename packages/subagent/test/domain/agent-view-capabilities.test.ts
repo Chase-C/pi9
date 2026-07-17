@@ -63,57 +63,6 @@ test("a completed background result releases its conversation and cannot regain 
   assert.equal(view(agent).conversation.available, false);
   assert.deepEqual(view(agent).capabilities, { canResume: false, canRemove: true });
 
-  agent.attach(1);
-  assert.equal(view(agent).conversation.available, false);
-  assert.equal(view(agent).capabilities.canResume, false);
-});
-
-test("attachment pins a queued row and keeps a conversation only after binding", () => {
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  agent.attach(7);
-
-  assert.equal(agent.attachmentOrder, 7);
-  assert.deepEqual(agent.retentionDecision, {
-    cataloged: true,
-    catalog: "persistent",
-    keepConversation: false,
-    conversationAvailable: false,
-    canResume: false,
-    canRemove: false,
-    reasons: ["active", "attachment"],
-  });
-
-  agent.bindSession(fakeSession());
-  assert.equal(agent.retentionDecision.keepConversation, true);
-  assert.equal(agent.snapshot().conversation.available, true);
-});
-
-test("detaching releases a terminal attachment-only conversation", () => {
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  agent.attach(1);
-  agent.bindSession(fakeSession());
-  completedRun(agent, "done");
-
-  assert.notEqual(agent.retainedSession(), undefined);
-  agent.detach();
-
-  assert.equal(agent.retainedSession(), undefined);
-  assert.equal(view(agent).conversation.available, false);
-  agent.attach(2);
-  assert.equal(view(agent).capabilities.canResume, false);
-});
-
-test("detaching an active release-policy conversation defers release until settlement", () => {
-  const agent = new Agent("id", baseConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  const session = fakeSession();
-  agent.attach(1);
-  agent.bindSession(session);
-
-  agent.detach();
-  assert.equal(agent.retainedSession(), session);
-
-  completedRun(agent, "done");
-  assert.equal(agent.retainedSession(), undefined);
 });
 
 test("terminal removal follows persistent catalog membership across outcomes", () => {
@@ -152,7 +101,7 @@ test("a post-bind error remains removable but cannot resume", () => {
 
 test("a pre-bind resume failure preserves resume capability", () => {
   const agent = new Agent("id", retainConversationConfig, { kind: "spawn", agent: "helper", prompt: "p" }, noop);
-  // Seed a retained session via a completed first attempt, then simulate a follow-up that fails before attach.
+  // Seed a retained session via a completed first attempt, then simulate a follow-up that fails before binding.
   agent.bindSession(fakeSession());
   completedRun(agent, "first");
   resumeAgent(agent, "follow");

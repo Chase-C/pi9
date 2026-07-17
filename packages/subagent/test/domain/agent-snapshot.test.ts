@@ -26,7 +26,7 @@ test("a fresh foreground spawn is active, transient, and has no available conver
   const snapshot = agent.snapshot();
 
   assert.deepEqual(snapshot.attempt, { kind: "spawn", dispatch: "foreground" });
-  assert.deepEqual(snapshot.conversation, { policy: "release", available: false, attached: false });
+  assert.deepEqual(snapshot.conversation, { policy: "release", available: false });
   assert.deepEqual(snapshot.retention, { catalog: "transient", reasons: ["active"] });
   assertNoLifecycleAliases(snapshot);
   assertNoLifecycleAliases(snapshot.config);
@@ -75,7 +75,7 @@ test("a retained policy is persistent while queued but only keeps a bound conver
   agent.bindSession(fakeSession);
   completedRun(agent, "done");
   const snapshot = agent.snapshot();
-  assert.deepEqual(snapshot.conversation, { policy: "retain", available: true, attached: false });
+  assert.deepEqual(snapshot.conversation, { policy: "retain", available: true });
   assert.deepEqual(snapshot.retention, { catalog: "persistent", reasons: ["conversation-policy"] });
   assert.deepEqual(snapshot.capabilities, { canResume: true, canRemove: true });
 });
@@ -86,7 +86,7 @@ test("a completed release-policy foreground spawn is transient despite its bound
   completedRun(agent, "done");
   const snapshot = agent.snapshot();
 
-  assert.deepEqual(snapshot.conversation, { policy: "release", available: false, attached: false });
+  assert.deepEqual(snapshot.conversation, { policy: "release", available: false });
   assert.deepEqual(snapshot.retention, { catalog: "transient", reasons: [] });
   assert.deepEqual(snapshot.capabilities, { canResume: false, canRemove: false });
 });

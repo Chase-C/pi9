@@ -82,7 +82,7 @@ Only a successfully completed, available conversation can resume. A failure befo
 
 Retention is centralized and reports why an agent remains cataloged. Active work, background results, and `retainConversation` policy independently govern inventory, conversation availability, and capabilities.
 
-`/subagents` opens Sessions, Agents, and Settings pages. Press Enter on a running session to replace the list and inspector with a full-width conversation pane. Its composer sends steering messages directly—no attachment step is required. Escape returns to Sessions.
+`/subagents` opens Sessions, Agents, and Settings pages. Press Enter on a running session to replace the list and inspector with a full-width conversation pane. Its composer sends steering messages directly. Escape returns to Sessions.
 
 A successfully completed retained conversation uses the same pane for tracked follow-ups. Conversations are process-local and are not restored after restart or extension reload.
 

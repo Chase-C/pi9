@@ -44,7 +44,6 @@ test("narrow rendering keeps the selected logical session row visible", () => {
   }));
   const manager = {
     listSessions: () => sessions,
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const { component } = overlay(manager);
@@ -64,7 +63,6 @@ test("session list entries are separated by an empty row", () => {
   ];
   const manager = {
     listSessions: () => sessions,
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const lines = overlay(manager).component.render(120);
@@ -80,7 +78,6 @@ test("session list entries are separated by an empty row", () => {
 test("agent definitions arrange identity, tools, and skills across rows", () => {
   const manager = {
     listSessions: () => [],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const component = new SubagentOverlayComponent(
@@ -129,7 +126,6 @@ test("agent definitions arrange identity, tools, and skills across rows", () => 
 test("agent descriptions truncate to one line and metadata counts stay muted", () => {
   const manager = {
     listSessions: () => [],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const mutedTheme = {
@@ -181,7 +177,6 @@ test("agent list capacity follows the dynamic pane height", () => {
   }));
   const manager = {
     listSessions: () => [],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const component = new SubagentOverlayComponent(
@@ -209,7 +204,6 @@ test("agent instructions use the remaining inspector height before truncating", 
   const systemPrompt = Array.from({ length: 30 }, (_, index) => `instruction-${index + 1}`).join("\n");
   const manager = {
     listSessions: () => [],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const truncationTheme = {
@@ -252,7 +246,6 @@ test("agent instructions use the remaining inspector height before truncating", 
 test("wrapped inspector sections preserve separately muted rails", () => {
   const manager = {
     listSessions: () => [],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const railTheme = {
@@ -312,7 +305,6 @@ test("session inspector combines concise metadata with expanded result sections"
   });
   const manager = {
     listSessions: () => [session],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const rendered = overlay(manager, "sessions", 60).component.render(160);
@@ -339,7 +331,6 @@ test("session rows show bold agent names followed by session IDs", () => {
   const session = fakeAgent({ id: "session-42", config: { name: "helper" }, status: { kind: "running" } });
   const manager = {
     listSessions: () => [session],
-    listAttachedSessions: () => [session],
     onAgentUpdate: () => () => {},
   };
   const styledTheme = {
@@ -375,7 +366,6 @@ test("session rows show bold agent names followed by session IDs", () => {
 test("settings uses the same body height as browser panes", () => {
   const manager = {
     listSessions: () => [],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const browser = overlay(manager, "agents").component.render(120);
@@ -425,14 +415,48 @@ test("agent definition prompts start background sessions", () => {
   component.handleInput("\r");
 
   assert.deepEqual(started, [{ agent: "helper", prompt: "Implement parser" }]);
-  assert.doesNotMatch(component.render(100).join("\n"), /Attached/);
+});
+
+test("filtering agents clears a draft owned by the previous selection", () => {
+  const manager = {
+    listSessions: () => [],
+    onAgentUpdate: () => () => {},
+  };
+  const component = new SubagentOverlayComponent(
+    manager as any,
+    { requestRender() {} },
+    theme as any,
+    undefined,
+    () => {},
+    {
+      initialPage: "agents",
+      agents: [
+        { name: "helper", description: "Helps", source: "project", retainConversation: false, systemPrompt: "" },
+        { name: "reviewer", description: "Reviews", source: "project", retainConversation: false, systemPrompt: "" },
+      ],
+      settings: DEFAULT_SUBAGENT_SETTINGS,
+      onSettingsChange() {},
+      onResume() {},
+      onStart() { return undefined; },
+      notify() {},
+    },
+  );
+
+  component.handleInput("\r");
+  for (const character of "OLD DRAFT") component.handleInput(character);
+  component.handleInput("\x1b");
+  component.handleInput("/");
+  for (const character of "reviewer") component.handleInput(character);
+
+  const rendered = component.render(100).join("\n");
+  assert.match(rendered, /reviewer/);
+  assert.doesNotMatch(rendered, /OLD DRAFT/);
 });
 
 test("filter focus propagates the hardware cursor marker and all narrow lines fit", () => {
   const session = fakeAgent({ id: "long", prompt: "A very long task description ".repeat(20), status: { kind: "running" } });
   const manager = {
     listSessions: () => [session],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => {},
   };
   const { component } = overlay(manager);
@@ -449,7 +473,6 @@ test("disposing the overlay unsubscribes live manager updates", () => {
   let unsubscribed = false;
   const manager = {
     listSessions: () => [],
-    listAttachedSessions: () => [],
     onAgentUpdate: () => () => { unsubscribed = true; },
   };
   const { component } = overlay(manager);
@@ -500,7 +523,7 @@ test("Enter replaces Sessions with a full-width conversation pane", () => {
   assert.doesNotMatch(text, /\[ Sessions \]|\[ Agents \]|Filter/);
 });
 
-test("conversation composer messages a running session without attaching", async () => {
+test("conversation composer messages a running session directly", async () => {
   const session = fakeAgent({ id: "running", status: { kind: "running" }, capabilities: { canResume: false } });
   const messages: Array<[string, string]> = [];
   const manager = {

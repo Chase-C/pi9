@@ -10,7 +10,7 @@ function terminalSnapshot(over: Partial<AgentSnapshot> = {}): AgentSnapshot {
     prompt: "do the work",
     createdAt: 0,
     attempt: { kind: "spawn", dispatch: "foreground" },
-    conversation: { policy: "retain", available: true, attached: false },
+    conversation: { policy: "retain", available: true },
     retention: { catalog: "persistent", reasons: ["conversation-policy"] },
     config: {
       name: "helper",

@@ -20,8 +20,6 @@ export {
 
 export {
   buildWidgetModel,
-  formatSubagentSessionInspect,
-  formatSubagentSessionSummary,
   formatSessionIdentityLine,
   formatSessionLine,
   formatRunSessionLine,
@@ -36,8 +34,6 @@ export {
 
 export {
   createSubagentTextComponent,
-  formatAgentConfigInspect,
-  formatAgentConfigSummary,
   formatSubagentToolLines,
   runSummary,
   type RunSummary,

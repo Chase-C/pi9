@@ -38,9 +38,6 @@ export interface SessionConversationDetail {
   readonly pending: { readonly steering: readonly string[]; readonly followUp: readonly string[] };
 }
 
-export type AttachedSessionMessage = SessionConversationMessage;
-export type AttachedSessionDetail = SessionConversationDetail;
-
 export interface RunHandle {
   /** Root sessions in input order, captured at handle creation. */
   readonly sessions: AgentSnapshot[];
@@ -57,7 +54,6 @@ export class AgentManager {
   private readonly _groups = new Map<string, RunGroup>();
   private readonly _removingSessionIds = new Set<string>();
   private readonly _acknowledgedResultIds = new Set<string>();
-  private _nextAttachmentOrder = 0;
   private readonly _descendantsByAncestor = new Map<string, Map<string, AgentSnapshot>>();
   /** In-flight cancellation fanouts keyed by the finalized parent's session id. */
   private readonly _pendingFinalize = new Map<string, Promise<void>>();
@@ -82,43 +78,6 @@ export class AgentManager {
     if (!filter || filter.status === undefined) return views;
     const allowed = new Set(filter.status);
     return views.filter(view => allowed.has(effectiveStatus(view.status) as SessionStatus));
-  }
-
-  attachToSession(sessionId: string): AgentSnapshot {
-    const lookup = this._resolveSession(sessionId);
-    if ("error" in lookup) throw new Error(lookup.error);
-    if (lookup.agent.attachmentOrder === undefined) {
-      lookup.agent.attach(this._nextAttachmentOrder++);
-    }
-    return lookup.agent.snapshot();
-  }
-
-  listAttachedSessions(): AgentSnapshot[] {
-    return this._agents
-      .filter(agent => agent.attachmentOrder !== undefined)
-      .sort((a, b) => a.attachmentOrder! - b.attachmentOrder!)
-      .map(agent => agent.snapshot());
-  }
-
-  detachFromSession(sessionId: string): boolean {
-    const lookup = this._resolveSession(sessionId);
-    if ("error" in lookup || lookup.agent.attachmentOrder === undefined) return false;
-    lookup.agent.detach();
-    if (!lookup.agent.retentionDecision.cataloged) {
-      this._agents = this._agents.filter(agent => agent.id !== sessionId);
-      this._acknowledgedResultIds.delete(sessionId);
-      this._descendantsByAncestor.delete(sessionId);
-      for (const descendants of this._descendantsByAncestor.values()) descendants.delete(sessionId);
-    }
-    return true;
-  }
-
-  attachedSessionDetail(sessionId: string): AttachedSessionDetail {
-    const lookup = this._resolveSession(sessionId);
-    if ("error" in lookup || lookup.agent.attachmentOrder === undefined) {
-      throw new Error(`Subagent session ${sessionId} is not attached.`);
-    }
-    return this._conversationDetail(lookup.agent);
   }
 
   sessionConversation(sessionId: string): SessionConversationDetail {

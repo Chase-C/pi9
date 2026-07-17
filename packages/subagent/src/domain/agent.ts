@@ -32,7 +32,6 @@ export class Agent {
   private _effectiveConfig?: AgentEffectiveConfig;
   private readonly _requestedConfig: AgentRequestedConfig;
   private readonly _label?: string;
-  private _attachmentOrder?: number;
 
   constructor(
     readonly id: string,
@@ -79,9 +78,6 @@ export class Agent {
   }
   get label(): string | undefined {
     return this._label;
-  }
-  get attachmentOrder(): number | undefined {
-    return this._attachmentOrder;
   }
   get requestedConfig(): AgentRequestedConfig {
     return this._requestedConfig;
@@ -130,20 +126,6 @@ export class Agent {
     return this._current !== undefined || this._retainedSession !== undefined;
   }
 
-  /** Assign attachment membership. Duplicate assignment preserves its original order. */
-  attach(order: number): void {
-    if (this._attachmentOrder !== undefined) return;
-    this._attachmentOrder = order;
-    this._emit("retention");
-  }
-
-  detach(): void {
-    if (this._attachmentOrder === undefined) return;
-    this._attachmentOrder = undefined;
-    this._releaseConversationIfUnused();
-    this._emit("retention");
-  }
-
   private _releaseConversationIfUnused(): void {
     if (this._current === undefined && !this.retentionDecision.keepConversation) {
       this._retainedSession = undefined;
@@ -172,22 +154,18 @@ export class Agent {
     const last = this._lastAttempt;
     const latest = this._current ?? last;
     const backgroundResult = latest?.dispatch === "background";
-    const attached = this._attachmentOrder !== undefined;
     const policyRetains = this._requestedConfig.conversationPolicy === "retain";
     const hasConversationToPreserve = this.hasCurrentOrRetainedConversation;
     const conversationAvailable = this._retainedSession !== undefined;
-    const keepConversation =
-      conversationAvailable && (policyRetains || attached);
+    const keepConversation = conversationAvailable && policyRetains;
     const reasons = [
       ...(active ? ["active" as const] : []),
       ...(backgroundResult ? ["background-result" as const] : []),
       ...(policyRetains && hasConversationToPreserve
         ? ["conversation-policy" as const]
         : []),
-      ...(attached ? ["attachment" as const] : []),
     ];
-    const cataloged =
-      active || backgroundResult || keepConversation || attached;
+    const cataloged = active || backgroundResult || keepConversation;
     const canResume =
       !active &&
       keepConversation &&
@@ -244,7 +222,6 @@ export class Agent {
       conversation: {
         policy: this._requestedConfig.conversationPolicy,
         available: decision.conversationAvailable,
-        attached: this._attachmentOrder !== undefined,
       },
       retention: { catalog: decision.catalog, reasons: decision.reasons },
       config: {
