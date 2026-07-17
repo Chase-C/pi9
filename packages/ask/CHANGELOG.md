@@ -4,6 +4,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-17
+
 ### Changed
 
 - Replace trailing `[selected]` badges in active multi-select questionnaires with checkbox glyphs beside the selection bar, using normal text color for the focused unchecked checkbox.
@@ -47,7 +49,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 - Add compact question and answer rendering with concise model context for completed exchanges.
 - Add branch-aware answer revisions from the session tree.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.3.0...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.3.1...HEAD
+[0.3.1]: https://github.com/Chase-C/pi9/compare/ask-v0.3.0...ask-v0.3.1
 [0.3.0]: https://github.com/Chase-C/pi9/compare/ask-v0.2.0...ask-v0.3.0
 [0.2.0]: https://github.com/Chase-C/pi9/compare/ask-v0.1.0...ask-v0.2.0
 [0.1.0]: https://github.com/Chase-C/pi9/releases/tag/ask-v0.1.0

@@ -1,6 +1,6 @@
 {
   "name": "@pi9/ask",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Preview-rich, replayable Pi questions with multi-select and comments.",
   "license": "MIT",
   "author": "Chase Cummings <chaseecummings@gmail.com>",
