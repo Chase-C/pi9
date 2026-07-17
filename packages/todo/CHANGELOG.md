@@ -4,6 +4,8 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-17
+
 ### Changed
 
 - Use the pending empty-circle glyph and normal text color for active tasks in expanded tool calls and the widget.
@@ -65,7 +67,8 @@ All notable changes to `@pi9/todo` will be documented in this file.
 - Add a persistent configurable widget with focused phase previews, terminal-task summaries, animated activity markers, and flexible placement.
 - Add validated global and trusted-project settings for widget presentation, glyph fallback, and tool-output visibility.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.3.3...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.3.4...HEAD
+[0.3.4]: https://github.com/Chase-C/pi9/compare/todo-v0.3.3...todo-v0.3.4
 [0.3.3]: https://github.com/Chase-C/pi9/compare/todo-v0.3.2...todo-v0.3.3
 [0.3.2]: https://github.com/Chase-C/pi9/compare/todo-v0.3.1...todo-v0.3.2
 [0.3.1]: https://github.com/Chase-C/pi9/compare/todo-v0.3.0...todo-v0.3.1
