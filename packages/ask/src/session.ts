@@ -9,6 +9,7 @@ import {
   AskAnsweredDetailsSchema,
   AskParamsSchema,
   answerMatchesAsk,
+  formatAskAnswer,
   normalizeAsk,
   parseAskReplayDetails,
   type Ask,
@@ -48,7 +49,7 @@ type AskSummaryPayload = {
 
 export type AskReplayMessage = {
   customType: typeof ASK_REPLAY_CUSTOM_TYPE;
-  content: "";
+  content: string;
   display: false;
   details: AskReplayDetails;
 };
@@ -60,10 +61,10 @@ export type AskReplayResolution =
       reason: "no-entry" | "not-assistant" | "not-ask" | "multiple-tool-calls" | "mixed-tools" | "invalid-arguments";
     };
 
-export function buildAskReplayMessage(toolCallId: string, answer: AskAnswer): AskReplayMessage {
+export function buildAskReplayMessage(toolCallId: string, ask: Ask, answer: AskAnswer): AskReplayMessage {
   return {
     customType: ASK_REPLAY_CUSTOM_TYPE,
-    content: "",
+    content: formatAskAnswer(ask, answer),
     display: false,
     details: { toolCallId, answer },
   };

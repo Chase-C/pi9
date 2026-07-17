@@ -34,6 +34,7 @@ import {
   type ViewportOverflow,
 } from "./viewport.js";
 import type { Ask, AskAnswer } from "./domain.js";
+import { CHECKED_BOX, EMPTY_BOX } from "./glyphs.js";
 
 const FRAME_WIDE_PREVIEW = true; // Set to false to compare the same layout without its outer frame.
 
@@ -368,36 +369,37 @@ export class AskComponent implements Component, Focusable {
       addWrappedWithPrefix(lines, prefix, styled, width);
     };
 
+    const multiple = this.questionnaireState.config.allowMultiple;
     let focus: FocusRange | undefined;
     for (const [index, row] of this.questionnaireState.rows.entries()) {
       if (row.kind === "submit") continue;
       const selected = this.questionnaireState.highlightedRow === index;
       const start = lines.length;
       const marker = selected ? this.config.theme.fg("accent", "┃ ") : "  ";
+      const checked = row.kind === "option"
+        ? this.questionnaireState.checked.has(row.index)
+        : this.questionnaireState.freeformChecked;
+      const checkboxColor = checked ? "success" : selected ? "text" : "muted";
+      const checkbox = multiple
+        ? `${this.config.theme.fg(checkboxColor, checked ? CHECKED_BOX : EMPTY_BOX)} `
+        : "";
 
       if (row.kind === "option") {
         const source = row.option;
-        const checked = this.questionnaireState.checked.has(row.index);
-        const badge = this.questionnaireState.config.allowMultiple && checked
-          ? this.config.theme.fg("success", " [selected]")
-          : "";
         const comment = this.questionnaireState.comments.has(row.index)
           ? this.config.theme.fg("warning", " ✎")
           : "";
-        addPrefixed(marker, `${source.label}${badge}${comment}`, selected ? "accent" : "text");
-        if (source.description) addPrefixed("  ", source.description, "muted");
+        addPrefixed(`${marker}${checkbox}`, `${source.label}${comment}`, selected ? "accent" : "text");
+        if (source.description) addPrefixed(multiple ? "    " : "  ", source.description, "muted");
         if (selected) {
           const commentText = this.questionnaireState.comments.get(row.index);
-          if (commentText) addPrefixed("     ", `✎ ${commentText}`, "dim");
+          if (commentText) addPrefixed(multiple ? "       " : "     ", `✎ ${commentText}`, "dim");
         }
       } else {
-        const badge = this.questionnaireState.config.allowMultiple && this.questionnaireState.freeformChecked
-          ? this.config.theme.fg("success", " [selected]")
-          : "";
         const suffix = this.questionnaireState.freeformDraft
           ? ` — ${this.questionnaireState.freeformDraft}`
           : "";
-        addPrefixed(marker, `Type a response…${suffix}${badge}`, selected ? "accent" : "text");
+        addPrefixed(`${marker}${checkbox}`, `Type a response…${suffix}`, selected ? "accent" : "text");
       }
       if (selected) focus = { start, end: lines.length };
       afterRow?.(row);

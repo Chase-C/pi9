@@ -38,16 +38,17 @@ describe("replay records", () => {
     if (resolution.status !== "resolved") return;
     expect(resolution.ask.options[0]?.preview).toBe(previewSentinel);
 
-    const message = buildAskReplayMessage("call-0", { selections: [{ option: 0 }] });
+    const message = buildAskReplayMessage("call-0", resolution.ask, { selections: [{ option: 0 }] });
     expect(JSON.stringify(message.details)).not.toContain(previewSentinel);
   });
 
-  it("builds a minimal hidden replay record", () => {
+  it("builds a hidden replay record with an answer summary for the tree view", () => {
     expect(ASK_REPLAY_CUSTOM_TYPE).toBe("ask:reanswer");
-    const message = buildAskReplayMessage("call-1", { selections: [{ option: 0 }] });
+    const ask = parseStoredAsk(args)!;
+    const message = buildAskReplayMessage("call-1", ask, { selections: [{ option: 0 }] });
     expect(message).toEqual({
       customType: "ask:reanswer",
-      content: "",
+      content: "Selected: A",
       display: false,
       details: { toolCallId: "call-1", answer: { selections: [{ option: 0 }] } },
     });
@@ -95,7 +96,8 @@ describe("resolveAskReplayTarget", () => {
   });
 
   it("uses a revision instead of the native result retained by tool-row navigation", () => {
-    const message = buildAskReplayMessage("call-1", { selections: [{ option: 1 }] });
+    const replayAsk = parseStoredAsk({ question: "Choose?", options: [{ label: "A" }, { label: "B" }] })!;
+    const message = buildAskReplayMessage("call-1", replayAsk, { selections: [{ option: 1 }] });
     const projected = rewriteAskContext([
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "Choose?", options: [{ label: "A" }, { label: "B" }] } }] },
       { role: "toolResult", toolCallId: "call-1", toolName: "ask", content: [{ type: "text", text: "Selected: A" }], details: { status: "answered", answer: { selections: [{ option: 0 }] } }, isError: false },

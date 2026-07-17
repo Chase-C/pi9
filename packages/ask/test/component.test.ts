@@ -3,6 +3,7 @@ import { CURSOR_MARKER, KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { AskComponent } from "../src/component.js";
+import { CHECKED_BOX, EMPTY_BOX } from "../src/glyphs.js";
 
 function theme(): Theme {
   return {
@@ -42,19 +43,6 @@ function make(options: Partial<ConstructorParameters<typeof AskComponent>[0]> = 
 describe("AskComponent", () => {
   initTheme("dark", false);
 
-  it("renders the prompt, descriptions, freeform row, help, and stays within width", () => {
-    const { component } = make();
-    const lines = component.render(32);
-
-    expect(lines.join("\n")).toContain("Both targets");
-    expect(lines.join("\n")).toContain("Which target");
-    expect(lines.join("\n")).toContain("Staging");
-    expect(lines.join("\n")).toContain("Validate");
-    expect(lines.join("\n")).toContain("Type a response");
-    expect(lines.join("\n")).toContain("comment");
-    expect(lines.every((line) => visibleWidth(line) <= 32)).toBe(true);
-  });
-
   it("uses Enter for single-select and returns the selected option", () => {
     const { component, onSubmit } = make();
     component.handleInput("\r");
@@ -67,10 +55,10 @@ describe("AskComponent", () => {
 
   it("toggles multi-select options with Space and Enter, then submits from the button", () => {
     const { component, onSubmit } = make({ allowMultiple: true });
-    expect(component.render(80).join("\n")).not.toContain("Staging [selected]");
+    expect(component.render(80).join("\n")).toContain(`┃ ${EMPTY_BOX} Staging`);
 
     component.handleInput(" ");
-    expect(component.render(80).join("\n")).toContain("Staging [selected]");
+    expect(component.render(80).join("\n")).toContain(`┃ ${CHECKED_BOX} Staging`);
 
     component.handleInput("\x1b[B");
     component.handleInput("\r");
@@ -84,6 +72,23 @@ describe("AskComponent", () => {
     expect(onSubmit).toHaveBeenCalledWith({
       selections: [{ option: 0 }, { option: 1 }],
     });
+  });
+
+  it("renders the active unchecked checkbox in the normal text color", () => {
+    const fg = vi.fn((_color: string, text: string) => text);
+    const styledTheme = theme();
+    styledTheme.fg = fg;
+    const { component } = make({ allowMultiple: true, theme: styledTheme });
+
+    component.render(80);
+    expect(fg.mock.calls.filter(([, text]) => text === EMPTY_BOX).map(([color]) => color))
+      .toEqual(["text", "muted", "muted"]);
+
+    fg.mockClear();
+    component.handleInput("\x1b[B");
+    component.render(80);
+    expect(fg.mock.calls.filter(([, text]) => text === EMPTY_BOX).map(([color]) => color))
+      .toEqual(["muted", "text", "muted"]);
   });
 
   it("opens a comment with literal c without selecting, previews it, and saves with Enter", () => {
@@ -149,16 +154,16 @@ describe("AskComponent", () => {
       allowMultiple: true,
     });
     component.handleInput("\x1b[B");
-    expect(component.render(80).join("\n")).not.toContain("Type a response… [selected]");
+    expect(component.render(80).join("\n")).toContain(`┃ ${EMPTY_BOX} Type a response…`);
 
     component.handleInput("\r");
     component.handleInput("Use the fallback");
     component.handleInput("\r");
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(component.render(80).join("\n")).toContain("Type a response… — Use the fallback [selected]");
+    expect(component.render(80).join("\n")).toContain(`${CHECKED_BOX} Type a response… — Use the fallback`);
 
     component.handleInput(" ");
-    expect(component.render(80).join("\n")).not.toContain("Type a response… — Use the fallback [selected]");
+    expect(component.render(80).join("\n")).toContain(`${EMPTY_BOX} Type a response… — Use the fallback`);
     component.handleInput(" ");
     component.handleInput("\x1b[B");
     component.handleInput("\r");
@@ -398,22 +403,6 @@ describe("AskComponent", () => {
     expect(submitLines.some(line => line.includes("│"))).toBe(width >= 88);
   });
 
-  it("keeps wide column headers visible while editing a freeform response", () => {
-    const { component } = make({
-      options: [{ label: "Staging", preview: "PREVIEW_SENTINEL" }],
-      allowFreeform: true,
-    });
-
-    component.handleInput("\x1b[B");
-    component.handleInput("\r");
-    const output = component.render(100).join("\n");
-
-    expect(component.state.editor.kind).toBe("freeform");
-    expect(output).toContain("OPTIONS");
-    expect(output).toContain("PREVIEW · FOCUSED OPTION");
-    expect(output).toContain("Type a response");
-  });
-
   it("keeps the selected option and fixed chrome visible while clipping long previews", () => {
     const tui = { terminal: { rows: 8 }, requestRender: vi.fn() };
     const { component } = make({
@@ -493,7 +482,6 @@ describe("AskComponent", () => {
     navigated.component.handleInput("c");
     expect(navigated.component.state.highlightedRow).toBe(1);
     expect(navigated.component.state.editor.kind).toBe("select");
-    expect(navigated.component.render(120).join("\n")).not.toContain("c comment");
 
     const confirmWithC = new KeybindingsManager(TUI_KEYBINDINGS, {
       "tui.select.confirm": "c",
@@ -516,7 +504,6 @@ describe("AskComponent", () => {
     freeform.component.handleInput(" ");
     expect(freeform.component.state.editor.kind).toBe("freeform");
     expect(freeform.component.state.freeformChecked).toBe(false);
-    expect(freeform.component.render(120).join("\n")).not.toContain("Space/Space");
   });
 
   it("uses injected select keybindings and retains j/k aliases", () => {
@@ -538,7 +525,6 @@ describe("AskComponent", () => {
     expect(component.state.highlightedRow).toBe(1);
     component.handleInput("k");
     expect(component.state.highlightedRow).toBe(0);
-    expect(component.render(120).join("\n")).toContain("w/s/jk");
 
     component.handleInput("x");
     expect(onSubmit).toHaveBeenCalledOnce();

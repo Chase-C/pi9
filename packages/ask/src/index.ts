@@ -159,7 +159,7 @@ export default function askExtension(pi: ExtensionAPI) {
     try {
       const answer = await launchQuestionnaire(ctx, resolution.ask, deadline.signal);
       if (!answer) return;
-      const message = buildAskReplayMessage(resolution.toolCallId, answer);
+      const message = buildAskReplayMessage(resolution.toolCallId, resolution.ask, answer);
       pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
       applyRevision(message.details.toolCallId, message.details.answer);
       replayState = { status: "dispatched", details: message.details };

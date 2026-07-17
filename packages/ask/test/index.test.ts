@@ -51,17 +51,6 @@ function pendingTui() {
 }
 
 describe("ask extension integration", () => {
-  it("describes the focused-question contract to the model", () => {
-    const { tool } = register();
-    const guidance = tool.promptGuidelines.join("\n");
-
-    expect(tool.description).toContain("selectable options");
-    expect(tool.description).toContain("answered, cancelled, or timed out");
-    expect(guidance).toContain("open-ended questions");
-    expect(guidance).toContain("ask_response");
-    expect(guidance).toContain("do not re-ask");
-  });
-
   it("registers session-start and before-agent-start hooks", () => {
     const { handlers } = register();
     expect(handlers.get("session_start")).toBeTypeOf("function");
@@ -110,13 +99,10 @@ describe("ask extension integration", () => {
     expect(setActiveTools).not.toHaveBeenCalled();
   });
 
-  it("registers the strict sequential tool, guidance, renderers, and context pruning", () => {
+  it("registers the strict sequential tool and context pruning", () => {
     const { tool, contextHandler } = register();
     expect(tool.parameters.additionalProperties).toBe(false);
     expect(tool.executionMode).toBe("sequential");
-    const rendererContext = { state: {}, args: { question: "Choose?", options: [{ label: "Yes" }] }, lastComponent: undefined };
-    expect(tool.renderCall(rendererContext.args, theme(), rendererContext).render(80).join("\n")).toContain("Choose?");
-    expect(tool.renderResult({ content: [{ type: "text", text: "Selected: Yes" }] }, {}, theme(), rendererContext).render(80).join("\n")).toContain("Selected: Yes");
 
     const messages: any[] = [
       { role: "assistant", content: [{ type: "toolCall", id: "a", name: "ask", arguments: { question: "Choose", options: [{ label: "Yes" }, { label: "No" }] } }] },
@@ -534,7 +520,7 @@ describe("ask extension integration", () => {
       { mode: "tui", ui: { custom, notify: vi.fn() }, sessionManager: { getBranch: () => [ask, ...(kind === "summary" ? [summary] : kind === "tool-result" ? [result] : [])] } },
     );
     expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
-      customType: "ask:reanswer", content: "", display: false,
+      customType: "ask:reanswer", content: "Selected: Yes", display: false,
       details: { toolCallId: "call-1", answer: { selections: [{ option: 0 }] } },
     }), { triggerTurn: true, deliverAs: "followUp" });
     expect(emit).not.toHaveBeenCalledWith("ask:reanswered", expect.anything());

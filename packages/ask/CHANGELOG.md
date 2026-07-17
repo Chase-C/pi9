@@ -4,6 +4,14 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Replace trailing `[selected]` badges in active multi-select questionnaires with checkbox glyphs beside the selection bar, using normal text color for the focused unchecked checkbox.
+
+### Fixed
+
+- Show the revised answer beside `[ask:reanswer]` entries in the `/tree` history view.
+
 ## [0.3.0] - 2026-07-17
 
 ### Changed
