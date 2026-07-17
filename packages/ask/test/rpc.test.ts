@@ -1,14 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { normalizeAsk, type AskParams } from "../src/domain.js";
 import { askWithRpc as askWithValidatedRpc, type AskDialogUI } from "../src/rpc.js";
-import type { AskParams } from "../src/types.js";
-import { validateAskParams } from "../src/validation.js";
 
 function ui(select: (title: string, options: string[]) => Promise<string | undefined>, input: (title: string) => Promise<string | undefined>): AskDialogUI {
   return { select, input };
 }
 
 function askWithRpc(ui: AskDialogUI, params: AskParams, signal?: AbortSignal) {
-  return askWithValidatedRpc(ui, validateAskParams(params), signal);
+  return askWithValidatedRpc(ui, normalizeAsk(params), signal);
 }
 
 describe("ask RPC fallback", () => {
@@ -24,7 +23,7 @@ describe("ask RPC fallback", () => {
     expect(select).toHaveBeenCalledWith("Which color?", ["1. Blue — Calm", "2. Type a response…"]);
     expect(input).toHaveBeenCalledWith('Which color?\n\nComment for "Blue" (optional):');
     expect(result).toEqual({
-      selections: [{ label: "Blue", description: "Calm" }],
+      selections: [{ option: 0 }],
     });
   });
 
@@ -76,10 +75,7 @@ describe("ask RPC fallback", () => {
       "Which apply?\n\n1. One — First\n2. Two\n3. Three — Third\n\nEnter option numbers separated by commas:",
     );
     expect(result).toEqual({
-      selections: [
-        { label: "One", description: "First" },
-        { label: "Three", description: "Third" },
-      ],
+      selections: [{ option: 0 }, { option: 2 }],
     });
   });
 
@@ -98,7 +94,7 @@ describe("ask RPC fallback", () => {
 
     expect(input).toHaveBeenCalledTimes(4);
     expect(result).toEqual({
-      selections: [{ label: "Docs" }, { label: "Tests" }],
+      selections: [{ option: 0 }, { option: 1 }],
       freeform: "Also check accessibility",
     });
   });
@@ -120,8 +116,8 @@ describe("ask RPC fallback", () => {
     expect(input.mock.calls[2]?.[0]).toContain('Comment for "Code"');
     expect(result).toEqual({
       selections: [
-        { label: "Docs" },
-        { label: "Code", comment: "Needs a migration note" },
+        { option: 0 },
+        { option: 2, comment: "Needs a migration note" },
       ],
     });
   });
@@ -154,7 +150,7 @@ describe("ask RPC fallback", () => {
       "1. Type a response…",
       "2. Type a response…",
     ]);
-    expect(result).toEqual({ selections: [{ label: "Type a response…" }] });
+    expect(result).toEqual({ selections: [{ option: 0 }] });
   });
 
   it("passes the abort signal to every dialog and stops a multi-step flow after abort", async () => {

@@ -1,7 +1,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 import { AskComponent } from "./component.js";
-import type { AskAnswer, ValidatedAskParams } from "./types.js";
+import type { Ask, AskAnswer } from "./domain.js";
 
 interface QuestionnaireLaunchContext {
   ui: Pick<ExtensionUIContext, "custom">;
@@ -9,7 +9,7 @@ interface QuestionnaireLaunchContext {
 
 export async function launchQuestionnaire(
   ctx: QuestionnaireLaunchContext,
-  params: ValidatedAskParams,
+  params: Ask,
   signal?: AbortSignal,
 ): Promise<AskAnswer | null> {
   let abortListener: (() => void) | undefined;

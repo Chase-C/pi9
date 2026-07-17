@@ -60,9 +60,9 @@ describe("AskComponent", () => {
     component.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledWith({
-      selections: [{ label: "Staging", description: "Validate with internal users first" }],
+      selections: [{ option: 0 }],
     });
-    expect(component.answer?.selections[0]?.label).toBe("Staging");
+    expect(component.answer?.selections[0]?.option).toBe(0);
   });
 
   it("toggles multi-select options with Space and Enter, then submits from the button", () => {
@@ -82,10 +82,7 @@ describe("AskComponent", () => {
     component.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledWith({
-      selections: [
-        { label: "Staging", description: "Validate with internal users first" },
-        { label: "Production", description: "Release immediately" },
-      ],
+      selections: [{ option: 0 }, { option: 1 }],
     });
   });
 
@@ -98,7 +95,7 @@ describe("AskComponent", () => {
     component.handleInput("Safer rollout");
     component.handleInput("\r");
     expect(component.state.editor.kind).toBe("select");
-    expect(component.state.comments.get("Staging")).toBe("Safer rollout");
+    expect(component.state.comments.get(0)).toBe("Safer rollout");
     expect(component.render(80).join("\n")).toContain("✎ Safer rollout");
     expect(component.state.checked.size).toBe(0);
   });

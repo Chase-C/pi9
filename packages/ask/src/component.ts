@@ -33,11 +33,11 @@ import {
   type FocusRange,
   type ViewportOverflow,
 } from "./viewport.js";
-import type { AskAnswer, ValidatedAskParams } from "./types.js";
+import type { Ask, AskAnswer } from "./domain.js";
 
 const FRAME_WIDE_PREVIEW = true; // Set to false to compare the same layout without its outer frame.
 
-type AskComponentOptions = ValidatedAskParams & {
+type AskComponentOptions = Ask & {
   tui: TUI;
   theme: Theme;
   keybindings: KeybindingsManager;
@@ -377,17 +377,17 @@ export class AskComponent implements Component, Focusable {
 
       if (row.kind === "option") {
         const source = row.option;
-        const checked = this.questionnaireState.checked.has(source.label);
+        const checked = this.questionnaireState.checked.has(row.index);
         const badge = this.questionnaireState.config.allowMultiple && checked
           ? this.config.theme.fg("success", " [selected]")
           : "";
-        const comment = this.questionnaireState.comments.has(source.label)
+        const comment = this.questionnaireState.comments.has(row.index)
           ? this.config.theme.fg("warning", " ✎")
           : "";
         addPrefixed(marker, `${source.label}${badge}${comment}`, selected ? "accent" : "text");
         if (source.description) addPrefixed("  ", source.description, "muted");
         if (selected) {
-          const commentText = this.questionnaireState.comments.get(source.label);
+          const commentText = this.questionnaireState.comments.get(row.index);
           if (commentText) addPrefixed("     ", `✎ ${commentText}`, "dim");
         }
       } else {

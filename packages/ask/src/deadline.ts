@@ -1,16 +1,41 @@
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
+type AskEnvironment = Readonly<{
+  PI9_ASK_TIMEOUT_MS?: string;
+}>;
+
 export interface DeadlineSignal {
   signal: AbortSignal | undefined;
   readonly timedOut: boolean;
   dispose(): void;
 }
 
+export function resolveTimeoutMs(
+  perCallTimeout: number | undefined,
+  env: AskEnvironment,
+): number | undefined {
+  if (perCallTimeout !== undefined) {
+    return Number.isInteger(perCallTimeout) && perCallTimeout > 0 && perCallTimeout <= MAX_TIMEOUT_MS
+      ? perCallTimeout
+      : undefined;
+  }
+
+  const envTimeout = env.PI9_ASK_TIMEOUT_MS;
+  if (envTimeout === undefined || !/^\d+$/.test(envTimeout)) return undefined;
+
+  const timeout = Number(envTimeout);
+  return Number.isInteger(timeout) && timeout > 0 && timeout <= MAX_TIMEOUT_MS
+    ? timeout
+    : undefined;
+}
+
 export function createDeadlineSignal(
   parent: AbortSignal | undefined,
-  timeoutMs: number | undefined,
+  perCallTimeout: number | undefined,
+  env: AskEnvironment = {},
 ): DeadlineSignal {
-  const hasTimeout = timeoutMs !== undefined
-    && Number.isFinite(timeoutMs)
-    && timeoutMs > 0;
+  const timeoutMs = resolveTimeoutMs(perCallTimeout, env);
+  const hasTimeout = timeoutMs !== undefined;
 
   if (parent === undefined && !hasTimeout) {
     return {

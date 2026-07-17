@@ -16,7 +16,7 @@ describe("questionnaire state", () => {
     expect(state.highlightedRow).toBe(0);
     state = transitionQuestionnaire(state, { type: "move", delta: 1 });
     state = transitionQuestionnaire(state, { type: "toggle" });
-    expect([...state.checked]).toEqual(["Rust"]);
+    expect([...state.checked]).toEqual([1]);
     expect(state.editor.kind).toBe("select");
   });
 
@@ -24,7 +24,7 @@ describe("questionnaire state", () => {
     let state = createQuestionnaireState({ ...config, allowMultiple: false });
     state = transitionQuestionnaire(state, { type: "move", delta: 1 });
     state = transitionQuestionnaire(state, { type: "toggle" });
-    expect(state.answer).toEqual({ selections: [{ label: "Rust" }] });
+    expect(state.answer).toEqual({ selections: [{ option: 1 }] });
   });
 
   it("omits presentation-only preview content from final selections", () => {
@@ -38,7 +38,7 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "saveEditor" });
     state = transitionQuestionnaire(state, { type: "toggle" });
     expect(state.answer).toEqual({
-      selections: [{ label: "TypeScript", description: "Typed", comment: "preferred" }],
+      selections: [{ option: 0, comment: "preferred" }],
     });
     expect(state.answer?.selections[0]).not.toHaveProperty("preview");
   });
@@ -50,7 +50,7 @@ describe("questionnaire state", () => {
     expect(state.checked.size).toBe(0);
     state = transitionQuestionnaire(state, { type: "edit", value: "  safer types  " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
-    expect(state.comments.get("TypeScript")).toBe("safer types");
+    expect(state.comments.get(0)).toBe("safer types");
     expect(state.editor.kind).toBe("select");
   });
 
@@ -62,7 +62,7 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "openComment" });
     state = transitionQuestionnaire(state, { type: "edit", value: "   " });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
-    expect(state.comments.has("TypeScript")).toBe(false);
+    expect(state.comments.has(0)).toBe(false);
   });
 
   it("Escape rolls editor changes back to the previously saved value", () => {
@@ -73,7 +73,7 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "openComment" });
     state = transitionQuestionnaire(state, { type: "edit", value: "discard me" });
     state = transitionQuestionnaire(state, { type: "cancelEditor" });
-    expect(state.comments.get("TypeScript")).toBe("saved");
+    expect(state.comments.get(0)).toBe("saved");
     expect(state.editor).toEqual({ kind: "select" });
   });
 
@@ -111,7 +111,7 @@ describe("questionnaire state", () => {
     expect(state.freeformChecked).toBe(true);
     state = transitionQuestionnaire(state, { type: "submit" });
     expect(state.answer).toEqual({
-      selections: [{ label: "TypeScript", comment: "preferred" }],
+      selections: [{ option: 0, comment: "preferred" }],
       freeform: "and Zig",
     });
   });
@@ -160,8 +160,8 @@ describe("questionnaire state", () => {
     state.highlightedRow = 1;
     state = transitionQuestionnaire(state, { type: "edit", value: "first option" });
     state = transitionQuestionnaire(state, { type: "saveEditor" });
-    expect(state.comments.get("TypeScript")).toBe("first option");
-    expect(state.comments.has("Rust")).toBe(false);
+    expect(state.comments.get(0)).toBe("first option");
+    expect(state.comments.has(1)).toBe(false);
   });
 
   it("rejects construction without an option", () => {
@@ -176,6 +176,6 @@ describe("questionnaire state", () => {
     state = transitionQuestionnaire(state, { type: "move", delta: 1 });
     state = transitionQuestionnaire(state, { type: "toggle" });
     state = transitionQuestionnaire(state, { type: "submit" });
-    expect(state.answer).toEqual({ selections: [{ label: "Rust" }] });
+    expect(state.answer).toEqual({ selections: [{ option: 1 }] });
   });
 });

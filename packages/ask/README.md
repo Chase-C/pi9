@@ -5,6 +5,7 @@ Ask adds interactive questions to [Pi](https://github.com/earendil-works/pi-mono
 ## Feature overview
 
 - **Answer revisions** — Reopen an Ask entry from `/tree` and continue with a new answer.
+- **Tool-call rewriting** — Replace answered standalone Ask exchanges in model context with compact, decision-focused responses while preserving the original session history.
 - **Lean tool definition** — A highly optimized description and schema minimize prompt overhead while staying compatible across providers.
 - **Rich previews** — Inspect Markdown previews before choosing.
 - **Multi-select** — Choose any number of options, then submit them together.
@@ -60,6 +61,16 @@ Ask temporarily replaces the editor with a question. It follows your configured 
 Comments let you qualify a selection without writing a separate message. When a question allows a custom response, highlight **Type a response…** and press **Enter** or **Space** to open the editor.
 
 ## Advanced behavior
+
+### Tool-call rewriting
+
+Ask rewrites answered standalone exchanges before they are sent back to the model, replacing the Ask call and its answer record with a compact `ask_response` message. The replacement keeps the question, optional background, single- or multi-select mode, selected option labels and descriptions, comments, and any freeform response. It leaves out unselected options and all Markdown previews.
+
+The main purpose is to keep proposed alternatives from being mistaken for decisions. Once you choose an answer, the model sees only what you selected and the context attached to that selection—not every option it originally offered. As a secondary benefit, dropping unused answers, previews, and the surrounding tool-call protocol reduces the amount of context carried into later turns.
+
+The answer can come from either a successful native tool result or a valid revision submitted from `/tree`. A revision becomes the authoritative answer, replacing the earlier result in model context even if that result is absent or unsuccessful.
+
+This rewrite affects only the model-facing context. The original messages remain in the stored session, so the conversation still renders normally and the question can still be reopened from `/tree`. Ask rewrites only unambiguous calls and answers that validate against each other; otherwise, it leaves the messages untouched rather than risk producing a misleading response or an unmatched tool call.
 
 ### Responsive previews
 

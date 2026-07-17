@@ -1,18 +1,15 @@
 import type { SessionEntry, SessionTreeEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { rewriteAskContext } from "../src/context.js";
 
-const rewrite = (messages: readonly unknown[]) => rewriteAskContext(messages as never);
-import { renderAskReanswerMessage } from "../src/replay-renderer.js";
 import {
   ASK_REPLAY_CUSTOM_TYPE,
   buildAskReplayMessage,
+  parseStoredAsk,
   resolveAskReplayTarget,
-  validateStoredArgs,
-} from "../src/replay.js";
+  rewriteAskContext,
+} from "../src/session.js";
 
 const args = { question: "  Choose? ", options: [{ label: " A " }] };
-const params = validateStoredArgs(args)!;
 const assistant = (id: string, calls: Array<{ name: string; arguments: unknown }>): SessionEntry => ({
   type: "message", id, parentId: null, timestamp: "now",
   message: {
@@ -23,61 +20,48 @@ const assistant = (id: string, calls: Array<{ name: string; arguments: unknown }
 const event = (newLeafId: string | null, summaryEntry?: SessionTreeEvent["summaryEntry"]): SessionTreeEvent => ({
   type: "session_tree", newLeafId, oldLeafId: "old", ...(summaryEntry ? { summaryEntry } : {}),
 });
-const lookup = (entries: SessionEntry[]) => (id: string) => entries.find((entry) => entry.id === id);
+const lookup = (entries: SessionEntry[]) => (id: string) => entries.find(entry => entry.id === id);
 
 describe("replay records", () => {
-  it("retains preview in replay source params but never in replay answers", () => {
+  it("retains previews only in source arguments", () => {
     const previewSentinel = "REPLAY_PREVIEW_SENTINEL";
     const storedArgs = {
       question: "Choose?",
       options: [{ label: "A", preview: previewSentinel }],
     };
-    const storedParams = validateStoredArgs(storedArgs);
-    expect(storedParams?.options[0]?.preview).toBe(previewSentinel);
+    const storedAsk = parseStoredAsk(storedArgs);
+    expect(storedAsk?.options[0]?.preview).toBe(previewSentinel);
 
     const source = assistant("ask-with-preview", [{ name: "ask", arguments: storedArgs }]);
     const resolution = resolveAskReplayTarget(event("ask-with-preview"), lookup([source]));
     expect(resolution.status).toBe("resolved");
     if (resolution.status !== "resolved") return;
-    expect(resolution.params.options[0]?.preview).toBe(previewSentinel);
+    expect(resolution.ask.options[0]?.preview).toBe(previewSentinel);
 
-    const message = buildAskReplayMessage("call-0", resolution.params, { selections: [{ label: "A" }] });
-    expect(JSON.stringify(message.details.answer)).not.toContain(previewSentinel);
-    expect(message.details.answer).toEqual({ selections: [{ label: "A" }] });
+    const message = buildAskReplayMessage("call-0", { selections: [{ option: 0 }] });
+    expect(JSON.stringify(message.details)).not.toContain(previewSentinel);
   });
 
-  it("builds canonical replay data with answer-oriented tree text", () => {
+  it("builds a minimal hidden replay record", () => {
     expect(ASK_REPLAY_CUSTOM_TYPE).toBe("ask:reanswer");
-    const message = buildAskReplayMessage("call-1", params, { selections: [{ label: "A" }] });
+    const message = buildAskReplayMessage("call-1", { selections: [{ option: 0 }] });
     expect(message).toEqual({
       customType: "ask:reanswer",
-      content: "Selected: A",
+      content: "",
       display: false,
-      details: {
-        toolCallId: "call-1",
-        question: "Choose?",
-        allowMultiple: false,
-        answer: { selections: [{ label: "A" }] },
-      },
+      details: { toolCallId: "call-1", answer: { selections: [{ option: 0 }] } },
     });
 
-    const projected = rewrite([
+    const projected = rewriteAskContext([
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: args }] },
       { role: "custom", timestamp: 12, ...message },
-    ]) as any[];
-    expect(projected).toEqual([{
-      role: "custom",
-      customType: "ask:summary",
-      display: false,
-      content: JSON.stringify({
-        type: "ask_response",
-        question: "Choose?",
-        selectionMode: "single",
-        answer: { selections: [{ label: "A" }] },
-      }),
-      timestamp: 12,
-    }]);
-    expect(renderAskReanswerMessage(message, { expanded: false }, undefined).render(80).join("\n")).toContain("Selected: A");
+    ] as never) as any[];
+    expect(JSON.parse(projected[0].content)).toEqual({
+      type: "ask_response",
+      question: "Choose?",
+      selectionMode: "single",
+      answer: { selections: [{ label: "A" }] },
+    });
   });
 });
 
@@ -86,7 +70,7 @@ describe("resolveAskReplayTarget", () => {
     const entry = assistant("ask-1", [{ name: "ask", arguments: args }]);
     expect(resolveAskReplayTarget(event("ask-1"), lookup([entry]))).toEqual({
       status: "resolved", toolCallId: "call-0",
-      params: { question: "Choose?", options: [{ label: "A" }], allowMultiple: false, allowFreeform: true },
+      ask: { question: "Choose?", options: [{ label: "A" }], allowMultiple: false, allowFreeform: true },
     });
   });
 
@@ -111,28 +95,14 @@ describe("resolveAskReplayTarget", () => {
   });
 
   it("uses a revision instead of the native result retained by tool-row navigation", () => {
-    const params = validateStoredArgs({ question: "Choose?", options: [{ label: "A" }, { label: "B" }] })!;
-    const message = buildAskReplayMessage("call-1", params, {
-      selections: [{ label: "B" }],
-    });
-    const projected = rewrite([
+    const message = buildAskReplayMessage("call-1", { selections: [{ option: 1 }] });
+    const projected = rewriteAskContext([
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "ask", arguments: { question: "Choose?", options: [{ label: "A" }, { label: "B" }] } }] },
-      { role: "toolResult", toolCallId: "call-1", toolName: "ask", content: [{ type: "text", text: "Selected: A" }], details: { status: "answered", question: "Choose?", answer: { selections: [{ label: "A" }] } }, isError: false },
+      { role: "toolResult", toolCallId: "call-1", toolName: "ask", content: [{ type: "text", text: "Selected: A" }], details: { status: "answered", answer: { selections: [{ option: 0 }] } }, isError: false },
       { role: "custom", timestamp: 12, ...message },
-    ]) as any[];
+    ] as never) as any[];
 
-    expect(projected).toEqual([{
-      role: "custom",
-      customType: "ask:summary",
-      display: false,
-      content: JSON.stringify({
-        type: "ask_response",
-        question: "Choose?",
-        selectionMode: "single",
-        answer: { selections: [{ label: "B" }] },
-      }),
-      timestamp: 12,
-    }]);
+    expect(JSON.parse(projected[0].content).answer).toEqual({ selections: [{ label: "B" }] });
   });
 
   it.each([

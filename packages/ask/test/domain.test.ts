@@ -1,22 +1,23 @@
 import { Check } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import {
-  buildAnsweredResponse,
-  buildCancelledResponse,
-  buildUiUnavailableResponse,
-  buildUnansweredResponse,
-  formatAskAnswer,
-} from "../src/response.js";
-import { MAX_TIMEOUT_MS } from "../src/config.js";
+
+import { MAX_TIMEOUT_MS } from "../src/deadline.js";
 import {
   AskAnswerSchema,
   AskAnsweredDetailsSchema,
   AskParamsSchema,
   AskReplayDetailsSchema,
   AskSelectionSchema,
-} from "../src/schema.js";
-import type { AskAnswer } from "../src/types.js";
-import { validateAskParams } from "../src/validation.js";
+  buildAskResponse,
+  formatAskAnswer,
+  normalizeAsk,
+  type AskAnswer,
+} from "../src/domain.js";
+
+const ask = normalizeAsk({
+  question: "Which color?",
+  options: [{ label: "Blue", description: "Calm" }],
+});
 
 describe("AskParamsSchema", () => {
   it("describes the strict provider-facing parameters", () => {
@@ -43,40 +44,25 @@ describe("AskParamsSchema", () => {
 
 describe("canonical stored-data schemas", () => {
   const answer = {
-    selections: [{ label: "Blue", description: "Calm", comment: "Best fit" }],
+    selections: [{ option: 0, comment: "Best fit" }],
     freeform: "Ship today",
   };
 
-  it("checks selections, answers, replay details, and answered native details strictly", () => {
+  it("stores only option references and user-authored answer data", () => {
     expect(Check(AskSelectionSchema, answer.selections[0])).toBe(true);
     expect(Check(AskAnswerSchema, answer)).toBe(true);
-    expect(Check(AskReplayDetailsSchema, {
-      toolCallId: "ask-1",
-      question: "Which color?",
-      allowMultiple: false,
-      answer,
-    })).toBe(true);
-    expect(Check(AskAnsweredDetailsSchema, {
-      status: "answered",
-      question: "Which color?",
-      answer,
-    })).toBe(true);
+    expect(Check(AskReplayDetailsSchema, { toolCallId: "ask-1", answer })).toBe(true);
+    expect(Check(AskAnsweredDetailsSchema, { status: "answered", answer })).toBe(true);
 
-    expect(Check(AskAnswerSchema, { selections: [{ label: "Blue", preview: "hidden" }] })).toBe(false);
-    expect(Check(AskReplayDetailsSchema, {
-      toolCallId: "ask-1",
-      question: "Which color?",
-      allowMultiple: false,
-      answer,
-      unknown: true,
-    })).toBe(false);
-    expect(Check(AskAnsweredDetailsSchema, { status: "cancelled", question: "Which color?", answer })).toBe(false);
+    expect(Check(AskAnswerSchema, { selections: [{ option: 0, label: "Blue" }] })).toBe(false);
+    expect(Check(AskReplayDetailsSchema, { toolCallId: "ask-1", answer, question: "Which color?" })).toBe(false);
+    expect(Check(AskAnsweredDetailsSchema, { status: "cancelled", answer })).toBe(false);
   });
 });
 
-describe("validateAskParams", () => {
+describe("normalizeAsk", () => {
   it("trims input and applies interaction defaults", () => {
-    expect(validateAskParams({
+    expect(normalizeAsk({
       question: "  Which?  ",
       context: "  Helpful  ",
       options: [{ label: " A ", description: " First " }],
@@ -90,7 +76,7 @@ describe("validateAskParams", () => {
   });
 
   it("preserves non-whitespace preview content and removes whitespace-only previews", () => {
-    expect(validateAskParams({
+    expect(normalizeAsk({
       question: "Preview?",
       options: [
         { label: "Keep", preview: "\n  indented text  \n" },
@@ -115,36 +101,36 @@ describe("validateAskParams", () => {
     [{ question: "Choose", options: [{ label: "A", description: "1" }, { label: " A ", description: "2" }] }, "duplicate"],
     [{ question: "Choose", options: [] }, "option"],
   ])("rejects invalid parameters %#", (params, message) => {
-    expect(() => validateAskParams(params as never)).toThrow(message as string);
+    expect(() => normalizeAsk(params as never)).toThrow(message as string);
   });
 });
 
 describe("ask responses", () => {
   const answer: AskAnswer = {
-    selections: [{ label: "Blue", description: "Calm", comment: "Best fit" }],
+    selections: [{ option: 0, comment: "Best fit" }],
     freeform: "Ship today",
   };
 
-  it("formats and builds a structured answer", () => {
-    expect(formatAskAnswer(answer)).toBe("Selected: Blue — Calm (Best fit)\nFreeform: Ship today");
-    expect(buildAnsweredResponse("Which color?", answer)).toEqual({
+  it("formats an answer from its canonical Ask options", () => {
+    expect(formatAskAnswer(ask, answer)).toBe("Selected: Blue — Calm (Best fit)\nFreeform: Ship today");
+    expect(buildAskResponse(ask, { status: "answered", answer })).toEqual({
       content: [{ type: "text", text: "Selected: Blue — Calm (Best fit)\nFreeform: Ship today" }],
-      details: { status: "answered", question: "Which color?", answer },
+      details: { status: "answered", answer },
     });
   });
 
   it("builds distinct unanswered, cancellation, and UI-unavailable results", () => {
-    expect(buildUnansweredResponse("Continue?")).toMatchObject({
+    expect(buildAskResponse(ask, { status: "unanswered" })).toMatchObject({
       content: [{ type: "text", text: "The question timed out without an answer." }],
-      details: { status: "unanswered", question: "Continue?" },
+      details: { status: "unanswered" },
     });
-    expect(buildCancelledResponse("Continue?")).toMatchObject({
+    expect(buildAskResponse(ask, { status: "cancelled" })).toMatchObject({
       content: [{ type: "text", text: "User cancelled the question." }],
-      details: { status: "cancelled", question: "Continue?" },
+      details: { status: "cancelled" },
     });
-    expect(buildUiUnavailableResponse("Continue?")).toMatchObject({
+    expect(buildAskResponse(ask, { status: "ui_unavailable" })).toMatchObject({
       content: [{ type: "text", text: "Interactive UI is unavailable." }],
-      details: { status: "ui_unavailable", question: "Continue?" },
+      details: { status: "ui_unavailable" },
     });
   });
 });
