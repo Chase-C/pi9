@@ -16,7 +16,7 @@ test("allocates distinct recognizable ID shapes", () => {
   const conversationId = new ConversationIdAllocator(() => 0).allocate();
   const runId = new RunIdAllocator(() => 0).allocate();
 
-  assert.equal(conversationId, "amber-acorn");
+  assert.equal(conversationId, "airy-acorn");
   assert.equal(runId, "adapt-ably");
   assert.equal(isConversationId(conversationId), true);
   assert.equal(isRunId(conversationId), false);
@@ -33,9 +33,17 @@ test("word lists are globally disjoint", () => {
   assert.equal(new Set(allWords).size, allWords.length);
 });
 
+test("word lists are sorted alphabetically", () => {
+  for (const words of [
+    CONVERSATION_ID_ADJECTIVES, CONVERSATION_ID_NOUNS, RUN_ID_VERBS, RUN_ID_ADVERBS,
+  ]) {
+    assert.deepEqual(words, [...words].sort());
+  }
+});
+
 test("retries collisions then falls back deterministically in each namespace", () => {
   for (const [allocator, first, second] of [
-    [new ConversationIdAllocator(() => 0), "amber-acorn", "amber-antelope"],
+    [new ConversationIdAllocator(() => 0), "airy-acorn", "airy-alpaca"],
     [new RunIdAllocator(() => 0), "adapt-ably", "adapt-abruptly"],
   ] as const) {
     assert.equal(allocator.allocate(), first);
