@@ -1,7 +1,7 @@
 import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type Component, type SettingItem } from "@earendil-works/pi-tui";
 
-import type { BackgroundNotifyMode, SubagentSettings, WidgetLayout, WidgetPlacement } from "../../config/settings.js";
+import type { CompletionNotifyMode, SubagentSettings, WidgetLayout, WidgetPlacement } from "../../config/settings.js";
 import { accent, fitLinesToWidth, isCancelKey, isDownKey, isEnterKey, isUpKey, type SubagentKeybindings } from "../input.js";
 
 const COUNT_SETTING_VALUES = ["1", "2", "4", "8", "16", "32"];
@@ -10,11 +10,10 @@ const ROW_SETTING_VALUES = ["1", "2", "4", "6", "8", "16", "32"];
 export type SubagentSettingsChange =
   | { kind: "widgetPlacement"; value: WidgetPlacement }
   | { kind: "widgetLayout"; value: WidgetLayout }
-  | { kind: "backgroundNotify"; value: BackgroundNotifyMode }
+  | { kind: "completionNotify"; value: CompletionNotifyMode }
   | { kind: "maxConcurrentSubagents"; value: number }
   | { kind: "maxTasksPerRun"; value: number }
-  | { kind: "defaultRetainConversation"; value: boolean }
-  | { kind: "widgetShowRetainedSessions"; value: boolean }
+  | { kind: "maxConversations"; value: number }
   | { kind: "widgetMaxRowsPerSection"; value: number };
 
 export interface AppliedSubagentSettingsChange {
@@ -37,10 +36,10 @@ export function applySubagentSettingsChange(
         settings: { ...settings, widgetLayout: change.value },
         confirmation: `Subagent widget layout set to ${change.value}.`,
       };
-    case "backgroundNotify":
+    case "completionNotify":
       return {
-        settings: { ...settings, runtime: { ...settings.runtime, backgroundNotify: change.value } },
-        confirmation: `Subagent background notify set to ${change.value}.`,
+        settings: { ...settings, runtime: { ...settings.runtime, completionNotify: change.value } },
+        confirmation: `Subagent completion notify set to ${change.value}.`,
       };
     case "maxConcurrentSubagents":
       return {
@@ -52,15 +51,10 @@ export function applySubagentSettingsChange(
         settings: { ...settings, runtime: { ...settings.runtime, maxTasksPerRun: change.value } },
         confirmation: `Subagent max tasks per run set to ${change.value}.`,
       };
-    case "defaultRetainConversation":
+    case "maxConversations":
       return {
-        settings: { ...settings, runtime: { ...settings.runtime, defaultRetainConversation: change.value } },
-        confirmation: `Subagent default retainConversation set to ${change.value}.`,
-      };
-    case "widgetShowRetainedSessions":
-      return {
-        settings: { ...settings, display: { ...settings.display, widgetShowRetainedSessions: change.value } },
-        confirmation: `Subagent show retained sessions set to ${change.value}.`,
+        settings: { ...settings, runtime: { ...settings.runtime, maxConversations: change.value } },
+        confirmation: `Subagent max conversations set to ${change.value}.`,
       };
     case "widgetMaxRowsPerSection":
       return {
@@ -96,12 +90,12 @@ export class SubagentSettingsComponent implements Component {
         label: "Widget layout",
         currentValue: settings.widgetLayout,
         values: ["auto", "columns", "stacked"],
-        description: "Values: auto, columns, stacked. auto uses side-by-side columns when both sections fit after the background content width.",
+        description: "Values: auto, columns, stacked. auto uses side-by-side columns when both sections fit after the content width.",
       },
       {
-        id: "backgroundNotify",
-        label: "Background notify",
-        currentValue: settings.runtime.backgroundNotify,
+        id: "completionNotify",
+        label: "Completion notify",
+        currentValue: settings.runtime.completionNotify,
         values: ["auto", "steer", "none"],
         description: "Values: auto, steer, none. auto fires once the parent is idle; steer injects into the active run before a future model step.",
       },
@@ -120,25 +114,18 @@ export class SubagentSettingsComponent implements Component {
         description: "Maximum tasks accepted in one subagent run call. This limits single-call fanout before tasks enter the queue.",
       },
       {
-        id: "defaultRetainConversation",
-        label: "Default retainConversation",
-        currentValue: String(settings.runtime.defaultRetainConversation),
-        values: ["false", "true"],
-        description: "Default conversation resumability when agent frontmatter omits it. Per-task overrides still win.",
-      },
-      {
-        id: "widgetShowRetainedSessions",
-        label: "Show retained",
-        currentValue: String(settings.display.widgetShowRetainedSessions),
-        values: ["true", "false"],
-        description: "Whether the progress widget includes completed retainConversation sessions. Disable to reduce widget clutter.",
+        id: "maxConversations",
+        label: "Max conversations",
+        currentValue: String(settings.runtime.maxConversations),
+        values: numericSettingValues(settings.runtime.maxConversations, ["25", "50", "100", "200", "500"]),
+        description: "Maximum number of conversations stored by the runtime.",
       },
       {
         id: "widgetMaxRowsPerSection",
         label: "Widget rows",
         currentValue: String(settings.display.widgetMaxRowsPerSection),
         values: numericSettingValues(settings.display.widgetMaxRowsPerSection, ROW_SETTING_VALUES),
-        description: "Maximum visible rows per Background or Retained widget section before showing a +N more overflow line.",
+        description: "Maximum visible rows per widget section before showing a +N more overflow line.",
       },
     ];
     this.settingsList = new SettingsList(
@@ -148,11 +135,10 @@ export class SubagentSettingsComponent implements Component {
       (id, newValue) => {
         if (id === "widgetPlacement") onChange({ kind: "widgetPlacement", value: newValue as WidgetPlacement });
         else if (id === "widgetLayout") onChange({ kind: "widgetLayout", value: newValue as WidgetLayout });
-        else if (id === "backgroundNotify") onChange({ kind: "backgroundNotify", value: newValue as BackgroundNotifyMode });
+        else if (id === "completionNotify") onChange({ kind: "completionNotify", value: newValue as CompletionNotifyMode });
         else if (id === "maxConcurrentSubagents") onChange({ kind: "maxConcurrentSubagents", value: Number(newValue) });
         else if (id === "maxTasksPerRun") onChange({ kind: "maxTasksPerRun", value: Number(newValue) });
-        else if (id === "defaultRetainConversation") onChange({ kind: "defaultRetainConversation", value: newValue === "true" });
-        else if (id === "widgetShowRetainedSessions") onChange({ kind: "widgetShowRetainedSessions", value: newValue === "true" });
+        else if (id === "maxConversations") onChange({ kind: "maxConversations", value: Number(newValue) });
         else if (id === "widgetMaxRowsPerSection") onChange({ kind: "widgetMaxRowsPerSection", value: Number(newValue) });
       },
       done,

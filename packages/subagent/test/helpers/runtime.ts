@@ -1,7 +1,7 @@
 import type { AgentSession, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { toResult, type AgentResult } from "../../src/domain/agent-result.js";
-import { AgentManager, type AgentRunner, type RunUpdateListener } from "../../src/runtime/agent-manager.js";
+import { AgentManager, type AgentRunner, type AgentUpdateListener } from "../../src/runtime/agent-manager.js";
 import type { TaskRequest } from "../../src/schema.js";
 
 /**
@@ -25,11 +25,12 @@ export function run(
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
   tasks: TaskRequest[],
-  onUpdate?: RunUpdateListener,
-  options: { parentId?: string } = {},
+  onUpdate?: AgentUpdateListener,
+  options: { parentConversationId?: string } = {},
 ): Promise<AgentResult[]> {
-  return manager.startRun(ctx, signal, tasks, onUpdate, { dispatch: "foreground", ...options })
-    .resultsPromise.then(snapshots => snapshots.map(toResult));
+  if (onUpdate) manager.onAgentUpdate(onUpdate);
+  const handle = manager.startRun(ctx, tasks, options.parentConversationId ? { parentConversationId: options.parentConversationId as any } : {});
+  return handle.completion.then(starts => starts.filter(start => start.ok).map(start => toResult(manager.conversation(start.conversationId), start.runId)));
 }
 
 export const baseCtx = () => ({ cwd: process.cwd(), modelRegistry: { getAll: () => [] } } as any);

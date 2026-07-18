@@ -1,53 +1,28 @@
-import { test } from "vitest";
-import assert from "node:assert/strict";
-
+import { expect, test, vi } from "vitest";
 import { confirmWithActiveSubagents, registerSubagentSessionGuards } from "../../src/runtime/session-guards.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
-test("session guard cancels when the user rejects switching with active subagents", async () => {
-  const prompts: Array<{ title: string; message: string }> = [];
-  const result = await confirmWithActiveSubagents(
-    {
-      hasUI: true,
-      ui: {
-        async confirm(title, message) {
-          prompts.push({ title, message });
-          return false;
-        },
-      },
-    },
-    { listSessions: () => [fakeAgent({ config: { name: "helper" }, label: "audit", status: { kind: "running", startedAt: 1 } })] },
-  );
+const manager = (items: any[]) => ({ listConversations: () => items });
 
-  assert.deepEqual(result, { cancel: true });
-  assert.equal(prompts[0].title, "Active subagents");
-  assert.match(prompts[0].message, /helper \(audit\): running/);
+test("declining runtime teardown cancels switching when a run is active", async () => {
+  const confirm = vi.fn().mockResolvedValue(false);
+  const active = fakeAgent({ conversationId: "amber-acorn", label: "review", status: { kind: "running" } });
+  await expect(confirmWithActiveSubagents({ hasUI: true, ui: { confirm } }, manager([active]))).resolves.toEqual({ cancel: true });
+  expect(confirm).toHaveBeenCalledWith("Active subagents", expect.stringContaining("helper (review): running"));
+  expect(confirm.mock.calls[0][1]).toContain("tear down this extension runtime");
 });
 
-test("session guard allows session changes without active subagents or without UI", async () => {
-  assert.equal(
-    await confirmWithActiveSubagents(
-      { hasUI: true, ui: { async confirm() { throw new Error("should not ask"); } } },
-      { listSessions: () => [fakeAgent({ status: { kind: "completed", completedAt: 2 } })] },
-    ),
-    undefined,
-  );
-
-  assert.equal(
-    await confirmWithActiveSubagents(
-      { hasUI: false },
-      { listSessions: () => [fakeAgent({ status: { kind: "queued" } })] },
-    ),
-    undefined,
-  );
+test("completed work or unavailable UI does not block teardown", async () => {
+  const confirm = vi.fn();
+  await expect(confirmWithActiveSubagents({ hasUI: true, ui: { confirm } }, manager([fakeAgent()]))).resolves.toBeUndefined();
+  await expect(confirmWithActiveSubagents({ hasUI: false }, manager([fakeAgent({ status: { kind: "queued" } })]))).resolves.toBeUndefined();
+  expect(confirm).not.toHaveBeenCalled();
 });
 
-test("session guards register for switch and fork events", () => {
-  const events: string[] = [];
-  registerSubagentSessionGuards(
-    { on: (event: any) => { events.push(event); } },
-    { listSessions: () => [] },
-  );
-
-  assert.deepEqual(events, ["session_before_switch", "session_before_fork"]);
+test("both SDK teardown entry points use the same guard", async () => {
+  const handlers = new Map<string, Function>();
+  registerSubagentSessionGuards({ on: (event, handler) => { handlers.set(event, handler); } }, manager([fakeAgent({ status: { kind: "queued" } })]));
+  expect([...handlers.keys()]).toEqual(["session_before_switch", "session_before_fork"]);
+  const ctx = { hasUI: true, ui: { confirm: vi.fn().mockResolvedValue(false) } };
+  await expect(handlers.get("session_before_fork")!({}, ctx)).resolves.toEqual({ cancel: true });
 });

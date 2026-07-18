@@ -1,369 +1,114 @@
 import { StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
+import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thinking-level.js";
+import { isConversationId, type ConversationId } from "./domain/conversation-id.js";
+import { isRunId, type RunId } from "./domain/run-id.js";
 
-import {
-  isModelThinkingLevel,
-  MODEL_THINKING_LEVELS,
-} from "./domain/model-thinking-level.js";
-import type { AgentDispatch } from "./domain/agent-lifecycle.js";
+export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./domain/model-thinking-level.js";
 
-export {
-  isModelThinkingLevel,
-  MODEL_THINKING_LEVELS,
-} from "./domain/model-thinking-level.js";
-
-export const TaskSchema = Type.Object({
-  agent: Type.Optional(
-    Type.String({ description: "New session only: agent name." }),
-  ),
-  sessionId: Type.Optional(
-    Type.String({ description: "Resume only: retained session handle." }),
-  ),
-  prompt: Type.String({
-    description:
-      "Delegated task or follow-up; resumes retain prior child context.",
-  }),
-  label: Type.Optional(
-    Type.String({
-      description:
-        "New session only: display label; required for new sessions.",
-    }),
-  ),
-  retainConversation: Type.Optional(
-    Type.Boolean({
-      description: "New session only: retain child context for follow-ups.",
-    }),
-  ),
-  model: Type.Optional(
-    Type.String({ description: "New session model override." }),
-  ),
-  thinking: Type.Optional(
-    StringEnum(MODEL_THINKING_LEVELS, {
-      description: "New session thinking override.",
-    }),
-  ),
-  cwd: Type.Optional(
-    Type.String({
-      description:
-        "New session working directory; relative paths use the parent cwd.",
-    }),
-  ),
-  skills: Type.Optional(
-    Type.Array(Type.String(), {
-      description: "New session skills; replaces agent defaults ([] disables).",
-    }),
-  ),
-});
-
-export const SUBAGENT_ACTIONS = [
-  "agents",
-  "list",
-  "run",
-  "results",
-  "remove",
-] as const;
-export const SESSION_STATUSES = [
-  "queued",
-  "running",
-  "completed",
-  "error",
-  "aborted",
-  "interrupted",
-  "skipped",
-] as const;
-
-export const SubagentParams = Type.Object({
-  action: StringEnum(SUBAGENT_ACTIONS),
-  tasks: Type.Optional(
-    Type.Array(TaskSchema, {
-      minItems: 1,
-      description:
-        "run only: tasks execute concurrently; avoid dependencies and overlapping writes.",
-    }),
-  ),
-  dispatch: Type.Optional(
-    StringEnum(["foreground", "background"] as const, {
-      description:
-        "run only: foreground (default) waits; background returns handles immediately.",
-    }),
-  ),
-  status: Type.Optional(
-    Type.Array(StringEnum(SESSION_STATUSES), {
-      minItems: 1,
-      description: "list only: statuses to include.",
-    }),
-  ),
-  sessionIds: Type.Optional(
-    Type.Array(Type.String(), {
-      minItems: 1,
-      description: "results/remove: session handles to target.",
-    }),
-  ),
-  remove: Type.Optional(
-    Type.Boolean({
-      description:
-        "results only: remove terminal sessions once returned; pending sessions remain.",
-    }),
-  ),
-});
-
+const NonBlankString = (description: string) => Type.String({ minLength: 1, pattern: ".*\\S.*", description });
+const SpawnTaskSchema = Type.Object({
+  agent: NonBlankString("Agent name."),
+  prompt: NonBlankString("Delegated task."),
+  label: Type.Optional(NonBlankString("Display label.")),
+  skills: Type.Optional(Type.Array(NonBlankString("Skill name."), { description: "Skills override." })),
+  model: Type.Optional(NonBlankString("Model override.")),
+  thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
+  cwd: Type.Optional(NonBlankString("Working directory.")),
+}, { additionalProperties: false });
+const ResumeTaskSchema = Type.Object({
+  conversationId: NonBlankString("Conversation ID."),
+  prompt: NonBlankString("Follow-up prompt."),
+}, { additionalProperties: false });
+export const TaskSchema = Type.Union([SpawnTaskSchema, ResumeTaskSchema]);
+export const SUBAGENT_ACTIONS = ["agents", "list", "run", "join", "remove"] as const;
+export const RUN_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
+export const SubagentParams = Type.Union([
+  Type.Object({ action: Type.Literal("agents") }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("list"), status: Type.Optional(Type.Array(StringEnum(RUN_STATUSES), { minItems: 1 })) }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("run"), tasks: Type.Array(TaskSchema, { minItems: 1 }) }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("join"), runIds: Type.Array(Type.String(), { minItems: 1 }) }, { additionalProperties: false }),
+  Type.Object({ action: Type.Literal("remove"), conversationIds: Type.Array(Type.String(), { minItems: 1 }) }, { additionalProperties: false }),
+]);
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
-export type SessionStatus = (typeof SESSION_STATUSES)[number];
-export const isSessionStatus = (value: unknown): value is SessionStatus =>
-  typeof value === "string" &&
-  (SESSION_STATUSES as readonly string[]).includes(value);
-
-export type SpawnRequest = {
-  kind: "spawn";
-  agent: string;
-  prompt: string;
-  label?: string;
-  skills?: string[];
-  retainConversation?: boolean;
-  model?: string;
-  thinking?: ModelThinkingLevel;
-  cwd?: string;
-};
-export type ResumeRequest = {
-  kind: "resume";
-  sessionId: string;
-  prompt: string;
-};
+export type RunStatus = (typeof RUN_STATUSES)[number];
+export const isRunStatus = (v: unknown): v is RunStatus => typeof v === "string" && (RUN_STATUSES as readonly string[]).includes(v);
+export type SpawnRequest = { kind: "spawn"; agent: string; prompt: string; label?: string; skills?: string[]; model?: string; thinking?: ModelThinkingLevel; cwd?: string };
+export type ResumeRequest = { kind: "resume"; conversationId: ConversationId; prompt: string };
 export type TaskRequest = SpawnRequest | ResumeRequest;
 export type ParsedTask = TaskRequest | { error: string };
-
 export type SubagentInvocation =
-  | { action: "agents" }
-  | { action: "list"; status?: SessionStatus[] }
-  | { action: "run"; tasks: TaskRequest[]; dispatch?: AgentDispatch }
-  | { action: "results"; sessionIds: string[]; remove?: boolean }
-  | { action: "remove"; sessionIds: string[] };
-export type SubagentInvocationParseError = {
-  error: string;
-  action?: SubagentAction;
-  errors?: string[];
-  missingAction?: boolean;
-  taskCountError?: boolean;
+ | { action: "agents" }
+ | { action: "list"; status?: RunStatus[] }
+ | { action: "run"; tasks: TaskRequest[] }
+ | { action: "join"; runIds: RunId[] }
+ | { action: "remove"; conversationIds: ConversationId[] };
+export type SubagentInvocationParseError = { error: string; action?: SubagentAction; errors?: string[]; missingAction?: boolean; taskCountError?: boolean };
+export type ParsedSubagentInvocation = SubagentInvocation | SubagentInvocationParseError;
+export interface ParseSubagentInvocationOptions { maxTasks?: number }
+
+const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
+ agents: ["action"], list: ["action", "status"], run: ["action", "tasks"], join: ["action", "runIds"], remove: ["action", "conversationIds"],
 };
-export type ParsedSubagentInvocation =
-  SubagentInvocation | SubagentInvocationParseError;
-export interface ParseSubagentInvocationOptions {
-  maxTasks?: number;
+const removedFieldMigration: Record<string, string> = {
+ background: "Runs are asynchronous by default; use action=run.",
+ dispatch: "Use action=run with tasks.",
+ wait: "Use action=join with runIds.",
+ results: "Use action=join with runIds.",
+ remove: "Use action=remove with conversationIds.",
+ sessionId: "Use conversationId inside a resume task.",
+ retainConversation: "Conversations are retained by default and removed with action=remove.",
+};
+export function parseSubagentInvocation(raw: unknown, options: ParseSubagentInvocationOptions = {}): ParsedSubagentInvocation {
+ const p = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+ const action = p.action;
+ if (!action) return { error: 'Provide an action: "agents", "list", "run", "join", or "remove".', missingAction: true };
+ if (action === "results") return { error: "The results action was removed. Use action=join with runIds." };
+ if (typeof action !== "string" || !(SUBAGENT_ACTIONS as readonly string[]).includes(action)) return { error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "join", or "remove".` };
+ const a = action as SubagentAction;
+ for (const [field, migration] of Object.entries(removedFieldMigration)) if (p[field] !== undefined) return { error: `Field ${field} was removed. ${migration}`, action: a };
+ const extra = Object.keys(p).find(key => !allowedInvocationKeys[a].includes(key));
+ if (extra) return { error: `Property ${extra} is not allowed for action=${a}. Allowed properties: ${allowedInvocationKeys[a].join(", ")}.`, action: a };
+ if (a === "agents") return { action: a };
+ if (a === "list") {
+   if (p.status !== undefined && (!Array.isArray(p.status) || !p.status.length || !p.status.every(isRunStatus))) return { error: "list status must be a non-empty array of valid run statuses.", action: a };
+   return { action: a, ...(p.status ? { status: p.status as RunStatus[] } : {}) };
+ }
+ if (a === "run") {
+   if (!Array.isArray(p.tasks) || !p.tasks.length) return { error: "Provide at least one task.", action: a, taskCountError: true };
+   if (options.maxTasks !== undefined && p.tasks.length > options.maxTasks) return { error: `Too many tasks (${p.tasks.length}). Max is ${options.maxTasks}.`, action: a, taskCountError: true };
+   const parsed = p.tasks.map(parseTask); const errors = parsed.flatMap((x, i) => "error" in x ? [`task[${i}]: ${x.error}`] : []);
+   return errors.length ? { error: errors.join("\n"), errors, action: a } : { action: a, tasks: parsed as TaskRequest[] };
+ }
+ if (a === "join") { const ids = parseIds(p.runIds, "join", isRunId, "runId", "conversation ID"); return "error" in ids ? { ...ids, action: a } : { action: a, runIds: ids }; }
+ const ids = parseIds(p.conversationIds, "remove", isConversationId, "conversationId", "run ID");
+ return "error" in ids ? { ...ids, action: a } : { action: a, conversationIds: ids };
 }
-
-export function parseSubagentInvocation(
-  raw: unknown,
-  options: ParseSubagentInvocationOptions = {},
-): ParsedSubagentInvocation {
-  const params =
-    raw !== null && typeof raw === "object"
-      ? (raw as Record<string, unknown>)
-      : {};
-  const action = params.action;
-  if (!action)
-    return {
-      error:
-        'Provide an action: "agents", "list", "run", "results", or "remove".',
-      missingAction: true,
-    };
-  if (!isSubagentAction(action))
-    return {
-      error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "results", or "remove".`,
-    };
-  if (params.background !== undefined)
-    return {
-      error: "Legacy field background is not supported; use dispatch.",
-      action,
-    };
-
-  switch (action) {
-    case "agents":
-      return { action };
-    case "list": {
-      const status = params.status;
-      if (status !== undefined && !Array.isArray(status))
-        return {
-          error: "list status must be an array of status strings.",
-          action,
-        };
-      if (Array.isArray(status)) {
-        if (status.length === 0)
-          return {
-            error: "list status must contain at least one status.",
-            action,
-          };
-        const invalid = status.find((value) => !isSessionStatus(value));
-        if (invalid !== undefined)
-          return {
-            error: `Unknown status '${String(invalid)}'. Valid: ${SESSION_STATUSES.join(", ")}.`,
-            action,
-          };
-      }
-      return {
-        action,
-        ...(status !== undefined ? { status: status as SessionStatus[] } : {}),
-      };
-    }
-    case "run": {
-      const dispatch = params.dispatch;
-      if (
-        dispatch !== undefined &&
-        dispatch !== "foreground" &&
-        dispatch !== "background"
-      )
-        return {
-          error: "run dispatch must be foreground or background.",
-          action,
-        };
-      const countError = validateTaskCount(params.tasks, options.maxTasks);
-      if (countError)
-        return { error: countError, action, taskCountError: true };
-      const tasks: TaskRequest[] = [];
-      const errors: string[] = [];
-      (params.tasks as unknown[]).forEach((task, index) => {
-        const parsed = parseTask(task);
-        if ("error" in parsed) errors.push(`task[${index}]: ${parsed.error}`);
-        else tasks.push(parsed);
-      });
-      if (errors.length) return { error: errors.join("\n"), errors, action };
-      return {
-        action,
-        tasks,
-        ...(dispatch !== undefined
-          ? { dispatch: dispatch as AgentDispatch }
-          : {}),
-      };
-    }
-    case "results": {
-      if (params.remove !== undefined && typeof params.remove !== "boolean")
-        return { error: "results remove must be a boolean.", action };
-      const ids = parseSessionIds(params.sessionIds, "results");
-      if ("error" in ids) return { ...ids, action };
-      return {
-        action,
-        sessionIds: ids,
-        ...(params.remove !== undefined
-          ? { remove: params.remove as boolean }
-          : {}),
-      };
-    }
-    case "remove": {
-      if (params.sessionIds === undefined)
-        return { error: "remove requires sessionIds.", action };
-      const ids = parseSessionIds(params.sessionIds, "remove");
-      return "error" in ids ? { ...ids, action } : { action, sessionIds: ids };
-    }
-  }
+function parseIds<T extends string>(v: unknown, action: string, guard: (x: unknown) => x is T, name: string, wrong: string): T[] | { error: string } {
+ if (!Array.isArray(v) || !v.length || !v.every(x => typeof x === "string" && x.trim())) return { error: `${action} requires a non-empty ${name}s array.` };
+ const bad = v.find(x => !guard(x)); if (bad !== undefined) return { error: `${action} received invalid ${name} '${bad}' (a ${wrong} is not accepted).` };
+ return v as T[];
 }
-
-function isSubagentAction(value: unknown): value is SubagentAction {
-  return (
-    typeof value === "string" &&
-    (SUBAGENT_ACTIONS as readonly string[]).includes(value)
-  );
-}
-function validateTaskCount(tasks: unknown, max?: number): string | undefined {
-  if (!Array.isArray(tasks)) return "Provide a tasks array for action=run.";
-  if (!tasks.length) return "Provide at least one task.";
-  if (max !== undefined && tasks.length > max)
-    return `Too many tasks (${tasks.length}). Max is ${max}.`;
-}
-function parseSessionIds(
-  value: unknown,
-  action: "results" | "remove",
-): string[] | { error: string } {
-  if (!Array.isArray(value) || !value.every((v) => typeof v === "string"))
-    return { error: `${action} sessionIds must be an array of strings.` };
-  if (!value.every((v) => v.trim()))
-    return {
-      error: `${action} sessionIds must be an array of non-empty strings.`,
-    };
-  if (!value.length)
-    return { error: `${action} requires at least one sessionId.` };
-  return value;
-}
-
 export function parseTask(raw: unknown): ParsedTask {
-  if (!raw || typeof raw !== "object")
-    return { error: "Task must be an object." };
-  const task = raw as Record<string, unknown>;
-  if (task.resumable !== undefined)
-    return {
-      error:
-        "Legacy field resumable is not supported; use retainConversation on spawn tasks.",
-    };
-  const hasAgent = task.agent !== undefined,
-    hasSession = task.sessionId !== undefined;
-  if (hasAgent === hasSession)
-    return {
-      error: hasAgent
-        ? "Task cannot carry both agent and sessionId. Use agent for a new spawn or sessionId for a resume."
-        : "Task must carry exactly one of agent (spawn) or sessionId (resume).",
-    };
-  if (typeof task.prompt !== "string" || !task.prompt.trim())
-    return { error: "Task prompt must be a non-empty string." };
-  if (hasAgent) {
-    if (typeof task.agent !== "string" || !task.agent.trim())
-      return { error: "Task agent must be a non-empty string." };
-    if (typeof task.label !== "string" || !task.label.trim())
-      return { error: "Spawn task label must be a non-empty string." };
-    if (
-      task.retainConversation !== undefined &&
-      typeof task.retainConversation !== "boolean"
-    )
-      return {
-        error: "Task retainConversation must be a boolean when present.",
-      };
-    if (
-      task.skills !== undefined &&
-      (!Array.isArray(task.skills) ||
-        !task.skills.every((v) => typeof v === "string" && v.trim()))
-    )
-      return { error: "Task skills must contain only non-empty strings." };
-    if (
-      task.model !== undefined &&
-      (typeof task.model !== "string" || !task.model.trim())
-    )
-      return { error: "Task model must be a non-empty string when present." };
-    if (task.thinking !== undefined && !isModelThinkingLevel(task.thinking))
-      return {
-        error: `Task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.`,
-      };
-    if (
-      task.cwd !== undefined &&
-      (typeof task.cwd !== "string" || !task.cwd.trim())
-    )
-      return { error: "Task cwd must be a non-empty string when present." };
-    return {
-      kind: "spawn",
-      agent: task.agent,
-      prompt: task.prompt,
-      label: task.label,
-      ...(task.retainConversation !== undefined
-        ? { retainConversation: task.retainConversation as boolean }
-        : {}),
-      ...(task.skills !== undefined ? { skills: task.skills as string[] } : {}),
-      ...(task.model !== undefined ? { model: task.model as string } : {}),
-      ...(task.thinking !== undefined
-        ? { thinking: task.thinking as ModelThinkingLevel }
-        : {}),
-      ...(task.cwd !== undefined ? { cwd: task.cwd as string } : {}),
-    };
-  }
-  if (typeof task.sessionId !== "string" || !task.sessionId.trim())
-    return { error: "Task sessionId must be a non-empty string." };
-  for (const field of [
-    "label",
-    "retainConversation",
-    "model",
-    "thinking",
-    "cwd",
-    "skills",
-  ] as const)
-    if (task[field] !== undefined)
-      return {
-        error: `Task with sessionId rejects ${field}; that field belongs to a spawn task.`,
-      };
-  return { kind: "resume", sessionId: task.sessionId, prompt: task.prompt };
+ if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "Task must be an object." }; const t = raw as Record<string, unknown>;
+ if (t.sessionId !== undefined) return { error: "Task field sessionId was removed. Use conversationId to resume a conversation." };
+ if (t.retainConversation !== undefined) return { error: "Task field retainConversation was removed. Conversations are retained by default and removed with action=remove." };
+ const spawn = t.agent !== undefined, resume = t.conversationId !== undefined;
+ const allowed = resume ? ["conversationId", "prompt"] : ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"];
+ const extra = Object.keys(t).find(key => !allowed.includes(key));
+ if (extra) return { error: resume ? `Task with conversationId rejects ${extra}; that field belongs to a spawn task.` : `Task property ${extra} is not allowed for a spawn task.` };
+ if (spawn === resume) return { error: "Task must carry exactly one of agent (spawn) or conversationId (resume)." };
+ if (typeof t.prompt !== "string" || !t.prompt.trim()) return { error: "Task prompt must be a non-empty string." };
+ if (resume) {
+   if (!isConversationId(t.conversationId)) return { error: `Task conversationId '${String(t.conversationId)}' is invalid (a run ID is not accepted).` };
+   for (const f of ["label", "skills", "model", "thinking", "cwd"] as const) if (t[f] !== undefined) return { error: `Task with conversationId rejects ${f}; that field belongs to a spawn task.` };
+   return { kind: "resume", conversationId: t.conversationId, prompt: t.prompt };
+ }
+ if (typeof t.agent !== "string" || !t.agent.trim()) return { error: "Task agent must be a non-empty string." };
+ if (t.label !== undefined && (typeof t.label !== "string" || !t.label.trim())) return { error: "Task label must be a non-empty string when present." };
+ if (t.skills !== undefined && (!Array.isArray(t.skills) || !t.skills.every(x => typeof x === "string" && x.trim()))) return { error: "Task skills must contain only non-empty strings." };
+ for (const f of ["model", "cwd"] as const) if (t[f] !== undefined && (typeof t[f] !== "string" || !(t[f] as string).trim())) return { error: `Task ${f} must be a non-empty string when present.` };
+ if (t.thinking !== undefined && !isModelThinkingLevel(t.thinking)) return { error: `Task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.` };
+ return { kind: "spawn", agent: t.agent, prompt: t.prompt, ...(t.label !== undefined ? { label: t.label as string } : {}), ...(t.skills !== undefined ? { skills: t.skills as string[] } : {}), ...(t.model !== undefined ? { model: t.model as string } : {}), ...(t.thinking !== undefined ? { thinking: t.thinking as ModelThinkingLevel } : {}), ...(t.cwd !== undefined ? { cwd: t.cwd as string } : {}) };
 }

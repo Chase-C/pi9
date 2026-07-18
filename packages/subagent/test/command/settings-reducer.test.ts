@@ -18,3 +18,13 @@ test("settings change reducer immutably applies nested fields and returns confir
   assert.equal(applied.settings.display, original.display);
   assert.equal(original.runtime.maxConcurrentSubagents, 4);
 });
+
+test("settings change reducer applies redesigned conversation settings", () => {
+  const original = createDefaultSubagentSettings();
+  const conversations = applySubagentSettingsChange(original, { kind: "maxConversations", value: 200 });
+  const notify = applySubagentSettingsChange(conversations.settings, { kind: "completionNotify", value: "steer" });
+
+  assert.equal(notify.settings.runtime.maxConversations, 200);
+  assert.equal(notify.settings.runtime.completionNotify, "steer");
+  assert.equal(notify.confirmation, "Subagent completion notify set to steer.");
+});

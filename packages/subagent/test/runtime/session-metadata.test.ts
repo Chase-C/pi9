@@ -1,71 +1,46 @@
-import { test } from "vitest";
-import assert from "node:assert/strict";
+import { test, expect } from "vitest";
+import { projectSubagentRunIndex } from "../../src/runtime/session-metadata.js";
 
-import { projectSubagentSessionIndex, registerSubagentMetadataPersistence } from "../../src/runtime/session-metadata.js";
-import { fakeAgent } from "../helpers/fake-agent.js";
+const sentinel = "SENSITIVE_SENTINEL_" + "x".repeat(10_000);
 
-function source() {
-  let listener: any;
+function snapshot(outcome: "completed" | "error") {
   return {
-    manager: {
-      onAgentUpdate(fn: any) {
-        listener = fn;
-        return () => { listener = undefined; };
+    conversationId: "amber-acorn",
+    label: "safe label",
+    config: { name: "helper" },
+    runs: [{
+      runId: "adapt-ably",
+      kind: "spawn",
+      prompt: `prompt:${sentinel}`,
+      status: {
+        kind: "done",
+        outcome,
+        startedAt: 100,
+        completedAt: 175,
+        output: `output:${sentinel}`,
+        error: `error:${sentinel}`,
       },
-    },
-    emit(snapshot: any, kind = "status") {
-      listener({ snapshot: () => snapshot }, kind);
-    },
-  };
+    }],
+  } as any;
 }
 
-test("subagent metadata persistence appends one custom entry per terminal attempt", () => {
-  const entries: Array<{ customType: string; data: any }> = [];
-  const driver = source();
-  registerSubagentMetadataPersistence(
-    { appendEntry: (customType, data) => entries.push({ customType, data }) },
-    driver.manager as any,
-  );
-
-  const first = fakeAgent({
-    id: "s1",
-    label: "audit",
-    prompt: "follow up on this long prompt",
-    status: { kind: "completed", startedAt: 10, completedAt: 30, response: "done" },
-  });
-  driver.emit(first);
-  driver.emit(first);
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "completed", startedAt: 40, completedAt: 80, response: "done again" } }));
-
-  assert.equal(entries.length, 2);
-  assert.equal(entries[0].customType, "subagent-session-index");
-  assert.deepEqual(entries[0].data, {
-    version: 1,
-    sessionId: "s1",
+test.each(["completed", "error"] as const)("durable metadata excludes full content for %s runs", outcome => {
+  const metadata = projectSubagentRunIndex(snapshot(outcome));
+  expect(metadata).toEqual({
+    version: 2,
+    conversationId: "amber-acorn",
+    runId: "adapt-ably",
     agent: "helper",
-    label: "audit",
-    status: "completed",
-    dispatch: "foreground",
-    retention: { catalog: "transient", reasons: [] },
-    completedAt: 30,
-    startedAt: 10,
-    elapsedMs: 20,
-    promptPreview: "follow up on this long prompt",
-    outputSnippet: "done",
+    label: "safe label",
+    kind: "spawn",
+    status: outcome,
+    completedAt: 175,
+    startedAt: 100,
+    elapsedMs: 75,
   });
-});
-
-test("subagent metadata projection compacts prompt and error fields", () => {
-  const data = projectSubagentSessionIndex(
-    fakeAgent({
-      id: "s2",
-      prompt: `prompt ${"x".repeat(300)}`,
-      status: { kind: "error", startedAt: 5, completedAt: 8, error: `boom ${"y".repeat(1500)}` },
-    }) as any,
-    { promptPreviewLength: 20, outputSnippetLength: 30 } as any,
-  );
-
-  assert.equal(data.promptPreview!.length <= 20, true);
-  assert.equal(data.errorSnippet!.length <= 30, true);
-  assert.equal(data.status, "error");
+  const persisted = JSON.stringify(metadata);
+  expect(persisted).not.toContain("SENSITIVE_SENTINEL");
+  expect(persisted).not.toContain("prompt:");
+  expect(persisted).not.toContain("output:");
+  expect(persisted).not.toContain("error:");
 });

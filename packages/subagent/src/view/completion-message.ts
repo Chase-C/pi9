@@ -4,50 +4,51 @@ import { DEFAULT_SUBAGENT_SETTINGS, type SubagentDisplaySettings } from "../conf
 import type { AgentRunStatus } from "../domain/agent-lifecycle.js";
 
 /** The current serializable completion summary shared by notification production and rendering. */
-export interface BackgroundCompletion {
-  sessionId: string;
+export interface CompletionNotification {
+  runId: string;
+  conversationId: string;
   agent: string;
   label?: string;
   status: AgentRunStatus;
   elapsedMs: number;
 }
 
-export interface BackgroundCompletionMessageDetails {
-  completions: BackgroundCompletion[];
+export interface CompletionNotificationMessageDetails {
+  completions: CompletionNotification[];
 }
 
-export interface BackgroundCompletionMessage {
+export interface CompletionNotificationMessage {
   content: string;
-  details: BackgroundCompletionMessageDetails;
+  details: CompletionNotificationMessageDetails;
 }
 
-export type BackgroundCompletionMessagePayload = BackgroundCompletionMessage;
+export type CompletionNotificationMessagePayload = CompletionNotificationMessage;
 
 const MAX_LISTED_COMPLETIONS = 20;
-const RESULTS_INSTRUCTION = "Call subagent results with these sessionIds to retrieve output.";
+const RESULTS_INSTRUCTION = "Call subagent join with these runIds to retrieve output.";
 
 type EntrySurface = "notification" | "renderer";
 
 /**
- * Creates the complete custom message sent for a batch of background completions.
+ * Creates the complete custom message sent for a batch of run completions.
  *
  * The notification text and details are projected from the same copied entries so the producer
  * and renderer cannot drift on the payload shape. The renderer intentionally applies its own
  * collapsed/expanded presentation to preserve the existing themed surfaces.
  */
-export function createBackgroundCompletionMessage(
-  entries: readonly BackgroundCompletion[],
+export function createCompletionNotificationMessage(
+  entries: readonly CompletionNotification[],
   display: SubagentDisplaySettings = DEFAULT_SUBAGENT_SETTINGS.display,
-): BackgroundCompletionMessagePayload {
-  const completions = entries.map(copyBackgroundCompletion);
+): CompletionNotificationMessagePayload {
+  const completions = entries.map(copyCompletionNotification);
   return {
     content: formatNotificationContent(completions, display),
     details: { completions },
   };
 }
 
-export function formatBackgroundCompletionMessage(
-  details: BackgroundCompletionMessageDetails,
+export function formatCompletionNotificationMessage(
+  details: CompletionNotificationMessageDetails,
   expanded: boolean,
   theme: Pick<Theme, "fg"> | undefined,
   display: SubagentDisplaySettings = DEFAULT_SUBAGENT_SETTINGS.display,
@@ -67,7 +68,7 @@ export function formatBackgroundCompletionMessage(
   return [header, ...lines].join("\n");
 }
 
-function formatNotificationContent(entries: readonly BackgroundCompletion[], display: SubagentDisplaySettings): string {
+function formatNotificationContent(entries: readonly CompletionNotification[], display: SubagentDisplaySettings): string {
   const visible = entries.slice(0, MAX_LISTED_COMPLETIONS);
   const overflow = entries.length - visible.length;
   const header = formatCompletionHeader(entries.length, true);
@@ -82,9 +83,10 @@ function formatNotificationContent(entries: readonly BackgroundCompletion[], dis
   return [header, ...lines].join("\n");
 }
 
-function copyBackgroundCompletion(entry: BackgroundCompletion): BackgroundCompletion {
+function copyCompletionNotification(entry: CompletionNotification): CompletionNotification {
   return {
-    sessionId: entry.sessionId,
+    runId: entry.runId,
+    conversationId: entry.conversationId,
     agent: entry.agent,
     ...(entry.label !== undefined ? { label: entry.label } : {}),
     status: entry.status,
@@ -93,7 +95,7 @@ function copyBackgroundCompletion(entry: BackgroundCompletion): BackgroundComple
 }
 
 function formatCompletionHeader(count: number, includeSinceLastNotification: boolean): string {
-  return `${count} background subagent${count === 1 ? "" : "s"} completed${includeSinceLastNotification ? " since the last notification:" : ""}`;
+  return `${count} subagent${count === 1 ? "" : "s"} completed${includeSinceLastNotification ? " since the last notification:" : ""}`;
 }
 
 interface CompletionEntryFormatOptions {
@@ -103,15 +105,17 @@ interface CompletionEntryFormatOptions {
   theme?: Pick<Theme, "fg">;
 }
 
-function formatCompletionEntry(entry: BackgroundCompletion, options: CompletionEntryFormatOptions): string {
+function formatCompletionEntry(entry: CompletionNotification, options: CompletionEntryFormatOptions): string {
   const labelPart = entry.label !== undefined
     ? ` (${formatCompletionLabel(entry.label, options.display.toolCallLabelMaxLength, options.surface)})`
     : "";
   const status = options.surface === "renderer"
     ? colorCompletionStatus(entry.status, options.theme)
     : entry.status;
-  const sessionPart = options.expanded ? ` · sessionId ${entry.sessionId}` : "";
-  return `- ${entry.agent}${labelPart} · ${status} · ${formatElapsed(entry.elapsedMs)}${sessionPart}`;
+  const identityPart = options.expanded
+    ? ` · runId ${entry.runId} · conversationId ${entry.conversationId}`
+    : "";
+  return `- ${entry.agent}${labelPart} · ${status} · ${formatElapsed(entry.elapsedMs)}${identityPart}`;
 }
 
 /** Keeps producer and renderer truncation rules distinct while giving them one semantic owner. */
@@ -136,7 +140,7 @@ function colorCompletionStatus(status: AgentRunStatus, theme: Pick<Theme, "fg"> 
   return typeof theme?.fg === "function" ? theme.fg(color, status) : status;
 }
 
-/** Matches the existing background renderer palette for every current terminal status. */
+/** Uses the completion renderer palette for every current terminal status. */
 function statusColor(status: AgentRunStatus): ThemeColor {
   if (status === "completed") return "success";
   if (status === "error") return "error";

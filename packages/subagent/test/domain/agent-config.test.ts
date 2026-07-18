@@ -15,7 +15,7 @@ function fail(result: unknown): Error {
 
 test("BuildAgentConfig parses every supported field on the happy path", () => {
   const config = ok(BuildAgentConfig(
-    `---\nname: helper\ndescription: d\nmodel: anthropic/claude\nthinking: medium\ntools: read, bash\nskills: foo, bar\nretainConversation: true\n---\n  body text  `,
+    `---\nname: helper\ndescription: d\nmodel: anthropic/claude\nthinking: medium\ntools: read, bash\nskills: foo, bar\n---\n  body text  `,
     "project",
   ));
   assert.equal(config.name, "helper");
@@ -24,18 +24,16 @@ test("BuildAgentConfig parses every supported field on the happy path", () => {
   assert.equal(config.thinking, "medium");
   assert.deepEqual(config.tools, ["read", "bash"]);
   assert.deepEqual(config.skills, ["foo", "bar"]);
-  assert.equal(config.retainConversation, true);
   assert.equal(config.systemPrompt, "body text");
   assert.equal(config.source, "project");
 });
 
-test("BuildAgentConfig leaves optional fields undefined when absent and defaults retainConversation to false", () => {
+test("BuildAgentConfig leaves optional fields undefined when absent", () => {
   const config = ok(BuildAgentConfig(`---\nname: helper\ndescription: d\n---\nbody`, "project"));
   assert.equal(config.model, undefined);
   assert.equal(config.thinking, undefined);
   assert.equal(config.tools, undefined);
   assert.equal(config.skills, undefined);
-  assert.equal(config.retainConversation, false);
 });
 
 test("BuildAgentConfig rejects a missing description", () => {
@@ -91,23 +89,12 @@ test("BuildAgentConfig rejects non-string CSV fields with a type error naming th
   }
 });
 
-test("BuildAgentConfig rejects the legacy resumable frontmatter key", () => {
-  const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: d\nresumable: true\n---\n`, "project"));
-  assert.match(err.message, /Legacy field "resumable" is not supported/);
-});
-
-test("BuildAgentConfig rejects non-boolean retainConversation values with a type error", () => {
-  const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: d\nretainConversation: maybe\n---\n`, "project"));
-  assert.match(err.message, /Expected field "retainConversation"/);
-});
-
-test("BuildAgentConfig retainConversation accepts true/false strings and applies defaultRetainConversation only when absent", () => {
-  assert.equal(ok(BuildAgentConfig(`---\nname: a\ndescription: d\nretainConversation: true\n---\n`, "project")).retainConversation, true);
-  assert.equal(ok(BuildAgentConfig(`---\nname: a\ndescription: d\nretainConversation: false\n---\n`, "project")).retainConversation, false);
-
-  assert.equal(ok(BuildAgentConfig(`---\nname: a\ndescription: d\n---\n`, "project", { defaultRetainConversation: true })).retainConversation, true);
-  // explicit frontmatter wins over the default
-  assert.equal(ok(BuildAgentConfig(`---\nname: a\ndescription: d\nretainConversation: false\n---\n`, "project", { defaultRetainConversation: true })).retainConversation, false);
+test("BuildAgentConfig rejects obsolete retention frontmatter with migration guidance", () => {
+  for (const [field, prefix] of [["resumable", "Legacy"], ["retainConversation", "Obsolete"]]) {
+    const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: d\n${field}: true\n---\nbody`, "project"));
+    assert.match(err.message, new RegExp(`${prefix} field "${field}" is not supported; remove it`));
+    assert.match(err.message, /Conversation retention is managed centrally/);
+  }
 });
 
 test("BuildAgentConfig CSV parsing treats 'none' and empty values as undefined and trims items", () => {

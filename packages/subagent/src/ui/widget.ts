@@ -2,7 +2,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
-import { buildWidgetModel } from "../view/session-lines.js";
+import { buildWidgetModel } from "../view/conversation-lines.js";
 import { SubagentWidgetComponent } from "../view/widget-component.js";
 import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentSettings, type SubagentUiSettings } from "../config/settings.js";
 
@@ -23,18 +23,24 @@ type SubagentWidgetLifecyclePi = {
   on?(event: "session_start" | "session_shutdown", handler: (event: unknown, ctx: SubagentWidgetContext) => void): void;
 };
 
-type SubagentWidgetSessionSource = {
-  listSessions(): AgentSnapshot[];
+type SubagentWidgetConversationSource = {
+  listConversations(): AgentSnapshot[];
 };
 
 export function registerSubagentWidgetLifecycle(
   pi: SubagentWidgetLifecyclePi,
-  source: SubagentWidgetSessionSource,
+  source: SubagentWidgetConversationSource,
   getSettings: () => SubagentSettings | SubagentUiSettings,
 ): void {
   if (typeof pi.on !== "function") return;
-  pi.on("session_shutdown", (_event, ctx) => updateSubagentWidget(ctx, [], getSettings()));
-  pi.on("session_start", (_event, ctx) => updateSubagentWidget(ctx, source.listSessions(), getSettings()));
+  let activeContext: SubagentWidgetContext | undefined;
+  const refresh = () => { if (activeContext) updateSubagentWidget(activeContext, source.listConversations(), getSettings()); };
+  const unsubscribe = typeof (source as SubagentWidgetConversationSource & { onAgentUpdate?: (listener: () => void) => () => void }).onAgentUpdate === "function"
+    ? (source as SubagentWidgetConversationSource & { onAgentUpdate(listener: () => void): () => void }).onAgentUpdate(refresh)
+    : undefined;
+  pi.on("session_shutdown", (_event, ctx) => { activeContext = undefined; updateSubagentWidget(ctx, [], getSettings()); });
+  pi.on("session_start", (_event, ctx) => { activeContext = ctx; refresh(); });
+  void unsubscribe;
 }
 
 export function updateSubagentWidget(

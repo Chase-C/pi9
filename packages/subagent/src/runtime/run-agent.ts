@@ -22,7 +22,7 @@ import type { Attempt } from "../domain/agent-attempt.js";
 import { discoverInheritedExtensionPaths } from "./extension-paths.js";
 import { timingAsync } from "./timing.js";
 import { completedRun, errorRun, interruptedRun, skippedRun } from "../domain/agent-finalize.js";
-import type { AgentSnapshot } from "../domain/agent-snapshot.js";
+import type { AgentRunSnapshot } from "../domain/agent-snapshot.js";
 
 export interface RunAgentDependencies {
   ResourceLoader: typeof DefaultResourceLoader;
@@ -53,19 +53,19 @@ export async function RunAttempt(
   attempt: Attempt,
   signal?: AbortSignal,
   dependencies: RunAgentDependencies = DefaultRunAgentDependencies,
-): Promise<AgentSnapshot> {
+): Promise<AgentRunSnapshot> {
   if (attempt.kind === "resume") {
-    const session = agent.retainedSession();
+    const session = agent.sessionForResume();
     if (!session) {
-      throw new Error(`Cannot resume an agent without a retained session.`);
+      throw new Error(`Cannot resume an agent without a conversation session.`);
     }
     agent.bindSession(session);
     return PromptAgent(session, agent, attempt, signal);
   }
 
-  if (signal?.aborted) return skippedRun(agent);
+  if (signal?.aborted) return skippedRun(agent, attempt.runId);
 
-  const runData = { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId };
+  const runData = { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId };
   const requestedConfig = agent.requestedConfig;
   const cwd = ResolveTaskCwd(ctx.cwd, requestedConfig.cwd);
   const agentDir = dependencies.getAgentDir();
@@ -81,7 +81,7 @@ export async function RunAttempt(
       if (!found) { missingSkill = name; break; }
       matched.push({ ...found, disableModelInvocation: false });
     }
-    if (missingSkill) return errorRun(agent, `Unknown skill: ${missingSkill}`);
+    if (missingSkill) return errorRun(agent, attempt.runId, `Unknown skill: ${missingSkill}`);
 
     try {
       const skillBlocks = matched.map(skill => {
@@ -92,7 +92,7 @@ export async function RunAttempt(
       systemPrompt = `${systemPrompt}\n\n${skillBlocks.join("\n\n")}`;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return errorRun(agent, `Could not load requested skill: ${message}`);
+      return errorRun(agent, attempt.runId, `Could not load requested skill: ${message}`);
     }
   }
 
@@ -113,7 +113,7 @@ export async function RunAttempt(
   });
 
   await timingAsync("runAgent.resourceLoader.reload", { ...runData, cwd }, () => resourceLoader.reload());
-  if (signal?.aborted) return skippedRun(agent);
+  if (signal?.aborted) return skippedRun(agent, attempt.runId);
 
   const selectedModel = SelectModel(requestedConfig.model, ctx.model, ctx.modelRegistry);
   const requestedThinking = requestedConfig.thinking;
@@ -146,7 +146,7 @@ export async function RunAttempt(
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return skippedRun(agent);
+    return skippedRun(agent, attempt.runId);
   }
 
   agent.bindSession(session);
@@ -158,34 +158,33 @@ async function PromptAgent(
   agent: Agent,
   attempt: Attempt,
   signal?: AbortSignal,
-): Promise<AgentSnapshot> {
+): Promise<AgentRunSnapshot> {
   const prompt = attempt.prompt;
   const onAbort = () => { void AbortSession(session); }
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return interruptedRun(agent, "Agent interrupted.");
+    return interruptedRun(agent, attempt.runId, "Agent interrupted.");
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    await timingAsync("runAgent.session.prompt", { agent: agent.agentName, sessionId: agent.id, promptLength: prompt.length }, () => session.prompt(prompt));
+    await timingAsync("runAgent.session.prompt", { agent: agent.agentName, conversationId: agent.conversationId, promptLength: prompt.length }, () => session.prompt(prompt));
     const finalMessage = GetFinalAssistantMessage(session);
     if (finalMessage.stopReason === "aborted") {
-      return interruptedRun(agent, finalMessage.errorMessage || "Agent interrupted.");
+      return interruptedRun(agent, attempt.runId, finalMessage.errorMessage || "Agent interrupted.");
     }
     if (finalMessage.stopReason === "error") {
-      return errorRun(agent, finalMessage.errorMessage || finalMessage.response || "Agent failed.");
+      return errorRun(agent, attempt.runId, finalMessage.errorMessage || finalMessage.response || "Agent failed.");
     }
 
-    const response = agent.message || finalMessage.response;
-    return completedRun(agent, response);
+    return completedRun(agent, attempt.runId, finalMessage.response);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return signal?.aborted
-      ? interruptedRun(agent, message)
-      : errorRun(agent, message);
+      ? interruptedRun(agent, attempt.runId, message)
+      : errorRun(agent, attempt.runId, message);
   } finally {
     signal?.removeEventListener("abort", onAbort);
   }

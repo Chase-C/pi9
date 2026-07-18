@@ -1,8 +1,5 @@
-import { randomInt } from "node:crypto";
-
-// Keep these lists deliberately small and human-readable: the finite pair space keeps handles
-// easy to read aloud and type.
-const ADJECTIVES = [
+/** Vocabulary is intentionally disjoint so an identifier's kind can be recognized without context. */
+export const CONVERSATION_ID_ADJECTIVES = [
   "amber", "ancient", "azure", "bold", "brave", "breezy", "bright", "brisk", "bubbly", "bucolic",
   "calm", "candid", "cheerful", "clear", "clever", "cloudy", "coastal", "cool", "cozy", "crafty",
   "crisp", "curious", "dainty", "daring", "dashing", "dappled", "devoted", "distant", "eager", "electric",
@@ -15,7 +12,7 @@ const ADJECTIVES = [
   "swift", "tender", "tranquil", "vivid", "warm", "watchful", "wild", "wise", "witty", "zesty",
 ] as const;
 
-const NOUNS = [
+export const CONVERSATION_ID_NOUNS = [
   "acorn", "antelope", "aster", "badger", "beaver", "birch", "bison", "blossom", "bluebird", "brook",
   "breeze", "canyon", "cardinal", "cedar", "cherry", "clover", "cloud", "comet", "coral", "coyote",
   "crane", "creek", "dahlia", "dandelion", "dolphin", "dragon", "dusk", "eagle", "ember", "falcon",
@@ -28,43 +25,18 @@ const NOUNS = [
   "sequoia", "shell", "shore", "sparrow", "star", "stone", "storm", "stream", "summit", "swan",
 ] as const;
 
-const RANDOM_RETRIES = 32;
-type RandomIndex = (max: number) => number;
+export const RUN_ID_VERBS = [
+  "adapt", "assemble", "balance", "build", "calculate", "capture", "chart", "check", "compose", "connect",
+  "decode", "deliver", "design", "discover", "draft", "explore", "finish", "gather", "generate", "guide",
+  "inspect", "launch", "measure", "navigate", "organize", "parse", "prepare", "process", "record", "refine",
+  "render", "repair", "review", "route", "scan", "search", "select", "solve", "sort", "synthesize",
+  "test", "trace", "transform", "translate", "update", "validate", "verify", "write", "yield", "zoom",
+] as const;
 
-/** Allocates unique, readable session handles for one AgentManager lifetime. */
-export class SessionIdAllocator {
-  private readonly _allocated = new Set<string>();
-  private _fallbackIndex = 0;
-
-  constructor(private readonly _randomIndex: RandomIndex = randomInt) { }
-
-  allocate(): string | undefined {
-    for (let attempt = 0; attempt < RANDOM_RETRIES; attempt++) {
-      const candidate = this._randomCandidate();
-      if (this._allocated.has(candidate)) continue;
-      this._allocated.add(candidate);
-      return candidate;
-    }
-
-    // Continue through the finite base space after random retries so a collision-heavy source
-    // cannot spin forever or repeatedly rescan previously allocated candidates.
-    while (this._fallbackIndex < ADJECTIVES.length * NOUNS.length) {
-      const adjective = ADJECTIVES[Math.floor(this._fallbackIndex / NOUNS.length)];
-      const noun = NOUNS[this._fallbackIndex % NOUNS.length];
-      this._fallbackIndex += 1;
-
-      const candidate = `${adjective}-${noun}`;
-      if (this._allocated.has(candidate)) continue;
-      this._allocated.add(candidate);
-      return candidate;
-    }
-
-    return undefined;
-  }
-
-  private _randomCandidate(): string {
-    const adjective = ADJECTIVES[this._randomIndex(ADJECTIVES.length)];
-    const noun = NOUNS[this._randomIndex(NOUNS.length)];
-    return `${adjective}-${noun}`;
-  }
-}
+export const RUN_ID_ADVERBS = [
+  "ably", "abruptly", "actively", "aptly", "carefully", "certainly", "closely", "correctly", "deftly", "directly",
+  "easily", "exactly", "firmly", "fully", "gently", "gladly", "honestly", "lightly", "neatly", "openly",
+  "patiently", "plainly", "promptly", "properly", "quickly", "readily", "safely", "securely", "simply", "slowly",
+  "smartly", "softly", "soundly", "squarely", "strictly", "strongly", "surely", "tightly", "truly", "usefully",
+  "warmly", "widely", "willingly", "wisely", "yearly", "briskly", "boldly", "keenly", "calmly", "clearly",
+] as const;

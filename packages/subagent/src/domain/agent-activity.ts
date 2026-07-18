@@ -119,8 +119,14 @@ function toolInputSummary(toolName: string, args: unknown): string | undefined {
       return joinParts([quote(stringValue(input.pattern)), input.path ? `in ${String(input.path)}` : undefined]);
     case "find":
       return joinParts([stringValue(input.pattern) ?? stringValue(input.name), input.path ? `in ${String(input.path)}` : undefined]);
-    case "subagent":
-      return joinParts([stringValue(input.action), countPart(input.tasks, "task") ?? countPart(input.sessionIds, "session")]);
+    case "subagent": {
+      const action = stringValue(input.action);
+      const count = action === "run" ? countPart(input.tasks, "task")
+        : action === "join" ? countPart(input.runIds, "run")
+        : action === "remove" ? countPart(input.conversationIds, "conversation")
+        : undefined;
+      return joinParts([action, count]);
+    }
     default:
       return fallbackSummary(input);
   }

@@ -16,7 +16,7 @@ test("loadSubagentSettings normalizes partial injected results with defaults", a
 });
 
 test("loadSubagentSettings preserves injected warning text", async () => {
-  const warning = "Invalid subagent backgroundNotify; using default.";
+  const warning = "Invalid subagent completionNotify; using default.";
   const notifications: Array<{ message: string; level?: string }> = [];
   await loadSubagentSettings(
     { hasUI: true, ui: { notify: (message, level) => notifications.push({ message, level }) } },

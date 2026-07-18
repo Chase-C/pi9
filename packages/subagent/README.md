@@ -1,17 +1,8 @@
 # @pi9/subagent
 
-Delegate focused work from Pi to context-isolated child conversations with a single `subagent` tool. It supports foreground and background dispatch, retained follow-up conversations, recursive delegation, live progress, and tree-wide concurrency limits.
+Delegate focused work from Pi to context-isolated child conversations. The single `subagent` tool provides agent discovery, side-effect-free inventory, asynchronous runs, blocking retrieval, explicit cleanup, recursive delegation, and live progress.
 
 ![A subagent run with nested children rendering live progress, tool calls, and per-child counters](media/subagent-overview.png)
-
-## Feature overview
-
-- **Retained conversations** let the parent send follow-ups to a successful child while preserving its accumulated context.
-- **Background dispatch** returns session handles immediately so the parent can continue working, with configurable completion notifications and nonblocking result retrieval.
-- **Recursive delegation** lets subagents spawn their own children under one tree-wide concurrency limit.
-- **Live progress** shows status, token usage, tool activity, recursive children, and answers in the tool row, with persistent work tracked in the Background and Retained widget sections.
-- **Unified session management** provides filterable flat and tree views, live conversations, agent discovery and launch, cleanup, and settings through `/subagents`.
-- **Focused tool actions** separate agent discovery, session inventory, dispatch, result retrieval, and cleanup without adding multiple tools to the parent context.
 
 ## Install
 
@@ -29,13 +20,12 @@ name: scout
 description: Read-only codebase reconnaissance
 model: anthropic/claude-sonnet-4
 tools: read, bash
-retainConversation: true
 ---
 
 Inspect the repository and return concise, evidence-backed findings.
 ```
 
-Then delegate to it:
+Start a run:
 
 ```ts
 subagent({
@@ -44,12 +34,23 @@ subagent({
 })
 ```
 
-Foreground dispatch waits and returns settled results. To continue the same retained conversation, use its handle; the spawn policy and label remain fixed:
+`run` is always asynchronous. It returns immediately with two process-local identifiers for each accepted task:
+
+- `conversationId`, a readable adjective-noun identifier such as `quiet-otter`
+- `runId`, a readable verb-adverb identifier such as `search-boldly`
+
+Wait for that exact run and retrieve its output with `join`:
+
+```ts
+subagent({ action: "join", runIds: ["search-boldly"] })
+```
+
+Continue the conversation after it becomes resumable:
 
 ```ts
 subagent({
   action: "run",
-  tasks: [{ sessionId: "quiet-otter", prompt: "Turn those findings into an implementation plan." }]
+  tasks: [{ conversationId: "quiet-otter", prompt: "Turn those findings into a plan." }]
 })
 ```
 
@@ -65,99 +66,53 @@ Agent markdown is discovered from the user `${PI_AGENT_DIR ?? ~/.pi/agent}/agent
 | `thinking` | no | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
 | `tools` | no | Comma-separated allowlist; include `subagent` for recursive delegation. |
 | `skills` | no | Comma-separated default skills. A spawn-task value replaces this list. |
-| `retainConversation` | no | Retain the process-local child conversation for successful follow-ups. |
 
-The body becomes the child system prompt. `retainConversation` resolves once at spawn into an immutable `retain` or `release` conversation policy. A resume task accepts only `sessionId` and `prompt`: it cannot change the policy, label, model, thinking, working directory, or skills.
-
-## Dispatch and attempts
-
-Every invocation is represented as an attempt with immutable `kind` (`spawn` or `resume`), `dispatch` (`foreground` or `background`), and prompt. Dispatch belongs to the attempt, so a conversation can have foreground and background attempts without rewriting its history.
-
-Background dispatch returns handles immediately:
-
-```ts
-subagent({
-  action: "run",
-  dispatch: "background",
-  tasks: [{ agent: "scout", label: "auth map", prompt: "Map auth code." }]
-})
-```
-
-Use `list` for lightweight status, `results` for full output, and `remove` for cleanup. A background attempt retains its latest result until removal or a later attempt supersedes it, but result retention alone does not make its conversation available for resume. `backgroundNotify` controls completion notification: `auto`, `steer`, or `none`.
-
-Only a successfully completed, available conversation can resume. A failure before conversation binding preserves the prior successful conversation; errors, aborts, or interruptions after binding do not.
-
-## Retention and conversations
-
-Retention is centralized and reports why an agent remains cataloged. Active work, background results, and `retainConversation` policy independently govern inventory, conversation availability, and capabilities. Conversations are process-local and are not restored after restart or extension reload.
-
-## `/subagents` UI
-
-`/subagents` opens a unified overlay with Sessions, Agents, and Settings pages; `/subagents sessions`, `/subagents agents`, and `/subagents settings` open a page directly.
-
-Sessions can be filtered and switched between flat and tree views. Tree view nests running descendants under their parents while retained terminal sessions stay at the root. From Sessions, stop active work, remove terminal entries, or press Enter on a running or resumable session to open its full-width conversation. Messages steer a running session directly; messages to a successfully completed retained session start a tracked follow-up attempt.
-
-The Agents page filters discovered definitions and can launch a selected agent in the background after prompting for its task.
-
-## Live display
-
-The tool row shows each child's state, label, tools, tokens, elapsed time, recursive children, and answer. Previous Run sections carry their own attempt kind and dispatch.
-
-The persistent widget separates **Background** work and other **Retained** sessions. Background attempts stay in the Background section while active or holding a result; persistent non-background sessions appear under Retained. Transient foreground work remains in the tool row, with an optional running count in the widget footer. Configure `widgetPlacement` (`belowEditor`, `aboveEditor`, `off`) and `widgetLayout` (`auto`, `columns`, `stacked`).
-
-## Settings
-
-Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`:
-
-```json
-{
-  "runtime": {
-    "maxTasksPerRun": 8,
-    "maxConcurrentSubagents": 4,
-    "defaultRetainConversation": false,
-    "backgroundNotify": "auto"
-  }
-}
-```
-
-`defaultRetainConversation` applies only when an agent definition omits `retainConversation`; a spawn task may override the resolved definition. Concurrency is shared across the entire recursive tree. Discovery and display settings are also available, while common runtime and widget controls are exposed by `/subagents settings`.
+The body becomes the child system prompt. Spawn tasks require `agent` and `prompt`; `label` is optional, and may override supported execution options such as model, thinking, working directory, and skills. Follow-up tasks identify a conversation and provide a prompt; the conversation's agent and execution context remain fixed.
 
 ## Tool actions
 
 | Action | Behavior |
 | --- | --- |
-| `agents` | Discover definitions and their resolved defaults. |
-| `list` | Return lightweight identity, status, attempt, conversation, retention, and capability fields, optionally filtered by status. |
-| `run` | Spawn with `agent` or resume with `sessionId`; `dispatch` selects foreground or background for the whole invocation. |
-| `results` | Nonblocking retrieval of full output/error by `sessionIds`; `remove: true` atomically collects and removes terminal entries. |
-| `remove` | Abort running entries or discard queued/retained entries by `sessionIds`. |
+| `agents` | Discover agent definitions and their resolved defaults. |
+| `list` | Return a lightweight inventory of conversations and runs without run output. It is pure: it acknowledges nothing and changes no lifecycle state. |
+| `run` | Start one or more tasks asynchronously, returning a `conversationId` and `runId` for each accepted task. |
+| `join` | Block until each specified exact run settles, then return that run's output or error. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying run. |
+| `remove` | Explicitly batch cleanup for the specified conversations, stopping their active work if necessary and removing their runs and accumulated context. |
 
-Spawn tasks require `agent`, `label`, and `prompt`, and may set `model`, `thinking`, `cwd`, `skills`, and `retainConversation`. Resume tasks contain `sessionId` and `prompt` only. Unknown or unreadable skills fail before child startup.
+A run belongs to one conversation. Spawning creates both; a follow-up creates another run in an existing conversation. Every conversation remains available in the runtime inventory until explicitly removed, including after successful, failed, or interrupted work.
 
-A snapshot projects lifecycle state structurally:
+`canResume` becomes true only after a completed run or an interrupted run that preserved its conversation context. It remains false while work is queued or active, and after failures or interruptions that did not preserve context.
 
-```ts
-{
-  attempt: { kind: "spawn" | "resume", dispatch: "foreground" | "background" },
-  conversation: { policy: "retain" | "release", available: boolean },
-  retention: { catalog: "transient" | "persistent", reasons: RetentionReason[] },
-  capabilities: { canResume: boolean, canRemove: boolean }
-}
-```
+`join` is keyed by `runId`, not merely by conversation, so a caller always receives the requested run even when that conversation has newer work. Use `remove` with conversation identifiers when the whole conversation is no longer needed.
 
-Previous runs contain their own `attempt`. Settled agent results expose `kind`, `dispatch`, `canResume`, and `retentionReasons`; `sessionId` is exposed only while the agent remains cataloged. `canRemove` is the safe interactive capability for terminal cataloged entries; an explicit remove can still stop queued or running work.
+## Capacity and concurrency
 
-## Breaking contract
+Concurrency is shared across the entire recursive delegation tree. `maxConversations` defaults to `100`. Once that many conversations are present, new spawns are rejected until one or more conversations are removed; existing conversations can still be inspected, joined, or cleaned up.
 
-This lifecycle release has no migration layer, compatibility aliases, or compatibility projections. The legacy `resumable` field is rejected in both task input and agent frontmatter; callers must use `retainConversation` and adopt the current attempt, snapshot, result, and capability contracts directly. The old settings key `runtime.defaultResumable` is ignored rather than migrated, so when `runtime.defaultRetainConversation` is absent its new default of `false` applies.
+Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. Common runtime and display controls are also available through `/subagents settings`.
 
-## Events and persistence
+## Notifications, UI, and lifecycle
 
-The package emits `subagent:updated`, `subagent:queued`, `subagent:started`, and `subagent:completed`. Terminal attempt metadata is appended to the Pi session log, but child conversations are process-local. Switching or forking while work is queued or running asks for confirmation.
+Completion notifications concern settled runs that have not yet been acknowledged. Listing inventory does not acknowledge them. Joining a run acknowledges that exact run; cleanup also clears notifications associated with the removed conversations.
+
+`/subagents` opens the conversation, agent, and settings UI. It provides live status and progress, access to completed output, follow-up prompts when `canResume` is true, and explicit conversation cleanup.
+
+The package emits lifecycle updates for queued, started, and completed work. Identifiers, run records, and child conversation context are runtime-local only. They are not restored after a process restart or extension reload.
+
+## Major-version migration
+
+There is no compatibility layer for the previous lifecycle API.
+
+| Previous term or behavior | New contract |
+| --- | --- |
+| `foreground` / `background` dispatch | `run` always starts asynchronously; use `join` when blocking retrieval is needed. |
+| `results` action | `join` waits for and retrieves an exact run. |
+| `sessionId` | Use `conversationId` for conversation lifecycle and `runId` for exact-run retrieval. |
+| `retainConversation` | Every conversation remains in the runtime until explicit `remove`. |
 
 ## Architecture
 
-- `src/domain/` owns agents, attempts, the single retention decision, snapshots, and results.
-- `src/runtime/` owns orchestration, queues, groups, notifications, and child sessions.
+- `src/domain/` owns agents, conversations, runs, lifecycle state, and capabilities.
+- `src/runtime/` owns orchestration, queues, limits, notifications, and child execution.
 - `src/tool/` owns action handlers and child tool injection.
-- `src/command/`, `src/ui/`, and `src/view/` own the overlay, Retained widget, and rendering.
+- `src/command/`, `src/ui/`, and `src/view/` own the overlay, persistent display, and rendering.

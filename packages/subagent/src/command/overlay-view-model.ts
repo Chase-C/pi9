@@ -1,86 +1,32 @@
-import type { AgentConfig } from "../domain/agent-config.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 
-export type SessionLayoutMode = "flat" | "tree";
+export type ConversationLayoutMode = "flat" | "tree";
+export interface ConversationRow { readonly conversation: AgentSnapshot; readonly depth: number; readonly contextOnly?: boolean }
 
-export interface SessionRow {
-  readonly session: AgentSnapshot;
-  readonly depth: number;
-  readonly contextOnly?: boolean;
-}
-
-export function projectSessions(
-  sessions: readonly AgentSnapshot[],
-  options: { mode: SessionLayoutMode; query: string },
-): SessionRow[] {
-  const directMatches = sessions.filter(session => sessionMatches(session, options.query));
-  if (options.mode === "flat") return directMatches.map(session => ({ session, depth: 0 }));
-
-  const allById = new Map(sessions.map(session => [session.id, session]));
-  const includedIds = new Set(directMatches.map(session => session.id));
-  for (const match of directMatches) {
-    if (match.status.kind !== "running") continue;
-    let parentId = match.parentSessionId;
-    while (parentId) {
-      const parent = allById.get(parentId);
-      if (!parent || includedIds.has(parent.id)) break;
-      includedIds.add(parent.id);
-      parentId = parent.parentSessionId;
-    }
+/** Projects conversations without assuming that a parent is still present in the catalog. */
+export function projectConversations(conversations: readonly AgentSnapshot[], options: { mode: ConversationLayoutMode; query: string }): ConversationRow[] {
+  const matches = conversations.filter(c => conversationMatches(c, options.query));
+  if (options.mode === "flat") return matches.map(conversation => ({ conversation, depth: 0 }));
+  const byId = new Map(matches.map(c => [c.conversationId, c]));
+  const children = new Map<string, AgentSnapshot[]>();
+  for (const conversation of matches) {
+    const parent = conversation.parentConversationId;
+    if (!parent || !byId.has(parent)) continue;
+    const values = children.get(parent) ?? []; values.push(conversation); children.set(parent, values);
   }
-  const matches = sessions.filter(session => includedIds.has(session.id));
-  const directIds = new Set(directMatches.map(session => session.id));
-  const byId = new Map(matches.map(session => [session.id, session]));
-  const childrenByParent = new Map<string, AgentSnapshot[]>();
-  for (const session of matches) {
-    if (session.status.kind !== "running" || !session.parentSessionId || !byId.has(session.parentSessionId)) continue;
-    const children = childrenByParent.get(session.parentSessionId) ?? [];
-    children.push(session);
-    childrenByParent.set(session.parentSessionId, children);
-  }
-
-  const nested = new Set(Array.from(childrenByParent.values()).flat().map(session => session.id));
-  const rows: SessionRow[] = [];
-  const seen = new Set<string>();
-  const visit = (session: AgentSnapshot, depth: number) => {
-    if (seen.has(session.id)) return;
-    seen.add(session.id);
-    rows.push({ session, depth, ...(!directIds.has(session.id) ? { contextOnly: true } : {}) });
-    for (const child of childrenByParent.get(session.id) ?? []) visit(child, depth + 1);
-  };
-  for (const session of matches) if (!nested.has(session.id)) visit(session, 0);
-  for (const session of matches) if (!seen.has(session.id)) visit(session, 0);
+  const nested = new Set([...children.values()].flat().map(c => c.conversationId));
+  const rows: ConversationRow[] = []; const seen = new Set<string>();
+  const visit = (conversation: AgentSnapshot, depth: number) => { if (seen.has(conversation.conversationId)) return; seen.add(conversation.conversationId); rows.push({ conversation, depth }); for (const child of children.get(conversation.conversationId) ?? []) visit(child, depth + 1); };
+  for (const conversation of matches) if (!nested.has(conversation.conversationId)) visit(conversation, 0);
   return rows;
 }
 
-function sessionMatches(session: AgentSnapshot, query: string): boolean {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return true;
-  const status = session.status.kind === "done" ? session.status.outcome : session.status.kind;
-  return [
-    session.config.name,
-    session.label,
-    session.prompt,
-    session.config.description,
-    session.id,
-    session.parentSessionId,
-    session.attempt.dispatch,
-    session.retention.catalog,
-    ...session.retention.reasons,
-    status,
-  ]
-    .some(value => value?.toLowerCase().includes(normalized));
+function conversationMatches(conversation: AgentSnapshot, query: string): boolean {
+  const needle = query.trim().toLowerCase(); if (!needle) return true;
+  return [conversation.config.name, conversation.label, conversation.config.description, conversation.conversationId,
+    conversation.parentConversationId, ...conversation.runs.flatMap(run => [run.runId, run.prompt, effectiveRunStatus(run)])]
+    .some(value => value?.toLowerCase().includes(needle));
 }
+function effectiveRunStatus(run: AgentSnapshot["runs"][number]): string { return run.status.kind === "done" ? run.status.outcome : run.status.kind; }
 
-export function filterAgents(agents: readonly AgentConfig[], query: string): AgentConfig[] {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return [...agents];
-  return agents.filter(agent => [
-    agent.name,
-    agent.description,
-    agent.source,
-    agent.model,
-    ...(agent.tools ?? []),
-    ...(agent.skills ?? []),
-  ].some(value => value?.toLowerCase().includes(normalized)));
-}
+export function filterAgents<T extends { name: string; description?: string }>(agents: readonly T[], query: string): T[] { const needle = query.trim().toLowerCase(); return needle ? agents.filter(a => [a.name, a.description].some(v => v?.toLowerCase().includes(needle))) : [...agents]; }

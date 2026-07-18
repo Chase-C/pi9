@@ -12,7 +12,6 @@ export interface AgentConfig {
   thinking?: ModelThinkingLevel;
   tools?: string[];
   skills?: string[];
-  retainConversation: boolean;
   systemPrompt: string;
   source: AgentSource;
   sourcePath?: string;
@@ -23,12 +22,14 @@ const requiredFields = [ "name" ];
 export function BuildAgentConfig(
   content: string,
   source: AgentSource,
-  options: { defaultRetainConversation?: boolean } = {},
 ): AgentConfig | { error: Error } {
   try {
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
     if (frontmatter.resumable !== undefined) {
-      throw new Error('Legacy field "resumable" is not supported; use "retainConversation".');
+      throw new Error('Legacy field "resumable" is not supported; remove it. Conversation retention is managed centrally.');
+    }
+    if (frontmatter.retainConversation !== undefined) {
+      throw new Error('Obsolete field "retainConversation" is not supported; remove it. Conversation retention is managed centrally.');
     }
     const result = {
       name: parseString(frontmatter.name, "name"),
@@ -37,7 +38,6 @@ export function BuildAgentConfig(
       thinking: parseThinkingLevel(frontmatter.thinking),
       tools: parseCSVStrings(frontmatter.tools, "tools"),
       skills: parseCSVStrings(frontmatter.skills, "skills"),
-      retainConversation: parseBoolean(frontmatter.retainConversation, "retainConversation") ?? options.defaultRetainConversation ?? false,
       systemPrompt: body.trim(),
       source,
       sourcePath: undefined,
@@ -91,14 +91,4 @@ function parseCSVStrings(val: unknown, field: string): Array<string> | undefined
   return (items.length > 0)
     ? items
     : undefined
-}
-
-function parseBoolean(val: unknown, field: string): boolean | undefined {
-  if (val == null) return undefined;
-  if (typeof val === "boolean") return val;
-  if (typeof val === "string") {
-    if (val === "true") return true;
-    if (val === "false") return false;
-  }
-  throw new Error(`Expected field "${field}" to be a boolean, but got ${typeof val}.`);
 }

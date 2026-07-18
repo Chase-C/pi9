@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { AgentRegistry } from "../../src/domain/agent-registry.js";
 
-test("registry honors discovery options and default retainConversation", async () => {
+test("registry honors discovery options", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-registry-config-"));
   const projectAgents = join(root, ".pi", "agents");
   await mkdir(projectAgents, { recursive: true });
@@ -17,8 +17,8 @@ test("registry honors discovery options and default retainConversation", async (
   assert.equal(disabled.agents.has("helper"), false);
 
   const enabled = new AgentRegistry();
-  await enabled.reload(root, { discovery: { includeUserAgents: false }, defaultRetainConversation: true });
-  assert.equal(enabled.agents.get("helper")?.retainConversation, true);
+  await enabled.reload(root, { discovery: { includeUserAgents: false } });
+  assert.equal(enabled.agents.has("helper"), true);
 });
 
 test("registry skips invalid descriptions and only warns when configured", async () => {
@@ -68,7 +68,7 @@ test("registry loads markdown files from ctx cwd project dir and keys by frontma
   await mkdir(projectAgents, { recursive: true });
   await writeFile(
     join(projectAgents, "filename.md"),
-    `---\nname: runtime-name\ndescription: Runtime description\nretainConversation: true\n---\nSystem prompt`,
+    `---\nname: runtime-name\ndescription: Runtime description\n---\nSystem prompt`,
   );
 
   const registry = new AgentRegistry();
@@ -76,5 +76,4 @@ test("registry loads markdown files from ctx cwd project dir and keys by frontma
 
   assert.equal(registry.agents.has("filename"), false);
   assert.equal(registry.agents.get("runtime-name")?.systemPrompt, "System prompt");
-  assert.equal(registry.agents.get("runtime-name")?.retainConversation, true);
 });

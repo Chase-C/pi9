@@ -7,7 +7,7 @@ export type WidgetPlacement = "belowEditor" | "aboveEditor" | "off";
 export type WidgetLayout = "auto" | "columns" | "stacked";
 export type ProjectAgentsStrategy = "nearest" | "off";
 export type DuplicateNamePolicy = "projectOverridesUser" | "userOverridesProject";
-export type BackgroundNotifyMode = "auto" | "steer" | "none";
+export type CompletionNotifyMode = "auto" | "steer" | "none";
 
 export interface SubagentUiSettings {
   widgetPlacement: WidgetPlacement;
@@ -22,8 +22,9 @@ export interface SubagentRuntimeSettings {
    * across the whole recursive tree rather than per-manager or per-parent.
    */
   maxConcurrentSubagents: number;
-  defaultRetainConversation: boolean;
-  backgroundNotify: BackgroundNotifyMode;
+  /** Maximum number of conversations stored by the runtime. */
+  maxConversations: number;
+  completionNotify: CompletionNotifyMode;
 }
 
 export interface SubagentAgentDiscoverySettings {
@@ -40,16 +41,11 @@ export interface SubagentDisplaySettings {
   messageSnippetLength: number;
   outputSnippetLength: number;
   outputSnippetMaxLines: number;
-  resumeMessageSnippetLength: number;
   toolCallLabelMaxLength: number;
   toolInputSummaryLength: number;
   collapsedAgentListLimit: number;
   collapsedDescriptionLength: number;
-  /** When false, done/retained agents contribute to section counts only (no rows). */
-  widgetShowRetainedSessions: boolean;
-  /** When false, omit the foreground-transient footer line. */
-  widgetShowForeground: boolean;
-  /** Max rows per Background/Retained section before a +N more overflow line. */
+  /** Max rows per widget section before a +N more overflow line. */
   widgetMaxRowsPerSection: number;
 }
 
@@ -70,8 +66,8 @@ export function createDefaultSubagentSettings(): SubagentSettings {
     runtime: {
       maxTasksPerRun: 8,
       maxConcurrentSubagents: 4,
-      defaultRetainConversation: false,
-      backgroundNotify: "auto",
+      maxConversations: 100,
+      completionNotify: "auto",
     },
     agentDiscovery: {
       includeUserAgents: true,
@@ -86,13 +82,10 @@ export function createDefaultSubagentSettings(): SubagentSettings {
       messageSnippetLength: 200,
       outputSnippetLength: 400,
       outputSnippetMaxLines: 8,
-      resumeMessageSnippetLength: 80,
       toolCallLabelMaxLength: 60,
       toolInputSummaryLength: 80,
       collapsedAgentListLimit: 8,
       collapsedDescriptionLength: 100,
-      widgetShowRetainedSessions: true,
-      widgetShowForeground: true,
       widgetMaxRowsPerSection: 6,
     },
   };
@@ -111,7 +104,7 @@ const WIDGET_PLACEMENTS = new Set<WidgetPlacement>(["belowEditor", "aboveEditor"
 const WIDGET_LAYOUTS = new Set<WidgetLayout>(["auto", "columns", "stacked"]);
 const PROJECT_AGENTS_STRATEGIES = new Set<ProjectAgentsStrategy>(["nearest", "off"]);
 const DUPLICATE_NAME_POLICIES = new Set<DuplicateNamePolicy>(["projectOverridesUser", "userOverridesProject"]);
-const BACKGROUND_NOTIFY_MODES = new Set<BackgroundNotifyMode>(["auto", "steer", "none"]);
+const COMPLETION_NOTIFY_MODES = new Set<CompletionNotifyMode>(["auto", "steer", "none"]);
 
 export class SubagentSettingsStore {
   constructor(readonly settingsPath = join(getAgentDir(), "subagent", "settings.json")) { }
@@ -162,8 +155,10 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
   if (runtime) {
     assignPositiveInt(runtime, "maxTasksPerRun", value => { settings.runtime.maxTasksPerRun = value; }, warnings);
     assignPositiveInt(runtime, "maxConcurrentSubagents", value => { settings.runtime.maxConcurrentSubagents = value; }, warnings);
-    assignBoolean(runtime, "defaultRetainConversation", value => { settings.runtime.defaultRetainConversation = value; }, warnings);
-    assignEnum(runtime, "backgroundNotify", BACKGROUND_NOTIFY_MODES, value => { settings.runtime.backgroundNotify = value; }, warnings);
+    assignPositiveInt(runtime, "maxConversations", value => { settings.runtime.maxConversations = value; }, warnings);
+    assignEnum(runtime, "completionNotify", COMPLETION_NOTIFY_MODES, value => { settings.runtime.completionNotify = value; }, warnings);
+    warnRemoved(runtime, "defaultRetainConversation", warnings);
+    warnRemoved(runtime, "backgroundNotify", warnings);
   }
 
   const discovery = objectValue(record.agentDiscovery);
@@ -189,14 +184,13 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
     assignPositiveInt(display, "messageSnippetLength", value => { settings.display.messageSnippetLength = value; }, warnings);
     assignPositiveInt(display, "outputSnippetLength", value => { settings.display.outputSnippetLength = value; }, warnings);
     assignPositiveInt(display, "outputSnippetMaxLines", value => { settings.display.outputSnippetMaxLines = value; }, warnings);
-    assignPositiveInt(display, "resumeMessageSnippetLength", value => { settings.display.resumeMessageSnippetLength = value; }, warnings);
     assignPositiveInt(display, "toolCallLabelMaxLength", value => { settings.display.toolCallLabelMaxLength = value; }, warnings);
     assignPositiveInt(display, "toolInputSummaryLength", value => { settings.display.toolInputSummaryLength = value; }, warnings);
     assignPositiveInt(display, "collapsedAgentListLimit", value => { settings.display.collapsedAgentListLimit = value; }, warnings);
     assignPositiveInt(display, "collapsedDescriptionLength", value => { settings.display.collapsedDescriptionLength = value; }, warnings);
-    assignBoolean(display, "widgetShowRetainedSessions", value => { settings.display.widgetShowRetainedSessions = value; }, warnings);
-    assignBoolean(display, "widgetShowForeground", value => { settings.display.widgetShowForeground = value; }, warnings);
     assignPositiveInt(display, "widgetMaxRowsPerSection", value => { settings.display.widgetMaxRowsPerSection = value; }, warnings);
+    warnRemoved(display, "widgetShowRetainedSessions", warnings);
+    warnRemoved(display, "widgetShowForeground", warnings);
   }
 
   return { settings, ...(warnings.length ? { warning: warnings.join(" ") } : {}) };
@@ -211,6 +205,10 @@ function assignPositiveInt(record: Record<string, unknown>, field: string, set: 
   if (value === undefined) return;
   if (Number.isInteger(value) && (value as number) > 0) set(value as number);
   else warnings.push(`Invalid subagent ${field}; using default.`);
+}
+
+function warnRemoved(record: Record<string, unknown>, field: string, warnings: string[]) {
+  if (record[field] !== undefined) warnings.push(`Removed subagent ${field} setting ignored.`);
 }
 
 function assignBoolean(record: Record<string, unknown>, field: string, set: (value: boolean) => void, warnings: string[]) {

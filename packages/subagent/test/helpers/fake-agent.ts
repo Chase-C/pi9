@@ -1,78 +1,28 @@
 import type { Usage } from "@earendil-works/pi-ai";
-
-import type { AgentDispatch, AgentRetentionReason } from "../../src/domain/agent-lifecycle.js";
-import type {
-  AgentRunSection, AgentSnapshot, AgentToolUse, AgentViewCapabilities, AgentViewStatus,
-} from "../../src/domain/agent-snapshot.js";
+import type { AgentRunSnapshot, AgentSnapshot, AgentToolUse, AgentViewCapabilities, AgentViewStatus } from "../../src/domain/agent-snapshot.js";
+import type { AgentRunStatus, RunKind } from "../../src/domain/agent-lifecycle.js";
 
 export const ZERO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 export const TERMINAL_RESULT_KINDS = ["completed", "error", "interrupted", "aborted", "skipped"] as const;
-type TerminalKind = (typeof TERMINAL_RESULT_KINDS)[number];
-type FakeStatusInput =
-  | { kind: "queued"; queuedAt?: number }
-  | { kind: "running"; startedAt?: number }
-  | { kind: TerminalKind; startedAt?: number; completedAt?: number; errorAt?: number; interruptedAt?: number; abortedAt?: number; skippedAt?: number; response?: string; error?: string }
-  | AgentViewStatus;
-
+type StatusInput = { kind: "queued"; queuedAt?: number } | { kind: "running"; startedAt?: number } | { kind: AgentRunStatus; startedAt?: number; completedAt?: number; response?: string; error?: string } | Extract<AgentViewStatus, { kind: "done" }>;
 export interface FakeAgentOptions {
-  id?: string; inputIndex?: number; parentSessionId?: string; label?: string; prompt?: string; createdAt?: number;
-  dispatch?: AgentDispatch; kind?: "spawn" | "resume";
-  retention?: "transient" | "persistent"; retentionReasons?: AgentRetentionReason[];
-  conversation?: Partial<AgentSnapshot["conversation"]>;
-  config?: Partial<AgentSnapshot["config"]> & { retainConversation?: boolean };
-  options?: { agent?: string; prompt?: string; model?: string; thinking?: AgentSnapshot["config"]["thinking"] };
-  status?: FakeStatusInput; activity?: { toolHistory?: AgentToolUse[] }; message?: string; messageSnippet?: string;
-  turns?: number; compactions?: number; toolUses?: number; activeTools?: string[]; usage?: Usage; totalUsage?: Usage;
-  capabilities?: Partial<AgentViewCapabilities>; previousRuns?: AgentRunSection[]; subagents?: AgentSnapshot[];
+  conversationId?: string; runId?: string; parentConversationId?: string; label?: string; prompt?: string; createdAt?: number; kind?: RunKind;
+  config?: Partial<AgentSnapshot["config"]> & { retainConversation?: boolean }; options?: { agent?: string; prompt?: string; model?: string; thinking?: AgentSnapshot["config"]["thinking"] };
+  status?: StatusInput; activity?: { toolHistory?: AgentToolUse[] }; message?: string; messageSnippet?: string; turns?: number; compactions?: number; toolUses?: number; activeTools?: string[]; usage?: Usage; totalUsage?: Usage;
+  capabilities?: Partial<AgentViewCapabilities>; previousRuns?: AgentRunSnapshot[]; runs?: AgentRunSnapshot[]; subagents?: AgentSnapshot[]; [key: string]: unknown;
 }
-
+function makeStatus(input: StatusInput | undefined): AgentViewStatus {
+  const status = input ?? { kind: "completed", startedAt: 1, completedAt: 2, response: "done" };
+  if (status.kind === "queued") return { kind: "queued", queuedAt: status.queuedAt ?? 1 };
+  if (status.kind === "running") return { kind: "running", startedAt: status.startedAt ?? 1 };
+  if (status.kind === "done") return status;
+  return { kind: "done", outcome: status.kind, startedAt: status.startedAt, completedAt: status.completedAt ?? 2, ...(status.kind === "completed" ? { output: status.response ?? "done" } : { error: status.error ?? `Agent ${status.kind}.` }) };
+}
 export function fakeAgent(options: FakeAgentOptions = {}): AgentSnapshot {
-  const { config: overrides, options: invocationOverrides, status: statusOverride, activity, ...rest } = options;
-  const cfg = { name: "helper", description: "", source: "project" as const, ...overrides };
-  const invocation = { agent: cfg.name, prompt: "Fix issue", ...invocationOverrides };
-  const base = statusOverride ?? { kind: "completed" as const, startedAt: 1, completedAt: 2, response: "done" };
-  let status: AgentViewStatus;
-  if ((TERMINAL_RESULT_KINDS as readonly string[]).includes(base.kind)) {
-    const terminal = base as Extract<FakeStatusInput, { kind: TerminalKind }>;
-    const completedAt = terminal.completedAt ?? terminal.errorAt ?? terminal.skippedAt ?? terminal.interruptedAt ?? terminal.abortedAt ?? 2;
-    status = { kind: "done", outcome: terminal.kind, completedAt,
-      ...(terminal.startedAt !== undefined ? { startedAt: terminal.startedAt } : {}),
-      ...(terminal.kind === "completed" ? { output: terminal.response ?? "done" } : { error: terminal.error ?? `Agent ${terminal.kind}.` }) };
-  } else if (base.kind === "running") status = { kind: "running", startedAt: base.startedAt ?? 1 };
-  else if (base.kind === "queued") status = { kind: "queued", ...(base.queuedAt !== undefined ? { queuedAt: base.queuedAt } : {}) };
-  else status = base as AgentViewStatus;
-  let toolHistory: AgentToolUse[];
-  if (activity?.toolHistory) toolHistory = [...activity.toolHistory];
-  else if (rest.activeTools?.length) toolHistory = rest.activeTools.map((name, i) => ({ id: `${name}-${i}`, name, startedAt: 1 }));
-  else toolHistory = Array.from({ length: rest.toolUses ?? 0 }, (_, i) => ({ id: `tool-${i}`, name: `tool-${i}`, startedAt: 1, completedAt: 2 }));
-  const dispatch = rest.dispatch ?? "foreground";
-  const catalog = rest.retention
-    ?? (overrides?.retainConversation || (status.kind === "done" && dispatch === "background") ? "persistent" : "transient");
-  const reasons = rest.retentionReasons ?? [
-    ...(status.kind !== "done" ? ["active" as const] : []),
-    ...(status.kind === "done" && dispatch === "background" ? ["background-result" as const] : []),
-    ...(overrides?.retainConversation || (catalog === "persistent" && dispatch === "foreground") ? ["conversation-policy" as const] : []),
-  ];
-  const policy = rest.conversation?.policy ?? (reasons.includes("conversation-policy") ? "retain" : "release");
-  return {
-    id: rest.id ?? "s1", ...(rest.inputIndex !== undefined ? { inputIndex: rest.inputIndex } : {}),
-    ...(rest.parentSessionId !== undefined ? { parentSessionId: rest.parentSessionId } : {}), ...(rest.label !== undefined ? { label: rest.label } : {}),
-    ...(rest.prompt !== undefined ? { prompt: rest.prompt } : {}), createdAt: rest.createdAt ?? 1,
-    attempt: { kind: rest.kind ?? "spawn", dispatch },
-    conversation: { policy, available: rest.conversation?.available ?? catalog === "persistent" },
-    retention: { catalog, reasons },
-    config: { name: cfg.name, description: cfg.description, source: cfg.source, sourcePath: cfg.sourcePath,
-      model: invocation.model ?? cfg.model, thinking: invocation.thinking ?? cfg.thinking, tools: cfg.tools,
-      ...(cfg.skills !== undefined ? { skills: cfg.skills } : {}) },
-    status, activity: { ...(rest.messageSnippet ?? rest.message ? { messageSnippet: rest.messageSnippet ?? rest.message } : {}), turns: rest.turns ?? 0, compactions: rest.compactions ?? 0, toolHistory },
-    ...(rest.previousRuns ? { previousRuns: rest.previousRuns } : {}), ...(rest.subagents ? { subagents: rest.subagents } : {}),
-    usage: rest.totalUsage ?? rest.usage ?? ZERO_USAGE,
-    capabilities: { canResume: rest.capabilities?.canResume ?? false, canRemove: rest.capabilities?.canRemove ?? false },
-  };
+  const status = makeStatus(options.status); const config = options.config ?? {}; const tools = options.activity?.toolHistory ?? options.activeTools?.map((name, i) => ({ id: `${name}-${i}`, name, startedAt: 1 })) ?? [];
+  const run: AgentRunSnapshot = { runId: (options.runId ?? "r1") as AgentRunSnapshot["runId"], kind: options.kind ?? "spawn", prompt: options.prompt ?? options.options?.prompt ?? "Fix issue", createdAt: options.createdAt ?? 1, status, activity: { messageSnippet: options.messageSnippet ?? options.message, turns: options.turns ?? 0, compactions: options.compactions ?? 0, toolHistory: tools }, usage: options.totalUsage ?? options.usage ?? ZERO_USAGE, observerCount: 0, acknowledged: false, notification: "none" };
+  const runs = options.runs ?? [...(options.previousRuns ?? []), run];
+  return { conversationId: (options.conversationId ?? "c1") as AgentSnapshot["conversationId"], ...(options.parentConversationId ? { parentConversationId: options.parentConversationId as AgentSnapshot["conversationId"] } : {}), label: options.label, createdAt: options.createdAt ?? 1, config: { name: options.options?.agent ?? config.name ?? "helper", description: config.description ?? "", source: config.source ?? "project", sourcePath: config.sourcePath, model: options.options?.model ?? config.model, thinking: options.options?.thinking ?? config.thinking, tools: config.tools, skills: config.skills }, runs, currentRun: runs.at(-1), capabilities: { canResume: options.capabilities?.canResume ?? false, canRemove: options.capabilities?.canRemove ?? false } };
 }
-
-export function fakeRunSection(options: FakeAgentOptions = {}): AgentRunSection {
-  const snapshot = fakeAgent(options);
-  return { ...(snapshot.prompt !== undefined ? { prompt: snapshot.prompt } : {}), attempt: snapshot.attempt, status: snapshot.status, activity: snapshot.activity, usage: snapshot.usage };
-}
+export function fakeRunSection(options: FakeAgentOptions = {}): AgentRunSnapshot { return fakeAgent(options).runs.at(-1)!; }
 export const unique = () => `${Date.now()}-${Math.random()}`;

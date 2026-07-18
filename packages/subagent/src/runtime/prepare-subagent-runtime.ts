@@ -6,7 +6,7 @@ export interface PrepareSubagentRuntimeContext extends SubagentSettingsLoadConte
 }
 
 export interface PrepareSubagentRuntimeAgentManager {
-  configure?(options: { maxRunning?: number }): void;
+  configure?(options: { maxRunning?: number; maxConversations?: number }): void;
 }
 
 export interface PrepareSubagentRuntimeAgentRegistry {
@@ -31,11 +31,13 @@ export async function prepareSubagentRuntime({
   agentRegistry,
 }: PrepareSubagentRuntimeOptions): Promise<SubagentSettings> {
   const settings = await loadSubagentSettings(ctx, settingsStore);
-  agentManager.configure?.({ maxRunning: settings.runtime.maxConcurrentSubagents });
+  agentManager.configure?.({
+    maxRunning: settings.runtime.maxConcurrentSubagents,
+    maxConversations: settings.runtime.maxConversations,
+  });
   if (agentRegistry) {
     await agentRegistry.reload(ctx.cwd, {
       discovery: settings.agentDiscovery,
-      defaultRetainConversation: settings.runtime.defaultRetainConversation,
       onWarning: message => ctx.ui?.notify?.(message, "warning"),
     });
   }

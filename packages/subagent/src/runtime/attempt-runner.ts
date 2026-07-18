@@ -3,7 +3,7 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import type { Agent } from "../domain/agent.js";
 import type { Attempt } from "../domain/agent-attempt.js";
 import { errorRun, interruptedRun, skippedRun } from "../domain/agent-finalize.js";
-import type { AgentSnapshot } from "../domain/agent-snapshot.js";
+import type { AgentRunSnapshot } from "../domain/agent-snapshot.js";
 import { DefaultRunAgentDependencies, RunAttempt } from "./run-agent.js";
 import { TaskQueue, type QueueLease } from "./task-queue.js";
 import { timingStart } from "./timing.js";
@@ -13,7 +13,7 @@ export type AgentRunner = (
   agent: Agent,
   attempt: Attempt,
   signal?: AbortSignal,
-) => Promise<AgentSnapshot>;
+) => Promise<AgentRunSnapshot>;
 
 export interface AttemptRunnerOptions {
   maxRunning: number;
@@ -52,14 +52,14 @@ export class AttemptRunner {
 
   /**
    * Releases the named agent's queue slot while `fn` runs, then re-acquires it before returning.
-   * Used by the child subagent tool so a parent awaiting `batch.resultsPromise` doesn't pin the
+   * Used by the child subagent tool so a parent awaiting `batch.completion` doesn't pin the
    * only queue slot a recursive descendant needs to start — without this, a tree deeper than
-   * maxRunning deadlocks. No-op when the session has no active lease.
+   * maxRunning deadlocks. No-op when the conversation has no active lease.
    */
-  async suspendAgentSlotDuring<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
-    const lease = this._leases.get(sessionId);
+  async suspendAgentSlotDuring<T>(conversationId: string, fn: () => Promise<T>): Promise<T> {
+    const lease = this._leases.get(conversationId);
     if (!lease) return fn();
-    const end = timingStart("manager.suspendAgentSlot", { sessionId });
+    const end = timingStart("manager.suspendAgentSlot", { conversationId });
     try {
       return await lease.suspendDuring(fn);
     } finally {
@@ -72,38 +72,41 @@ export class AttemptRunner {
     signal: AbortSignal | undefined,
     agent: Agent,
     attempt: Attempt,
-  ): Promise<AgentSnapshot> {
+  ): Promise<AgentRunSnapshot> {
     const kind = attempt.kind;
     return this._queue.enqueue(async lease => {
-      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId });
-      let result: AgentSnapshot;
+      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId });
+      let result: AgentRunSnapshot;
       let error: string | undefined;
 
-      if (signal?.aborted || !this._isTracked(agent.id)) {
-        result = skippedRun(agent);
+      if (signal?.aborted || !this._isTracked(agent.conversationId)) {
+        result = skippedRun(agent, attempt.runId);
       } else if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
-        result = agent.snapshot();
+        result = agent.runHistory.find(run => run.runId === attempt.runId)!;
       } else {
-        this._leases.set(agent.id, lease);
+        this._leases.set(agent.conversationId, lease);
         try {
           result = await this._runner(ctx, agent, attempt, signal);
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           if (agent.status.kind === "done" && !agent.hasCurrentAttempt) {
-            result = agent.snapshot();
+            result = agent.runHistory.find(run => run.runId === attempt.runId)!;
           } else {
             error = message;
-            result = signal?.aborted
-              ? (attempt.state.kind === "queued" ? skippedRun(agent) : interruptedRun(agent, message))
-              : errorRun(agent, message);
+            if (signal?.aborted) {
+              if (attempt.state.kind === "queued") skippedRun(agent, attempt.runId);
+              else interruptedRun(agent, attempt.runId, message);
+            } else errorRun(agent, attempt.runId, message);
+            result = agent.runHistory.find(run => run.runId === attempt.runId)!;
           }
         } finally {
-          this._leases.delete(agent.id);
+          this._leases.delete(agent.conversationId);
         }
       }
 
-      end({ status: result.status.kind === "done" ? result.status.outcome : result.status.kind, error });
+      const status = result.status;
+      end({ status: status.kind === "done" ? status.outcome : status.kind, error });
       return result;
-    }, { agent: agent.agentName, sessionId: agent.id, parentSessionId: agent.parentId, kind });
+    }, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId, kind });
   }
 }

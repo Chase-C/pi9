@@ -1,80 +1,21 @@
-import { test } from "vitest";
-import assert from "node:assert/strict";
-
+import { test, expect } from "vitest";
+import { AgentManager } from "../../src/runtime/agent-manager.js";
 import { registerSubagentLifecycleEvents } from "../../src/runtime/lifecycle-events.js";
-import { fakeAgent } from "../helpers/fake-agent.js";
 
-function source() {
-  let listener: any;
-  return {
-    manager: {
-      onAgentUpdate(fn: any) {
-        listener = fn;
-        return () => { listener = undefined; };
-      },
-    },
-    emit(snapshot: any, kind = "status") {
-      listener({ snapshot: () => snapshot }, kind);
-    },
-  };
-}
+const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
+const registry = { agents: new Map([["worker", config]]) } as any;
 
-test("subagent lifecycle events emit generic updates and deduplicated status milestones", () => {
+test("spawn publishes queued after manager conversation and run indexes exist", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const manager = new AgentManager(registry, 1, (async () => { await gate; return { status: "completed" }; }) as any);
   const emitted: Array<{ event: string; data: any }> = [];
-  const events = { emit: (event: string, data: unknown) => emitted.push({ event, data }) };
-  const driver = source();
-
-  registerSubagentLifecycleEvents(events, driver.manager as any);
-
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "running", startedAt: 10 } }));
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "running", startedAt: 10 } }));
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "completed", startedAt: 10, completedAt: 30 } }));
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "completed", startedAt: 10, completedAt: 30 } }));
-
-  assert.deepEqual(emitted.map(e => e.event), [
-    "subagent:updated",
-    "subagent:started",
-    "subagent:updated",
-    "subagent:updated",
-    "subagent:completed",
-    "subagent:updated",
-  ]);
-  assert.equal(emitted[1].data.sessionId, "s1");
-  assert.equal(emitted[4].data.outcome, "completed");
-});
-
-test("subagent lifecycle events keep resumed completions observable", () => {
-  const emitted: Array<{ event: string; data: any }> = [];
-  const events = { emit: (event: string, data: unknown) => emitted.push({ event, data }) };
-  const driver = source();
-
-  registerSubagentLifecycleEvents(events, driver.manager as any);
-
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "completed", startedAt: 10, completedAt: 30 } }));
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "completed", startedAt: 40, completedAt: 80 } }));
-
-  const completions = emitted.filter(e => e.event === "subagent:completed");
-  assert.equal(completions.length, 2);
-  assert.equal(completions[1].data.snapshot.status.completedAt, 80);
-});
-
-test("subagent lifecycle events keep resumed queued and started attempts observable", () => {
-  const emitted: Array<{ event: string; data: any }> = [];
-  const events = { emit: (event: string, data: unknown) => emitted.push({ event, data }) };
-  const driver = source();
-
-  registerSubagentLifecycleEvents(events, driver.manager as any);
-
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "queued", queuedAt: 10 } }));
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "running", startedAt: 20 } }));
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "completed", startedAt: 20, completedAt: 30 } }));
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "queued", queuedAt: 40 } }));
-  driver.emit(fakeAgent({ id: "s1", status: { kind: "running", startedAt: 50 } }));
-
-  const queued = emitted.filter(e => e.event === "subagent:queued");
-  const started = emitted.filter(e => e.event === "subagent:started");
-  assert.equal(queued.length, 2);
-  assert.equal(started.length, 2);
-  assert.equal(queued[1].data.snapshot.status.queuedAt, 40);
-  assert.equal(started[1].data.snapshot.status.startedAt, 50);
+  const unsubscribe = registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, manager);
+  const started = manager.startRun({ cwd: "/tmp" } as any, [{ kind: "spawn", agent: "worker", prompt: "work" }] as any);
+  const identity = started.starts[0] as any;
+  const queued = emitted.find(value => value.event === "subagent:queued")!;
+  expect(queued.data).toMatchObject({ conversationId: identity.conversationId, runId: identity.runId });
+  expect(manager.conversation(identity.conversationId).runs.some(run => run.runId === identity.runId)).toBe(true);
+  expect(() => manager.bindJoin([identity.runId])).not.toThrow();
+  release(); await started.completion; unsubscribe();
 });

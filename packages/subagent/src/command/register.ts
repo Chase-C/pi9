@@ -1,9 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-
 import type { AgentRegistry } from "../domain/agent-registry.js";
-import { toResult } from "../domain/agent-result.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
-import { createSubagentResumeMessage } from "../view/resume-message.js";
 import { SubagentSettingsStore, type SubagentSettings } from "../config/settings.js";
 import { prepareSubagentRuntime } from "../runtime/prepare-subagent-runtime.js";
 import { updateSubagentWidget } from "../ui/widget.js";
@@ -11,130 +8,26 @@ import { SubagentOverlayComponent, type SubagentOverlayPage } from "./components
 import { applySubagentSettingsChange } from "./components/settings.js";
 import { errorMessage, notify } from "./notify.js";
 
-export function registerSubagentsCommand(
-  pi: ExtensionAPI,
-  agentManager: AgentManager,
-  settingsStore: Pick<SubagentSettingsStore, "load" | "save"> = new SubagentSettingsStore(),
-  agentRegistry?: AgentRegistry,
-  onSettingsUpdated?: (settings: SubagentSettings) => void,
-) {
-  pi.registerCommand?.("subagents", {
-    description: "Manage active and retained subagent sessions",
-    getArgumentCompletions: (prefix: string) => getSubagentsArgumentCompletions(prefix),
-    handler: async (args: string, ctx: ExtensionCommandContext) => {
-      if (!ctx.hasUI || !ctx.ui?.custom) return;
-
-      const command = args.trim();
-      const initialPage: SubagentOverlayPage = command === "settings" || command === "agents" || command === "sessions"
-        ? command
-        : agentManager.listSessions().length === 0 ? "agents" : "sessions";
-
-      let settings = await prepareSubagentRuntime({
-        ctx,
-        settingsStore,
-        agentManager,
-        ...(agentRegistry ? { agentRegistry } : {}),
-      });
-      onSettingsUpdated?.(settings);
-      const agents = agentRegistry ? Array.from(agentRegistry.agents.values()) : [];
-      let saveQueue = Promise.resolve();
-
-      try {
-        await ctx.ui.custom<void>((tui, theme, keybindings, done) => new SubagentOverlayComponent(
-          agentManager,
-          tui,
-          theme,
-          keybindings,
-          () => done(undefined),
-          {
-            initialPage,
-            agents,
-            settings,
-            notify: (message, level) => notify(ctx, message, level as any),
-            onSettingsChange: change => {
-              const applied = applySubagentSettingsChange(settings, change);
-              settings = applied.settings;
-              if (change.kind === "maxConcurrentSubagents") agentManager.configure({ maxRunning: change.value });
-              if (change.kind === "widgetPlacement"
-                || change.kind === "widgetLayout"
-                || change.kind === "widgetShowRetainedSessions"
-                || change.kind === "widgetMaxRowsPerSection") {
-                updateSubagentWidget(ctx, agentManager.listSessions(), settings);
-              }
-              onSettingsUpdated?.(settings);
-              const next = settings;
-              saveQueue = saveQueue.then(() => settingsStore.save(next).then(
-                () => notify(ctx, applied.confirmation, "info"),
-                error => notify(ctx, `Failed to save subagent settings: ${errorMessage(error)}`, "warning"),
-              ));
-              return settings;
-            },
-            onStart: (agent, prompt) => {
-              const handle = agentManager.startRun(
-                ctx,
-                undefined,
-                [{ kind: "spawn", agent, prompt }],
-                () => updateSubagentWidget(ctx, agentManager.listSessions(), settings),
-                { dispatch: "background" },
-              );
-              const session = handle.sessions[0];
-              if (!session) return undefined;
-              updateSubagentWidget(ctx, agentManager.listSessions(), settings);
-              notify(ctx, `Started ${agent} (${session.id}).`, "info");
-              void handle.resultsPromise.catch(error => notify(ctx, `Subagent ${agent} failed: ${errorMessage(error)}`, "warning"));
-              return session.id;
-            },
-            onResume: (sessionId, prompt) => {
-              const session = agentManager.listSessions().find(candidate => candidate.id === sessionId);
-              if (!session?.capabilities.canResume) return;
-              const handle = agentManager.startRun(
-                ctx,
-                undefined,
-                [{ kind: "resume", sessionId, prompt }],
-                () => updateSubagentWidget(ctx, agentManager.listSessions(), settings),
-                { dispatch: "foreground" },
-              );
-              void handle.resultsPromise.then(
-                results => {
-                  const snapshot = results[0];
-                  if (!snapshot) return;
-                  const result = toResult(snapshot);
-                  updateSubagentWidget(ctx, agentManager.listSessions(), settings);
-                  pi.sendMessage?.(createSubagentResumeMessage(result, settings.display));
-                  notify(ctx, result.status === "completed"
-                    ? `Subagent session ${sessionId} resumed.`
-                    : `Subagent session ${sessionId} resume ${result.status}.`,
-                    result.status === "completed" ? "info" : "warning");
-                },
-                error => notify(ctx, `Failed to resume subagent session ${sessionId}: ${errorMessage(error)}`, "warning"),
-              );
-            },
-          },
-        ), {
-          overlay: true,
-          overlayOptions: {
-            anchor: "center",
-            width: "90%",
-            minWidth: 56,
-            maxHeight: "80%",
-          },
-        });
-      } catch (error) {
-        notify(ctx, `Subagents UI failed: ${errorMessage(error)}`, "warning");
-      }
-      await saveQueue;
+export function registerSubagentsCommand(pi: ExtensionAPI, agentManager: AgentManager, settingsStore: Pick<SubagentSettingsStore, "load" | "save"> = new SubagentSettingsStore(), agentRegistry?: AgentRegistry, onSettingsUpdated?: (settings: SubagentSettings) => void) {
+ pi.registerCommand?.("subagents", { description: "Manage subagent conversations and runs", getArgumentCompletions,
+  handler: async (args: string, ctx: ExtensionCommandContext) => {
+   if (!ctx.hasUI || !ctx.ui?.custom) return;
+   const requested = args.trim(); const initialPage: SubagentOverlayPage = requested === "settings" || requested === "agents" || requested === "conversations" ? requested : agentManager.listConversations().length ? "conversations" : "agents";
+   let settings = await prepareSubagentRuntime({ ctx, settingsStore, agentManager, ...(agentRegistry ? { agentRegistry } : {}) }); onSettingsUpdated?.(settings);
+   try { await ctx.ui.custom<void>((tui, theme, keys, done) => new SubagentOverlayComponent(agentManager, tui, theme, keys, () => done(undefined), {
+    initialPage, agents: agentRegistry ? [...agentRegistry.agents.values()] : [], settings, notify: (m,l) => notify(ctx,m,l as any),
+    onSettingsChange: change => {
+     const applied = applySubagentSettingsChange(settings, change as any); settings = applied.settings;
+     agentManager.configure({ maxRunning: settings.runtime.maxConcurrentSubagents, maxConversations: settings.runtime.maxConversations });
+     onSettingsUpdated?.(settings);
+     void settingsStore.save(settings).catch(error => notify(ctx, `Could not save subagent settings: ${errorMessage(error)}`, "warning"));
+     updateSubagentWidget(ctx, agentManager.listConversations(), settings); return settings;
     },
-  });
+    onStart: (agent,prompt) => { const start = agentManager.startRun(ctx,[{kind:"spawn",agent,prompt}]).starts[0]; if (!start?.ok) { notify(ctx,start?.error ?? "Could not start run.","warning"); return; } updateSubagentWidget(ctx,agentManager.listConversations(),settings); return start.conversationId; },
+    onResume: (conversationId,prompt) => { const start = agentManager.startRun(ctx,[{kind:"resume",conversationId:conversationId as any,prompt}]).starts[0]; if (!start?.ok) notify(ctx,start?.error ?? `Could not resume conversation ${conversationId}.`,"warning"); else notify(ctx,`Started run ${start.runId} in conversation ${conversationId}.`,"info"); },
+    onRemove: conversationId => { const result = agentManager.removeConversation(conversationId); if (result.removed) notify(ctx, `Removed subagent conversation ${conversationId}.`, "info"); else notify(ctx, result.errors[0]?.error ?? `Could not remove conversation ${conversationId}.`, "warning"); updateSubagentWidget(ctx, agentManager.listConversations(), settings); },
+   }), { overlay:true, overlayOptions:{anchor:"center",width:"90%",minWidth:56,maxHeight:"80%"} }); } catch(error) { notify(ctx,`Subagents UI failed: ${errorMessage(error)}`,"warning"); }
+  }
+ });
 }
-
-function getSubagentsArgumentCompletions(prefix: string) {
-  const commands = [
-    { value: "settings", label: "settings", description: "Open subagent settings" },
-    { value: "sessions", label: "sessions", description: "Open active and retained subagent sessions" },
-    { value: "agents", label: "agents", description: "Browse discovered subagent definitions" },
-  ];
-  const normalized = prefix.trimStart();
-  if (normalized.includes(" ")) return null;
-  const filtered = commands.filter(item => item.value.startsWith(normalized));
-  return filtered.length > 0 ? filtered : null;
-}
+function getArgumentCompletions(prefix:string) { const values=[{value:"conversations",label:"conversations",description:"Open conversations and runs"},{value:"agents",label:"agents",description:"Browse agents"},{value:"settings",label:"settings",description:"Open settings"}]; const p=prefix.trimStart(); if(p.includes(" ")) return null; return values.filter(v=>v.value.startsWith(p)) || null; }

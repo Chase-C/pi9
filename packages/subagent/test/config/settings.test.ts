@@ -6,181 +6,68 @@ import { join } from "node:path";
 
 import { createDefaultSubagentSettings, normalizeSettings, SubagentSettingsStore } from "../../src/config/settings.js";
 
-test("subagent default settings are fresh at every construction", () => {
+test("subagent default settings are fresh and include redesigned runtime defaults", () => {
   const first = createDefaultSubagentSettings();
   first.runtime.maxTasksPerRun = 99;
   first.agentDiscovery.agentFileExtensions.push(".agent.md");
-  first.display.widgetShowForeground = false;
-
   const second = createDefaultSubagentSettings();
-
   assert.equal(second.runtime.maxTasksPerRun, 8);
+  assert.equal(second.runtime.maxConversations, 100);
+  assert.equal(second.runtime.completionNotify, "auto");
   assert.deepEqual(second.agentDiscovery.agentFileExtensions, [".md"]);
-  assert.equal(second.display.widgetShowForeground, true);
   assert.notEqual(first.runtime, second.runtime);
-  assert.notEqual(first.agentDiscovery, second.agentDiscovery);
-  assert.notEqual(first.agentDiscovery.agentFileExtensions, second.agentDiscovery.agentFileExtensions);
-  assert.notEqual(first.display, second.display);
 });
 
-test("subagent UI settings default to below editor when file is missing", async () => {
+test("missing settings use defaults", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-settings-default-"));
-  const store = new SubagentSettingsStore(join(root, "subagent", "settings.json"));
-
-  const result = await store.load();
-
+  const result = await new SubagentSettingsStore(join(root, "subagent", "settings.json")).load();
   assert.equal(result.settings.widgetPlacement, "belowEditor");
-  assert.equal(result.settings.runtime.maxTasksPerRun, 8);
-  assert.equal(result.settings.runtime.maxConcurrentSubagents, 4);
-  assert.equal(result.settings.runtime.defaultRetainConversation, false);
-  assert.equal(result.settings.runtime.backgroundNotify, "auto");
-  assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, [".md"]);
-  assert.equal(result.settings.display.outputSnippetLength, 400);
-  assert.equal(result.settings.display.toolInputSummaryLength, 80);
-  assert.equal(result.settings.display.widgetShowForeground, true);
-  assert.equal(result.settings.display.widgetMaxRowsPerSection, 6);
-  assert.equal(result.settings.widgetLayout, "auto");
+  assert.equal(result.settings.runtime.maxConversations, 100);
+  assert.equal(result.settings.runtime.completionNotify, "auto");
   assert.equal(result.warning, undefined);
 });
 
-test("subagent UI settings save and reload widget placement globally", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-settings-save-"));
-  const settingsPath = join(root, "subagent", "settings.json");
-
-  await new SubagentSettingsStore(settingsPath).save({ widgetPlacement: "aboveEditor" });
-  const result = await new SubagentSettingsStore(settingsPath).load();
-
-  assert.equal(result.settings.widgetPlacement, "aboveEditor");
-  assert.equal(result.settings.runtime.maxTasksPerRun, 8);
-  assert.equal(result.warning, undefined);
-});
-
-test("subagent settings reject invalid values with a field-named warning and fall back to defaults", async () => {
-  const cases: Array<{ label: string; written: object; expectedField: string; expectedFallback: () => Promise<void> }> = [
-    {
-      label: "widgetPlacement",
-      written: { widgetPlacement: "besideEditor" },
-      expectedField: "widgetPlacement",
-      expectedFallback: async () => {},
-    },
-    {
-      label: "backgroundNotify",
-      written: { runtime: { backgroundNotify: "loud" } },
-      expectedField: "backgroundNotify",
-      expectedFallback: async () => {},
-    },
-  ];
-
-  for (const { label, written, expectedField } of cases) {
-    const root = await mkdtemp(join(tmpdir(), `subagent-settings-invalid-${label}-`));
-    const settingsPath = join(root, "subagent", "settings.json");
-    await mkdir(join(root, "subagent"), { recursive: true });
-    await writeFile(settingsPath, JSON.stringify(written));
-
-    const result = await new SubagentSettingsStore(settingsPath).load();
-
-    // Defaults applied: widgetPlacement always falls back to belowEditor; runtime always has the canonical defaults.
-    assert.equal(result.settings.widgetPlacement, "belowEditor", `${label}: widgetPlacement should fall back`);
-    assert.equal(result.settings.runtime.backgroundNotify, "auto", `${label}: backgroundNotify should fall back`);
-    assert.equal(result.settings.runtime.maxConcurrentSubagents, 4, `${label}: maxConcurrentSubagents should default`);
-    assert.match(result.warning!, new RegExp(expectedField));
-  }
-});
-
-test("subagent settings reject unsupported backgroundNotify values and fall back to auto", async () => {
-  for (const value of ["end-of-turn", "next-tool-call"] as const) {
-    const root = await mkdtemp(join(tmpdir(), `subagent-settings-invalid-notify-${value}-`));
-    const settingsPath = join(root, "subagent", "settings.json");
-    await mkdir(join(root, "subagent"), { recursive: true });
-    await writeFile(settingsPath, JSON.stringify({ runtime: { backgroundNotify: value } }));
-
-    const result = await new SubagentSettingsStore(settingsPath).load();
-
-    assert.equal(result.settings.runtime.backgroundNotify, "auto", `${value}: should fall back to auto`);
-    assert.match(result.warning ?? "", /backgroundNotify/, `${value}: warning should mention backgroundNotify`);
-  }
-});
-
-test("subagent settings load widgetLayout override and reject invalid values", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-settings-widget-layout-"));
-  const settingsPath = join(root, "subagent", "settings.json");
-  await mkdir(join(root, "subagent"), { recursive: true });
-  await writeFile(settingsPath, JSON.stringify({ widgetLayout: "columns" }));
-
-  const valid = await new SubagentSettingsStore(settingsPath).load();
-  assert.equal(valid.settings.widgetLayout, "columns");
-  assert.equal(valid.warning, undefined);
-
-  await writeFile(settingsPath, JSON.stringify({ widgetLayout: "side-by-side" }));
-  const invalid = await new SubagentSettingsStore(settingsPath).load();
-  assert.equal(invalid.settings.widgetLayout, "auto");
-  assert.match(invalid.warning!, /widgetLayout/);
-});
-
-test("subagent settings load widgetShowForeground and widgetMaxRowsPerSection overrides", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-settings-widget-"));
-  const settingsPath = join(root, "subagent", "settings.json");
-  await mkdir(join(root, "subagent"), { recursive: true });
-  await writeFile(
-    settingsPath,
-    JSON.stringify({
-      display: { widgetShowForeground: false, widgetMaxRowsPerSection: 4 },
-    }),
-  );
-
-  const result = await new SubagentSettingsStore(settingsPath).load();
-
-  assert.equal(result.settings.display.widgetShowForeground, false);
-  assert.equal(result.settings.display.widgetMaxRowsPerSection, 4);
-  assert.equal(result.warning, undefined);
-});
-
-test("subagent settings reject invalid widgetShowForeground and widgetMaxRowsPerSection with warnings", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagent-settings-widget-invalid-"));
-  const settingsPath = join(root, "subagent", "settings.json");
-  await mkdir(join(root, "subagent"), { recursive: true });
-  await writeFile(
-    settingsPath,
-    JSON.stringify({
-      display: { widgetShowForeground: "yes", widgetMaxRowsPerSection: 0 },
-    }),
-  );
-
-  const result = await new SubagentSettingsStore(settingsPath).load();
-
-  assert.equal(result.settings.display.widgetShowForeground, true);
-  assert.equal(result.settings.display.widgetMaxRowsPerSection, 6);
-  assert.match(result.warning!, /widgetShowForeground/);
-  assert.match(result.warning!, /widgetMaxRowsPerSection/);
-});
-
-test("subagent settings do not migrate the legacy defaultResumable key", () => {
-  const result = normalizeSettings({ runtime: { defaultResumable: true } });
-  assert.equal(result.settings.runtime.defaultRetainConversation, false);
-  assert.equal("defaultResumable" in result.settings.runtime, false);
-});
-
-test("subagent settings load runtime, discovery, and display overrides", async () => {
+test("settings load redesigned runtime overrides", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-settings-overrides-"));
-  const settingsPath = join(root, "subagent", "settings.json");
+  const path = join(root, "subagent", "settings.json");
   await mkdir(join(root, "subagent"), { recursive: true });
-  await writeFile(
-    settingsPath,
-    JSON.stringify({
-      widgetPlacement: "off",
-      runtime: { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultRetainConversation: true, backgroundNotify: "steer" },
-      agentDiscovery: { includeProjectAgents: false, agentFileExtensions: [".md", ".agent.md"] },
-      display: { outputSnippetLength: 42, toolInputSummaryLength: 50, widgetShowRetainedSessions: false },
-    }),
-  );
+  await writeFile(path, JSON.stringify({ runtime: { maxConversations: 25, completionNotify: "steer" } }));
+  const result = await new SubagentSettingsStore(path).load();
+  assert.equal(result.settings.runtime.maxConversations, 25);
+  assert.equal(result.settings.runtime.completionNotify, "steer");
+  assert.equal(result.warning, undefined);
+});
 
-  const result = await new SubagentSettingsStore(settingsPath).load();
+test("invalid redesigned runtime values warn and use defaults", () => {
+  const result = normalizeSettings({ runtime: { maxConversations: 0, completionNotify: "loud" } });
+  assert.equal(result.settings.runtime.maxConversations, 100);
+  assert.equal(result.settings.runtime.completionNotify, "auto");
+  assert.match(result.warning!, /maxConversations/);
+  assert.match(result.warning!, /completionNotify/);
+});
 
-  assert.equal(result.settings.widgetPlacement, "off");
-  assert.deepEqual(result.settings.runtime, { maxTasksPerRun: 3, maxConcurrentSubagents: 2, defaultRetainConversation: true, backgroundNotify: "steer" });
-  assert.equal(result.settings.agentDiscovery.includeProjectAgents, false);
-  assert.deepEqual(result.settings.agentDiscovery.agentFileExtensions, [".md", ".agent.md"]);
-  assert.equal(result.settings.display.outputSnippetLength, 42);
-  assert.equal(result.settings.display.toolInputSummaryLength, 50);
-  assert.equal(result.settings.display.widgetShowRetainedSessions, false);
+test("removed settings are ignored with migration warnings", () => {
+  const result = normalizeSettings({
+    runtime: { defaultRetainConversation: true, backgroundNotify: "steer" },
+    display: { widgetShowRetainedSessions: false, widgetShowForeground: false },
+  });
+  assert.deepEqual(result.settings.runtime, {
+    maxTasksPerRun: 8,
+    maxConcurrentSubagents: 4,
+    maxConversations: 100,
+    completionNotify: "auto",
+  });
+  assert.equal("widgetShowRetainedSessions" in result.settings.display, false);
+  assert.equal("widgetShowForeground" in result.settings.display, false);
+  for (const field of ["defaultRetainConversation", "backgroundNotify", "widgetShowRetainedSessions", "widgetShowForeground"])
+    assert.match(result.warning!, new RegExp(field));
+});
+
+test("save and reload preserves partial UI setting with redesigned defaults", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-settings-save-"));
+  const path = join(root, "subagent", "settings.json");
+  await new SubagentSettingsStore(path).save({ widgetPlacement: "aboveEditor" });
+  const result = await new SubagentSettingsStore(path).load();
+  assert.equal(result.settings.widgetPlacement, "aboveEditor");
+  assert.equal(result.settings.runtime.maxConversations, 100);
 });

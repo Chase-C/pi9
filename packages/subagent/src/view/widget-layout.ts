@@ -13,12 +13,12 @@ export function maxLineWidth(lines: readonly string[]): number {
 }
 
 export function hasBothColumnSections(sections: readonly { title: string }[]): boolean {
-  let hasBackground = false;
-  let hasRetained = false;
+  let hasActive = false;
+  let hasCompleted = false;
   for (const section of sections) {
-    if (section.title === "Background") hasBackground = true;
-    else if (section.title === "Retained") hasRetained = true;
-    if (hasBackground && hasRetained) return true;
+    if (section.title === "Active Runs") hasActive = true;
+    else if (section.title === "Completed Runs") hasCompleted = true;
+    if (hasActive && hasCompleted) return true;
   }
   return false;
 }

@@ -2,7 +2,7 @@ import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import type { WidgetLayout } from "../config/settings.js";
-import { formatThemedWidgetRow, renderWidgetModelLines, type WidgetModel } from "./session-lines.js";
+import { formatThemedWidgetRow, renderWidgetModelLines, type WidgetModel } from "./conversation-lines.js";
 
 export class SubagentWidgetComponent implements Component {
   constructor(

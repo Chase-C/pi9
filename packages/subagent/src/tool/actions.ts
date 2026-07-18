@@ -1,166 +1,50 @@
 import type { AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-
 import type { AgentRegistry } from "../domain/agent-registry.js";
-import type { AgentSnapshot } from "../domain/agent-snapshot.js";
-import { toResults, type ResultEntry } from "../domain/agent-result.js";
-import type { AgentManager, RunUpdate } from "../runtime/agent-manager.js";
-import { timingStart } from "../runtime/timing.js";
-import {
-  type SubagentAction,
-  type SubagentInvocation,
-  type SubagentInvocationParseError,
-} from "../schema.js";
+import type { AgentManager } from "../runtime/agent-manager.js";
 import type { SubagentSettings } from "../config/settings.js";
-import { updateSubagentWidget } from "../ui/widget.js";
-import {
-  agentsDetails,
-  backgroundStartedDetails,
-  formatSubagentToolLines,
-  inventoryDetails,
-  resultsDetails,
-  runDetails,
-  type SubagentDetails,
-} from "../view/format.js";
-import {
-  listAgentDefinitions,
-  listAgentDefinitionsForModel,
-  serializeInventoryForModel,
-} from "../view/serialize.js";
+import type { SubagentAction, SubagentInvocation, SubagentInvocationParseError } from "../schema.js";
+import { agentsDetails, type SubagentDetails } from "../view/details.js";
+import { listAgentDefinitions, listAgentDefinitionsForModel } from "../view/serialize.js";
 
-export interface ActionDeps {
-  agentManager: AgentManager;
-  agentRegistry: AgentRegistry;
-  getCurrentSettings: () => SubagentSettings;
-  parentSessionId?: string;
-}
-
-export interface ActionResult {
-  content: { type: "text"; text: string }[];
-  details: SubagentDetails;
-  isError?: boolean;
-}
-
-/**
- * Builds a tool result. The model-facing `content` text is `json` when provided, else the
- * serialized `details`. Inventory and results keep rich snapshots in `details` for rendering
- * while `content` carries their narrower model-facing projections.
- */
-export function toolResult(details: SubagentDetails, opts: { isError?: boolean; json?: unknown } = {}): ActionResult {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(opts.json ?? details, null, 2) }],
-    details,
-    isError: opts.isError ?? false,
-  };
-}
-
-export function errorResult(message: string, extra: { errors?: string[] } = {}): ActionResult {
-  return {
-    content: [{ type: "text" as const, text: message }],
-    details: { view: "error", ...(extra.errors ? { errors: extra.errors } : {}) },
-    isError: true,
-  };
-}
-
-export function agentsAction(deps: ActionDeps, _invocation: InvocationFor<"agents">): ActionResult {
-  return toolResult(agentsDetails(listAgentDefinitions(deps.agentRegistry)), {
-    json: { view: "agents", agents: listAgentDefinitionsForModel(deps.agentRegistry) },
-  });
-}
-
+export interface ActionDeps { agentManager: AgentManager; agentRegistry: AgentRegistry; getCurrentSettings: () => SubagentSettings; parentConversationId?: string; parentRunId?: () => string }
+export interface ActionResult { content: { type: "text"; text: string }[]; details: SubagentDetails; isError?: boolean }
 type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { action: A }>;
-
-export function invocationErrorResult(deps: ActionDeps, parsed: SubagentInvocationParseError): ActionResult {
-  const message = parsed.missingAction || parsed.taskCountError
-    ? `${parsed.error}\n\nAvailable agents:\n${deps.agentRegistry.summarizeAgent()}`
-    : parsed.error;
-  return errorResult(message, parsed.errors ? { errors: parsed.errors } : {});
-}
-
+function jsonResult(json: unknown, details: SubagentDetails = { view: "error" }): ActionResult { return { content: [{ type: "text", text: JSON.stringify(json, null, 2) }], details, isError: false }; }
+export function errorResult(message: string, extra: { errors?: string[] } = {}): ActionResult { return { content: [{ type: "text", text: message }], details: { view: "error", ...(extra.errors ? { errors: extra.errors } : {}) }, isError: true }; }
+export function invocationErrorResult(deps: ActionDeps, parsed: SubagentInvocationParseError): ActionResult { const message = parsed.missingAction || parsed.taskCountError ? `${parsed.error}\n\nAvailable agents:\n${deps.agentRegistry.summarizeAgent()}` : parsed.error; return errorResult(message, parsed.errors ? { errors: parsed.errors } : {}); }
+export function agentsAction(deps: ActionDeps, _invocation: InvocationFor<"agents">): ActionResult { return jsonResult({ agents: listAgentDefinitionsForModel(deps.agentRegistry) }, agentsDetails(listAgentDefinitions(deps.agentRegistry))); }
 export function listAction(deps: ActionDeps, invocation: InvocationFor<"list">): ActionResult {
-  const filter = invocation.status !== undefined ? { status: invocation.status } : undefined;
-  const sessions = deps.agentManager.listSessions(filter);
-  return toolResult(inventoryDetails(sessions, filter), {
-    json: serializeInventoryForModel(sessions, filter),
-  });
+ const runs = deps.agentManager.listConversations().flatMap(c => c.runs.map(run => ({ conversationId: c.conversationId, runId: run.runId, agent: c.config.name, ...(c.label ? { label: c.label } : {}), kind: run.kind, status: run.status.kind === "done" ? run.status.outcome : run.status.kind, createdAt: run.createdAt })));
+ const filtered = invocation.status ? runs.filter(r => invocation.status!.includes(r.status as any)) : runs;
+ return jsonResult(filtered);
 }
-
-export async function resultsAction(deps: ActionDeps, invocation: InvocationFor<"results">, ctx?: ExtensionContext): Promise<ActionResult> {
-  const { sessionIds } = invocation;
-  const entries = deps.agentManager.backgroundResults(sessionIds);
-  if (invocation.remove) {
-    const terminalIds = entries.flatMap(e => "snapshot" in e && e.snapshot.status.kind === "done" ? [e.snapshot.id] : []);
-    await deps.agentManager.remove({ sessionIds: terminalIds });
-    if (ctx) updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-  }
-  return toolResult(resultsDetails(entries), { json: resultsJson(entries, { exposeId: true }) });
+export function runAction(deps: ActionDeps, invocation: InvocationFor<"run">, ctx: ExtensionContext): ActionResult {
+ const options = deps.parentConversationId ? { parentConversationId: deps.parentConversationId as any, parentRunId: deps.parentRunId?.() as any } : {};
+ const handle = deps.agentManager.startRun(ctx, invocation.tasks, options);
+ handle.completion.catch(() => {});
+ return jsonResult(handle.starts);
 }
-
-export async function removeAction(deps: ActionDeps, invocation: InvocationFor<"remove">, ctx?: ExtensionContext): Promise<ActionResult> {
-  const summary = await deps.agentManager.remove({ sessionIds: invocation.sessionIds });
-  if (ctx) updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-  return toolResult({ view: "remove-summary", summary });
+export async function joinAction(deps: ActionDeps, invocation: InvocationFor<"join">, signal: AbortSignal | undefined, onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined): Promise<ActionResult> {
+ let binding;
+ try { binding = deps.agentManager.bindJoin(invocation.runIds); } catch (error) { return errorResult(error instanceof Error ? error.message : String(error)); }
+ // A join is a flat, ordered projection: each requested run, then that run's descendant runs.
+ const project = (binding as { project?: typeof binding.project }).project;
+ const selected = () => project?.call(binding) ?? deps.agentManager.listConversations().flatMap(c => c.runs.filter(r => invocation.runIds.includes(r.runId)).map(r => ({ conversationId: c.conversationId, runId: r.runId, status: r.status })));
+ const output = () => selected().map(entry => entry.status.kind === "done"
+   ? { conversationId: entry.conversationId, runId: entry.runId, status: entry.status.outcome, ...(entry.status.output !== undefined ? { output: entry.status.output } : {}), ...(entry.status.error !== undefined ? { error: entry.status.error } : {}) }
+   : { conversationId: entry.conversationId, runId: entry.runId, status: entry.status.kind });
+ const emit = () => onUpdate?.({ content: [{ type: "text", text: JSON.stringify(output()) }], details: { view: "error" } });
+ const unsubscribe = deps.agentManager.onAgentUpdate(() => emit()); emit();
+ let abort: (() => void) | undefined;
+ const cancelled = signal ? new Promise<never>((_, reject) => { abort = () => reject(new Error("Join cancelled by caller.")); if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true }); }) : undefined;
+ try {
+   const wait = () => cancelled ? Promise.race([binding.completion, cancelled]) : binding.completion;
+   const outcomes = await (deps.parentConversationId ? deps.agentManager.runner.suspendAgentSlotDuring(deps.parentConversationId, wait) : wait());
+   const result = project ? output() : outcomes.map((outcome, index) => ({ runId: invocation.runIds[index], ...outcome }));
+   if (binding.acknowledge) binding.acknowledge();
+   else deps.agentManager.acknowledgeRuns(invocation.runIds);
+   return jsonResult(result);
+ } catch (error) { return errorResult(error instanceof Error ? error.message : String(error)); }
+ finally { unsubscribe(); binding.release(); if (abort) signal?.removeEventListener("abort", abort); }
 }
-
-export async function runAction(
-  deps: ActionDeps,
-  invocation: InvocationFor<"run">,
-  signal: AbortSignal | undefined,
-  onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
-  ctx: ExtensionContext,
-): Promise<ActionResult> {
-  const parsed = invocation.tasks;
-  const startOptions = deps.parentSessionId !== undefined
-    ? { dispatch: invocation.dispatch ?? "foreground", parentId: deps.parentSessionId }
-    : { dispatch: invocation.dispatch ?? "foreground" };
-
-  if (invocation.dispatch === "background") {
-    const handle = deps.agentManager.startRun(ctx, signal, parsed, () => {
-      updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-    }, startOptions);
-    handle.resultsPromise.catch(() => {});
-    updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-    const sessions = handle.sessions.map(session => {
-      const task = session.inputIndex === undefined ? undefined : parsed[session.inputIndex];
-      return session.label === undefined && task?.kind === "spawn" && task.label !== undefined
-        ? { ...session, label: task.label }
-        : session;
-    });
-    const details = backgroundStartedDetails(sessions);
-    return toolResult(details, { isError: (details.errors?.length ?? 0) > 0 });
-  }
-
-  const runStartedAt = Date.now();
-  const runEnd = timingStart("tool.agentManager.run", { taskCount: parsed.length, isChild: deps.parentSessionId !== undefined });
-  const emitPartial = (update: RunUpdate) => {
-    const partial = partialToolResult(update, deps.getCurrentSettings().display, runStartedAt);
-    onUpdate?.(partial);
-    updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-  };
-  const handle = deps.agentManager.startRun(ctx, signal, parsed, emitPartial, startOptions);
-  const settled = deps.parentSessionId !== undefined
-    ? await deps.agentManager.runner.suspendAgentSlotDuring(deps.parentSessionId, () => handle.resultsPromise)
-    : await handle.resultsPromise;
-  runEnd({ ok: true, resultCount: settled.length });
-  updateSubagentWidget(ctx, deps.agentManager.listSessions(), deps.getCurrentSettings());
-  // The terminal snapshot is the result: each settled run is a ready entry, the same shape a
-  // background poll yields, so both feed the one `results` renderer and the one JSON projection.
-  const entries: ResultEntry[] = settled.map(snapshot => ({
-    snapshot: deps.agentManager.snapshotWithSubagents?.(snapshot) ?? snapshot,
-  }));
-  const isError = settled.some(s => s.status.kind === "done" && s.status.outcome !== "completed");
-  return toolResult(resultsDetails(entries), { isError, json: resultsJson(entries) });
-}
-
-/** The model-facing `results` envelope: the `view` tag plus the projected per-entry JSON. */
-function resultsJson(entries: ResultEntry[], opts?: { exposeId?: boolean }) {
-  return { view: "results" as const, results: toResults(entries, opts) };
-}
-
-function partialToolResult(update: RunUpdate, display: import("../config/settings.js").SubagentDisplaySettings, runStartedAt: number): { content: { type: "text"; text: string }[]; details: SubagentDetails } {
-  const subtree: AgentSnapshot[] = update.tree.length > update.sessions.length ? update.tree : [];
-  const details = runDetails(update.sessions, { ...(subtree.length > 0 ? { subtree: update.tree } : {}), runStartedAt });
-  return {
-    content: [{ type: "text" as const, text: formatSubagentToolLines(details, true, Date.now(), display).join("\n") }],
-    details,
-  };
-}
+export function removeAction(deps: ActionDeps, invocation: InvocationFor<"remove">): ActionResult { return jsonResult(deps.agentManager.removeConversations(invocation.conversationIds)); }

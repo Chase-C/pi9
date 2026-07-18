@@ -4,6 +4,19 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Replace the prior dispatch and retrieval lifecycle with five actions: `agents`, pure output-free `list`, always-asynchronous `run`, exact-run blocking `join`, and explicit batched conversation `remove`.
+- Give every spawned conversation a process-local adjective-noun `conversationId` and every attempt a verb-adverb `runId`; `join` has no timeout, and cancelling it stops only the wait rather than the underlying run.
+- Keep every conversation until explicit removal. Allow follow-ups only after completed runs or interrupted runs that preserved conversation context.
+- Add a `maxConversations` runtime limit, defaulting to 100, which rejects new spawns at capacity until conversations are removed.
+- Define completion notifications in terms of unacknowledged runs; inventory remains side-effect free and does not acknowledge completion.
+- Remove the previous dispatch modes, nonblocking retrieval action, session identifier, and opt-in conversation-retention contract without compatibility aliases.
+
+### Documentation
+
+- Rewrite the README around conversations and exact runs, including action semantics, capacity, cleanup, notifications, migration guidance, and the runtime-local lifetime of child context.
+
 ## [0.6.0] - 2026-07-17
 
 ### Breaking

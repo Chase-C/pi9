@@ -9,7 +9,6 @@ import { DEFAULT_SUBAGENT_SETTINGS, type SubagentAgentDiscoverySettings } from "
 
 export interface AgentRegistryOptions {
   discovery?: Partial<SubagentAgentDiscoverySettings>;
-  defaultRetainConversation?: boolean;
   onWarning?: (message: string) => void;
 }
 
@@ -48,7 +47,7 @@ export class AgentRegistry {
           continue;
         }
 
-        const result = BuildAgentConfig(content, source, { defaultRetainConversation: options.defaultRetainConversation });
+        const result = BuildAgentConfig(content, source);
         if ("error" in result) {
           if (discovery.warnOnInvalidAgents) options.onWarning?.(`Invalid subagent definition ${path}: ${result.error.message}`);
           continue;

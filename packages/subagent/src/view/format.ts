@@ -1,36 +1,35 @@
 export {
   agentsDetails,
-  backgroundStartedDetails,
+  runsStartedDetails,
   inventoryDetails,
-  resultsDetails,
+  joinDetails,
   runDetails,
   type AgentListingEntry,
   type AgentsDetails,
-  type BackgroundPreflightError,
-  type BackgroundSpawnHandle,
-  type BackgroundStartedDetails,
-  type InventoryDetails,
+  type RunStartError,
+  type RunStartHandle,
+  type RunsStartedDetails,
   type InventoryFilter,
   type RemoveSummary,
   type RemoveSummaryDetails,
-  type ResultsDetails,
+  type JoinDetails,
   type RunDetails,
   type SubagentDetails,
+  type InventoryDetails,
 } from "./details.js";
 
 export {
   buildWidgetModel,
-  formatSessionIdentityLine,
-  formatSessionLine,
-  formatRunSessionLine,
+  formatConversationIdentityLine,
+  formatConversationLine,
+  formatRunConversationLine,
   formatWidgetLines,
-  hasBackgroundAncestor,
   stringifyWidgetModel,
   type WidgetModel,
   type WidgetRow,
   type WidgetSection,
   type WidgetSectionTitle,
-} from "./session-lines.js";
+} from "./conversation-lines.js";
 
 export {
   createSubagentTextComponent,
