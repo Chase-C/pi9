@@ -10,17 +10,14 @@ const NonBlankString = (description: string) =>
   Type.String({ minLength: 1, pattern: ".*\\S.*", description });
 
 export const TaskSchema = Type.Object({
-  agent: Type.Optional(NonBlankString("Agent name for a spawn task.")),
-  conversationId: Type.Optional(NonBlankString("Conversation ID for a resume task.")),
-  prompt: NonBlankString("Delegated task or follow-up prompt."),
-  label: Type.Optional(NonBlankString("Display label for a spawn task.")),
-  skills: Type.Optional(Type.Array(
-    NonBlankString("Skill name."),
-    { description: "Skills override for a spawn task." },
-  )),
-  model: Type.Optional(NonBlankString("Model override for a spawn task.")),
+  agent: Type.Optional(Type.String({ description: "Agent definition name." })),
+  conversationId: Type.Optional(Type.String()),
+  prompt: NonBlankString("The subagent's complete instructions."),
+  label: Type.Optional(NonBlankString("Display label.")),
+  skills: Type.Optional(Type.Array(Type.String(), { description: "Skills override." })),
+  model: Type.Optional(Type.String({ description: "Model override." })),
   thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
-  cwd: Type.Optional(NonBlankString("Working directory for a spawn task.")),
+  cwd: Type.Optional(Type.String({ description: "Working directory override." })),
 }, { additionalProperties: false });
 
 export const SUBAGENT_ACTIONS = ["agents", "list", "run", "join", "remove"] as const;
@@ -93,15 +90,6 @@ const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   join: ["action", "runIds"],
   remove: ["action", "conversationIds"],
 };
-const removedFieldMigration: Record<string, string> = {
-  background: "Runs are asynchronous by default; use action=run.",
-  dispatch: "Use action=run with tasks.",
-  wait: "Use action=join with runIds.",
-  results: "Use action=join with runIds.",
-  remove: "Use action=remove with conversationIds.",
-  sessionId: "Use conversationId inside a resume task.",
-  retainConversation: "Conversations are retained by default and removed with action=remove.",
-};
 
 export function parseSubagentInvocation(
   raw: unknown,
@@ -130,16 +118,6 @@ export function parseSubagentInvocation(
   }
 
   const parsedAction = action as SubagentAction;
-
-  for (const [field, migration] of Object.entries(removedFieldMigration)) {
-    if (params[field] !== undefined) {
-      return {
-        error: `Field ${field} was removed. ${migration}`,
-        action: parsedAction,
-      };
-    }
-  }
-
   const extra = Object.keys(params).find(
     key => !allowedInvocationKeys[parsedAction].includes(key),
   );
@@ -152,9 +130,7 @@ export function parseSubagentInvocation(
   }
 
   switch (parsedAction) {
-    case "agents":
-      return { action: parsedAction };
-
+    case "agents": return { action: parsedAction };
     case "list": {
       const invalidStatus = params.status !== undefined && (
         !Array.isArray(params.status)
@@ -173,7 +149,6 @@ export function parseSubagentInvocation(
         ...(params.status ? { status: params.status as RunStatus[] } : {}),
       };
     }
-
     case "run": {
       if (!Array.isArray(params.tasks) || params.tasks.length === 0) {
         return {
@@ -200,14 +175,12 @@ export function parseSubagentInvocation(
         ? { error: errors.join("\n"), errors, action: parsedAction }
         : { action: parsedAction, tasks: tasks as TaskRequest[] };
     }
-
     case "join": {
       const ids = parseIds(params.runIds, "join", isRunId, "runId", "conversation ID");
       return "error" in ids
         ? { ...ids, action: parsedAction }
         : { action: parsedAction, runIds: ids };
     }
-
     case "remove": {
       const ids = parseIds(
         params.conversationIds,
@@ -253,17 +226,11 @@ export function parseTask(raw: unknown): ParsedTask {
   }
 
   const task = raw as Record<string, unknown>;
-
   if (task.sessionId !== undefined) {
-    return {
-      error: "Task field sessionId was removed. Use conversationId to resume a conversation.",
-    };
+    return { error: "Task field sessionId was removed. Use conversationId to resume a conversation." };
   }
-
   if (task.retainConversation !== undefined) {
-    return {
-      error: "Task field retainConversation was removed. Conversations are retained by default and removed with action=remove.",
-    };
+    return { error: "Task field retainConversation was removed. Conversations are retained by default and removed with action=remove." };
   }
 
   const isSpawn = task.agent !== undefined;
@@ -282,9 +249,7 @@ export function parseTask(raw: unknown): ParsedTask {
   }
 
   if (isSpawn === isResume) {
-    return {
-      error: "Task must carry exactly one of agent (spawn) or conversationId (resume).",
-    };
+    return { error: "Task must carry exactly one of agent (spawn) or conversationId (resume)." };
   }
 
   if (typeof task.prompt !== "string" || !task.prompt.trim()) {
@@ -293,9 +258,7 @@ export function parseTask(raw: unknown): ParsedTask {
 
   if (isResume) {
     if (!isConversationId(task.conversationId)) {
-      return {
-        error: `Task conversationId '${String(task.conversationId)}' is invalid (a run ID is not accepted).`,
-      };
+      return { error: `Task conversationId '${String(task.conversationId)}' is invalid (a run ID is not accepted).` };
     }
 
     return {
