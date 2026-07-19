@@ -46,27 +46,12 @@ test("invalid redesigned runtime values warn and use defaults", () => {
   assert.match(result.warning!, /completionNotify/);
 });
 
-test("removed settings are ignored with migration warnings", () => {
-  const result = normalizeSettings({
-    runtime: { defaultRetainConversation: true, backgroundNotify: "steer" },
-    display: { widgetShowRetainedSessions: false, widgetShowForeground: false },
-  });
-  assert.deepEqual(result.settings.runtime, {
-    maxTasksPerRun: 8,
-    maxConcurrentSubagents: 4,
-    maxConversations: 100,
-    completionNotify: "auto",
-  });
-  assert.equal("widgetShowRetainedSessions" in result.settings.display, false);
-  assert.equal("widgetShowForeground" in result.settings.display, false);
-  for (const field of ["defaultRetainConversation", "backgroundNotify", "widgetShowRetainedSessions", "widgetShowForeground"])
-    assert.match(result.warning!, new RegExp(field));
-});
-
-test("save and reload preserves partial UI setting with redesigned defaults", async () => {
+test("save and reload preserves complete settings", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-settings-save-"));
   const path = join(root, "subagent", "settings.json");
-  await new SubagentSettingsStore(path).save({ widgetPlacement: "aboveEditor" });
+  const settings = createDefaultSubagentSettings();
+  settings.widgetPlacement = "aboveEditor";
+  await new SubagentSettingsStore(path).save(settings);
   const result = await new SubagentSettingsStore(path).load();
   assert.equal(result.settings.widgetPlacement, "aboveEditor");
   assert.equal(result.settings.runtime.maxConversations, 100);

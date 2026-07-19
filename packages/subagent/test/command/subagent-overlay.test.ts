@@ -16,7 +16,7 @@ function overlay(conversations: any[], overrides: Partial<OverlayOptions> = {}) 
 
 describe("subagent overlay behavior", () => {
   it("opens terminal output by default and resumes only through the rendered resume action", () => {
-    const conversation = fakeAgent({ conversationId: "conversation-1", runId: "run-1", status: { kind: "completed", response: "finished output" }, capabilities: { canResume: true } });
+    const conversation = fakeAgent({ conversationId: "conversation-1", runId: "run-1", status: { kind: "completed", response: "finished output" }, canResume: true });
     const { component, callbacks } = overlay([conversation]);
     expect(component.render(100).join("\n")).toContain("[r] resume");
     component.handleInput("\r");
@@ -28,8 +28,8 @@ describe("subagent overlay behavior", () => {
   });
 
   it("keeps the resume target fixed while composing and rejects a stale target", () => {
-    const first = fakeAgent({ conversationId: "conversation-1", createdAt: 1, capabilities: { canResume: true } });
-    const second = fakeAgent({ conversationId: "conversation-2", createdAt: 2, capabilities: { canResume: true } });
+    const first = fakeAgent({ conversationId: "conversation-1", createdAt: 1, canResume: true });
+    const second = fakeAgent({ conversationId: "conversation-2", createdAt: 2, canResume: true });
     const conversations = [first, second];
     const { component, callbacks } = overlay(conversations);
 
@@ -48,8 +48,8 @@ describe("subagent overlay behavior", () => {
 
   it("does not offer or invoke resume for active and nonresumable runs", () => {
     for (const conversation of [
-      fakeAgent({ status: { kind: "running" }, capabilities: { canResume: true } }),
-      fakeAgent({ status: { kind: "completed" }, capabilities: { canResume: false } }),
+      fakeAgent({ status: { kind: "running" }, canResume: true }),
+      fakeAgent({ status: { kind: "completed" }, canResume: false }),
     ]) {
       const { component, callbacks } = overlay([conversation]);
       expect(component.render(100).join("\n")).not.toContain("[r] resume");
@@ -59,7 +59,7 @@ describe("subagent overlay behavior", () => {
   });
 
   it("invokes remove, start, and settings callbacks from keyboard actions", () => {
-    const { component, callbacks } = overlay([fakeAgent({ capabilities: { canRemove: true } })]);
+    const { component, callbacks } = overlay([fakeAgent()]);
     component.handleInput("x");
     expect(callbacks.onRemove).toHaveBeenCalledWith("c1");
     component.handleInput("\t"); // settings

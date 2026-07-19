@@ -12,7 +12,6 @@ export interface PrepareSubagentRuntimeAgentManager {
 export interface PrepareSubagentRuntimeAgentRegistry {
   reload(cwd: string, options: {
     discovery?: Partial<SubagentAgentDiscoverySettings>;
-    defaultRetainConversation?: boolean;
     onWarning?: (message: string) => void;
   }): Promise<void>;
 }

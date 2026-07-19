@@ -18,9 +18,10 @@ export function makeChildSubagentTool(deps: ChildToolDeps): ToolDefinition {
   return defineSubagentTool({
     agentManager: manager,
     agentRegistry: registry,
-    getCurrentSettings,
     prepareInvocation: async () => getCurrentSettings(),
-    parentConversationId: parent.conversationId,
-    parentRunId: () => parent.requireCurrentAttempt().runId,
+    parent: {
+      conversationId: parent.conversationId,
+      runId: () => parent.requireCurrentAttempt().runId,
+    },
   });
 }

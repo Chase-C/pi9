@@ -2,7 +2,6 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { AgentRunSnapshot, AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { SubagentDisplaySettings } from "../config/settings.js";
 import { effectiveStatus } from "../domain/agent-decisions.js";
-import { compact } from "./view-helpers.js";
 import { hasBothColumnSections, maxLineWidth, resolveWidgetLayout, zipWidgetColumns } from "./widget-layout.js";
 
 export type WidgetSectionTitle = "Active Runs" | "Completed Runs" | "Conversations";

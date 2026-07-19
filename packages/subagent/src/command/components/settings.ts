@@ -16,53 +16,26 @@ export type SubagentSettingsChange =
   | { kind: "maxConversations"; value: number }
   | { kind: "widgetMaxRowsPerSection"; value: number };
 
-export interface AppliedSubagentSettingsChange {
-  settings: SubagentSettings;
-  confirmation: string;
-}
-
 export function applySubagentSettingsChange(
   settings: SubagentSettings,
   change: SubagentSettingsChange,
-): AppliedSubagentSettingsChange {
+): SubagentSettings {
   switch (change.kind) {
     case "widgetPlacement":
-      return {
-        settings: { ...settings, widgetPlacement: change.value },
-        confirmation: `Subagent widget placement set to ${change.value}.`,
-      };
+      return { ...settings, widgetPlacement: change.value };
     case "widgetLayout":
-      return {
-        settings: { ...settings, widgetLayout: change.value },
-        confirmation: `Subagent widget layout set to ${change.value}.`,
-      };
+      return { ...settings, widgetLayout: change.value };
     case "completionNotify":
-      return {
-        settings: { ...settings, runtime: { ...settings.runtime, completionNotify: change.value } },
-        confirmation: `Subagent completion notify set to ${change.value}.`,
-      };
+      return { ...settings, runtime: { ...settings.runtime, completionNotify: change.value } };
     case "maxConcurrentSubagents":
-      return {
-        settings: { ...settings, runtime: { ...settings.runtime, maxConcurrentSubagents: change.value } },
-        confirmation: `Subagent max running set to ${change.value}.`,
-      };
+      return { ...settings, runtime: { ...settings.runtime, maxConcurrentSubagents: change.value } };
     case "maxTasksPerRun":
-      return {
-        settings: { ...settings, runtime: { ...settings.runtime, maxTasksPerRun: change.value } },
-        confirmation: `Subagent max tasks per run set to ${change.value}.`,
-      };
+      return { ...settings, runtime: { ...settings.runtime, maxTasksPerRun: change.value } };
     case "maxConversations":
-      return {
-        settings: { ...settings, runtime: { ...settings.runtime, maxConversations: change.value } },
-        confirmation: `Subagent max conversations set to ${change.value}.`,
-      };
+      return { ...settings, runtime: { ...settings.runtime, maxConversations: change.value } };
     case "widgetMaxRowsPerSection":
-      return {
-        settings: { ...settings, display: { ...settings.display, widgetMaxRowsPerSection: change.value } },
-        confirmation: `Subagent widget rows per section set to ${change.value}.`,
-      };
+      return { ...settings, display: { ...settings.display, widgetMaxRowsPerSection: change.value } };
   }
-  throw new Error(`Unknown subagent settings change: ${(change as { kind: string }).kind}`);
 }
 
 export class SubagentSettingsComponent implements Component {

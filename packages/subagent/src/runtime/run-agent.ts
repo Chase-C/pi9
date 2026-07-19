@@ -65,7 +65,7 @@ export async function RunAttempt(
 
   if (signal?.aborted) return skippedRun(agent, attempt.runId);
 
-  const runData = { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId };
+  const runData = { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId };
   const requestedConfig = agent.requestedConfig;
   const cwd = ResolveTaskCwd(ctx.cwd, requestedConfig.cwd);
   const agentDir = dependencies.getAgentDir();

@@ -1,7 +1,7 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 
-import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
+import { DEFAULT_SUBAGENT_SETTINGS, normalizeSettings } from "../../src/config/settings.js";
 import { prepareSubagentRuntime } from "../../src/runtime/prepare-subagent-runtime.js";
 
 const baseCtx = () => ({ cwd: "/some/cwd", hasUI: false, ui: { notify: () => {} } });
@@ -15,10 +15,10 @@ function fakeManager() {
 }
 
 function fakeRegistry() {
-  const calls: Array<{ cwd: string; discovery?: unknown; defaultRetainConversation?: boolean; onWarning?: (msg: string) => void }> = [];
+  const calls: Array<{ cwd: string; discovery?: unknown; onWarning?: (msg: string) => void }> = [];
   return {
     calls,
-    async reload(cwd: string, options: { discovery?: unknown; defaultRetainConversation?: boolean; onWarning?: (msg: string) => void } = {}) {
+    async reload(cwd: string, options: { discovery?: unknown; onWarning?: (msg: string) => void } = {}) {
       calls.push({ cwd, ...options });
     },
   };
@@ -26,7 +26,10 @@ function fakeRegistry() {
 
 function fakeStore(settings: any = { widgetPlacement: "belowEditor" }, warning?: string) {
   return {
-    async load() { return warning ? { settings, warning } : { settings }; },
+    async load() {
+      const normalized = normalizeSettings(settings);
+      return warning ? { settings: normalized.settings, warning } : normalized;
+    },
   };
 }
 
@@ -96,12 +99,12 @@ test("prepareSubagentRuntime surfaces settings load warnings via ctx.ui.notify",
 
   await prepareSubagentRuntime({
     ctx,
-    settingsStore: fakeStore({ widgetPlacement: "belowEditor" }, "Invalid backgroundNotify; using default."),
+    settingsStore: fakeStore({ widgetPlacement: "belowEditor" }, "Invalid settings; using defaults."),
     agentManager: fakeManager(),
   });
 
   assert.equal(notifications.length, 1);
-  assert.match(notifications[0]!.message, /backgroundNotify/);
+  assert.match(notifications[0]!.message, /Invalid settings/);
   assert.equal(notifications[0]!.level, "warning");
 });
 

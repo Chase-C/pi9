@@ -2,10 +2,11 @@ import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-age
 import { Text } from "@earendil-works/pi-tui";
 
 import type { AgentRegistry } from "../domain/agent-registry.js";
+import type { ConversationId } from "../domain/conversation-id.js";
+import type { RunId } from "../domain/run-id.js";
 import type { AgentManager } from "../runtime/agent-manager.js";
 import { parseSubagentInvocation, SubagentParams } from "../schema.js";
 import type { SubagentSettings } from "../config/settings.js";
-import type { SubagentDetails } from "../view/details.js";
 import {
   agentsAction,
   listAction,
@@ -16,8 +17,6 @@ import {
   type ActionDeps,
 } from "./actions.js";
 
-interface SubagentRenderState {}
-
 /** Adds the ordered task count to run call titles. */
 function callSuffix(args: any): string {
   const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
@@ -27,7 +26,6 @@ function callSuffix(args: any): string {
 export interface SubagentToolDeps {
   agentManager: AgentManager;
   agentRegistry: AgentRegistry;
-  getCurrentSettings: () => SubagentSettings;
   /**
    * Called at the start of every tool invocation. Root extensions use this to reload settings,
    * reconfigure display, set max-concurrent, and reload the registry. Child factories provide
@@ -37,18 +35,15 @@ export interface SubagentToolDeps {
   /** Releases notifier claims made by tool_execution_start after every join exit path. */
   releaseJoinClaims?: (runIds: readonly string[]) => void;
   /** Set on child factories; links spawned conversations and suspends its queue slot while joining. */
-  parentConversationId?: string;
-  parentRunId?: () => string;
+  parent?: { conversationId: ConversationId; runId: () => RunId };
 }
 
 
 export function defineSubagentTool(deps: SubagentToolDeps) {
-  const { agentManager, agentRegistry, getCurrentSettings, prepareInvocation, parentConversationId, parentRunId } = deps;
-  const actionDeps: ActionDeps = parentConversationId !== undefined
-    ? { agentManager, agentRegistry, getCurrentSettings, parentConversationId, ...(parentRunId ? { parentRunId } : {}) }
-    : { agentManager, agentRegistry, getCurrentSettings };
+  const { agentManager, agentRegistry, prepareInvocation, parent } = deps;
+  const actionDeps: ActionDeps = { agentManager, agentRegistry, ...(parent ? { parent } : {}) };
 
-  return defineTool<typeof SubagentParams, SubagentDetails, SubagentRenderState>({
+  return defineTool<typeof SubagentParams, undefined>({
     name: "subagent",
     label: "Subagent",
     description: [
@@ -73,7 +68,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       //"Call subagent action=agents before choosing an agent unless the user named one explicitly or definitions were already listed.",
     ],
     parameters: SubagentParams,
-    renderCall(args, theme, context) {
+    renderCall(args, theme) {
       const action = typeof args?.action === "string" ? args.action : "pending";
       const title = theme?.bold ? theme.bold("subagent") : "subagent";
       const label = `${title} ${action}`;

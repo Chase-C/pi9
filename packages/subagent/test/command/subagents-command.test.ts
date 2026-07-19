@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/config/settings.js";
 import { registerSubagentsCommand } from "../../src/command/register.js";
-import { projectConversations } from "../../src/command/overlay-view-model.js";
-import { fakeAgent } from "../helpers/fake-agent.js";
-describe("subagents command conversation model", () => { it("searches both conversation and run ids", () => { const value = fakeAgent({ conversationId: "conversation-one", runId: "run-one" }); expect(projectConversations([value], { mode: "flat", query: "run-one" })).toHaveLength(1); expect(projectConversations([value], { mode: "flat", query: "conversation-one" })).toHaveLength(1); }); });
-
 describe("subagents command registration", () => {
   it("applies runtime settings before a subsequent start and persists them", async () => {
     let handler: any; let component: any;

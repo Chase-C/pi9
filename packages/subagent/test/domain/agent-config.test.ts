@@ -55,7 +55,7 @@ test("BuildAgentConfig validates but does not normalize a description", () => {
 
 test("BuildAgentConfig returns error when name is missing", () => {
   const err = fail(BuildAgentConfig(`---\ndescription: d\n---\nbody`, "project"));
-  assert.match(err.message, /Missing required fields:.*name/);
+  assert.equal(err.message, 'Expected required field "name" to be a non-empty string.');
 });
 
 test("BuildAgentConfig accepts every supported thinking level", () => {
@@ -89,11 +89,10 @@ test("BuildAgentConfig rejects non-string CSV fields with a type error naming th
   }
 });
 
-test("BuildAgentConfig rejects obsolete retention frontmatter with migration guidance", () => {
-  for (const [field, prefix] of [["resumable", "Legacy"], ["retainConversation", "Obsolete"]]) {
+test("BuildAgentConfig rejects unsupported frontmatter fields", () => {
+  for (const field of ["resumable", "retainConversation", "unknown"]) {
     const err = fail(BuildAgentConfig(`---\nname: helper\ndescription: d\n${field}: true\n---\nbody`, "project"));
-    assert.match(err.message, new RegExp(`${prefix} field "${field}" is not supported; remove it`));
-    assert.match(err.message, /Conversation retention is managed centrally/);
+    assert.equal(err.message, `Unsupported fields: ${field}.`);
   }
 });
 

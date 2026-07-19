@@ -17,7 +17,7 @@ export interface AgentConfig {
   sourcePath?: string;
 }
 
-const requiredFields = [ "name" ];
+const AGENT_FIELDS = new Set(["name", "description", "model", "thinking", "tools", "skills"]);
 
 export function BuildAgentConfig(
   content: string,
@@ -25,14 +25,12 @@ export function BuildAgentConfig(
 ): AgentConfig | { error: Error } {
   try {
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
-    if (frontmatter.resumable !== undefined) {
-      throw new Error('Legacy field "resumable" is not supported; remove it. Conversation retention is managed centrally.');
-    }
-    if (frontmatter.retainConversation !== undefined) {
-      throw new Error('Obsolete field "retainConversation" is not supported; remove it. Conversation retention is managed centrally.');
+    const unsupported = Object.keys(frontmatter).filter(field => !AGENT_FIELDS.has(field));
+    if (unsupported.length > 0) {
+      throw new Error(`Unsupported fields: ${unsupported.join(", ")}.`);
     }
     const result = {
-      name: parseString(frontmatter.name, "name"),
+      name: parseRequiredString(frontmatter.name, "name"),
       description: parseRequiredString(frontmatter.description, "description"),
       model: parseString(frontmatter.model, "model"),
       thinking: parseThinkingLevel(frontmatter.thinking),
@@ -43,12 +41,7 @@ export function BuildAgentConfig(
       sourcePath: undefined,
     }
 
-    const missingFields = requiredFields.filter((field) => result[field as keyof typeof result] == null);
-    if (missingFields.length > 0) {
-      return { error: new Error(`Missing required fields: ${missingFields.join(", ")}`) }
-    }
-
-    return result as AgentConfig;
+    return result;
   } catch (error) {
     return { error: error as Error }
   }

@@ -107,10 +107,6 @@ export function parseSubagentInvocation(
     };
   }
 
-  if (action === "results") {
-    return { error: "The results action was removed. Use action=join with runIds." };
-  }
-
   if (typeof action !== "string" || !SUBAGENT_ACTIONS.includes(action as SubagentAction)) {
     return {
       error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "join", or "remove".`,
@@ -226,13 +222,6 @@ export function parseTask(raw: unknown): ParsedTask {
   }
 
   const task = raw as Record<string, unknown>;
-  if (task.sessionId !== undefined) {
-    return { error: "Task field sessionId was removed. Use conversationId to resume a conversation." };
-  }
-  if (task.retainConversation !== undefined) {
-    return { error: "Task field retainConversation was removed. Conversations are retained by default and removed with action=remove." };
-  }
-
   const isSpawn = task.agent !== undefined;
   const isResume = task.conversationId !== undefined;
   const allowed = isResume

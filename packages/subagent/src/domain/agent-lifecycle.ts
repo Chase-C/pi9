@@ -1,7 +1,5 @@
 /** A run starts a conversation or resumes its existing SDK session. */
 export type RunKind = "spawn" | "resume";
-export type AttemptKind = RunKind;
-
 export type AgentRunStatus =
   | "completed"
   | "error"
@@ -26,5 +24,3 @@ export type AgentUpdateKind =
   | "compaction"
   | "acknowledgement"
   | "observer";
-
-export type RunNotificationState = "none" | "pending" | "notified";

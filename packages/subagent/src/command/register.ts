@@ -17,7 +17,7 @@ export function registerSubagentsCommand(pi: ExtensionAPI, agentManager: AgentMa
    try { await ctx.ui.custom<void>((tui, theme, keys, done) => new SubagentOverlayComponent(agentManager, tui, theme, keys, () => done(undefined), {
     initialPage, agents: agentRegistry ? [...agentRegistry.agents.values()] : [], settings, notify: (m,l) => notify(ctx,m,l as any),
     onSettingsChange: change => {
-     const applied = applySubagentSettingsChange(settings, change as any); settings = applied.settings;
+     settings = applySubagentSettingsChange(settings, change as any);
      agentManager.configure({ maxRunning: settings.runtime.maxConcurrentSubagents, maxConversations: settings.runtime.maxConversations });
      onSettingsUpdated?.(settings);
      void settingsStore.save(settings).catch(error => notify(ctx, `Could not save subagent settings: ${errorMessage(error)}`, "warning"));

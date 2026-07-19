@@ -1,6 +1,5 @@
 import {
   createDefaultSubagentSettings,
-  normalizeSettings,
   type SubagentSettings,
   type SubagentSettingsLoadResult,
   type SubagentSettingsStore,
@@ -19,11 +18,10 @@ export async function loadSubagentSettings(
 ): Promise<SubagentSettings> {
   try {
     const result = await settingsStore.load();
-    const normalized = normalizeSettings(result.settings);
-    notifySettingsWarning(ctx, result.warning ? result : normalized);
-    return normalized.settings;
+    notifySettingsWarning(ctx, result);
+    return result.settings;
   } catch (error) {
-    const message = `Failed to load subagent UI settings; using defaults. ${error instanceof Error ? error.message : String(error)}`;
+    const message = `Failed to load subagent settings; using defaults. ${error instanceof Error ? error.message : String(error)}`;
     const settings = createDefaultSubagentSettings();
     notifySettingsWarning(ctx, { settings, warning: message });
     return settings;

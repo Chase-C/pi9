@@ -7,17 +7,17 @@ import type { AgentRequestedConfig } from "./agent-requested-config.js";
 import { resolveRequestedConfig } from "./agent-requested-config.js";
 import type { AgentEffectiveConfig, AgentRunSnapshot, AgentSnapshot, AgentViewStatus } from "./agent-snapshot.js";
 import type { ConversationId } from "./conversation-id.js";
+import type { ParentRun } from "./parent-run.js";
 import type { RunId } from "./run-id.js";
 
 export type AgentUpdateListener = (agent: Agent, kind: AgentUpdateKind) => void;
-export interface RunBinding { readonly runId: RunId; readonly result: Promise<AgentRunOutcome>; snapshot(): AgentRunSnapshot; acknowledge(): void; release(): void }
+export interface RunBinding { readonly runId: RunId; snapshot(): AgentRunSnapshot; acknowledge(): void; release(): void }
 
 /** One persistent conversation containing an append-only, exact-run history. */
 export class Agent {
   readonly createdAt = Date.now();
   readonly agentName: string;
-  readonly parentConversationId?: ConversationId;
-  readonly parentRunId?: RunId;
+  readonly parent?: ParentRun;
   readonly requestedConfig: AgentRequestedConfig;
   readonly label?: string;
   private readonly attempts: Attempt[] = [];
@@ -32,12 +32,11 @@ export class Agent {
     readonly config: AgentConfig,
     spawn: SpawnRequest,
     readonly listener: AgentUpdateListener,
-    options: { parentConversationId?: ConversationId; parentRunId?: RunId } = {},
+    options: { parent?: ParentRun } = {},
   ) {
     this.agentName = spawn.agent;
     this.label = spawn.label;
-    this.parentConversationId = options.parentConversationId;
-    this.parentRunId = options.parentRunId;
+    this.parent = options.parent;
     this.requestedConfig = resolveRequestedConfig(config, spawn);
     this.current = this.newAttempt(initialRunId, "spawn", spawn.prompt);
     this.attempts.push(this.current);
@@ -80,7 +79,7 @@ export class Agent {
   }
   sessionForResume(): AgentSession | undefined { return this.session; }
 
-  /** Stable exact-run binding. Repeated binds share the run's one terminal promise. */
+  /** Stable exact-run observation retained independently of catalog removal. */
   bindRun(runId: RunId): RunBinding {
     const run = this.requireRun(runId);
     run.observerCount++;
@@ -88,7 +87,6 @@ export class Agent {
     let released = false;
     return {
       runId,
-      result: run.completion,
       snapshot: () => this.project(run),
       acknowledge: () => this.acknowledge(runId),
       release: () => {
@@ -120,7 +118,6 @@ export class Agent {
   acknowledge(runId: RunId): void {
     const run = this.requireRun(runId);
     run.acknowledged = true;
-    run.notification = "notified";
     this.listener(this, "acknowledgement");
   }
   setEffectiveConfig(config: AgentEffectiveConfig): void { this.effectiveConfig = config; }
@@ -129,15 +126,14 @@ export class Agent {
     const runs = this.runHistory;
     return Object.freeze({
       conversationId: this.conversationId,
-      ...(this.parentConversationId ? { parentConversationId: this.parentConversationId } : {}),
-      ...(this.parentRunId ? { parentRunId: this.parentRunId } : {}),
+      ...(this.parent ? { parent: this.parent } : {}),
       ...(this.label ? { label: this.label } : {}),
       createdAt: this.createdAt,
       config: { name: this.agentName, description: this.config.description, source: this.config.source, sourcePath: this.config.sourcePath, model: this.requestedConfig.model, thinking: this.requestedConfig.thinking, tools: this.requestedConfig.tools, ...(this.requestedConfig.skills !== undefined ? { skills: this.requestedConfig.skills } : {}) },
       runs,
       ...(this.current ? { currentRun: runs[runs.length - 1] } : {}),
       ...(this.effectiveConfig ? { effectiveConfig: this.effectiveConfig } : {}),
-      capabilities: { canResume: this.canResume, canRemove: !this.current },
+      canResume: this.canResume,
     });
   }
 
@@ -151,6 +147,6 @@ export class Agent {
     const status: AgentViewStatus = state.kind === "queued" ? { kind: "queued", queuedAt: run.createdAt }
       : state.kind === "running" ? { kind: "running", startedAt: state.startedAt }
       : { kind: "done", outcome: state.result.status, completedAt: state.completedAt, ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}), ...(state.result.output !== undefined ? { output: state.result.output } : {}), ...(state.result.error !== undefined ? { error: state.result.error } : {}) };
-    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, acknowledged: run.acknowledged, notification: run.notification });
+    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, acknowledged: run.acknowledged });
   }
 }

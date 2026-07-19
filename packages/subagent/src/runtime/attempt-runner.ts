@@ -75,7 +75,7 @@ export class AttemptRunner {
   ): Promise<AgentRunSnapshot> {
     const kind = attempt.kind;
     return this._queue.enqueue(async lease => {
-      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId });
+      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId });
       let result: AgentRunSnapshot;
       let error: string | undefined;
 
@@ -107,6 +107,6 @@ export class AttemptRunner {
       const status = result.status;
       end({ status: status.kind === "done" ? status.outcome : status.kind, error });
       return result;
-    }, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId, kind });
+    }, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId, kind });
   }
 }

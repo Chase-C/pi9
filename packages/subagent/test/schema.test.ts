@@ -78,15 +78,20 @@ test("schema and parser reject unknown properties", () => {
   assert.ok("error" in parseTask(task));
 });
 
-test("removed session, retention, background, dispatch, wait, results, and remove forms give migrations", () => {
-  for (const raw of [
-    { action: "run", tasks: [], background: true },
-    { action: "run", tasks: [], dispatch: "background" },
-    { action: "join", runIds: [runId], wait: true },
-    { action: "results", runIds: [runId] },
-    { action: "join", runIds: [runId], results: true },
-    { action: "join", runIds: [runId], remove: true },
-    { action: "run", tasks: [{ sessionId: conversationId, prompt: "x" }] },
-    { action: "run", tasks: [{ agent: "a", prompt: "x", retainConversation: true }] },
-  ]) { const parsed = parseSubagentInvocation(raw); assert.ok("error" in parsed); assert.match(parsed.error, /removed|Use|retained/); }
+test("unsupported actions and fields receive ordinary validation errors", () => {
+  const cases: Array<[unknown, RegExp]> = [
+    [{ action: "run", tasks: [], background: true }, /Property background is not allowed/],
+    [{ action: "run", tasks: [], dispatch: "background" }, /Property dispatch is not allowed/],
+    [{ action: "join", runIds: [runId], wait: true }, /Property wait is not allowed/],
+    [{ action: "results", runIds: [runId] }, /Unknown action/],
+    [{ action: "join", runIds: [runId], results: true }, /Property results is not allowed/],
+    [{ action: "join", runIds: [runId], remove: true }, /Property remove is not allowed/],
+    [{ action: "run", tasks: [{ sessionId: conversationId, prompt: "x" }] }, /sessionId is not allowed/],
+    [{ action: "run", tasks: [{ agent: "a", prompt: "x", retainConversation: true }] }, /retainConversation is not allowed/],
+  ];
+  for (const [raw, expected] of cases) {
+    const parsed = parseSubagentInvocation(raw);
+    assert.ok("error" in parsed);
+    assert.match(parsed.error, expected);
+  }
 });

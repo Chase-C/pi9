@@ -98,8 +98,6 @@ export type SubagentSettingsLoadResult = {
   warning?: string;
 };
 
-export type SubagentSettingsSaveInput = Partial<SubagentUiSettings> | SubagentSettings;
-
 const WIDGET_PLACEMENTS = new Set<WidgetPlacement>(["belowEditor", "aboveEditor", "off"]);
 const WIDGET_LAYOUTS = new Set<WidgetLayout>(["auto", "columns", "stacked"]);
 const PROJECT_AGENTS_STRATEGIES = new Set<ProjectAgentsStrategy>(["nearest", "off"]);
@@ -125,9 +123,9 @@ export class SubagentSettingsStore {
     }
   }
 
-  async save(settings: SubagentSettingsSaveInput): Promise<void> {
+  async save(settings: SubagentSettings): Promise<void> {
     await mkdir(dirname(this.settingsPath), { recursive: true });
-    await writeFile(this.settingsPath, `${JSON.stringify(normalizeSettings(settings).settings, null, 2)}\n`, "utf8");
+    await writeFile(this.settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   }
 }
 
@@ -157,8 +155,6 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
     assignPositiveInt(runtime, "maxConcurrentSubagents", value => { settings.runtime.maxConcurrentSubagents = value; }, warnings);
     assignPositiveInt(runtime, "maxConversations", value => { settings.runtime.maxConversations = value; }, warnings);
     assignEnum(runtime, "completionNotify", COMPLETION_NOTIFY_MODES, value => { settings.runtime.completionNotify = value; }, warnings);
-    warnRemoved(runtime, "defaultRetainConversation", warnings);
-    warnRemoved(runtime, "backgroundNotify", warnings);
   }
 
   const discovery = objectValue(record.agentDiscovery);
@@ -189,8 +185,6 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
     assignPositiveInt(display, "collapsedAgentListLimit", value => { settings.display.collapsedAgentListLimit = value; }, warnings);
     assignPositiveInt(display, "collapsedDescriptionLength", value => { settings.display.collapsedDescriptionLength = value; }, warnings);
     assignPositiveInt(display, "widgetMaxRowsPerSection", value => { settings.display.widgetMaxRowsPerSection = value; }, warnings);
-    warnRemoved(display, "widgetShowRetainedSessions", warnings);
-    warnRemoved(display, "widgetShowForeground", warnings);
   }
 
   return { settings, ...(warnings.length ? { warning: warnings.join(" ") } : {}) };
@@ -205,10 +199,6 @@ function assignPositiveInt(record: Record<string, unknown>, field: string, set: 
   if (value === undefined) return;
   if (Number.isInteger(value) && (value as number) > 0) set(value as number);
   else warnings.push(`Invalid subagent ${field}; using default.`);
-}
-
-function warnRemoved(record: Record<string, unknown>, field: string, warnings: string[]) {
-  if (record[field] !== undefined) warnings.push(`Removed subagent ${field} setting ignored.`);
 }
 
 function assignBoolean(record: Record<string, unknown>, field: string, set: (value: boolean) => void, warnings: string[]) {

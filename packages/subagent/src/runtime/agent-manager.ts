@@ -1,8 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Agent, type RunBinding } from "../domain/agent.js";
-import type { AgentUpdateKind, AgentRunOutcome } from "../domain/agent-lifecycle.js";
+import type { AgentUpdateKind } from "../domain/agent-lifecycle.js";
 import type { AgentSnapshot } from "../domain/agent-snapshot.js";
 import type { ConversationId } from "../domain/conversation-id.js";
+import type { ParentRun } from "../domain/parent-run.js";
 import type { RunId } from "../domain/run-id.js";
 import { AgentRegistry } from "../domain/agent-registry.js";
 import type { TaskRequest } from "../schema.js";
@@ -18,7 +19,7 @@ export type OrderedStartOutcome =
   | { readonly ok: false; readonly inputIndex: number; readonly error: string };
 export interface RunHandle { readonly starts: readonly OrderedStartOutcome[]; readonly completion: Promise<readonly OrderedStartOutcome[]> }
 export interface JoinProjection { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: AgentSnapshot["runs"][number]["status"] }
-export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<readonly AgentRunOutcome[]>; project(): readonly JoinProjection[]; acknowledge(): void; release(): void; cancel(): void }
+export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; acknowledge(): void; release(): void }
 export interface RemoveResult { removed: number; aborted: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
 
 /** Owns the conversation catalog and the exact-run index. */
@@ -44,7 +45,7 @@ export class AgentManager {
   conversation(conversationId: string): AgentSnapshot { return this.requireConversation(conversationId).snapshot(); }
 
   /** Resolves and reserves the complete batch synchronously; executions never inherit caller cancellation. */
-  startRun(ctx: ExtensionContext, tasks: readonly TaskRequest[], options: { parentConversationId?: ConversationId; parentRunId?: RunId } = {}): RunHandle {
+  startRun(ctx: ExtensionContext, tasks: readonly TaskRequest[], options: { parent?: ParentRun } = {}): RunHandle {
     const starts: OrderedStartOutcome[] = [];
     const executions: Promise<unknown>[] = [];
     let reserved = this.conversations.size;
@@ -82,15 +83,15 @@ export class AgentManager {
   bindJoin(runIds: readonly RunId[]): JoinBinding {
     const roots = runIds.map(id => { const agent = this.runs.get(id); if (!agent) throw new Error(`Unknown or removed run: ${id}.`); return { id, agent }; });
     const bindings = new Map<RunId, { agent: Agent; binding: RunBinding }>();
-    let released = false; let checking = true; let resolve!: (value: readonly AgentRunOutcome[]) => void;
-    const completion = new Promise<readonly AgentRunOutcome[]>(done => { resolve = done; });
+    let released = false; let checking = true; let resolve!: () => void;
+    const completion = new Promise<void>(done => { resolve = done; });
     const add = (id: RunId, agent: Agent) => { if (!bindings.has(id)) bindings.set(id, { agent, binding: agent.bindRun(id) }); };
     const discover = () => {
       let changed: boolean;
       do {
         changed = false;
         for (const agent of this.conversations.values()) {
-          if (!agent.parentRunId || !bindings.has(agent.parentRunId)) continue;
+          if (!agent.parent || !bindings.has(agent.parent.runId)) continue;
           // A spawn conversation contributes its initial run only. Resumes are not descendants
           // of the spawning run; their own children are linked to their exact run independently.
           const run = agent.runHistory[0];
@@ -100,19 +101,13 @@ export class AgentManager {
     };
     const ordered = () => {
       const result: Array<{ agent: Agent; binding: RunBinding }> = []; const emitted = new Set<RunId>();
-      const visit = (id: RunId) => { const item = bindings.get(id); if (!item || emitted.has(id)) return; emitted.add(id); result.push(item); for (const [childId, child] of bindings) if (child.agent.parentRunId === id) visit(childId); };
+      const visit = (id: RunId) => { const item = bindings.get(id); if (!item || emitted.has(id)) return; emitted.add(id); result.push(item); for (const [childId, child] of bindings) if (child.agent.parent?.runId === id) visit(childId); };
       for (const root of roots) visit(root.id);
       return result;
     };
     const check = () => {
       if (released || checking) return; checking = true; discover(); const all = ordered();
-      if (all.every(item => item.binding.snapshot().status.kind === "done")) resolve(all.map(item => {
-        const status = item.binding.snapshot().status;
-        if (status.kind !== "done") throw new Error("Non-terminal join result.");
-        return status.outcome === "completed"
-          ? { status: "completed" as const, ...(status.output !== undefined ? { output: status.output } : {}) }
-          : { status: status.outcome, ...(status.error !== undefined ? { error: status.error } : {}) };
-      }));
+      if (all.every(item => item.binding.snapshot().status.kind === "done")) resolve();
       checking = false;
     };
     // Subscribe before initial discovery so a spawn/terminal event cannot fall in the bind race.
@@ -123,20 +118,8 @@ export class AgentManager {
       get runIds() { return ordered().map(item => item.binding.runId); }, completion,
       project: () => ordered().map(item => ({ conversationId: item.agent.conversationId, runId: item.binding.runId, status: item.binding.snapshot().status })),
       acknowledge: () => { for (const item of ordered()) if (item.binding.snapshot().status.kind === "done") item.binding.acknowledge(); },
-      release, cancel: release,
+      release,
     };
-  }
-
-  /** Atomically validates and acknowledges terminal runs by their immutable IDs. */
-  acknowledgeRuns(runIds: readonly RunId[]): void {
-    const targets = [...new Set(runIds)].map(runId => {
-      const agent = this.runs.get(runId);
-      if (!agent) throw new Error(`Unknown or removed run: ${runId}.`);
-      const run = agent.runHistory.find(candidate => candidate.runId === runId);
-      if (run?.status.kind !== "done") throw new Error(`Run ${runId} is not terminal.`);
-      return { agent, runId };
-    });
-    for (const target of targets) target.agent.acknowledge(target.runId);
   }
 
   removeConversation(conversationId: string): RemoveResult { return this.removeConversations([conversationId]); }
