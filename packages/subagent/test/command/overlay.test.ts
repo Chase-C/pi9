@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/settings.js";
 import { SubagentOverlayComponent, type OverlayOptions } from "../../src/command/overlay.js";
-import { fakeAgent } from "../helpers/fake-agent.js";
+import { fakeAgent, fakeRunSection } from "../helpers/fake-agent.js";
 
 function overlay(conversations: any[], overrides: Partial<OverlayOptions> = {}) {
   let listener: (() => void) | undefined;
@@ -93,5 +93,55 @@ describe("subagent overlay behavior", () => {
     const { component } = overlay([fakeAgent()]);
     expect(() => component.render(120)).not.toThrow();
     expect(() => component.render(56)).not.toThrow();
+  });
+
+  it("renders conversation chronology with compact previous-run statistics", () => {
+    const previous = fakeRunSection({
+      runId: "scan-deeply",
+      prompt: "Initial risk scan",
+      turns: 3,
+      compactions: 1,
+      activeTools: ["read", "grep", "read", "grep", "read"],
+    });
+    const conversation = fakeAgent({
+      conversationId: "amber-fox",
+      runId: "inspect-carefully",
+      label: "risk review",
+      prompt: "Review session handling.",
+      turns: 4,
+      activeTools: ["read", "grep"],
+      previousRuns: [previous],
+      status: { kind: "completed", response: "Final findings." },
+    });
+    const { component } = overlay([conversation]);
+    const output = component.render(120).map(line => line.trimEnd()).join("\n");
+
+    expect(output).toContain("Previous runs");
+    expect(output).toContain("risk review · scan-deeply · 3 turns · 5 tools · 1 compaction");
+    expect(output).not.toContain("run scan-deeply");
+    expect(output).not.toContain("spawn · completed");
+    expect(output.indexOf("Previous runs")).toBeLessThan(output.indexOf("Current prompt"));
+    expect(output.indexOf("Current prompt")).toBeLessThan(output.indexOf("Activity"));
+    expect(output.indexOf("Activity")).toBeLessThan(output.indexOf("Final output"));
+    expect(output).toContain("Final findings.");
+  });
+
+  it("renders unlabelled, unindented agent instructions below metadata", () => {
+    const agent = {
+      name: "scout",
+      description: "A long agent description that should wrap naturally instead of being indented as subordinate metadata.",
+      source: "project",
+      model: "anthropic/sonnet",
+      thinking: "medium",
+      tools: ["read", "grep"],
+      systemPrompt: "Inspect the repository without modifying files.\n\nReturn evidence-backed findings.",
+    } as any;
+    const { component } = overlay([], { initialPage: "agents", agents: [agent] });
+    const output = component.render(120).map(line => line.trimEnd()).join("\n");
+
+    expect(output).not.toContain("Instructions");
+    expect(output).toContain("model anthropic/sonnet · thinking medium");
+    expect(output).toContain("│  Inspect the repository without modifying files.");
+    expect(output).toContain("Return evidence-backed findings.");
   });
 });

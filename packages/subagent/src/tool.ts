@@ -1,11 +1,17 @@
 import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
-import type { Conversation } from "./conversation.js";
+import type { Conversation, ConversationSnapshot } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
 import type { OrderedStartOutcome, SubagentRuntime } from "./runtime.js";
 import { parseSubagentInvocation, SubagentParams, type RunStatus, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type TaskRequest } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
+import {
+  renderSubagentCall,
+  renderSubagentResult,
+  type JoinedRunRenderItem,
+  type RunRenderItem,
+  type SubagentToolDetails,
+} from "./tool-renderer.js";
 
 export interface ActionDeps {
   runtime: SubagentRuntime;
@@ -15,24 +21,24 @@ export interface ActionDeps {
 
 export interface ActionResult {
   content: Array<{ type: "text"; text: string }>;
-  details: undefined;
+  details: SubagentToolDetails;
   isError?: boolean;
 }
 
 type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { action: A }>;
 
-function jsonResult(json: unknown): ActionResult {
+function jsonResult(json: unknown, details: SubagentToolDetails): ActionResult {
   return {
     content: [{ type: "text", text: JSON.stringify(json, null, 2) }],
-    details: undefined,
+    details,
     isError: false,
   };
 }
 
-export function errorResult(message: string): ActionResult {
+export function errorResult(message: string, requestedAction?: SubagentAction): ActionResult {
   return {
     content: [{ type: "text", text: message }],
-    details: undefined,
+    details: { action: "error", ...(requestedAction ? { requestedAction } : {}), message },
     isError: true,
   };
 }
@@ -44,14 +50,15 @@ export function invocationErrorResult(
   const message = parsed.missingAction || parsed.taskCountError
     ? `${parsed.error}\n\nAvailable agents:\n${deps.agentRegistry.summarizeAgent()}`
     : parsed.error;
-  return errorResult(message);
+  return errorResult(message, parsed.action);
 }
 
 export function agentsAction(
   deps: ActionDeps,
   _invocation: InvocationFor<"agents">,
 ): ActionResult {
-  return jsonResult({ agents: listAgentDefinitions(deps.agentRegistry) });
+  const agents = listAgentDefinitions(deps.agentRegistry);
+  return jsonResult({ agents }, { action: "agents", agents });
 }
 
 export function listAction(
@@ -72,7 +79,7 @@ export function listAction(
   const filtered = invocation.status
     ? runs.filter(run => invocation.status!.includes(run.status))
     : runs;
-  return jsonResult(filtered);
+  return jsonResult(filtered, { action: "list", runs: filtered });
 }
 
 export function runAction(
@@ -99,14 +106,17 @@ export function runAction(
     inputIndex: inputIndexes[start.inputIndex],
   })));
   starts.sort((a, b) => a.inputIndex - b.inputIndex);
-  return jsonResult(starts);
+  return jsonResult(starts, {
+    action: "run",
+    tasks: renderRunItems(invocation.tasks, starts, conversationSnapshots(deps.runtime)),
+  });
 }
 
 export async function joinAction(
   deps: ActionDeps,
   invocation: InvocationFor<"join">,
   signal: AbortSignal | undefined,
-  onUpdate: AgentToolUpdateCallback<undefined> | undefined,
+  onUpdate: AgentToolUpdateCallback<SubagentToolDetails> | undefined,
 ): Promise<ActionResult> {
   let binding;
   try {
@@ -128,9 +138,13 @@ export async function joinAction(
         runId: entry.runId,
         status: entry.status.kind,
       });
+  const renderDetails = (): SubagentToolDetails => ({
+    action: "join",
+    runs: renderJoinedRuns(output(), conversationSnapshots(deps.runtime)),
+  });
   const emit = () => onUpdate?.({
     content: [{ type: "text", text: JSON.stringify(output()) }],
-    details: undefined,
+    details: renderDetails(),
   });
   const unsubscribe = deps.runtime.onConversationUpdate(emit);
   emit();
@@ -152,7 +166,11 @@ export async function joinAction(
       ? deps.runtime.scheduler.suspendAgentSlotDuring(deps.parent.conversationId, wait)
       : wait());
     binding.acknowledge();
-    return jsonResult(output());
+    const result = output();
+    return jsonResult(result, {
+      action: "join",
+      runs: renderJoinedRuns(result, conversationSnapshots(deps.runtime)),
+    });
   } catch (error) {
     return errorResult(error instanceof Error ? error.message : String(error));
   } finally {
@@ -166,13 +184,59 @@ export function removeAction(
   deps: ActionDeps,
   invocation: InvocationFor<"remove">,
 ): ActionResult {
-  return jsonResult(deps.runtime.removeConversations(invocation.conversationIds));
+  const result = deps.runtime.removeConversations(invocation.conversationIds);
+  return jsonResult(result, { action: "remove", ...result });
 }
 
-/** Adds the ordered task count to run call titles. */
-function callSuffix(args: any): string {
-  const tasks = Array.isArray(args?.tasks) ? args.tasks : [];
-  return tasks.length ? `  ${tasks.length} task${tasks.length === 1 ? "" : "s"}` : "";
+function renderRunItems(
+  tasks: readonly (TaskRequest | { error: string })[],
+  starts: readonly OrderedStartOutcome[],
+  conversations: readonly ConversationSnapshot[],
+): RunRenderItem[] {
+  const byConversation = new Map(conversations.map(conversation => [conversation.conversationId, conversation]));
+  return starts.map(start => {
+    const task = tasks[start.inputIndex];
+    if (!task) return { inputIndex: start.inputIndex, error: "Task was not accepted." };
+    if ("error" in task) return { inputIndex: start.inputIndex, error: task.error };
+    const conversationId = start.ok
+      ? start.conversationId
+      : task.kind === "resume" ? task.conversationId : undefined;
+    const conversation = conversationId ? byConversation.get(conversationId) : undefined;
+    return {
+      inputIndex: start.inputIndex,
+      kind: task.kind,
+      agent: task.kind === "spawn" ? task.agent : conversation?.config.name,
+      label: task.kind === "spawn" ? task.label : conversation?.label,
+      prompt: task.prompt,
+      ...(start.ok ? { conversationId: start.conversationId, runId: start.runId } : { error: start.error }),
+    };
+  });
+}
+
+function conversationSnapshots(runtime: SubagentRuntime): ConversationSnapshot[] {
+  const source = runtime as SubagentRuntime & { listConversations?: () => ConversationSnapshot[] };
+  return typeof source.listConversations === "function" ? source.listConversations() : [];
+}
+
+type JoinedOutput = {
+  conversationId: ConversationId;
+  runId: RunId;
+  status: RunStatus;
+  output?: string;
+  error?: string;
+};
+
+function renderJoinedRuns(
+  output: readonly JoinedOutput[],
+  conversations: readonly ConversationSnapshot[],
+): JoinedRunRenderItem[] {
+  const displayByRun = new Map(conversations.flatMap(conversation =>
+    conversation.runs.map(run => [run.runId, {
+      agent: conversation.config.name,
+      label: conversation.label,
+    }] as const),
+  ));
+  return output.map(run => ({ ...run, ...displayByRun.get(run.runId) }));
 }
 
 export interface SubagentToolDeps {
@@ -195,7 +259,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
   const { runtime, agentRegistry, prepareInvocation, parent } = deps;
   const actionDeps: ActionDeps = { runtime, agentRegistry, ...(parent ? { parent } : {}) };
 
-  return defineTool<typeof SubagentParams, undefined>({
+  return defineTool<typeof SubagentParams, SubagentToolDetails>({
     name: "subagent",
     label: "Subagent",
     description: [
@@ -221,18 +285,10 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     ],
     parameters: SubagentParams,
     renderCall(args, theme) {
-      const action = typeof args?.action === "string" ? args.action : "pending";
-      const title = theme?.bold ? theme.bold("subagent") : "subagent";
-      const label = `${title} ${action}`;
-      const suffix = callSuffix(args);
-      const styledLabel = theme?.fg ? theme.fg("toolTitle", label) : label;
-      const styledSuffix = theme?.fg ? theme.fg("dim", suffix) : suffix;
-      return new Text(`${styledLabel}${styledSuffix}`, 0, 0);
+      return renderSubagentCall(args, theme);
     },
-    renderResult(result) {
-      const part = result.content.find(entry => entry.type === "text");
-      const text = part && "text" in part ? part.text : "";
-      return new Text(text, 0, 0);
+    renderResult(result, options, theme) {
+      return renderSubagentResult(result, options, theme);
     },
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
