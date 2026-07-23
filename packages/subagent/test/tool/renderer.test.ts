@@ -95,20 +95,20 @@ test("join distinguishes partial waits and terminal child errors", () => {
     ],
   };
   assert.equal(renderResult(partial, false, true), [
-    "→ auth map · completed",
+    "✓ auth map · completed",
     "  Mapped auth.",
     "",
-    "→ test audit · running",
+    "● test audit · running",
     "  waiting for result",
   ].join("\n"));
   assert.equal(renderResult(details, true), [
-    "→ auth map · completed",
-    "  Mapped auth.",
+    "✓ auth map · completed",
     "  conversation quiet-otter · run search-boldly",
+    "  Mapped auth.",
     "",
     "× test audit · error",
-    "  Child failed.",
     "  conversation calm-wren · run test-thoroughly",
+    "  Child failed.",
   ].join("\n"));
 });
 
@@ -134,7 +134,7 @@ test("join renders recent filtered activity, recursive groups, outcomes, and bac
       joins: [
         { status: "completed", toolCallId: "represented-join", targets: [{ conversationId: "c1" as any, runId: "r1" as any, label: "child", agent: "scout", status: "completed" }] },
         { status: "completed", targets: [{ conversationId: "c1" as any, runId: "r1" as any, label: "child", agent: "scout", status: "error", error: "target failed" }] },
-        { status: "interrupted", error: "join was cancelled", targets: [{ conversationId: "c2" as any, runId: "r2" as any, label: "branch", status: "running", activity: [{ tool: "read", summary: "nested" }], joins: [{ status: "running", targets: [{ conversationId: "c3" as any, runId: "r3" as any, label: "leaf", agent: "reviewer", status: "running" }] }] }] },
+        { status: "running", targets: [{ conversationId: "c2" as any, runId: "r2" as any, label: "branch", status: "running", activity: [{ tool: "read", summary: "nested" }], joins: [{ status: "running", targets: [{ conversationId: "c3" as any, runId: "r3" as any, label: "leaf", agent: "reviewer", status: "running" }] }] }] },
       ],
       background: [{ ownerRunId: "root-run" as any, ownerLabel: "root task", entries: [
         { conversationId: "bg-c1" as any, runId: "bg-r1" as any, label: "watcher", status: "running" },
@@ -143,16 +143,44 @@ test("join renders recent filtered activity, recursive groups, outcomes, and bac
     }],
   };
   const collapsed = renderResult(details);
-  assert.match(collapsed, /· read a\n  · grep b\n  · bash c/);
-  assert.doesNotMatch(collapsed, /too old|subagent/);
-  assert.match(collapsed, /join 1 · completed[\s\S]*join 2 · completed[\s\S]*join 3 · interrupted/);
-  assert.match(collapsed, /branch · running[\s\S]*read nested[\s\S]*join 1 · running[\s\S]*leaf · reviewer · running/);
-  assert.match(collapsed, /background: root task · 1 active · 1 completed/);
+  assert.match(collapsed, /subagent join\(1 run\) · 5 total tool calls/);
+  assert.doesNotMatch(collapsed, /too old|read\(a\)|grep\(b\)|bash\(c\)/);
+  assert.match(collapsed, /✓ joined 1 · child[\s\S]*✓ joined 1 · child/);
+  assert.match(collapsed, /╰─ ● branch · running[\s\S]*subagent join\(1 run\) · 1 total tool call[\s\S]*╰─ ● leaf · reviewer · running/);
+  assert.doesNotMatch(collapsed, /read\(nested\)/);
+  assert.match(collapsed, /background · 1 active · 1 completed/);
   assert.doesNotMatch(collapsed, /bg-r2|detached at final/);
 
   const expanded = renderResult(details, true);
   assert.match(expanded, /Investigate the whole system\./);
   assert.match(expanded, /conversation bg-c2 · run bg-r2 · detached at final/);
+});
+
+test("join activity is newest-first and reports hidden tool calls", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{
+      conversationId: "root-c" as any,
+      runId: "root-r" as any,
+      label: "activity",
+      status: "running",
+      activity: [
+        { tool: "first", summary: "1" },
+        { tool: "second", summary: "2" },
+        { tool: "third", summary: "3" },
+        { tool: "fourth", summary: "4" },
+        { tool: "fifth", summary: "5" },
+      ],
+    }],
+  };
+
+  assert.equal(renderResult(details), [
+    "● activity · running",
+    "  fifth(5)",
+    "  fourth(4)",
+    "  third(3)",
+    "  +2 tool calls",
+  ].join("\n"));
 });
 
 test("terminal join collapse hides history while expansion retains it and never renders nested answers", () => {
@@ -161,9 +189,9 @@ test("terminal join collapse hides history while expansion retains it and never 
     activity: [{ tool: "read", summary: "history" }],
     joins: [{ status: "completed", targets: [{ conversationId: "child-c" as any, runId: "child-r" as any, label: "child", status: "completed", output: "SECRET CHILD ANSWER" }] }],
   }] } as unknown as SubagentToolDetails;
-  assert.equal(renderResult(details), "→ finished · completed\n  Root answer.");
+  assert.equal(renderResult(details), "✓ finished · completed\n  Root answer.");
   const expanded = renderResult(details, true);
-  assert.match(expanded, /Full prompt\.|read history|join 1 · completed|child · completed/);
+  assert.match(expanded, /Full prompt\.|read\(history\)|✓ joined 1 · child|child · completed/);
   assert.doesNotMatch(expanded, /SECRET CHILD ANSWER/);
 });
 
@@ -209,10 +237,10 @@ test("expanded terminal joins retain recursive history, node-local filtering, an
     }],
   };
 
-  assert.equal(renderResult(details), "→ root · completed\n  root answer");
+  assert.equal(renderResult(details), "✓ root · completed\n  root answer");
   const expanded = renderResult(details, true);
-  assert.match(expanded, /join 1 · completed[\s\S]*child · completed[\s\S]*child activity survives/);
-  assert.match(expanded, /join 1 · completed[\s\S]*leaf · completed/);
+  assert.match(expanded, /✓ joined 1 · child[\s\S]*child · completed[\s\S]*read\(child activity survives\)/);
+  assert.match(expanded, /✓ joined 1 · leaf[\s\S]*leaf · completed/);
   assert.match(expanded, /conversation background-c · run background-r · detached at final/);
   assert.match(expanded, /parent activity survives/);
   assert.doesNotMatch(expanded, /root represented join|child represented join/);

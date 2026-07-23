@@ -228,72 +228,117 @@ function joinLines(runs: readonly JoinedRunRenderItem[], expanded: boolean, part
 
 function renderJoinRoot(run: JoinedRunRenderItem, index: number, expanded: boolean, partial: boolean, theme?: ThemeLike): string[] {
   const terminal = isTerminal(run.status);
-  const failed = run.status !== "completed" && terminal;
+  const failed = terminal && run.status !== "completed";
   const label = run.label || run.agent || run.runId || `run ${index + 1}`;
   const meta = [run.agent, run.kind].filter(Boolean).join(" · ");
   const lines = [
-    `${failed ? errorMarker(theme) : arrow(theme)} ${paint(theme, "text", label)}${meta ? ` ${paint(theme, "muted", `· ${meta}`)}` : ""} ${paint(theme, "muted", "·")} ${statusText(theme, run.status)}`,
+    `${statusMarker(theme, run.status)} ${paint(theme, "text", label)}${meta ? ` ${paint(theme, "muted", `· ${meta}`)}` : ""} ${paint(theme, "muted", "·")} ${statusText(theme, run.status)}`,
   ];
   const message = run.output ?? run.error;
-  if (terminal && message) lines.push(`  ${paint(theme, failed ? "error" : "dim", truncate(message, expanded ? 1200 : 320))}`);
-  if (terminal && !expanded) return lines;
+  if (terminal && !expanded) {
+    if (message) lines.push(`  ${paint(theme, failed ? "error" : "dim", truncate(message, 320))}`);
+    return lines;
+  }
 
   if (expanded) {
     if (run.prompt) lines.push(`  ${paint(theme, "dim", run.prompt)}`);
     lines.push(`  ${identity(theme, run.conversationId, run.runId)}`);
-  } else if (run.prompt) {
-    lines.push(`  ${paint(theme, "dim", truncate(run.prompt, 140))}`);
-  } else if (partial) {
+  } else if (partial && !run.activity?.length && !run.joins?.length) {
     lines.push(`  ${paint(theme, "dim", "waiting for result")}`);
   }
 
-  const omitted = new Set(run.joinToolCallIds ?? []);
-  for (const group of run.joins ?? []) if (group.toolCallId) omitted.add(group.toolCallId);
-  lines.push(...renderActivity(run.activity, omitted, "  ", theme));
-  (run.joins ?? []).forEach((group, groupIndex) => {
-    lines.push(...renderJoinGroup(group, groupIndex, "  ", expanded, theme));
-  });
-  for (const owner of run.background ?? []) lines.push(...renderBackground(owner, expanded, theme));
+  lines.push(...renderJoinNode(run.activity, run.joins, run.background, "  ", expanded, theme));
+  if (terminal && message) lines.push(`  ${paint(theme, failed ? "error" : "dim", truncate(message, 1200))}`);
+  return lines;
+}
+
+function renderJoinNode(
+  activity: readonly JoinActivityRenderItem[] | undefined,
+  joins: readonly JoinInvocationRenderItem[] | undefined,
+  background: readonly JoinBackgroundOwnerRenderItem[] | undefined,
+  indent: string,
+  expanded: boolean,
+  theme?: ThemeLike,
+): string[] {
+  const groups = joins ?? [];
+  const active = groups.filter(group => !isTerminal(group.status));
+  const lines: string[] = [];
+
+  if (active.length > 0) {
+    for (const group of groups) {
+      lines.push(...(isTerminal(group.status)
+        ? renderTerminalJoin(group, indent, expanded, theme)
+        : renderActiveJoin(group, activity?.length ?? 0, indent, expanded, theme)));
+    }
+  } else {
+    const omitted = new Set(groups.flatMap(group => group.toolCallId ? [group.toolCallId] : []));
+    lines.push(...renderActivity(activity, omitted, indent, theme));
+    for (const group of groups) lines.push(...renderTerminalJoin(group, indent, expanded, theme));
+  }
+
+  for (const owner of background ?? []) lines.push(...renderBackground(owner, expanded, theme, indent));
   return lines;
 }
 
 function renderActivity(activity: readonly JoinActivityRenderItem[] | undefined, omitted: ReadonlySet<string>, indent: string, theme?: ThemeLike): string[] {
-  const visible = (activity ?? []).filter(item => !item.toolCallId || !omitted.has(item.toolCallId)).slice(-3);
-  return visible.map(item => `${indent}${paint(theme, "muted", "·")} ${paint(theme, "accent", item.tool)}${item.summary ? ` ${paint(theme, "dim", truncate(item.summary, 100))}` : ""}`);
+  const all = (activity ?? []).filter(item => !item.toolCallId || !omitted.has(item.toolCallId));
+  const recent = all.slice(-3).reverse();
+  const lines = recent.map(item => {
+    const summary = item.summary ? `(${truncate(item.summary, 100)})` : "";
+    return `${indent}${paint(theme, "muted", `${item.tool}${summary}`)}`;
+  });
+  const additional = all.length - recent.length;
+  if (additional > 0) lines.push(`${indent}${paint(theme, "muted", `+${additional} tool calls`)}`);
+  return lines;
 }
 
-function renderJoinGroup(group: JoinInvocationRenderItem, index: number, indent: string, expanded: boolean, theme?: ThemeLike): string[] {
-  const terminal = isTerminal(group.status);
-  const failed = terminal && group.status !== "completed";
-  const lines = [`${indent}${failed ? errorMarker(theme) : paint(theme, "muted", "├─")} ${paint(theme, "text", `join ${index + 1}`)} ${paint(theme, "muted", "·")} ${statusText(theme, group.status)}`];
-  if (group.error) lines.push(`${indent}│  ${paint(theme, "error", group.error)}`);
-  for (const target of group.targets) {
+function renderActiveJoin(group: JoinInvocationRenderItem, totalTools: number, indent: string, expanded: boolean, theme?: ThemeLike): string[] {
+  const total = count(group.targets.length, "run");
+  const toolCount = totalTools > 0 ? ` · ${count(totalTools, "total tool call")}` : "";
+  return [
+    `${indent}${paint(theme, "muted", `subagent join(${total})${toolCount}`)}`,
+    ...renderJoinTargets(group.targets, indent, expanded, theme),
+  ];
+}
+
+function renderTerminalJoin(group: JoinInvocationRenderItem, indent: string, expanded: boolean, theme?: ThemeLike): string[] {
+  const failed = group.status !== "completed";
+  const labels = group.targets.map(target => target.label || target.agent || target.runId);
+  const summary = failed
+    ? `${group.status === "interrupted" ? "join interrupted" : "join failed"}${group.error ? ` · ${group.error}` : ""}`
+    : `joined ${group.targets.length}${labels.length ? ` · ${labels.join(", ")}` : ""}`;
+  const lines = [`${indent}${paint(theme, failed ? "error" : "muted", `${failed ? "×" : "✓"} ${summary}`)}`];
+  if (expanded) lines.push(...renderJoinTargets(group.targets, indent, true, theme));
+  return lines;
+}
+
+function renderJoinTargets(targets: readonly JoinTargetRenderItem[], indent: string, expanded: boolean, theme?: ThemeLike): string[] {
+  return targets.flatMap((target, index) => {
+    const last = index === targets.length - 1;
+    const connector = last ? "╰─" : "├─";
     const label = target.label || target.agent || target.runId;
     const agent = target.agent && target.agent !== label ? ` · ${target.agent}` : "";
-    lines.push(`${indent}│  ${terminal ? paint(theme, "muted", "└") : paint(theme, "muted", "├─")} ${paint(theme, "text", label)}${paint(theme, "muted", agent)} ${paint(theme, "muted", "·")} ${statusText(theme, target.status)}`);
-    const targetTerminal = isTerminal(target.status);
-    if (!targetTerminal || expanded) {
-      const targetOmitted = new Set((target.joins ?? []).flatMap(nested => nested.toolCallId ? [nested.toolCallId] : []));
-      lines.push(...renderActivity(target.activity, targetOmitted, `${indent}│     `, theme));
-      (target.joins ?? []).forEach((nested, nestedIndex) => lines.push(...renderJoinGroup(nested, nestedIndex, `${indent}│     `, expanded, theme)));
-      for (const owner of target.background ?? []) lines.push(...renderBackground(owner, expanded, theme, `${indent}│     `));
+    const lines = [
+      `${indent}${paint(theme, "muted", connector)} ${statusMarker(theme, target.status)} ${paint(theme, "text", label)}${paint(theme, "muted", agent)} ${paint(theme, "muted", `· ${target.status}`)}`,
+    ];
+    const childIndent = `${indent}${last ? "   " : "│  "}  `;
+    if (!isTerminal(target.status) || expanded) {
+      lines.push(...renderJoinNode(target.activity, target.joins, target.background, childIndent, expanded, theme));
     }
-    if (targetTerminal && target.error) {
-      lines.push(`${indent}│     ${paint(theme, "error", target.error)}`);
-    }
-  }
-  return lines;
+    if (isTerminal(target.status) && target.error) lines.push(`${childIndent}${paint(theme, "error", target.error)}`);
+    return lines;
+  });
 }
 
 function renderBackground(owner: JoinBackgroundOwnerRenderItem, expanded: boolean, theme?: ThemeLike, indent = "  "): string[] {
   const active = owner.entries.filter(entry => !isTerminal(entry.status)).length;
   const completed = owner.entries.length - active;
-  const ownerName = owner.ownerLabel || owner.ownerRunId;
-  const lines = [`${indent}${paint(theme, "muted", "background")}: ${paint(theme, "text", ownerName)} · ${active} active · ${completed} completed`];
+  const counts = [active ? `${active} active` : "", completed ? `${completed} completed` : ""].filter(Boolean).join(" · ");
+  const lines = [`${indent}${paint(theme, "muted", `background${counts ? ` · ${counts}` : ""}`)}`];
   if (expanded) for (const entry of owner.entries) {
     const label = entry.label || entry.agent || entry.runId;
     const detached = entry.detachedAtFinal ? paint(theme, "warning", " · detached at final") : "";
-    lines.push(`${indent}  ${paint(theme, "muted", "└")} ${label} · ${statusText(theme, entry.status)} · ${identity(theme, entry.conversationId, entry.runId)}${detached}`);
+    lines.push(`${indent}  ${paint(theme, "muted", label)} · ${statusText(theme, entry.status)} · ${identity(theme, entry.conversationId, entry.runId)}${detached}`);
   }
   return lines;
 }
@@ -364,6 +409,13 @@ function statusText(theme: ThemeLike | undefined, status: RunStatus): string {
     : status === "queued" || status === "running" ? "warning"
       : "error";
   return paint(theme, color, status);
+}
+
+function statusMarker(theme: ThemeLike | undefined, status: RunStatus): string {
+  if (status === "completed") return paint(theme, "success", "✓");
+  if (status === "running") return paint(theme, "warning", "●");
+  if (status === "queued") return paint(theme, "warning", "…");
+  return paint(theme, "error", "×");
 }
 
 function isTerminal(status: RunStatus): boolean {
