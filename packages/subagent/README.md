@@ -4,6 +4,16 @@ Delegate focused work from Pi to context-isolated child conversations. The singl
 
 ![The complete subagent workflow: discover agents, start and list parallel runs, join their results, and remove their conversations](media/subagent-overview.png)
 
+## Feature overview
+
+- **Retained conversations** preserve child context for follow-up runs until the parent explicitly removes the conversation.
+- **Asynchronous runs and exact joins** let the parent continue working after dispatch, then wait for and retrieve specific runs by ID.
+- **Recursive delegation** lets subagents spawn and join their own descendants under tree-wide ownership and concurrency rules.
+- **Live progress** shows queued and running work, recent tool activity, recursive children, and completed answers in tool and widget views.
+- **Unified conversation management** provides live status, completed output, follow-up prompts, agent discovery, cleanup, and settings through `/subagents`.
+- **Focused tool actions** separate agent discovery, side-effect-free inventory, task execution, blocking retrieval, and cleanup without adding multiple tools to the parent context.
+- **Minimal tool prompt size** keeps delegation overhead low and reduces context bloat in the parent conversation.
+
 ## Install
 
 ```bash

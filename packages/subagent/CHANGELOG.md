@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Documentation
+
+- Restore the README feature overview, including the minimal tool prompt size that reduces parent-context bloat.
+
 ## [0.7.1] - 2026-07-23
 
 ### Changed
