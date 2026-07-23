@@ -30,6 +30,7 @@ export function registerSubagentsCommand(
         ...(agentRegistry ? { agentRegistry } : {}),
       });
       onSettingsUpdated?.(settings);
+      updateSubagentWidget(ctx, runtime.listConversations(), settings);
       let saveQueue = Promise.resolve();
 
       try {
@@ -50,7 +51,7 @@ export function registerSubagentsCommand(
                 maxRunning: settings.runtime.maxConcurrentSubagents,
                 maxConversations: settings.runtime.maxConversations,
               });
-              if (change.kind === "widgetPlacement" || change.kind === "widgetLayout" || change.kind === "widgetMaxRowsPerSection") {
+              if (change.kind === "widgetPlacement" || change.kind === "widgetMode" || change.kind === "widgetMaxRowsPerSection") {
                 updateSubagentWidget(ctx, runtime.listConversations(), settings);
               }
               onSettingsUpdated?.(settings);

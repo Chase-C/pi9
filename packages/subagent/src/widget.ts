@@ -1,115 +1,135 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
-import { effectiveStatus } from "./conversation.js";
-import type { RunSnapshot, ConversationSnapshot } from "./conversation.js";
-import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentDisplaySettings, type SubagentSettings, type SubagentUiSettings, type WidgetLayout } from "./settings.js";
+import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
-export const WIDGET_COLUMN_GUTTER = "  │ ";
+import type { ConversationSnapshot, ConversationUpdateKind, RunSnapshot } from "./conversation.js";
+import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentDisplaySettings, type SubagentSettings, type SubagentUiSettings, type WidgetMode } from "./settings.js";
 
-export function maxLineWidth(lines: readonly string[]): number {
-  let max = 0;
-  for (const line of lines) {
-    max = Math.max(max, visibleWidth(line));
-  }
-  return max;
+export interface ProgressWidgetRow {
+  conversation: ConversationSnapshot;
+  run: RunSnapshot;
+  status: "queued" | "running";
+  text: string;
 }
 
-export function hasBothColumnSections(sections: readonly { title: string }[]): boolean {
-  let hasActive = false;
-  let hasCompleted = false;
-  for (const section of sections) {
-    if (section.title === "Active Runs") hasActive = true;
-    else if (section.title === "Completed Runs") hasCompleted = true;
-    if (hasActive && hasCompleted) return true;
-  }
-  return false;
+function activeRun(conversation: ConversationSnapshot): RunSnapshot | undefined {
+  const run = conversation.currentRun;
+  return run?.status.kind === "queued" || run?.status.kind === "running" ? run : undefined;
 }
 
-export function resolveWidgetLayout(
-  layout: WidgetLayout,
-  width: number,
-  bothColumnSectionsPresent = true,
-  leftNaturalWidth = 0,
-): "columns" | "stacked" {
-  if (layout === "columns") return "columns";
-  if (layout === "stacked") return "stacked";
-  if (!bothColumnSectionsPresent) return "stacked";
-  return width > leftNaturalWidth + visibleWidth(WIDGET_COLUMN_GUTTER) ? "columns" : "stacked";
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
 }
 
-export function zipWidgetColumns(
-  leftLines: string[],
-  rightLines: string[],
-  totalWidth: number,
-  gutter: string = WIDGET_COLUMN_GUTTER,
-): string[] {
-  const gutterWidth = visibleWidth(gutter);
-  const leftWidth = Math.min(maxLineWidth(leftLines), Math.max(0, totalWidth - gutterWidth));
-  const rightWidth = Math.max(0, totalWidth - leftWidth - gutterWidth);
-  const maxLen = Math.max(leftLines.length, rightLines.length);
-  const lines: string[] = [];
-  for (let i = 0; i < maxLen; i++) {
-    const left = truncateToWidth(leftLines[i] ?? "", leftWidth, "", true);
-    const right = truncateToWidth(rightLines[i] ?? "", rightWidth, "", false);
-    lines.push(`${left}${gutter}${right}`);
-  }
-  return lines;
+function latestActivity(run: RunSnapshot): string {
+  const tool = [...run.activity.toolHistory].reverse().find(candidate => candidate.completedAt === undefined);
+  if (tool) return `${tool.name}${tool.inputSummary ? ` ${tool.inputSummary}` : ""}`;
+  if (run.activity.messageSnippet?.trim()) return run.activity.messageSnippet.replace(/\s+/g, " ").trim();
+  const completedTool = [...run.activity.toolHistory].reverse().find(candidate => candidate.completedAt !== undefined);
+  if (completedTool) return `${completedTool.name}${completedTool.inputSummary ? ` ${completedTool.inputSummary}` : ""}`;
+  return "starting…";
 }
 
-export type WidgetSectionTitle = "Active Runs" | "Completed Runs" | "Conversations";
-export interface WidgetRow { conversation: ConversationSnapshot; run?: RunSnapshot; text: string; status: string }
-export interface WidgetSection { title: WidgetSectionTitle; rows: WidgetRow[]; overflow?: number }
-export interface WidgetModel { sections: WidgetSection[] }
-
-export function formatConversationIdentityLine(conversation: ConversationSnapshot): string {
-  return `${conversation.config.name}${conversation.label ? ` · ${conversation.label}` : ""} · ${conversation.conversationId}`;
+export function formatProgressWidgetRow(conversation: ConversationSnapshot, run: RunSnapshot, now = Date.now()): ProgressWidgetRow {
+  const status = run.status.kind;
+  if (status !== "queued" && status !== "running") throw new Error("Progress rows require an active run.");
+  const identity = conversation.label ?? conversation.config.name;
+  const agent = conversation.label ? ` · ${conversation.config.name}` : "";
+  const timestamp = status === "queued" ? run.status.queuedAt : run.status.startedAt;
+  const marker = status === "running" ? "●" : "○";
+  return {
+    conversation,
+    run,
+    status,
+    text: `${marker} ${identity}${agent} · ${status} ${formatElapsed(now - timestamp)} · ${latestActivity(run)}`,
+  };
 }
-export function formatRunConversationLine(conversation: ConversationSnapshot, run: RunSnapshot = conversation.currentRun ?? conversation.runs.at(-1)!): string {
-  return `${formatConversationIdentityLine(conversation)} · ${run.runId} · ${effectiveStatus(run.status)}`;
-}
-export const formatConversationLine = formatRunConversationLine;
 
-export function buildWidgetModel(conversations: ConversationSnapshot[], _now = Date.now(), display?: SubagentDisplaySettings): WidgetModel {
-  const active: WidgetRow[] = []; const completed: WidgetRow[] = []; const empty: WidgetRow[] = [];
-  for (const conversation of conversations) {
-    const run = conversation.currentRun ?? conversation.runs.at(-1);
-    if (!run) { empty.push({ conversation, text: formatConversationIdentityLine(conversation), status: "conversation" }); continue; }
-    const row = { conversation, run, text: formatRunConversationLine(conversation, run), status: effectiveStatus(run.status) };
-    (run.status.kind === "done" ? completed : active).push(row);
-  }
+export function buildProgressWidgetRows(conversations: readonly ConversationSnapshot[], now = Date.now()): ProgressWidgetRow[] {
+  return conversations.flatMap(conversation => {
+    const run = activeRun(conversation);
+    return run ? [formatProgressWidgetRow(conversation, run, now)] : [];
+  });
+}
+
+export function formatSummaryWidgetLines(conversations: readonly ConversationSnapshot[]): string[] {
+  if (!conversations.length) return [];
+  const running = conversations.filter(conversation => conversation.currentRun?.status.kind === "running").length;
+  const queued = conversations.filter(conversation => conversation.currentRun?.status.kind === "queued").length;
+  const counts = [
+    ...(running ? [`${running} running`] : []),
+    ...(queued ? [`${queued} queued`] : []),
+    `${conversations.length} retained`,
+  ];
+  return [`Subagents  ${counts.join(" · ")}`];
+}
+
+function limitProgressRows(rows: readonly ProgressWidgetRow[], display?: SubagentDisplaySettings) {
   const limit = display?.widgetMaxRowsPerSection ?? Infinity;
-  const section = (title: WidgetSectionTitle, rows: WidgetRow[]): WidgetSection | undefined => rows.length ? { title, rows: rows.slice(0, limit), ...(rows.length > limit ? { overflow: rows.length - limit } : {}) } : undefined;
-  return { sections: [section("Active Runs", active), section("Completed Runs", completed), section("Conversations", empty)].filter((x): x is WidgetSection => !!x) };
+  return {
+    visible: rows.slice(0, limit),
+    overflow: Math.max(0, rows.length - limit),
+  };
 }
 
-export function formatThemedWidgetRow(row: WidgetRow, theme?: Pick<Theme, "fg">): string {
-  const color: ThemeColor = row.status === "running" ? "accent" : row.status === "queued" ? "warning" : row.status === "completed" ? "success" : row.status === "conversation" ? "muted" : "error";
-  return theme?.fg ? theme.fg(color, row.text) : row.text;
+export function formatProgressWidgetLines(
+  conversations: readonly ConversationSnapshot[],
+  now = Date.now(),
+  display?: SubagentDisplaySettings,
+): string[] {
+  const { visible, overflow } = limitProgressRows(buildProgressWidgetRows(conversations, now), display);
+  return [...visible.map(row => row.text), ...(overflow ? [`+${overflow} more`] : [])];
 }
-export function renderWidgetModelLines(model: WidgetModel, _now = Date.now(), format = (row: WidgetRow) => row.text, options: { layout?: "auto" | "columns" | "stacked"; width?: number } = {}): string[] {
-  const render = (s: WidgetSection) => [`${s.title}`, ...s.rows.map(format), ...(s.overflow ? [`+${s.overflow} more`] : [])];
-  const lines = model.sections.map(render);
-  if (lines.length === 2 && resolveWidgetLayout(options.layout ?? "stacked", options.width ?? 80, hasBothColumnSections(model.sections), maxLineWidth(lines[0])) === "columns") return zipWidgetColumns(lines[0], lines[1], options.width ?? 80);
-  return lines.flatMap((value, index) => index ? ["", ...value] : value);
+
+export function formatWidgetLines(
+  conversations: readonly ConversationSnapshot[],
+  now = Date.now(),
+  display?: SubagentDisplaySettings,
+  mode: WidgetMode = "summary",
+): string[] {
+  return mode === "progress" ? formatProgressWidgetLines(conversations, now, display) : formatSummaryWidgetLines(conversations);
 }
-export function formatWidgetLines(conversations: ConversationSnapshot[], now = Date.now(), display?: SubagentDisplaySettings): string[] { return renderWidgetModelLines(buildWidgetModel(conversations, now, display), now); }
-export function stringifyWidgetModel(model: WidgetModel): string { return renderWidgetModelLines(model).join("\n"); }
+
+function formatThemedWidgetLine(line: string, status: ProgressWidgetRow["status"] | undefined, theme?: Pick<Theme, "fg">): string {
+  const color: ThemeColor = status === "running" ? "accent" : status === "queued" ? "warning" : "muted";
+  return theme?.fg ? theme.fg(color, line) : line;
+}
 
 export class SubagentWidgetComponent implements Component {
+  private readonly timer?: ReturnType<typeof setInterval>;
+
   constructor(
-    private readonly model: WidgetModel,
-    private readonly theme: Theme | undefined,
-    private readonly widgetLayout: WidgetLayout = "auto",
-  ) { }
+    private readonly conversations: readonly ConversationSnapshot[],
+    private readonly display: SubagentDisplaySettings | undefined,
+    private readonly mode: WidgetMode,
+    private readonly theme?: Theme,
+    tui?: TUI,
+  ) {
+    if (mode === "progress" && buildProgressWidgetRows(conversations).length && tui?.requestRender) {
+      this.timer = setInterval(() => tui.requestRender(), 1_000);
+    }
+  }
+
+  dispose(): void {
+    if (this.timer) clearInterval(this.timer);
+  }
 
   invalidate(): void { }
 
   render(width: number): string[] {
-    const lines = renderWidgetModelLines(this.model, Date.now(), row => formatThemedWidgetRow(row, this.theme), {
-      layout: this.widgetLayout,
-      width,
-    });
-    return lines.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width)));
+    const now = Date.now();
+    const { visible: progressRows, overflow } = this.mode === "progress"
+      ? limitProgressRows(buildProgressWidgetRows(this.conversations, now), this.display)
+      : { visible: [], overflow: 0 };
+    const lines = this.mode === "progress"
+      ? [
+        ...progressRows.map(row => formatThemedWidgetLine(row.text, row.status, this.theme)),
+        ...(overflow ? [formatThemedWidgetLine(`+${overflow} more`, undefined, this.theme)] : []),
+      ]
+      : formatSummaryWidgetLines(this.conversations).map(line => formatThemedWidgetLine(line, undefined, this.theme));
+    return lines.map(line => truncateToWidth(line, Math.max(1, width), "…"));
   }
 }
 
@@ -132,6 +152,7 @@ type SubagentWidgetLifecyclePi = {
 
 type SubagentWidgetConversationSource = {
   listConversations(): ConversationSnapshot[];
+  onConversationUpdate?(listener: (conversation: unknown, kind?: ConversationUpdateKind) => void): () => void;
 };
 
 export function registerSubagentWidgetLifecycle(
@@ -141,20 +162,42 @@ export function registerSubagentWidgetLifecycle(
 ): void {
   if (typeof pi.on !== "function") return;
   let activeContext: SubagentWidgetContext | undefined;
+  let unsubscribe: (() => void) | undefined;
+  let pendingRefresh: ReturnType<typeof setTimeout> | undefined;
+  const clearPendingRefresh = () => {
+    if (pendingRefresh) clearTimeout(pendingRefresh);
+    pendingRefresh = undefined;
+  };
   const refresh = () => { if (activeContext) updateSubagentWidget(activeContext, source.listConversations(), getSettings()); };
-  const unsubscribe = typeof (source as SubagentWidgetConversationSource & { onConversationUpdate?: (listener: () => void) => () => void }).onConversationUpdate === "function"
-    ? (source as SubagentWidgetConversationSource & { onConversationUpdate(listener: () => void): () => void }).onConversationUpdate(refresh)
-    : undefined;
-  pi.on("session_shutdown", (_event, ctx) => { activeContext = undefined; updateSubagentWidget(ctx, [], getSettings()); });
-  pi.on("session_start", (_event, ctx) => { activeContext = ctx; refresh(); });
-  void unsubscribe;
+  const onConversationUpdate = (_conversation: unknown, kind?: ConversationUpdateKind) => {
+    if (!activeContext) return;
+    if (kind === "status" || kind === undefined) {
+      clearPendingRefresh();
+      refresh();
+      return;
+    }
+    if (!pendingRefresh) pendingRefresh = setTimeout(() => {
+      pendingRefresh = undefined;
+      refresh();
+    }, 100);
+  };
+  const subscribe = () => { unsubscribe ??= source.onConversationUpdate?.(onConversationUpdate); };
+  subscribe();
+  pi.on("session_shutdown", (_event, ctx) => {
+    activeContext = undefined;
+    clearPendingRefresh();
+    unsubscribe?.();
+    unsubscribe = undefined;
+    updateSubagentWidget(ctx, [], getSettings());
+  });
+  pi.on("session_start", (_event, ctx) => { subscribe(); activeContext = ctx; refresh(); });
 }
 
 export function updateSubagentWidget(
   ctx: SubagentWidgetContext,
-  agents: ConversationSnapshot[],
+  conversations: ConversationSnapshot[],
   settings: SubagentSettings | SubagentUiSettings,
-) {
+): void {
   if (!ctx.hasUI || !ctx.ui?.setWidget) return;
   try {
     if (settings.widgetPlacement === "off") {
@@ -162,10 +205,10 @@ export function updateSubagentWidget(
       return;
     }
     const display = (settings as SubagentSettings).display;
-    const model = buildWidgetModel(agents, Date.now(), display);
-    const widgetLayout = settings.widgetLayout ?? DEFAULT_SUBAGENT_UI_SETTINGS.widgetLayout;
-    const factory: WidgetComponentFactory | undefined = model.sections.length > 0
-      ? (_tui, theme) => new SubagentWidgetComponent(model, theme, widgetLayout)
+    const mode = settings.widgetMode ?? DEFAULT_SUBAGENT_UI_SETTINGS.widgetMode;
+    const hasContent = mode === "summary" ? conversations.length > 0 : buildProgressWidgetRows(conversations).length > 0;
+    const factory: WidgetComponentFactory | undefined = hasContent
+      ? (tui, theme) => new SubagentWidgetComponent(conversations, display, mode, theme, tui)
       : undefined;
     ctx.ui.setWidget("subagent", factory, { placement: settings.widgetPlacement });
   } catch (error) {

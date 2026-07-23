@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
-import type { CompletionNotifyMode, SubagentSettings, WidgetLayout, WidgetPlacement } from "../settings.js";
+import type { CompletionNotifyMode, SubagentSettings, WidgetMode, WidgetPlacement } from "../settings.js";
 import { isCancelKey, isDownKey, isEnterKey, isUpKey, type SubagentKeybindings } from "./input.js";
 
 const COUNT_SETTING_VALUES = ["1", "2", "4", "8", "16", "32"];
@@ -9,7 +9,7 @@ const ROW_SETTING_VALUES = ["1", "2", "4", "6", "8", "16", "32"];
 
 export type SubagentSettingsChange =
   | { kind: "widgetPlacement"; value: WidgetPlacement }
-  | { kind: "widgetLayout"; value: WidgetLayout }
+  | { kind: "widgetMode"; value: WidgetMode }
   | { kind: "completionNotify"; value: CompletionNotifyMode }
   | { kind: "maxConcurrentSubagents"; value: number }
   | { kind: "maxTasksPerRun"; value: number }
@@ -23,8 +23,8 @@ export function applySubagentSettingsChange(
   switch (change.kind) {
     case "widgetPlacement":
       return { ...settings, widgetPlacement: change.value };
-    case "widgetLayout":
-      return { ...settings, widgetLayout: change.value };
+    case "widgetMode":
+      return { ...settings, widgetMode: change.value };
     case "completionNotify":
       return { ...settings, runtime: { ...settings.runtime, completionNotify: change.value } };
     case "maxConcurrentSubagents":
@@ -157,20 +157,20 @@ function createSettingDefinitions(settings: SubagentSettings): SettingDefinition
       description: "Place live run progress relative to the editor.",
     },
     {
-      id: "widgetLayout",
+      id: "widgetMode",
       section: "Interface",
-      label: "Widget layout",
-      currentValue: settings.widgetLayout,
-      values: ["auto", "columns", "stacked"],
-      description: "Choose whether active and completed runs use automatic, side-by-side, or stacked layout.",
+      label: "Widget mode",
+      currentValue: settings.widgetMode,
+      values: ["summary", "progress"],
+      description: "Choose a retained-conversation summary or active-run progress rows.",
     },
     {
       id: "widgetMaxRowsPerSection",
       section: "Interface",
-      label: "Widget rows",
+      label: "Progress rows",
       currentValue: String(settings.display.widgetMaxRowsPerSection),
       values: numericSettingValues(settings.display.widgetMaxRowsPerSection, ROW_SETTING_VALUES),
-      description: "Maximum visible rows per widget section before an overflow line appears.",
+      description: "Maximum visible active progress rows before an overflow line appears.",
     },
     {
       id: "completionNotify",
@@ -209,7 +209,7 @@ function createSettingDefinitions(settings: SubagentSettings): SettingDefinition
 
 function settingChange(id: SettingId, value: string): SubagentSettingsChange {
   if (id === "widgetPlacement") return { kind: id, value: value as WidgetPlacement };
-  if (id === "widgetLayout") return { kind: id, value: value as WidgetLayout };
+  if (id === "widgetMode") return { kind: id, value: value as WidgetMode };
   if (id === "completionNotify") return { kind: id, value: value as CompletionNotifyMode };
   return { kind: id, value: Number(value) };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/settings.js";
 import { registerSubagentsCommand } from "../../src/command/index.js";
+import { fakeAgent } from "../helpers/fake-agent.js";
 
 describe("subagents command registration", () => {
   it("applies settings before starting work and persists them", async () => {
@@ -30,6 +31,36 @@ describe("subagents command registration", () => {
     expect(configure).toHaveBeenLastCalledWith({ maxRunning: 8, maxConversations: 100 });
     expect(configure.mock.invocationCallOrder.at(-1)).toBeLessThan(startRun.mock.invocationCallOrder[0]);
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ runtime: expect.objectContaining({ maxConcurrentSubagents: 8 }) }));
+  });
+
+  it("refreshes the widget when settings open and display settings change", async () => {
+    let handler: any;
+    const setWidget = vi.fn();
+    const manager = {
+      configure: vi.fn(),
+      listConversations: () => [fakeAgent({ status: { kind: "running", startedAt: 1 } })],
+      onConversationUpdate: () => () => {},
+    };
+    registerSubagentsCommand(
+      { registerCommand: (_name: string, registration: any) => { handler = registration.handler; } } as any,
+      manager as any,
+      { load: async () => ({ settings: DEFAULT_SUBAGENT_SETTINGS }), save: async () => {} },
+    );
+
+    await handler("settings", {
+      hasUI: true,
+      ui: {
+        setWidget,
+        custom: async (factory: any) => {
+          const component = factory({ requestRender() {} }, {}, undefined, () => {});
+          component.options.onSettingsChange({ kind: "widgetMode", value: "progress" });
+          component.options.onSettingsChange({ kind: "widgetMaxRowsPerSection", value: 8 });
+          component.options.onSettingsChange({ kind: "widgetPlacement", value: "aboveEditor" });
+        },
+      },
+    });
+
+    expect(setWidget).toHaveBeenCalledTimes(4);
   });
 
   it("serializes rapid settings saves", async () => {

@@ -10,7 +10,7 @@ import { makeChildSubagentTool } from "./tool.js";
 import { defineSubagentTool } from "./tool.js";
 import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, prepareSubagentRuntime, type SubagentSettings } from "./settings.js";
 import { registerSubagentsCommand } from "./command/index.js";
-import { registerSubagentWidgetLifecycle } from "./widget.js";
+import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "./widget.js";
 import {
   formatCompletionNotificationMessage,
   type CompletionNotificationMessageDetails,
@@ -70,6 +70,7 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
         () => prepareSubagentRuntime({ ctx, settingsStore, runtime, agentRegistry }),
       );
       currentSettings = settings;
+      updateSubagentWidget(ctx, runtime.listConversations(), settings);
       return settings;
     },
   }));

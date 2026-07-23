@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Redesign the subagent widget around a default retained-conversation summary and an opt-in active-run progress mode. Legacy `widgetLayout` values migrate to `widgetMode` on load.
+
 ### Documentation
 
 - Refresh the README with current screenshots for the complete tool lifecycle, parallel progress, and recursive delegation, and focus setup guidance on defining agents rather than model-facing tool calls.

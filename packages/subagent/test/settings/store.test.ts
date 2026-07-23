@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,8 +14,25 @@ test("subagent default settings are fresh and include redesigned runtime default
   assert.equal(second.runtime.maxTasksPerRun, 8);
   assert.equal(second.runtime.maxConversations, 100);
   assert.equal(second.runtime.completionNotify, "auto");
+  assert.equal(second.widgetMode, "summary");
   assert.deepEqual(second.agentDiscovery.agentFileExtensions, [".md"]);
   assert.notEqual(first.runtime, second.runtime);
+});
+
+test("widget mode normalizes to progress", () => {
+  assert.equal(normalizeSettings({ widgetMode: "progress" }).settings.widgetMode, "progress");
+});
+
+test("legacy columns layout normalizes to progress mode", () => {
+  assert.equal(normalizeSettings({ widgetLayout: "columns" }).settings.widgetMode, "progress");
+});
+
+test("legacy stacked layout normalizes to progress mode", () => {
+  assert.equal(normalizeSettings({ widgetLayout: "stacked" }).settings.widgetMode, "progress");
+});
+
+test("legacy automatic layout normalizes to summary mode", () => {
+  assert.equal(normalizeSettings({ widgetLayout: "auto" }).settings.widgetMode, "summary");
 });
 
 test("missing settings use defaults", async () => {
@@ -52,6 +69,9 @@ test("save and reload preserves complete settings", async () => {
   const settings = createDefaultSubagentSettings();
   settings.widgetPlacement = "aboveEditor";
   await new SubagentSettingsStore(path).save(settings);
+  const saved = await readFile(path, "utf8");
+  assert.match(saved, /widgetMode/);
+  assert.doesNotMatch(saved, /widgetLayout/);
   const result = await new SubagentSettingsStore(path).load();
   assert.equal(result.settings.widgetPlacement, "aboveEditor");
   assert.equal(result.settings.runtime.maxConversations, 100);

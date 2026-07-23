@@ -49,11 +49,13 @@ test("settings render as a categorized split navigator", () => {
   assert.match(output, /Notifications/);
   assert.match(output, /Runtime/);
   assert.match(output, /Widget placement · Interface/);
+  assert.match(output, /Widget mode/);
+  assert.match(output, /Progress rows/);
   assert.match(output, /current belowEditor/);
   assert.doesNotMatch(output, /Subagent Settings/);
   assert.ok(component.render(40).every(line => visibleWidth(line) <= 40));
 
   component.handleInput("\x1b[B");
   component.handleInput("\r");
-  assert.deepEqual(changes, [{ kind: "widgetLayout", value: "columns" }]);
+  assert.deepEqual(changes, [{ kind: "widgetMode", value: "progress" }]);
 });

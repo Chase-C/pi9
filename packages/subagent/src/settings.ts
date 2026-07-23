@@ -3,14 +3,14 @@ import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type WidgetPlacement = "belowEditor" | "aboveEditor" | "off";
-export type WidgetLayout = "auto" | "columns" | "stacked";
+export type WidgetMode = "summary" | "progress";
 export type ProjectAgentsStrategy = "nearest" | "off";
 export type DuplicateNamePolicy = "projectOverridesUser" | "userOverridesProject";
 export type CompletionNotifyMode = "auto" | "steer" | "none";
 
 export interface SubagentUiSettings {
   widgetPlacement: WidgetPlacement;
-  widgetLayout: WidgetLayout;
+  widgetMode: WidgetMode;
 }
 
 export interface SubagentRuntimeSettings {
@@ -56,7 +56,7 @@ export interface SubagentSettings extends SubagentUiSettings {
 
 export const DEFAULT_SUBAGENT_UI_SETTINGS: SubagentUiSettings = {
   widgetPlacement: "belowEditor",
-  widgetLayout: "auto",
+  widgetMode: "summary",
 };
 
 export function createDefaultSubagentSettings(): SubagentSettings {
@@ -98,7 +98,7 @@ export type SubagentSettingsLoadResult = {
 };
 
 const WIDGET_PLACEMENTS = new Set<WidgetPlacement>(["belowEditor", "aboveEditor", "off"]);
-const WIDGET_LAYOUTS = new Set<WidgetLayout>(["auto", "columns", "stacked"]);
+const WIDGET_MODES = new Set<WidgetMode>(["summary", "progress"]);
 const PROJECT_AGENTS_STRATEGIES = new Set<ProjectAgentsStrategy>(["nearest", "off"]);
 const DUPLICATE_NAME_POLICIES = new Set<DuplicateNamePolicy>(["projectOverridesUser", "userOverridesProject"]);
 const COMPLETION_NOTIFY_MODES = new Set<CompletionNotifyMode>(["auto", "steer", "none"]);
@@ -146,7 +146,10 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
     else warnings.push("Invalid subagent widgetPlacement; using belowEditor.");
   }
 
-  assignEnum(record, "widgetLayout", WIDGET_LAYOUTS, value => { settings.widgetLayout = value; }, warnings);
+  assignEnum(record, "widgetMode", WIDGET_MODES, value => { settings.widgetMode = value; }, warnings);
+  if (record.widgetMode === undefined && (record.widgetLayout === "columns" || record.widgetLayout === "stacked")) {
+    settings.widgetMode = "progress";
+  }
 
   const runtime = objectValue(record.runtime);
   if (runtime) {

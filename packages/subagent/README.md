@@ -82,7 +82,7 @@ After `remove`, compact terminal run results remain joinable by `runId`, includi
 
 Concurrency is shared across the entire recursive delegation tree. `maxConversations` defaults to `100`. Once that many conversations are present, new spawns are rejected until one or more conversations are removed; existing conversations can still be inspected, joined, or cleaned up.
 
-Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. Common runtime and display controls are also available through `/subagents settings`.
+Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. The widget defaults to **summary** mode, a one-line count of running, queued, and all retained conversations; **progress** mode instead shows active queued/running rows and respects the `Progress rows` limit in `/subagents settings`. Retained conversations remain counted after they settle until explicit `remove`. Existing `widgetLayout: "columns"` or `"stacked"` settings migrate to progress mode, while `"auto"` (or no legacy value) becomes summary; saved settings use `widgetMode`.
 
 ## Notifications, UI, and lifecycle
 
@@ -104,6 +104,7 @@ There is no compatibility layer for the previous lifecycle API.
 | `results` action | `join` waits for and retrieves an exact run. |
 | `sessionId` | Use `conversationId` for conversation lifecycle and `runId` for exact-run retrieval. |
 | `retainConversation` | Every conversation remains in the runtime until explicit `remove`. |
+| `widgetLayout` | Use `widgetMode`: legacy `columns`/`stacked` becomes `progress`; `auto` becomes the default `summary`. |
 
 ## Architecture
 
