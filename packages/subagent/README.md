@@ -2,7 +2,7 @@
 
 Delegate focused work from Pi to context-isolated child conversations. The single `subagent` tool provides agent discovery, side-effect-free inventory, asynchronous runs, blocking retrieval, explicit cleanup, recursive delegation, and live progress.
 
-![A subagent run with nested children rendering live progress, tool calls, and per-child counters](media/subagent-overview.png)
+![The complete subagent workflow: discover agents, start and list parallel runs, join their results, and remove their conversations](media/subagent-overview.png)
 
 ## Install
 
@@ -10,9 +10,11 @@ Delegate focused work from Pi to context-isolated child conversations. The singl
 pi install npm:@pi9/subagent
 ```
 
-## Quick start
+## Define agents
 
-Define an agent in `.pi/agents/scout.md`:
+Agent markdown is discovered from the user `${PI_AGENT_DIR ?? ~/.pi/agent}/agents` directory and the nearest project `.pi/agents`. Project definitions override same-named user definitions by default.
+
+For example, `.pi/agents/scout.md` defines a project-local read-only agent:
 
 ```markdown
 ---
@@ -24,39 +26,6 @@ tools: read, bash
 
 Inspect the repository and return concise, evidence-backed findings.
 ```
-
-Start a run:
-
-```ts
-subagent({
-  action: "run",
-  tasks: [{ agent: "scout", label: "auth map", prompt: "Find the auth entry points." }]
-})
-```
-
-`run` is always asynchronous. It returns immediately with two process-local identifiers for each accepted task:
-
-- `conversationId`, a readable adjective-noun identifier such as `quiet-otter`
-- `runId`, a readable verb-adverb identifier such as `search-boldly`
-
-Wait for that exact run and retrieve its output with `join`:
-
-```ts
-subagent({ action: "join", runIds: ["search-boldly"] })
-```
-
-Continue the conversation after it becomes resumable:
-
-```ts
-subagent({
-  action: "run",
-  tasks: [{ conversationId: "quiet-otter", prompt: "Turn those findings into a plan." }]
-})
-```
-
-## Define agents
-
-Agent markdown is discovered from the user `${PI_AGENT_DIR ?? ~/.pi/agent}/agents` directory and the nearest project `.pi/agents`. Project definitions override same-named user definitions by default.
 
 | Frontmatter | Required | Meaning |
 | --- | --- | --- |
@@ -79,6 +48,10 @@ The body becomes the child system prompt. Spawn tasks require `agent` and `promp
 | `join` | Block until every explicitly requested exact run settles, then return and acknowledge exactly those runs. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying runs. |
 | `remove` | Clean up the specified conversations, aborting active work if necessary, deleting resumable child session state, and hiding them from `list`. |
 
+Parallel runs stream their current status and recent tool activity independently:
+
+![Two parallel subagent runs with one completed and one still exploring the codebase](media/live-parallel-runs.png)
+
 Each task is handled independently after the tool call passes SDK schema validation. Task-level parsing and startup failures—such as a missing agent, an unknown agent, an invalid model, or a missing working directory—return an ordered `{ ok: false, inputIndex, error }` outcome without preventing valid sibling tasks from starting. Invalid outer invocations—including a missing or unknown action, absent or empty tasks, and batch-limit violations—remain global errors. Provider-level schema violations may reject the tool call before execution.
 
 For example, a three-task batch can return a successful start, a task-level failure, and another successful start in input order:
@@ -100,6 +73,8 @@ A run belongs to one conversation. Spawning creates both; a follow-up creates an
 `join` is keyed by `runId`, not merely by conversation. A root/top-level join waits for, returns, and acknowledges exactly the requested runs, even when one of their conversations has newer work. A join issued by a child may target only runs spawned anywhere beneath that child's exact owner run; sibling, ancestor, and unrelated runs are rejected.
 
 Only descendants named in an explicit nested join block that caller. Unjoined descendants continue independently and detach when their parent finishes. Nested answers are returned directly to the child that joined them, but their output is omitted from ancestor tree rendering; ancestor views retain lifecycle and identity context without copying target answers. Nested join-attempt history is runtime-local and is not restored after restart or extension reload.
+
+![A technical-lead subagent joining two nested investigations with live tool activity](media/recursive-delegation.png)
 
 After `remove`, compact terminal run results remain joinable by `runId`, including the aborted result of work that was active when removed, even though the conversation and resumable session state are gone. Use `remove` with conversation identifiers when the whole conversation is no longer needed.
 

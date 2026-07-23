@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Documentation
+
+- Refresh the README with current screenshots for the complete tool lifecycle, parallel progress, and recursive delegation, and focus setup guidance on defining agents rather than model-facing tool calls.
+
 ## [0.7.0] - 2026-07-23
 
 ### Breaking
