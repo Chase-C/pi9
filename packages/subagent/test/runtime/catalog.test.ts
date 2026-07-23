@@ -217,7 +217,7 @@ test("removal terminalizes immediately, wakes joins, and leaves children", async
   release();
 });
 
-test("subtree join discovers late descendants and waits in root-first order", async () => {
+test("root join remains exact when descendants spawn later", async () => {
   const gates = new Map<string, () => void>();
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
     agent.bindSession(session());
@@ -246,7 +246,6 @@ test("subtree join discovers late descendants and waits in root-first order", as
     agent: "worker",
     prompt: "grand",
   }] as any, parent(child.conversationId, child.runId));
-  const grand = grandStart.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
   gates.get("root")!();
@@ -254,24 +253,15 @@ test("subtree join discovers late descendants and waits in root-first order", as
   let finished = false;
   void join.completion.then(() => { finished = true; });
   await new Promise(done => setImmediate(done));
-  expect(finished).toBe(false);
-  gates.get("grand")!();
-  await grandStart.completion;
-  expect(finished).toBe(false);
-  gates.get("child")!();
-  await childStart.completion;
-  await join.completion;
-
-  expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([
-    [root.runId, root.conversationId],
-    [child.runId, child.conversationId],
-    [grand.runId, grand.conversationId],
-  ]);
-  expect(join.project().map(output)).toEqual(["root", "child", "grand"]);
+  expect(finished).toBe(true);
+  expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([[root.runId, root.conversationId]]);
+  expect(join.project().map(output)).toEqual(["root"]);
+  gates.get("grand")!(); gates.get("child")!();
+  await Promise.all([grandStart.completion, childStart.completion]);
   join.release();
 });
 
-test("new subtree join discovers descendants after conversations were removed", async () => {
+test("exact root join remains exact after conversations were removed", async () => {
   const manager = new SubagentRuntime(registry, 4, runner);
   const rootStart = manager.startRun(ctx, [{
     kind: "spawn",
@@ -300,16 +290,12 @@ test("new subtree join discovers descendants after conversations were removed", 
   manager.removeConversation(grand.conversationId);
   const join = manager.bindJoin([root.runId]);
   await join.completion;
-  expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([
-    [root.runId, root.conversationId],
-    [child.runId, child.conversationId],
-    [grand.runId, grand.conversationId],
-  ]);
-  expect(join.project().map(output)).toEqual(["root", "child", "grand"]);
+  expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([[root.runId, root.conversationId]]);
+  expect(join.project().map(output)).toEqual(["root"]);
   join.release();
 });
 
-test("subtree join retains a bound descendant after removal", async () => {
+test("exact join does not bind an unrequested descendant", async () => {
   let releaseRoot!: () => void;
   const rootGate = new Promise<void>(done => { releaseRoot = done; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -333,14 +319,14 @@ test("subtree join retains a bound descendant after removal", async () => {
   const child = childStart.starts[0] as any;
   await childStart.completion;
   const join = manager.bindJoin([root.runId]);
-  expect(join.project().map(entry => entry.runId)).toEqual([root.runId, child.runId]);
+  expect(join.project().map(entry => entry.runId)).toEqual([root.runId]);
 
   manager.removeConversation(child.conversationId);
   releaseRoot();
   await rootStart.completion;
   await join.completion;
-  expect(join.project().map(entry => entry.runId)).toEqual([root.runId, child.runId]);
-  expect(join.project().map(output)).toEqual(["root", "child"]);
+  expect(join.project().map(entry => entry.runId)).toEqual([root.runId]);
+  expect(join.project().map(output)).toEqual(["root"]);
   join.release();
 });
 
@@ -388,4 +374,87 @@ test("spawn execution is independent of caller cancellation", async () => {
     kind: "done",
     outcome: "completed",
   });
+});
+
+test("nested joins validate descendants and preserve ordered attempts without target output", async () => {
+  const manager = new SubagentRuntime(registry, 4, runner);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "secret" }] as any,
+    parent(owner.conversationId, owner.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+
+  const nested = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId },
+    [child.runId, child.runId], "tool-1");
+  await nested.completion;
+  nested.acknowledge();
+  nested.release();
+
+  const snapshot = manager.runSnapshot(owner.runId);
+  expect(snapshot.nestedJoins).toHaveLength(1);
+  expect(snapshot.nestedJoins?.[0]).toMatchObject({ state: "completed", toolCallId: "tool-1" });
+  expect(snapshot.nestedJoins?.[0].targets.map(target => target.runId)).toEqual([child.runId, child.runId]);
+  expect(snapshot.nestedJoins?.[0].targets[0]).not.toHaveProperty("output");
+  expect(manager.unjoinedDirectChildren(owner.runId)).toEqual([]);
+
+  expect(() => manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [owner.runId]))
+    .toThrow("not a descendant");
+  expect(manager.runSnapshot(owner.runId).nestedJoins?.[1]).toMatchObject({ state: "failed" });
+  expect(manager.runSnapshot(owner.runId).observerCount).toBe(0);
+});
+
+test("detached owner snapshot records nested completion after removal", async () => {
+  let finishTarget!: () => void;
+  const targetGate = new Promise<void>(resolve => { finishTarget = resolve; });
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(session());
+    if (attempt.prompt === "target") await targetGate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 2, controlled);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const targetStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "target" }] as any,
+    parent(owner.conversationId, owner.runId));
+  const target = targetStart.starts[0] as any;
+  await new Promise(resolve => setImmediate(resolve));
+  const binding = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [target.runId]);
+
+  manager.removeConversation(owner.conversationId);
+  finishTarget();
+  await Promise.all([targetStart.completion, binding.completion]);
+  expect(manager.runSnapshot(owner.runId).nestedJoins?.[0]).toMatchObject({ state: "completed" });
+  expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(1);
+  binding.release();
+  expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(0);
+});
+
+test("detached owner snapshot records explicit nested interruption", async () => {
+  let finishTarget!: () => void;
+  const targetGate = new Promise<void>(resolve => { finishTarget = resolve; });
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(session());
+    if (attempt.prompt === "target") await targetGate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 2, controlled);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const targetStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "target" }] as any,
+    parent(owner.conversationId, owner.runId));
+  const target = targetStart.starts[0] as any;
+  await new Promise(resolve => setImmediate(resolve));
+  const binding = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [target.runId]);
+
+  manager.removeConversation(owner.conversationId);
+  binding.interrupt("caller cancelled");
+  expect(manager.runSnapshot(owner.runId).nestedJoins?.[0]).toMatchObject({ state: "interrupted", error: "caller cancelled" });
+  expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(0);
+  finishTarget();
+  await targetStart.completion;
+  expect(manager.runSnapshot(owner.runId).nestedJoins?.[0]).toMatchObject({ state: "interrupted", error: "caller cancelled" });
 });

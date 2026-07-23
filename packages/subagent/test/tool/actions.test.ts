@@ -202,10 +202,16 @@ test("caller cancellation releases join without cancelling child work", async ()
   assert.equal(released, 1);
 });
 
-test("child join suspends the parent queue slot", async () => {
+test("child join binds its captured owner and suspends the parent queue slot", async () => {
   let suspended: any;
+  let boundOwner: any;
+  let boundToolCallId: any;
   const manager = {
-    bindJoin: () => joinBinding([]),
+    bindNestedJoin: (owner: any, _ids: any, toolCallId: any) => {
+      boundOwner = owner;
+      boundToolCallId = toolCallId;
+      return { ...joinBinding([]), interrupt: () => {} };
+    },
     onConversationUpdate: () => () => {},
     scheduler: {
       suspendAgentSlotDuring: async (id: any, fn: any) => {
@@ -217,8 +223,10 @@ test("child join suspends the parent queue slot", async () => {
   await joinAction({
     ...deps(manager),
     parent: { conversationId, runId: () => runId },
-  }, { action: "join", runIds: [runId] }, undefined, undefined);
+  }, { action: "join", runIds: [runId] }, undefined, undefined, "join-call-1");
   assert.equal(suspended, conversationId);
+  assert.deepEqual(boundOwner, { conversationId, runId });
+  assert.equal(boundToolCallId, "join-call-1");
 });
 
 test("a bound join acknowledges an aborted outcome after removal", async () => {
@@ -256,6 +264,40 @@ test("a bound join acknowledges an aborted outcome after removal", async () => {
     error: "Conversation removed.",
   }]);
   assert.equal(acknowledged, 1);
+});
+
+test("join projection retains terminal descendant joins and final detached backgrounds", async () => {
+  const childRunId = "child-boldly" as any;
+  const leafRunId = "leaf-quietly" as any;
+  const backgroundRunId = "watch-carefully" as any;
+  const done = (id: any, nestedJoins: any[] = []) => ({
+    runId: id, kind: "spawn", prompt: `prompt ${id}`, createdAt: 1,
+    status: { kind: "done", outcome: "completed", completedAt: 2 },
+    activity: { turns: 0, compactions: 0, toolHistory: [] }, usage: undefined,
+    observerCount: 0, acknowledged: false, nestedJoins,
+  });
+  const snapshots = new Map<any, any>([
+    [runId, done(runId, [{ state: "completed", startedAt: 1, completedAt: 2, toolCallId: "root-join", targets: [{ runId: childRunId, conversationId: "child-c", status: "completed" }] }])],
+    [childRunId, done(childRunId, [{ state: "completed", startedAt: 1, completedAt: 2, toolCallId: "child-join", targets: [{ runId: leafRunId, conversationId: "leaf-c", status: "completed" }] }])],
+    [leafRunId, done(leafRunId)],
+    [backgroundRunId, { ...done(backgroundRunId), status: { kind: "running", startedAt: 1 } }],
+  ]);
+  const manager = {
+    bindJoin: () => joinBinding([{ conversationId, runId, status: snapshots.get(runId).status }]),
+    onConversationUpdate: () => () => {},
+    runSnapshot: (id: any) => snapshots.get(id),
+    listConversations: () => [],
+    conversationDisplay: (id: any) => ({ conversationId: id, label: id }),
+    unjoinedDirectChildren: (id: any) => id === childRunId
+      ? [{ runId: backgroundRunId, conversationId: "background-c" }]
+      : [],
+  };
+
+  const result = await joinAction(deps(manager), { action: "join", runIds: [runId] }, undefined, undefined);
+  const child = (result.details as any).runs[0].joins[0].targets[0];
+  assert.equal(child.joins[0].targets[0].runId, leafRunId);
+  assert.equal(child.background[0].entries[0].detachedAtFinal, true);
+  assert.equal("output" in child, false);
 });
 
 test("whole-batch bind errors return before update subscription", async () => {

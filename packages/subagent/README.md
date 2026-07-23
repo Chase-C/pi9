@@ -76,7 +76,7 @@ The body becomes the child system prompt. Spawn tasks require `agent` and `promp
 | `agents` | Discover agent definitions and their resolved defaults. |
 | `list` | Return a lightweight inventory of conversations and runs without run output. It is pure: it acknowledges nothing and changes no lifecycle state. |
 | `run` | Start one or more well-formed tasks asynchronously and return one ordered outcome per task, including identifiers for accepted tasks and errors for semantic or startup failures. |
-| `join` | Block until each specified exact run settles, then return that run's output or error. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying run. |
+| `join` | Block until every explicitly requested exact run settles, then return and acknowledge exactly those runs. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying runs. |
 | `remove` | Clean up the specified conversations, aborting active work if necessary, deleting resumable child session state, and hiding them from `list`. |
 
 Each task is handled independently after the tool call passes SDK schema validation. Task-level parsing and startup failures—such as a missing agent, an unknown agent, an invalid model, or a missing working directory—return an ordered `{ ok: false, inputIndex, error }` outcome without preventing valid sibling tasks from starting. Invalid outer invocations—including a missing or unknown action, absent or empty tasks, and batch-limit violations—remain global errors. Provider-level schema violations may reject the tool call before execution.
@@ -97,7 +97,11 @@ A run belongs to one conversation. Spawning creates both; a follow-up creates an
 
 `canResume` becomes true only after a completed run or an interrupted run that preserved its conversation context. It remains false while work is queued or active, and after failures or interruptions that did not preserve context.
 
-`join` is keyed by `runId`, not merely by conversation, so a caller always receives the requested run even when that conversation has newer work. After `remove`, compact terminal run results remain joinable by `runId`, including the aborted result of work that was active when removed, even though the conversation and resumable session state are gone. Use `remove` with conversation identifiers when the whole conversation is no longer needed.
+`join` is keyed by `runId`, not merely by conversation. A root/top-level join waits for, returns, and acknowledges exactly the requested runs, even when one of their conversations has newer work. A join issued by a child may target only runs spawned anywhere beneath that child's exact owner run; sibling, ancestor, and unrelated runs are rejected.
+
+Only descendants named in an explicit nested join block that caller. Unjoined descendants continue independently and detach when their parent finishes. Nested answers are returned directly to the child that joined them, but their output is omitted from ancestor tree rendering; ancestor views retain lifecycle and identity context without copying target answers. Nested join-attempt history is runtime-local and is not restored after restart or extension reload.
+
+After `remove`, compact terminal run results remain joinable by `runId`, including the aborted result of work that was active when removed, even though the conversation and resumable session state are gone. Use `remove` with conversation identifiers when the whole conversation is no longer needed.
 
 ## Capacity and concurrency
 
@@ -111,7 +115,9 @@ Completion notifications concern settled runs that have not yet been acknowledge
 
 `/subagents` opens the conversation, agent, and settings UI. It provides live status and progress, access to completed output, follow-up prompts when `canResume` is true, and explicit conversation cleanup.
 
-The package emits lifecycle updates for queued, started, and completed work. Identifiers, run records, and child conversation context are runtime-local only. They are not restored after a process restart or extension reload.
+The package emits lifecycle updates for queued, started, and completed work. Nested join changes emit `subagent:updated` with `kind: "nestedJoin"` and the owner conversation snapshot; they do not create additional queued, started, or completed milestones. Identifiers, run records, child conversation context, and nested join-attempt history are runtime-local only. They are not restored after a process restart or extension reload.
+
+`run` remains asynchronous regardless of recursive delegation. These join semantics do not change the scope or behavior of `/subagents` or its widget.
 
 ## Major-version migration
 

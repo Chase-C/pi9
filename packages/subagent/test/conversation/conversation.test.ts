@@ -86,3 +86,38 @@ test("bindings track observers and acknowledge an exact run", () => {
   agent.acknowledge(r1);
   assert.equal(agent.snapshot().runs[0].acknowledged, true);
 });
+
+test("nested join attempts preserve immutable owner history, target order, and duplicates", () => {
+  const agent = make();
+  const firstIndex = agent.beginNestedJoin(r1, [r2, r2], "call-1");
+  const active = agent.snapshot().runs[0].nestedJoins![0];
+
+  agent.updateNestedJoin(r1, firstIndex, {
+    targets: [
+      { runId: r2, conversationId: cid, status: "completed" },
+      { runId: r2, conversationId: cid, status: "error" },
+    ],
+    state: "interrupted",
+    error: "caller stopped waiting",
+  });
+  const secondIndex = agent.beginNestedJoin(r1, [r2], "call-2");
+  agent.updateNestedJoin(r1, secondIndex, {
+    targets: [{ runId: r2, conversationId: cid, status: "completed" }],
+    state: "completed",
+  });
+
+  const attempts = agent.snapshot().runs[0].nestedJoins!;
+  assert.deepEqual(active.targets.map(target => target.runId), [r2, r2], "an earlier snapshot does not change");
+  assert.equal(active.state, "running");
+  assert.deepEqual(attempts.map(attempt => attempt.toolCallId), ["call-1", "call-2"]);
+  assert.deepEqual(attempts[0].targets.map(target => target.runId), [r2, r2]);
+  assert.equal(attempts[0].state, "interrupted");
+  assert.equal(attempts[0].error, "caller stopped waiting");
+  assert.equal(typeof attempts[0].completedAt, "number");
+  assert.equal(attempts[1].state, "completed");
+  assert.equal(typeof attempts[1].completedAt, "number");
+  assert.ok(Object.isFrozen(attempts));
+  assert.ok(Object.isFrozen(attempts[0]));
+  assert.ok(Object.isFrozen(attempts[0].targets));
+  assert.ok(attempts.every(attempt => attempt.targets.every(target => !("output" in target))));
+});

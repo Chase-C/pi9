@@ -31,7 +31,8 @@ export type ConversationUpdateKind =
   | "usage"
   | "compaction"
   | "acknowledgement"
-  | "observer";
+  | "observer"
+  | "nestedJoin";
 
 /** The exact parent run that spawned a child conversation. */
 export interface ParentRun {
@@ -48,6 +49,21 @@ export type RunViewStatus =
   | { readonly kind: "running"; readonly startedAt: number }
   | { readonly kind: "done"; readonly outcome: RunOutcomeStatus; readonly completedAt: number; readonly startedAt?: number; readonly output?: string; readonly error?: string };
 
+export type NestedJoinAttemptState = "running" | "completed" | "failed" | "interrupted";
+export interface NestedJoinTargetSnapshot {
+  readonly runId: RunId;
+  readonly conversationId?: ConversationId;
+  readonly status?: RunOutcomeStatus | "queued" | "running";
+}
+export interface NestedJoinAttemptSnapshot {
+  readonly toolCallId?: string;
+  readonly targets: readonly NestedJoinTargetSnapshot[];
+  readonly state: NestedJoinAttemptState;
+  readonly startedAt: number;
+  readonly completedAt?: number;
+  readonly error?: string;
+}
+
 export interface RunSnapshot {
   readonly runId: RunId;
   readonly kind: RunKind;
@@ -58,6 +74,7 @@ export interface RunSnapshot {
   readonly usage: Usage;
   readonly observerCount: number;
   readonly acknowledged: boolean;
+  readonly nestedJoins?: readonly NestedJoinAttemptSnapshot[];
 }
 export interface ConversationSnapshot {
   readonly conversationId: ConversationId;
@@ -83,6 +100,7 @@ export class Run {
   state: AttemptState = { kind: "queued" };
   observerCount = 0;
   acknowledged = false;
+  readonly nestedJoins: Array<{ toolCallId?: string; targets: NestedJoinTargetSnapshot[]; state: NestedJoinAttemptState; startedAt: number; completedAt?: number; error?: string }> = [];
   constructor(readonly runId: RunId, readonly kind: RunKind, readonly prompt: string, onChange: RunActivityListener) {
     this.activity = new RunActivity(onChange);
   }
@@ -90,6 +108,20 @@ export class Run {
   attach(session: AgentSession): void {
     if (this.state.kind !== "queued") throw new Error(`Cannot attach a session to a run that is ${this.state.kind}.`);
     this.state = { kind: "running", session, startedAt: Date.now() };
+  }
+
+  beginNestedJoin(runIds: readonly RunId[], toolCallId?: string): number {
+    this.nestedJoins.push({ ...(toolCallId ? { toolCallId } : {}), targets: runIds.map(runId => ({ runId })), state: "running", startedAt: Date.now() });
+    return this.nestedJoins.length - 1;
+  }
+
+  updateNestedJoin(index: number, update: { targets?: readonly NestedJoinTargetSnapshot[]; state?: NestedJoinAttemptState; error?: string }): void {
+    const attempt = this.nestedJoins[index];
+    if (!attempt || attempt.state !== "running") return;
+    if (update.targets) attempt.targets = update.targets.map(target => ({ ...target }));
+    if (update.state) attempt.state = update.state;
+    if (update.error !== undefined) attempt.error = update.error;
+    if (update.state && update.state !== "running") attempt.completedAt = Date.now();
   }
 
   settle(result: RunOutcome): boolean {
@@ -215,6 +247,16 @@ export class Conversation {
     await Promise.resolve(runningSession?.abort()).catch(() => undefined);
   }
 
+  beginNestedJoin(runId: RunId, targets: readonly RunId[], toolCallId?: string): number {
+    const index = this.requireRun(runId).beginNestedJoin(targets, toolCallId);
+    this.listener(this, "nestedJoin");
+    return index;
+  }
+  updateNestedJoin(runId: RunId, index: number, update: { targets?: readonly NestedJoinTargetSnapshot[]; state?: NestedJoinAttemptState; error?: string }): void {
+    this.requireRun(runId).updateNestedJoin(index, update);
+    this.listener(this, "nestedJoin");
+  }
+
   acknowledge(runId: RunId): void {
     const run = this.requireRun(runId);
     run.acknowledged = true;
@@ -247,6 +289,14 @@ export class Conversation {
     const status: RunViewStatus = state.kind === "queued" ? { kind: "queued", queuedAt: run.createdAt }
       : state.kind === "running" ? { kind: "running", startedAt: state.startedAt }
       : { kind: "done", outcome: state.result.status, completedAt: state.completedAt, ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}), ...(state.result.output !== undefined ? { output: state.result.output } : {}), ...(state.result.error !== undefined ? { error: state.result.error } : {}) };
-    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, acknowledged: run.acknowledged });
+    const nestedJoins = run.nestedJoins.map(attempt => Object.freeze({
+      ...(attempt.toolCallId ? { toolCallId: attempt.toolCallId } : {}),
+      targets: Object.freeze(attempt.targets.map(target => Object.freeze({ ...target }))),
+      state: attempt.state,
+      startedAt: attempt.startedAt,
+      ...(attempt.completedAt !== undefined ? { completedAt: attempt.completedAt } : {}),
+      ...(attempt.error !== undefined ? { error: attempt.error } : {}),
+    }));
+    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, acknowledged: run.acknowledged, nestedJoins: Object.freeze(nestedJoins) });
   }
 }

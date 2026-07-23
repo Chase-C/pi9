@@ -1,14 +1,16 @@
 import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { Conversation, ConversationSnapshot } from "./conversation.js";
+import type { Conversation, ConversationSnapshot, NestedJoinAttemptSnapshot, RunSnapshot } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
-import type { OrderedStartOutcome, SubagentRuntime } from "./runtime.js";
+import type { JoinBinding, NestedJoinBinding, OrderedStartOutcome, SubagentRuntime } from "./runtime.js";
 import { parseSubagentInvocation, SubagentParams, type RunStatus, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type TaskRequest } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
   renderSubagentCall,
   renderSubagentResult,
   type JoinedRunRenderItem,
+  type JoinInvocationRenderItem,
+  type JoinTargetRenderItem,
   type RunRenderItem,
   type SubagentToolDetails,
 } from "./tool-renderer.js";
@@ -117,10 +119,16 @@ export async function joinAction(
   invocation: InvocationFor<"join">,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<SubagentToolDetails> | undefined,
+  toolCallId?: string,
 ): Promise<ActionResult> {
-  let binding;
+  let binding: JoinBinding | NestedJoinBinding;
+  const owner = deps.parent
+    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
+    : undefined;
   try {
-    binding = deps.runtime.bindJoin(invocation.runIds);
+    binding = owner
+      ? deps.runtime.bindNestedJoin(owner, invocation.runIds, toolCallId)
+      : deps.runtime.bindJoin(invocation.runIds);
   } catch (error) {
     return errorResult(error instanceof Error ? error.message : String(error));
   }
@@ -138,9 +146,9 @@ export async function joinAction(
         runId: entry.runId,
         status: entry.status.kind,
       });
-  const renderDetails = (): SubagentToolDetails => ({
+  const renderDetails = (final = false): SubagentToolDetails => ({
     action: "join",
-    runs: renderJoinedRuns(output(), conversationSnapshots(deps.runtime)),
+    runs: renderJoinedRuns(output(), deps.runtime, final),
   });
   const emit = () => onUpdate?.({
     content: [{ type: "text", text: JSON.stringify(output()) }],
@@ -167,12 +175,11 @@ export async function joinAction(
       : wait());
     binding.acknowledge();
     const result = output();
-    return jsonResult(result, {
-      action: "join",
-      runs: renderJoinedRuns(result, conversationSnapshots(deps.runtime)),
-    });
+    return jsonResult(result, renderDetails(true));
   } catch (error) {
-    return errorResult(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    if (owner) (binding as NestedJoinBinding).interrupt(message);
+    return errorResult(message);
   } finally {
     unsubscribe();
     binding.release();
@@ -228,15 +235,64 @@ type JoinedOutput = {
 
 function renderJoinedRuns(
   output: readonly JoinedOutput[],
-  conversations: readonly ConversationSnapshot[],
+  runtime: SubagentRuntime,
+  final: boolean,
 ): JoinedRunRenderItem[] {
-  const displayByRun = new Map(conversations.flatMap(conversation =>
-    conversation.runs.map(run => [run.runId, {
-      agent: conversation.config.name,
-      label: conversation.label,
-    }] as const),
-  ));
-  return output.map(run => ({ ...run, ...displayByRun.get(run.runId) }));
+  const conversations = conversationSnapshots(runtime);
+  const byRun = new Map(conversations.flatMap(conversation => conversation.runs.map(run =>
+    [run.runId, { conversation, run }] as const)));
+  const snapshot = (runId: RunId): RunSnapshot | undefined => {
+    try { return runtime.runSnapshot?.(runId) ?? byRun.get(runId)?.run; } catch { return byRun.get(runId)?.run; }
+  };
+  const display = (conversationId: ConversationId | undefined) => {
+    if (!conversationId) return {};
+    const local = conversations.find(item => item.conversationId === conversationId);
+    if (local) return { agent: local.config.name, ...(local.label ? { label: local.label } : {}) };
+    try {
+      const value = runtime.conversationDisplay(conversationId);
+      return { ...(value.agentName ? { agent: value.agentName } : {}), ...(value.label ? { label: value.label } : {}) };
+    } catch { return {}; }
+  };
+  const status = (run: RunSnapshot): RunStatus => run.status.kind === "done" ? run.status.outcome : run.status.kind;
+  const activity = (run: RunSnapshot) => run.activity.toolHistory.map(tool => ({
+    toolCallId: tool.id, tool: tool.name, ...(tool.inputSummary ? { summary: tool.inputSummary } : {}),
+  }));
+  const background = (ownerRunId: RunId, ownerLabel?: string) => {
+    let children: readonly { runId: RunId; conversationId: ConversationId }[] = [];
+    try { children = runtime.unjoinedDirectChildren(ownerRunId); } catch { return []; }
+    if (!children.length) return [];
+    return [{ ownerRunId, ...(ownerLabel ? { ownerLabel } : {}), entries: children.map(child => {
+      const childRun = snapshot(child.runId);
+      const childStatus = childRun ? status(childRun) : "running";
+      return { conversationId: child.conversationId, runId: child.runId, ...display(child.conversationId), status: childStatus,
+        ...(final && (childStatus === "queued" || childStatus === "running") ? { detachedAtFinal: true } : {}) };
+    }) }];
+  };
+  const target = (value: NestedJoinAttemptSnapshot["targets"][number]): JoinTargetRenderItem => {
+    const run = snapshot(value.runId);
+    const targetStatus = (run ? status(run) : value.status ?? "error") as RunStatus;
+    const base: JoinTargetRenderItem = { runId: value.runId, ...(value.conversationId ? { conversationId: value.conversationId, ...display(value.conversationId) } : {}), status: targetStatus };
+    if (!run) return base;
+    return {
+      ...base,
+      activity: activity(run),
+      joins: joins(run),
+      background: background(run.runId, base.label ?? base.agent),
+      ...(run.status.kind === "done" && run.status.error ? { error: run.status.error } : {}),
+    };
+  };
+  const joins = (run: RunSnapshot): JoinInvocationRenderItem[] => (run.nestedJoins ?? []).map(attempt => ({
+    status: (attempt.state === "running" ? "running" : attempt.state === "completed" ? "completed" : attempt.state === "interrupted" ? "interrupted" : "error") as RunStatus,
+    targets: attempt.targets.map(target), ...(attempt.error ? { error: attempt.error } : {}), ...(attempt.toolCallId ? { toolCallId: attempt.toolCallId } : {}),
+  }));
+  return output.map(value => {
+    const run = snapshot(value.runId);
+    if (!run) return { ...value };
+    const info = display(value.conversationId);
+    const represented = (run.nestedJoins ?? []).flatMap(attempt => attempt.toolCallId ? [attempt.toolCallId] : []);
+    return { ...value, ...info, kind: run.kind, prompt: run.prompt, activity: activity(run), joins: joins(run),
+      background: background(run.runId, info.label ?? info.agent), joinToolCallIds: represented };
+  });
 }
 
 export interface SubagentToolDeps {
@@ -291,7 +347,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       return renderSubagentResult(result, options, theme);
     },
 
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       const requestedJoinIds = params?.action === "join" && Array.isArray(params.runIds)
         ? params.runIds.filter((id): id is string => typeof id === "string")
         : [];
@@ -304,7 +360,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
         switch (invocation.action) {
           case "agents": return agentsAction(actionDeps, invocation);
           case "list": return listAction(actionDeps, invocation);
-          case "join": return joinAction(actionDeps, invocation, signal, onUpdate);
+          case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
           case "remove": return removeAction(actionDeps, invocation);
           case "run": return runAction(actionDeps, invocation, ctx);
         }

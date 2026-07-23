@@ -1,6 +1,6 @@
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
-import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type ParentRun, type Run, type RunSnapshot } from "./conversation.js";
+import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type ParentRun, type Run, type RunSnapshot } from "./conversation.js";
 import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun, resolveModel, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId } from "./identifiers.js";
 import type { TaskRequest } from "./schema.js";
@@ -186,12 +186,15 @@ export type OrderedStartOutcome =
 export interface RunHandle { readonly starts: readonly OrderedStartOutcome[]; readonly completion: Promise<readonly OrderedStartOutcome[]> }
 export interface JoinProjection { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: ConversationSnapshot["runs"][number]["status"] }
 export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; acknowledge(): void; release(): void }
+export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: RunId; readonly attemptIndex: number; interrupt(error?: string): void }
+export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId }
+export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
 export interface RemoveResult { removed: number; aborted: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
 
 type JoinStatus = ConversationSnapshot["runs"][number]["status"];
 type RunRecord =
   | { readonly kind: "live"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly agent: Conversation }
-  | { readonly kind: "detached"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly status: JoinStatus };
+  | { readonly kind: "detached"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; snapshot: RunSnapshot; readonly display: ConversationDisplayIdentity };
 interface BoundRun { readonly runId: RunId; snapshot(): { readonly status: JoinStatus }; acknowledge(): void; release(): void }
 interface BoundRecord { readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly binding: BoundRun }
 
@@ -262,58 +265,125 @@ export class SubagentRuntime {
     return { starts, completion: Promise.allSettled(executions).then(() => starts) };
   }
 
-  /** Manager-owned, event-driven binding of exact roots and their exact-run spawn subtree. */
+  /** Binds only the requested runs. Resolution and observer attachment are all-or-nothing. */
   bindJoin(runIds: readonly RunId[]): JoinBinding {
-    const roots = runIds.map(id => { const record = this.runs.get(id); if (!record) throw new Error(`Unknown run: ${id}.`); return record; });
-    const bindings = new Map<RunId, BoundRecord>();
-    let released = false; let checking = true; let resolve!: () => void;
-    const completion = new Promise<void>(done => { resolve = done; });
-    const add = (record: RunRecord) => {
-      if (bindings.has(record.runId)) return;
-      const binding: BoundRun = record.kind === "live" ? record.agent.bindRun(record.runId) : {
-        runId: record.runId,
-        snapshot: () => ({ status: record.status }),
-        acknowledge: () => {},
-        release: () => {},
-      };
-      bindings.set(record.runId, {
-        conversationId: record.conversationId, binding,
-        ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
+    const records = runIds.map(id => { const record = this.runs.get(id); if (!record) throw new Error(`Unknown run: ${id}.`); return record; });
+    return this.bindRecords(records);
+  }
+
+  /** Records and binds one nested join attempt on its exact owner run. */
+  bindNestedJoin(owner: ParentRun, runIds: readonly RunId[], toolCallId?: string): NestedJoinBinding {
+    const ownerRecord = this.runs.get(owner.runId);
+    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId || ownerRecord.kind !== "live")
+      throw new Error(`Unknown join owner run: ${owner.runId}.`);
+    const attemptIndex = ownerRecord.agent.beginNestedJoin(owner.runId, runIds, toolCallId);
+    let records: RunRecord[];
+    try {
+      records = runIds.map(id => {
+        const record = this.runs.get(id);
+        if (!record) throw new Error(`Unknown run: ${id}.`);
+        if (!this.isDescendant(record.runId, owner.runId)) throw new Error(`Run ${id} is not a descendant of owner run ${owner.runId}.`);
+        return record;
       });
-    };
-    const discover = () => {
-      let changed: boolean;
-      do {
-        changed = false;
-        for (const record of this.runs.values()) {
-          if (!record.parentRunId || !bindings.has(record.parentRunId) || bindings.has(record.runId)) continue;
-          // Only initial spawn runs have a parentRunId; resumes do not implicitly join the spawn subtree.
-          add(record); changed = true;
-        }
-      } while (changed);
-    };
-    const ordered = () => {
-      const result: BoundRecord[] = []; const emitted = new Set<RunId>();
-      const visit = (id: RunId) => { const item = bindings.get(id); if (!item || emitted.has(id)) return; emitted.add(id); result.push(item); for (const [childId, child] of bindings) if (child.parentRunId === id) visit(childId); };
-      for (const root of roots) visit(root.runId);
-      return result;
-    };
-    const check = () => {
-      if (released || checking) return; checking = true; discover(); const all = ordered();
-      if (all.every(item => item.binding.snapshot().status.kind === "done")) resolve();
-      checking = false;
-    };
-    // Subscribe before initial discovery so a spawn/terminal event cannot fall in the bind race.
-    const unsubscribe = this.onConversationUpdate(() => check());
-    for (const root of roots) add(root); checking = false; check();
-    const release = () => { if (released) return; released = true; unsubscribe(); for (const item of bindings.values()) item.binding.release(); };
+    } catch (error) {
+      this.updateNestedJoin(owner.runId, attemptIndex, { state: "failed", error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+    const base = this.bindRecords(records);
+    let terminal = false;
+    const targets = (): NestedJoinTargetSnapshot[] => base.project().map(value => ({
+      runId: value.runId, conversationId: value.conversationId,
+      status: value.status.kind === "done" ? value.status.outcome : value.status.kind,
+    }));
+    this.updateNestedJoin(owner.runId, attemptIndex, { targets: targets() });
+    void base.completion.then(() => {
+      if (terminal) return; terminal = true;
+      this.updateNestedJoin(owner.runId, attemptIndex, { targets: targets(), state: "completed" });
+    });
     return {
-      get runIds() { return ordered().map(item => item.binding.runId); }, completion,
-      project: () => ordered().map(item => ({ conversationId: item.conversationId, runId: item.binding.runId, status: item.binding.snapshot().status })),
-      acknowledge: () => { for (const item of ordered()) if (item.binding.snapshot().status.kind === "done") item.binding.acknowledge(); },
-      release,
+      ownerRunId: owner.runId, attemptIndex,
+      get runIds() { return base.runIds; }, completion: base.completion,
+      project: () => base.project(), acknowledge: () => base.acknowledge(), release: () => base.release(),
+      interrupt: (error = "Nested join interrupted.") => {
+        if (terminal) return; terminal = true;
+        this.updateNestedJoin(owner.runId, attemptIndex, { targets: targets(), state: "interrupted", error });
+        base.release();
+      },
     };
   }
+
+  runSnapshot(runId: RunId): RunSnapshot {
+    const record = this.requireRunRecord(runId);
+    return record.kind === "live" ? record.agent.runHistory.find(run => run.runId === runId)! : record.snapshot;
+  }
+  conversationDisplay(conversationId: ConversationId): ConversationDisplayIdentity {
+    const live = this.conversations.get(conversationId);
+    if (live) return { conversationId, ...(live.label ? { label: live.label } : {}), agentName: live.agentName };
+    const record = [...this.runs.values()].find(value => value.conversationId === conversationId && value.kind === "detached");
+    if (!record || record.kind !== "detached") throw new Error(`Unknown conversation: ${conversationId}.`);
+    return record.display;
+  }
+  directSpawnedChildren(runId: RunId): readonly RunIdentity[] {
+    return [...this.runs.values()].filter(value => value.parentRunId === runId).map(value => ({ runId: value.runId, conversationId: value.conversationId, parentRunId: runId }));
+  }
+  unjoinedDirectChildren(runId: RunId): readonly RunIdentity[] {
+    const mentioned = new Set((this.runSnapshot(runId).nestedJoins ?? []).flatMap(attempt => attempt.targets.map(target => target.runId)));
+    return this.directSpawnedChildren(runId).filter(child => !mentioned.has(child.runId));
+  }
+
+  private bindRecords(records: readonly RunRecord[]): JoinBinding {
+    const attached: BoundRecord[] = [];
+    try {
+      for (const record of records) {
+        const binding: BoundRun = record.kind === "live" ? record.agent.bindRun(record.runId) : {
+          runId: record.runId, snapshot: () => ({ status: record.snapshot.status }),
+          acknowledge: () => { record.snapshot = Object.freeze({ ...record.snapshot, acknowledged: true }); }, release: () => {},
+        };
+        attached.push({ conversationId: record.conversationId, binding, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}) });
+      }
+    } catch (error) { for (const item of attached) item.binding.release(); throw error; }
+    let released = false; let resolve!: () => void;
+    const completion = new Promise<void>(done => { resolve = done; });
+    const check = () => { if (!released && attached.every(item => item.binding.snapshot().status.kind === "done")) resolve(); };
+    const unsubscribe = this.onConversationUpdate(check);
+    check();
+    return {
+      runIds: Object.freeze(records.map(record => record.runId)), completion,
+      project: () => attached.map(item => ({ conversationId: item.conversationId, runId: item.binding.runId, status: item.binding.snapshot().status })),
+      acknowledge: () => { for (const item of attached) if (item.binding.snapshot().status.kind === "done") item.binding.acknowledge(); },
+      release: () => { if (released) return; released = true; unsubscribe(); for (const item of attached) item.binding.release(); },
+    };
+  }
+  private updateNestedJoin(runId: RunId, index: number, update: { targets?: readonly NestedJoinTargetSnapshot[]; state?: "running" | "completed" | "failed" | "interrupted"; error?: string }): void {
+    const record = this.requireRunRecord(runId);
+    if (record.kind === "live") {
+      record.agent.updateNestedJoin(runId, index, update);
+      return;
+    }
+    const attempts = [...(record.snapshot.nestedJoins ?? [])];
+    const current = attempts[index];
+    if (!current || current.state !== "running") return;
+    const terminal = update.state !== undefined && update.state !== "running";
+    attempts[index] = Object.freeze({
+      ...current,
+      ...(update.targets ? { targets: Object.freeze(update.targets.map(target => Object.freeze({ ...target }))) } : {}),
+      ...(update.state ? { state: update.state } : {}),
+      ...(update.error !== undefined ? { error: update.error } : {}),
+      ...(terminal ? { completedAt: Date.now() } : {}),
+    });
+    record.snapshot = Object.freeze({ ...record.snapshot, nestedJoins: Object.freeze(attempts) });
+  }
+
+  private isDescendant(candidate: RunId, owner: RunId): boolean {
+    let current = this.runs.get(candidate);
+    const seen = new Set<RunId>();
+    while (current?.parentRunId && !seen.has(current.runId)) {
+      if (current.parentRunId === owner) return true;
+      seen.add(current.runId); current = this.runs.get(current.parentRunId);
+    }
+    return false;
+  }
+  private requireRunRecord(runId: RunId): RunRecord { const record = this.runs.get(runId); if (!record) throw new Error(`Unknown run: ${runId}.`); return record; }
 
   removeConversation(conversationId: string): RemoveResult { return this.removeConversations([conversationId]); }
   removeConversations(ids: readonly string[]): RemoveResult {
@@ -328,7 +398,7 @@ export class SubagentRuntime {
       for (const run of runs) {
         const indexed = this.runs.get(run.runId);
         this.runs.set(run.runId, {
-          kind: "detached", runId: run.runId, conversationId: agent.conversationId, status: run.status,
+          kind: "detached", runId: run.runId, conversationId: agent.conversationId, snapshot: run, display: { conversationId: agent.conversationId, ...(agent.label ? { label: agent.label } : {}), agentName: agent.agentName },
           ...(indexed?.parentRunId ? { parentRunId: indexed.parentRunId } : {}),
         });
       }
