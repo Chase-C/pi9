@@ -14,16 +14,17 @@ export function formatTodoSummary(state: TodoState | undefined, includeDescripti
   const tasks = todoTasks(state);
   if (tasks.length === 0) return "No todo tasks.";
 
-  const counts = countTodos(tasks);
+  const counts = countTodoStatuses(tasks);
   const summary = [
-    `${counts.open} open`,
+    ...(counts.in_progress ? [`${counts.in_progress} active`] : []),
+    ...(counts.pending ? [`${counts.pending} pending`] : []),
     ...(counts.completed ? [`${counts.completed} completed`] : []),
     ...(counts.cancelled ? [`${counts.cancelled} cancelled`] : []),
   ].join(` ${TODO_SEPARATOR_GLYPH} `);
 
   return [
     `Todo: ${summary}`,
-    ...(includeDescriptions && state?.workingOn ? [`Working on: ${state.workingOn}`] : []),
+    ...(state?.workingOn ? [`Working on: ${state.workingOn}`] : []),
     ...formatTodoTaskLines(state, includeDescriptions),
   ].join("\n");
 }

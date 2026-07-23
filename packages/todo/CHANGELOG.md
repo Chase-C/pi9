@@ -4,6 +4,11 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Streamline the model-facing task schema and planning guidance around names, status transitions, verification, and active work.
+- Improve tool summaries by separating active and pending counts, always showing current work, and naming conflicting active phases in validation errors.
+
 ## [0.3.4] - 2026-07-17
 
 ### Changed

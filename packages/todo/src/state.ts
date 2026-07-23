@@ -280,7 +280,9 @@ function assertTodoState(value: unknown): asserts value is TodoState {
       if (!isTodoStatus(task.status)) throw new Error("Invalid todo state.");
       if (task.status === "in_progress") {
         if (activePhase !== undefined && activePhase !== phaseName) {
-          throw new Error("Invalid todo state: in_progress tasks must all belong to one phase.");
+          throw new Error(
+            `Invalid todo state: in_progress tasks span conflicting phases: ${activePhase} and ${phaseName}.`,
+          );
         }
         activePhase = phaseName;
       }

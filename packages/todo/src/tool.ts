@@ -213,9 +213,8 @@ export function registerTodoTool(pi: ExtensionAPI): void {
     promptSnippet: "Track multi-step work in a phased task plan",
     promptGuidelines: [
       "When creating a todo plan, prefer a few broad phases with many concrete tasks; use smaller phases only for meaningful execution boundaries.",
-      "Update the todo plan immediately as work starts, finishes, or is abandoned; never defer status transitions to the end.",
-      "Mark todo tasks `completed` only after verification and `cancelled` when abandoned or obsolete; keep all `in_progress` tasks confined to one phase.",
-      "Include an accurate `workingOn` summary in every todo transition that leaves one or more tasks `in_progress`.",
+      "Transition the todo plan immediately as work starts, finishes and is verified, or is abandoned; never defer status transitions to the end.",
+      "Confine `in_progress` todo tasks to a single phase, and include an accurate `workingOn` summary in every transition that leaves any task `in_progress`.",
       "As work evolves, mark stale todo tasks `cancelled` and use todo `add` for newly discovered tasks instead of expanding the scope of existing tasks",
     ],
     parameters: TodoParamsSchema,

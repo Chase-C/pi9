@@ -137,7 +137,7 @@ describe("todo state", () => {
         { phase: "Verify", task: "Run tests", status: "in_progress" },
       ],
       workingOn: "Working in two phases",
-    })).toThrow(/one phase/);
+    })).toThrow(/conflicting phases: Build and Verify/);
   });
 
   it("requires current work on every transition that leaves tasks active and clears it automatically", () => {

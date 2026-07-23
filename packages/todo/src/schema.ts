@@ -3,22 +3,20 @@ import { Type } from "typebox";
 import { TODO_ACTIONS, TODO_STATUSES } from "./types.js";
 
 export const TodoTaskSchema = Type.Object({
-  name: Type.String({
-    description: "Unique immutable task name within the phase; ~5–10 words describing what, not how.",
-  }),
+  name: Type.String({ description: "Unique task name; ~5–10 words describing what, not how." }),
   description: Type.String({
     description: "1–3 sentences expanding on the name with relevant context, constraints, or expected outcome.",
   }),
 }, { additionalProperties: false });
 
 export const TodoPhaseSchema = Type.Object({
-  name: Type.String({ description: "Unique immutable phase name; 1–2 words." }),
+  name: Type.String({ description: "Unique phase name; 1–2 words." }),
   tasks: Type.Array(TodoTaskSchema, { minItems: 1 }),
 }, { additionalProperties: false });
 
 export const TodoTransitionSchema = Type.Object({
-  phase: Type.String({ description: "Exact name of an existing phase." }),
-  task: Type.String({ description: "Exact name of an existing task within the phase." }),
+  phase: Type.String(),
+  task: Type.String(),
   status: StringEnum(TODO_STATUSES, { description: "Status to assign to the task." }),
 }, { additionalProperties: false });
 

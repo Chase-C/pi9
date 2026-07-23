@@ -25,8 +25,9 @@ describe("todo formatting", () => {
     expect(summary).toMatch(/○ Build feature/);
     expect(summary).toMatch(/✓ Ship release/);
     expect(summary).not.toContain("Detailed description");
+    expect(summary).toContain("Todo: 1 active · 1 pending · 1 completed · 1 cancelled");
+    expect(summary).toContain("Working on: Building the feature");
     expect(formatTodoSummary(state, true)).toContain("Build feature — Detailed description for Build feature.");
-    expect(formatTodoSummary(state, true)).toContain("Working on: Building the feature");
     expect(summary).not.toMatch(/task-/);
   });
 
