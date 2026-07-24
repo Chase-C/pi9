@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Redesign `/subagents` settings as a padded inspector with contextual previews, direct numeric entry, and dependency-aware progress-row controls.
+
 ## [0.7.2] - 2026-07-24
 
 ### Changed
