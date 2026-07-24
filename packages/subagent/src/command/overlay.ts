@@ -64,7 +64,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     private readonly options: OverlayOptions,
   ) {
     this.page = options.initialPage;
-    this.bodyHeight = tui.terminal ? Math.max(10, Math.floor(tui.terminal.rows * 0.8) - OVERLAY_CHROME_HEIGHT) : DEFAULT_BODY_HEIGHT;
+    this.bodyHeight = tui.terminal ? Math.max(1, Math.floor(tui.terminal.rows * 0.8) - OVERLAY_CHROME_HEIGHT) : DEFAULT_BODY_HEIGHT;
     const settings = options.settings?.runtime && options.settings?.display ? options.settings : DEFAULT_SUBAGENT_SETTINGS;
     this.settings = new SubagentSettingsComponent(
       settings,
@@ -153,7 +153,12 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const label = `[ ${PAGE_LABELS[page]} ]`;
       return page === this.page ? this.accent(label) : label;
     }).join("  ");
-    return truncateToWidth(` ${this.accent("Subagents")}    ${tabs}`, width, "");
+    const title = this.accent("Subagents");
+    const spacious = ` ${title}    ${tabs}`;
+    const compact = `${title}  ${tabs}`;
+    if (visibleWidth(spacious) <= width) return spacious;
+    if (visibleWidth(compact) <= width) return compact;
+    return truncateToWidth(` ${tabs}`, width, "");
   }
 
   private renderDetailTitle(width: number): string {
@@ -172,8 +177,16 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const filter = this.renderFilter(Math.max(1, leftWidth - 2));
 
     if (!wide) {
-      const listHeight = Math.max(4, Math.floor((this.bodyHeight - 2) / 2));
-      const inspectorHeight = Math.max(3, this.bodyHeight - listHeight - 2);
+      if (this.bodyHeight < 4) {
+        const listHeight = Math.max(0, this.bodyHeight - 1);
+        return [
+          ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight),
+          ` ${filter}`,
+        ];
+      }
+      const contentHeight = this.bodyHeight - 2;
+      const listHeight = Math.ceil(contentHeight / 2);
+      const inspectorHeight = contentHeight - listHeight;
       return [
         ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight),
         ` ${filter}`,
@@ -182,9 +195,10 @@ export class SubagentOverlayComponent implements Component, Focusable {
       ];
     }
 
-    const listHeight = this.bodyHeight - 2;
-    const left = ["", ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight), filter];
-    const right = fitHeight(["", ...compactViewport(inspector, this.bodyHeight - 1)], this.bodyHeight);
+    const topPadding = this.bodyHeight > 1 ? 1 : 0;
+    const listHeight = Math.max(0, this.bodyHeight - topPadding - 1);
+    const left = [...(topPadding ? [""] : []), ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight), filter];
+    const right = fitHeight([...(topPadding ? [""] : []), ...compactViewport(inspector, Math.max(0, this.bodyHeight - topPadding))], this.bodyHeight);
     return left.map((line, index) => `${pad(` ${line}`, leftWidth)} ${this.border("│")} ${pad(` ${right[index] ?? ""}`, rightWidth)}`);
   }
 
@@ -340,30 +354,32 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
 
   private renderNestedConversationTree(conversation: ConversationSnapshot, run: RunSnapshot, width: number): string[] {
-    const conversations = this.manager.listConversations();
-    const direct = conversations.filter(candidate => candidate.parent?.conversationId === conversation.conversationId && candidate.parent.runId === run.runId);
+    const ownerKey = (conversationId: string, runId: string) => `${conversationId}\0${runId}`;
     const children = new Map<string, ConversationSnapshot[]>();
-    for (const candidate of conversations) {
-      const parentId = candidate.parent?.conversationId;
-      if (!parentId) continue;
-      const siblings = children.get(parentId) ?? [];
+    for (const candidate of this.manager.listConversations()) {
+      if (!candidate.parent) continue;
+      const key = ownerKey(candidate.parent.conversationId, candidate.parent.runId);
+      const siblings = children.get(key) ?? [];
       siblings.push(candidate);
-      children.set(parentId, siblings);
+      children.set(key, siblings);
     }
 
     const lines: string[] = [];
+    const seen = new Set<string>();
     const visit = (siblings: readonly ConversationSnapshot[], prefix: string) => siblings.forEach((child, index) => {
+      if (seen.has(child.conversationId)) return;
+      seen.add(child.conversationId);
       const last = index === siblings.length - 1;
-      const childRun = child.currentRun ?? child.runs.at(-1);
+      const childRun = child.runs[0];
       const label = child.label || child.config.name;
       const agent = child.label ? ` · ${child.config.name}` : "";
       const status = childRun ? effectiveStatus(childRun.status) : "idle";
       const connector = `${prefix}${last ? "╰─" : "├─"}`;
       const content = `${this.muted(connector)} ${this.text(label)}${this.muted(agent)} ${this.muted("·")} ${childRun ? this.statusText(childRun, status) : this.muted(status)}`;
       lines.push(truncateToWidth(content, width, "…"));
-      visit(children.get(child.conversationId) ?? [], `${prefix}${last ? "   " : `${this.muted("│")}  `}`);
+      if (childRun) visit(children.get(ownerKey(child.conversationId, childRun.runId)) ?? [], `${prefix}${last ? "   " : `${this.muted("│")}  `}`);
     });
-    visit(direct, "");
+    visit(children.get(ownerKey(conversation.conversationId, run.runId)) ?? [], "");
     return lines;
   }
 

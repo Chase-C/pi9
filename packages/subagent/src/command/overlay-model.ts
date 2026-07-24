@@ -16,8 +16,11 @@ export function projectConversations(
   options: { mode?: ConversationLayoutMode; query?: string } = {},
 ): ConversationRow[] {
   const mode = options.mode ?? "tree";
+  const insertionOrder = new Map(conversations.map((conversation, index) => [conversation.conversationId, index]));
+  const newestFirst = (left: ConversationSnapshot, right: ConversationSnapshot) =>
+    right.createdAt - left.createdAt || (insertionOrder.get(right.conversationId) ?? 0) - (insertionOrder.get(left.conversationId) ?? 0);
   const directMatches = conversations.filter(conversation => conversationMatches(conversation, options.query ?? ""));
-  if (mode === "flat") return [...directMatches].sort(newestConversationFirst).map(conversation => ({ conversation, depth: 0 }));
+  if (mode === "flat") return [...directMatches].sort(newestFirst).map(conversation => ({ conversation, depth: 0 }));
 
   const allById = new Map(conversations.map(conversation => [conversation.conversationId, conversation]));
   const includedIds = new Set(directMatches.map(conversation => conversation.conversationId));
@@ -43,7 +46,7 @@ export function projectConversations(
     children.set(parentId, siblings);
   }
 
-  for (const siblings of children.values()) siblings.sort(newestConversationFirst);
+  for (const siblings of children.values()) siblings.sort(newestFirst);
 
   const nested = new Set([...children.values()].flat().map(conversation => conversation.conversationId));
   const rows: ConversationRow[] = [];
@@ -65,8 +68,8 @@ export function projectConversations(
     const childAncestors = depth ? [...ancestorLast, isLast] : [];
     descendants.forEach((child, index) => visit(child, depth + 1, childAncestors, index === descendants.length - 1));
   };
-  for (const conversation of included.filter(conversation => !nested.has(conversation.conversationId)).sort(newestConversationFirst)) visit(conversation, 0);
-  for (const conversation of included.filter(conversation => !seen.has(conversation.conversationId)).sort(newestConversationFirst)) visit(conversation, 0);
+  for (const conversation of included.filter(conversation => !nested.has(conversation.conversationId)).sort(newestFirst)) visit(conversation, 0);
+  for (const conversation of included.filter(conversation => !seen.has(conversation.conversationId)).sort(newestFirst)) visit(conversation, 0);
   return rows;
 }
 
@@ -83,10 +86,6 @@ export function filterAgents(agents: readonly AgentConfig[], query: string): Age
     ...(agent.skills ?? []),
   ].some(value => value?.toLowerCase().includes(normalized))) : [...agents];
   return filtered.sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function newestConversationFirst(left: ConversationSnapshot, right: ConversationSnapshot): number {
-  return right.createdAt - left.createdAt;
 }
 
 function conversationMatches(conversation: ConversationSnapshot, query: string): boolean {

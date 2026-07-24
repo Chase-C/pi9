@@ -21,10 +21,10 @@ describe("conversation projection", () => {
   });
 
   it("projects classic connectors and continuous ancestor rails", () => {
-    const root = fakeAgent({ conversationId: "root" });
-    const branchA = fakeAgent({ conversationId: "branch-a", parent: { conversationId: "root", runId: "root-run" } });
-    const leafA = fakeAgent({ conversationId: "leaf-a", parent: { conversationId: "branch-a", runId: "branch-run" } });
-    const branchB = fakeAgent({ conversationId: "branch-b", parent: { conversationId: "root", runId: "root-run" } });
+    const root = fakeAgent({ conversationId: "root", createdAt: 1 });
+    const branchA = fakeAgent({ conversationId: "branch-a", createdAt: 3, parent: { conversationId: "root", runId: "root-run" } });
+    const leafA = fakeAgent({ conversationId: "leaf-a", createdAt: 4, parent: { conversationId: "branch-a", runId: "branch-run" } });
+    const branchB = fakeAgent({ conversationId: "branch-b", createdAt: 2, parent: { conversationId: "root", runId: "root-run" } });
 
     const rows = projectConversations([root, branchA, leafA, branchB]);
 
@@ -52,6 +52,14 @@ describe("conversation projection", () => {
       "newer-root",
       "older-root",
     ]);
+  });
+
+  it("treats later insertions as newer when timestamps are equal", () => {
+    const first = fakeAgent({ conversationId: "first", createdAt: 1 });
+    const second = fakeAgent({ conversationId: "second", createdAt: 1 });
+
+    expect(projectConversations([first, second]).map(row => row.conversation.conversationId)).toEqual(["second", "first"]);
+    expect(projectConversations([first, second], { mode: "flat" }).map(row => row.conversation.conversationId)).toEqual(["second", "first"]);
   });
 
   it("filters conversations using run identities and activity", () => {

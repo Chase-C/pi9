@@ -3,7 +3,7 @@ import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/settings.js";
 import { SubagentOverlayComponent, type OverlayOptions } from "../../src/command/overlay.js";
 import { fakeAgent, fakeRunSection, ZERO_USAGE } from "../helpers/fake-agent.js";
 
-function overlay(conversations: any[], overrides: Partial<OverlayOptions> = {}, theme: any = {}) {
+function overlay(conversations: any[], overrides: Partial<OverlayOptions> = {}, theme: any = {}, terminalRows?: number) {
   let listener: (() => void) | undefined;
   const unsubscribe = vi.fn();
   const requestRender = vi.fn();
@@ -20,7 +20,7 @@ function overlay(conversations: any[], overrides: Partial<OverlayOptions> = {}, 
   };
   const component = new SubagentOverlayComponent(
     manager as any,
-    { requestRender } as any,
+    { requestRender, ...(terminalRows !== undefined ? { terminal: { rows: terminalRows } } : {}) } as any,
     theme,
     undefined,
     vi.fn(),
@@ -98,6 +98,18 @@ describe("subagent overlay behavior", () => {
     expect(output[2]).toMatch(/^├─+┤$/);
   });
 
+  it("keeps complete header and controls within small-terminal height budgets", () => {
+    for (const rows of [18, 19]) {
+      const { component } = overlay([fakeAgent()], {}, {}, rows);
+      const output = component.render(56);
+
+      expect(output).toHaveLength(Math.floor(rows * 0.8));
+      expect(output[1]).toContain("Subagents  [ Agents ]  [ Conversations ]  [ Settings ]");
+      expect(output.at(-2)).toContain("select");
+      expect(output.at(-1)).toMatch(/^╰─+╯$/);
+    }
+  });
+
   it("cycles panes backward with shift-tab", () => {
     const { component } = overlay([], {
       initialPage: "agents",
@@ -129,7 +141,7 @@ describe("subagent overlay behavior", () => {
   });
 
   it("keeps the selected row visible when scrolling either browser page", () => {
-    const conversations = Array.from({ length: 12 }, (_, index) => fakeAgent({ conversationId: `conversation-${index}` }));
+    const conversations = Array.from({ length: 12 }, (_, index) => fakeAgent({ conversationId: `conversation-${index}`, createdAt: 12 - index }));
     const agents = Array.from({ length: 12 }, (_, index) => ({
       name: `agent-${String(index).padStart(2, "0")}`,
       description: `Agent ${index}`,
@@ -179,31 +191,45 @@ describe("subagent overlay behavior", () => {
       conversationId: "root-conversation",
       runId: "root-run",
       label: "recursive overlay demo",
+      createdAt: 1,
       messageSnippet: "ROOT_FINAL_OUTPUT",
       status: { kind: "completed", response: "ROOT_FINAL_OUTPUT" },
     });
+    const branchSpawn = fakeRunSection({ runId: "branch-a-run", createdAt: 3 });
+    const branchResume = fakeRunSection({ runId: "branch-a-resume", createdAt: 7, kind: "resume" });
     const branchA = fakeAgent({
       conversationId: "branch-a",
-      runId: "branch-a-run",
       label: "recursive branch A",
+      createdAt: 3,
       options: { agent: "recursive-test" },
       parent: { conversationId: "root-conversation", runId: "root-run" },
+      runs: [branchSpawn, branchResume],
     });
     const leafA = fakeAgent({
       conversationId: "leaf-a",
       runId: "leaf-a-run",
       label: "leaf branch A1",
+      createdAt: 5,
       options: { agent: "recursive-test" },
       parent: { conversationId: "branch-a", runId: "branch-a-run" },
+    });
+    const resumedLeaf = fakeAgent({
+      conversationId: "resumed-leaf",
+      runId: "resumed-leaf-run",
+      label: "leaf from branch resume",
+      createdAt: 8,
+      options: { agent: "recursive-test" },
+      parent: { conversationId: "branch-a", runId: "branch-a-resume" },
     });
     const branchB = fakeAgent({
       conversationId: "branch-b",
       runId: "branch-b-run",
       label: "recursive branch B",
+      createdAt: 2,
       options: { agent: "recursive-test" },
       parent: { conversationId: "root-conversation", runId: "root-run" },
     });
-    const { component } = overlay([root, branchA, leafA, branchB]);
+    const { component } = overlay([root, branchA, leafA, resumedLeaf, branchB]);
     const output = component.render(180).join("\n");
 
     expect(output).toContain("subagents");
@@ -211,9 +237,16 @@ describe("subagent overlay behavior", () => {
     expect(nested).toContain("├─ recursive branch A · recursive-test · completed");
     expect(nested).toContain("│  ╰─ leaf branch A1 · recursive-test · completed");
     expect(nested).toContain("╰─ recursive branch B · recursive-test · completed");
+    expect(nested).not.toContain("leaf from branch resume");
     expect(output.indexOf("Activity")).toBeLessThan(output.indexOf("subagents"));
     expect(output.match(/ROOT_FINAL_OUTPUT/g)).toHaveLength(1);
     expect(output).toContain("Final output");
+
+    component.handleInput("\x1b[B");
+    const resumedOutput = component.render(180).join("\n");
+    const resumedNested = resumedOutput.slice(resumedOutput.indexOf("subagents"));
+    expect(resumedNested).toContain("╰─ leaf from branch resume · recursive-test · completed");
+    expect(resumedNested).not.toContain("leaf branch A1");
   });
 
   it("renders conversation chronology with compact previous-run statistics", () => {
@@ -262,8 +295,8 @@ describe("subagent overlay behavior", () => {
 
   it("marks the selected conversation across all three row lines", () => {
     const conversations = [
-      fakeAgent({ conversationId: "conversation-alpha", label: "alpha" }),
-      fakeAgent({ conversationId: "conversation-beta", label: "beta" }),
+      fakeAgent({ conversationId: "conversation-alpha", label: "alpha", createdAt: 2 }),
+      fakeAgent({ conversationId: "conversation-beta", label: "beta", createdAt: 1 }),
     ];
     const { component } = overlay(conversations);
 
