@@ -1,0 +1,68 @@
+{
+  "name": "@pi9/persona",
+  "version": "0.1.0",
+  "description": "Prompt-based agent personas for Pi.",
+  "license": "MIT",
+  "author": "Chase Cummings <chaseecummings@gmail.com>",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chase-C/pi9.git",
+    "directory": "packages/persona"
+  },
+  "bugs": {
+    "url": "https://github.com/Chase-C/pi9/issues"
+  },
+  "homepage": "https://github.com/Chase-C/pi9/tree/main/packages/persona#readme",
+  "files": [
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "pi9",
+    "persona",
+    "mode"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "release": "node ../../scripts/release.mjs persona",
+    "release:patch": "node ../../scripts/release.mjs persona patch",
+    "release:minor": "node ../../scripts/release.mjs persona minor",
+    "release:major": "node ../../scripts/release.mjs persona major",
+    "prepublishOnly": "npm run typecheck && npm test"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [],
+    "prompts": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.9",
+    "@types/node": "^24.0.0",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.6"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
+}

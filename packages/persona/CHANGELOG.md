@@ -1,0 +1,16 @@
+# Changelog
+
+All notable changes to `@pi9/persona` will be documented in this file.
+
+## [Unreleased]
+
+## [0.1.0] - 2026-07-24
+
+### Added
+
+- Add prompt-based personas defined as Markdown in global or trusted project configuration.
+- Add command and keyboard controls for switching personas with session-aware state and status.
+- Keep persona instructions aligned across initial prompts, mid-session changes, and compaction.
+
+[Unreleased]: https://github.com/Chase-C/pi9/compare/persona-v0.1.0...HEAD
+[0.1.0]: https://github.com/Chase-C/pi9/releases/tag/persona-v0.1.0
