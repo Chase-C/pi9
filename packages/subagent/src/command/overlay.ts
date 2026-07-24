@@ -108,6 +108,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       this.requestRender();
       return;
     }
+    if (this.page === "settings" && this.settings.isEditing) { this.settings.handleInput(data); return; }
     if (isCancelKey(data, this.keybindings) || data === "q") { this.done(); return; }
     if (data === "\t") { this.switchPage(1); return; }
     if (isShiftTabKey(data)) { this.switchPage(-1); return; }
@@ -519,6 +520,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     this.filters.conversations.focused = this._focused && this.focusRegion === "filter" && this.page === "conversations";
     this.filters.agents.focused = this._focused && this.focusRegion === "filter" && this.page === "agents";
     this.prompt.focused = this._focused && this.focusRegion === "prompt";
+    this.settings.focused = this._focused && this.focusRegion === "list" && this.page === "settings";
   }
   private requestRender(): void { this.tui.requestRender(); }
   private findConversation(id: string): ConversationSnapshot | undefined { return this.manager.listConversations().find(conversation => conversation.conversationId === id); }
@@ -552,7 +554,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     if (this.detail) return "r resume · x remove · esc back";
     if (this.page === "agents") return "↑↓ select · / filter · enter/s start · tab pages · esc close";
     if (this.page === "conversations") return "↑↓ select · enter inspect · / filter · t flat/tree · r resume · x remove · tab pages · esc close";
-    return "↑↓ select · enter change · tab pages · esc close";
+    return this.settings.isEditing ? "type value · enter save · esc cancel" : "↑↓ select · enter/space change · tab pages · esc close";
   }
 }
 
