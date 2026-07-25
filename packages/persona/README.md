@@ -70,7 +70,9 @@ The selected persona becomes the initial baseline. Later switches are recorded a
 
 Compaction creates a new context boundary. After compaction, the currently active persona becomes the new system-prompt baseline and earlier persona messages are no longer needed. If no persona is active at compaction, the persona sections are omitted. Later switches continue to use hidden messages until the next compaction.
 
-If the first turn starts without an active persona, the system prompt remains unmodified. The first persona selected later is communicated through a hidden `persona-activation` message containing the persona-usage guidance and active instructions. Subsequent switches use hidden `persona-change` messages.
+If the first turn starts without an active persona, the system prompt remains unmodified. The first persona selected later is communicated through a hidden `persona-activation` message containing the persona-usage guidance and active instructions. Subsequent switches use hidden `persona-change` messages. The extension sends these messages during `before_agent_start`, so Pi persists them immediately before the pending user request rather than after it.
+
+This ordering relies on Pi's current behavior for `sendMessage()` without `triggerTurn` while idle. Prompts queued while an agent run is already active do not emit `before_agent_start` and are not covered by this ordering guarantee.
 
 ## Development
 

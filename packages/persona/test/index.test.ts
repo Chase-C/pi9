@@ -13,6 +13,7 @@ import personaExtension from "../src/index.js";
 
 interface Harness {
   appendEntry: ReturnType<typeof vi.fn>;
+  sendMessage: ReturnType<typeof vi.fn>;
   command: { handler: (args: string, ctx: TestContext) => Promise<void> };
   events: Record<string, (event: Record<string, unknown>, ctx: TestContext) => unknown>;
   shortcuts: Record<string, (ctx: TestContext) => Promise<void>>;
@@ -36,6 +37,7 @@ function createHarness(): Harness {
   const shortcuts: Harness["shortcuts"] = {};
   let command: Harness["command"] | undefined;
   const appendEntry = vi.fn();
+  const sendMessage = vi.fn();
   const pi = {
     registerCommand: (_name: string, registered: Harness["command"]) => {
       command = registered;
@@ -47,11 +49,12 @@ function createHarness(): Harness {
       events[name] = handler;
     },
     appendEntry,
+    sendMessage,
   };
 
   personaExtension(pi as never);
   if (!command) throw new Error("Persona command was not registered");
-  return { appendEntry, command, events, shortcuts };
+  return { appendEntry, sendMessage, command, events, shortcuts };
 }
 
 function createContext(
@@ -112,6 +115,7 @@ describe("persona extension", () => {
     expect(result).toMatchObject({
       systemPrompt: expect.stringContaining("## Persona baseline: planner"),
     });
+    expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("persona", "persona:planner");
   });
 
@@ -128,13 +132,32 @@ describe("persona extension", () => {
       activeName: "reviewer",
       baselineName: null,
     });
-    expect(result).toMatchObject({
-      message: {
+    expect(result).toBeUndefined();
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
         customType: "persona-activation",
         details: { name: "reviewer" },
-      },
+      }),
+    );
+  });
+
+  it("sends a late activation synchronously instead of returning it from the hook", async () => {
+    const branch = [{ type: "message", message: { role: "user", content: "Hello" } }];
+    const harness = createHarness();
+    const ctx = createContext(branch);
+    harness.events.session_start({}, ctx);
+    await harness.command.handler("reviewer", ctx);
+
+    let hookReturned = false;
+    harness.sendMessage.mockImplementation(() => {
+      expect(hookReturned).toBe(false);
     });
-    expect(result).not.toHaveProperty("systemPrompt");
+
+    const result = harness.events.before_agent_start({ systemPrompt: "Base prompt" }, ctx);
+    hookReturned = true;
+
+    expect(result).toBeUndefined();
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
   });
 
   it("restores the prompt baseline and communicates a later clear", async () => {
@@ -158,13 +181,15 @@ describe("persona extension", () => {
       activeName: null,
       baselineName: "planner",
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       systemPrompt: expect.stringContaining("## Persona baseline: planner"),
-      message: {
+    });
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
         customType: "persona-change",
         details: { name: null },
-      },
-    });
+      }),
+    );
     expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("persona", undefined);
   });
 
@@ -189,6 +214,7 @@ describe("persona extension", () => {
     expect(result).toEqual({
       systemPrompt: expect.stringContaining("## Persona baseline: planner"),
     });
+    expect(harness.sendMessage).not.toHaveBeenCalled();
   });
 
   it("promotes the active persona to the system-prompt baseline after compaction", async () => {
@@ -211,10 +237,15 @@ describe("persona extension", () => {
     });
 
     await harness.command.handler("planner", ctx);
-    expect(harness.events.before_agent_start({ systemPrompt: "Base prompt" }, ctx)).toMatchObject({
+    expect(harness.events.before_agent_start({ systemPrompt: "Base prompt" }, ctx)).toEqual({
       systemPrompt: expect.stringContaining("## Persona baseline: reviewer"),
-      message: { customType: "persona-change", details: { name: "planner" } },
     });
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "persona-change",
+        details: { name: "planner" },
+      }),
+    );
   });
 
   it("removes persona prompt additions when compaction occurs while cleared", async () => {
@@ -259,10 +290,13 @@ describe("persona extension", () => {
     harness.events.session_start({}, ctx);
 
     await harness.shortcuts["alt+]"](ctx);
-    const activation = harness.events.before_agent_start({ systemPrompt: "Base prompt" }, ctx);
-    expect(activation).toMatchObject({
-      message: { customType: "persona-activation", details: { name: "planner" } },
-    });
+    expect(harness.events.before_agent_start({ systemPrompt: "Base prompt" }, ctx)).toBeUndefined();
+    expect(harness.sendMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        customType: "persona-activation",
+        details: { name: "planner" },
+      }),
+    );
 
     branch.push({
       type: "custom_message",
@@ -270,10 +304,13 @@ describe("persona extension", () => {
       details: { name: "planner" },
     });
     await harness.shortcuts["alt+]"](ctx);
-    const change = harness.events.before_agent_start({ systemPrompt: "Base prompt" }, ctx);
-    expect(change).toMatchObject({
-      message: { customType: "persona-change", details: { name: "reviewer" } },
-    });
+    expect(harness.events.before_agent_start({ systemPrompt: "Base prompt" }, ctx)).toBeUndefined();
+    expect(harness.sendMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        customType: "persona-change",
+        details: { name: "reviewer" },
+      }),
+    );
   });
 
   it("uses project overrides only for trusted projects", async () => {

@@ -140,12 +140,10 @@ export default function personaExtension(pi: ExtensionAPI): void {
         ? createPersonaActivationMessage(activePersona)
         : createPersonaChangeMessage(activePersona);
 
-    if (!baselinePersona && !message) return;
+    if (message) pi.sendMessage<{ name: string | null }>(message);
+    if (!baselinePersona) return;
     return {
-      ...(baselinePersona
-        ? { systemPrompt: appendPersonaBaseline(event.systemPrompt, baselinePersona) }
-        : {}),
-      ...(message ? { message } : {}),
+      systemPrompt: appendPersonaBaseline(event.systemPrompt, baselinePersona),
     };
   });
 
