@@ -47,6 +47,11 @@ jobs:
               echo "path=packages/context" >> "$GITHUB_OUTPUT"
               echo "version=${RELEASE_TAG#context-v}" >> "$GITHUB_OUTPUT"
               ;;
+            persona-v*)
+              echo "workspace=@pi9/persona" >> "$GITHUB_OUTPUT"
+              echo "path=packages/persona" >> "$GITHUB_OUTPUT"
+              echo "version=${RELEASE_TAG#persona-v}" >> "$GITHUB_OUTPUT"
+              ;;
             subagent-v*)
               echo "workspace=@pi9/subagent" >> "$GITHUB_OUTPUT"
               echo "path=packages/subagent" >> "$GITHUB_OUTPUT"
