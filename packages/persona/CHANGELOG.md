@@ -4,6 +4,10 @@ All notable changes to `@pi9/persona` will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Add a `persona` tool for listing, setting, and clearing personas during an agent run.
+
 ## [0.1.0] - 2026-07-24
 
 ### Added
