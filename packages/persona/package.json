@@ -1,6 +1,6 @@
 {
   "name": "@pi9/persona",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Prompt-based agent personas for Pi.",
   "license": "MIT",
   "author": "Chase Cummings <chaseecummings@gmail.com>",
