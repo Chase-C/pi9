@@ -59,6 +59,14 @@ Cycling wraps at either end. When no persona is active, forward cycling selects 
 
 The active persona appears in the status bar as `persona:<name>`. Selection is stored on the current session branch and restored when that branch is resumed or forked.
 
+The agent can also use the `persona` tool:
+
+- `list` — list configured personas and the active selection
+- `set` — activate the exact, case-sensitive name supplied in `persona`
+- `clear` — clear the active persona
+
+Tool-based changes take effect on the next model response in the current run.
+
 ## Prompt behavior
 
 If a persona is selected before the first conversation turn, the extension appends two sections to every system prompt:

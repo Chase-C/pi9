@@ -11,12 +11,26 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 
 import personaExtension from "../src/index.js";
 
+interface PersonaToolParams {
+  action: "list" | "set" | "clear";
+  persona?: string;
+}
+
 interface Harness {
   appendEntry: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   command: { handler: (args: string, ctx: TestContext) => Promise<void> };
   events: Record<string, (event: Record<string, unknown>, ctx: TestContext) => unknown>;
   shortcuts: Record<string, (ctx: TestContext) => Promise<void>>;
+  tool: {
+    execute: (
+      toolCallId: string,
+      params: PersonaToolParams,
+      signal: undefined,
+      onUpdate: undefined,
+      ctx: TestContext,
+    ) => Promise<unknown>;
+  };
 }
 
 interface TestContext {
@@ -36,11 +50,15 @@ function createHarness(): Harness {
   const events: Harness["events"] = {};
   const shortcuts: Harness["shortcuts"] = {};
   let command: Harness["command"] | undefined;
+  let tool: Harness["tool"] | undefined;
   const appendEntry = vi.fn();
   const sendMessage = vi.fn();
   const pi = {
     registerCommand: (_name: string, registered: Harness["command"]) => {
       command = registered;
+    },
+    registerTool: (registered: Harness["tool"]) => {
+      tool = registered;
     },
     registerShortcut: (key: string, registered: { handler: Harness["shortcuts"][string] }) => {
       shortcuts[key] = registered.handler;
@@ -54,7 +72,8 @@ function createHarness(): Harness {
 
   personaExtension(pi as never);
   if (!command) throw new Error("Persona command was not registered");
-  return { appendEntry, sendMessage, command, events, shortcuts };
+  if (!tool) throw new Error("Persona tool was not registered");
+  return { appendEntry, sendMessage, command, events, shortcuts, tool };
 }
 
 function createContext(
@@ -311,6 +330,114 @@ describe("persona extension", () => {
         details: { name: "reviewer" },
       }),
     );
+  });
+
+  it("lists configured personas and the active selection through the tool", async () => {
+    const harness = createHarness();
+    const ctx = createContext();
+    harness.events.session_start({}, ctx);
+    await harness.command.handler("planner", ctx);
+
+    const result = await harness.tool.execute("tool-call", { action: "list" }, undefined, undefined, ctx);
+
+    expect(result).toMatchObject({
+      content: [{
+        type: "text",
+        text: expect.stringContaining(
+          "Active persona: planner\n\nAvailable personas:\n- planner — Plan before implementation\n- reviewer",
+        ),
+      }],
+      details: { action: "list", activeName: "planner" },
+    });
+  });
+
+  it("sets a persona through the tool and communicates it during the current run", async () => {
+    const branch = [{ type: "message", message: { role: "user", content: "Switch personas" } }];
+    const harness = createHarness();
+    const ctx = createContext(branch);
+    harness.events.session_start({}, ctx);
+
+    const result = await harness.tool.execute(
+      "tool-call",
+      { action: "set", persona: "reviewer" },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: 'Persona changed to "reviewer".' }],
+      details: { action: "set", activeName: "reviewer" },
+    });
+    expect(harness.appendEntry).toHaveBeenLastCalledWith("persona-state", {
+      activeName: "reviewer",
+      baselineName: null,
+    });
+    expect(harness.sendMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        customType: "persona-activation",
+        details: { name: "reviewer" },
+      }),
+    );
+  });
+
+  it("clears a persona through the tool and rejects invalid action arguments", async () => {
+    const branch = [
+      {
+        type: "custom",
+        customType: "persona-state",
+        data: { activeName: "planner", baselineName: "planner" },
+      },
+      {
+        type: "custom_message",
+        customType: "persona-change",
+        details: { name: "planner" },
+      },
+    ];
+    const harness = createHarness();
+    const ctx = createContext(branch);
+    harness.events.session_start({}, ctx);
+
+    const result = await harness.tool.execute("tool-call", { action: "clear" }, undefined, undefined, ctx);
+
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: "Persona cleared." }],
+      details: { action: "clear", activeName: null },
+    });
+    expect(harness.sendMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        customType: "persona-change",
+        details: { name: null },
+      }),
+    );
+    await expect(harness.tool.execute(
+      "tool-call",
+      { action: "set" },
+      undefined,
+      undefined,
+      ctx,
+    )).rejects.toThrow('persona is required when action is "set"');
+    await expect(harness.tool.execute(
+      "tool-call",
+      { action: "list", persona: "planner" },
+      undefined,
+      undefined,
+      ctx,
+    )).rejects.toThrow('persona must not be provided when action is "list"');
+  });
+
+  it("rejects unknown personas through the tool", async () => {
+    const harness = createHarness();
+    const ctx = createContext();
+    harness.events.session_start({}, ctx);
+
+    await expect(harness.tool.execute(
+      "tool-call",
+      { action: "set", persona: "missing" },
+      undefined,
+      undefined,
+      ctx,
+    )).rejects.toThrow('Unknown persona "missing". Available: planner, reviewer');
   });
 
   it("uses project overrides only for trusted projects", async () => {

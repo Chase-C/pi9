@@ -12,6 +12,7 @@ import {
   createPersonaChangeMessage,
 } from "./instructions.js";
 import { PERSONA_STATE_ENTRY_TYPE, PersonaStateManager } from "./state.js";
+import { registerPersonaTool } from "./tool.js";
 import type { CycleDirection } from "./types.js";
 
 const CLEAR_PERSONA_NAMES = new Set(["none", "off", "clear", "(none)"]);
@@ -37,14 +38,32 @@ export default function personaExtension(pi: ExtensionAPI): void {
     pi.appendEntry(PERSONA_STATE_ENTRY_TYPE, state.snapshot());
   }
 
+  function applySelection(name: string | undefined, ctx: ExtensionContext): void {
+    state.select(name, hasConversation(ctx));
+    persistState();
+    updateStatus(ctx);
+  }
+
   function selectPersona(name: string | undefined, ctx: ExtensionContext): boolean {
     const clearing = name === undefined || CLEAR_PERSONA_NAMES.has(name.toLowerCase());
     if (!clearing && !config.has(name)) return false;
 
-    state.select(clearing ? undefined : name, hasConversation(ctx));
-    persistState();
-    updateStatus(ctx);
+    applySelection(clearing ? undefined : name, ctx);
     return true;
+  }
+
+  function communicatePersona(ctx: ExtensionContext): void {
+    const contextEntries = ctx.sessionManager.buildContextEntries();
+    const activePersona = state.activeName ? config.get(state.activeName) : undefined;
+    const communicatedName = state.communicatedName(contextEntries);
+    const contextEstablished = state.personaContextEstablished(contextEntries);
+    const message = communicatedName === state.activeName
+      ? undefined
+      : !contextEstablished && activePersona
+        ? createPersonaActivationMessage(activePersona)
+        : createPersonaChangeMessage(activePersona);
+
+    if (message) pi.sendMessage<{ name: string | null }>(message);
   }
 
   function notifySelection(ctx: ExtensionContext): void {
@@ -69,6 +88,13 @@ export default function personaExtension(pi: ExtensionAPI): void {
     updateStatus(ctx);
     notifySelection(ctx);
   }
+
+  registerPersonaTool(pi, {
+    getPersonas: () => config.list(),
+    getActiveName: () => state.activeName,
+    select: applySelection,
+    communicate: communicatePersona,
+  });
 
   pi.registerCommand("persona", {
     description: "Switch the active agent persona",
@@ -129,18 +155,8 @@ export default function personaExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    const contextEntries = ctx.sessionManager.buildContextEntries();
+    communicatePersona(ctx);
     const baselinePersona = state.baselineName ? config.get(state.baselineName) : undefined;
-    const activePersona = state.activeName ? config.get(state.activeName) : undefined;
-    const communicatedName = state.communicatedName(contextEntries);
-    const contextEstablished = state.personaContextEstablished(contextEntries);
-    const message = communicatedName === state.activeName
-      ? undefined
-      : !contextEstablished && activePersona
-        ? createPersonaActivationMessage(activePersona)
-        : createPersonaChangeMessage(activePersona);
-
-    if (message) pi.sendMessage<{ name: string | null }>(message);
     if (!baselinePersona) return;
     return {
       systemPrompt: appendPersonaBaseline(event.systemPrompt, baselinePersona),
