@@ -4,6 +4,9 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Added
+- Expand identifier word lists
+
 ## [0.7.3] - 2026-07-24
 
 ### Changed
