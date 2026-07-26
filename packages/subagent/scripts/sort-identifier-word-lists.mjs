@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 
-const file = new URL("../src/domain/identifier-word-lists.ts", import.meta.url);
+const file = new URL("../src/identifier-word-lists.ts", import.meta.url);
 const listNames = [
   "CONVERSATION_ID_ADJECTIVES",
   "CONVERSATION_ID_NOUNS",
