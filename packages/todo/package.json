@@ -39,6 +39,10 @@
     "typecheck": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "release": "node ../../scripts/release.mjs todo",
+    "release:patch": "node ../../scripts/release.mjs todo patch",
+    "release:minor": "node ../../scripts/release.mjs todo minor",
+    "release:major": "node ../../scripts/release.mjs todo major",
     "prepublishOnly": "npm run typecheck && npm test"
   },
   "pi": {
