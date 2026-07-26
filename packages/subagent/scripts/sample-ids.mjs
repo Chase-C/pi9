@@ -5,7 +5,7 @@ import {
   CONVERSATION_ID_NOUNS,
   RUN_ID_ADVERBS,
   RUN_ID_VERBS,
-} from "../src/domain/identifier-word-lists.ts";
+} from "../src/identifier-word-lists.ts";
 
 const kinds = {
   conversationIds: [CONVERSATION_ID_ADJECTIVES, CONVERSATION_ID_NOUNS],
