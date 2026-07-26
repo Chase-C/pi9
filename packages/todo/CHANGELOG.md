@@ -4,6 +4,10 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Update Pi development dependencies to 0.82.1.
+
 ## [0.3.5] - 2026-07-23
 
 ### Changed

@@ -7,6 +7,10 @@ This changelog starts with version `v0.2.1`.
 ### Added
 - Expand identifier word lists
 
+### Changed
+
+- Update Pi development dependencies to 0.82.1.
+
 ## [0.7.3] - 2026-07-24
 
 ### Changed
