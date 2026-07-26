@@ -4,6 +4,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-26
+
 ### Changed
 
 - Update Pi development dependencies to 0.82.1.
@@ -53,7 +55,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 - Add compact question and answer rendering with concise model context for completed exchanges.
 - Add branch-aware answer revisions from the session tree.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.3.1...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.3.2...HEAD
+[0.3.2]: https://github.com/Chase-C/pi9/compare/ask-v0.3.1...ask-v0.3.2
 [0.3.1]: https://github.com/Chase-C/pi9/compare/ask-v0.3.0...ask-v0.3.1
 [0.3.0]: https://github.com/Chase-C/pi9/compare/ask-v0.2.0...ask-v0.3.0
 [0.2.0]: https://github.com/Chase-C/pi9/compare/ask-v0.1.0...ask-v0.2.0
