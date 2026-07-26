@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-07-26
+
 ### Added
 - Expand identifier word lists
 
@@ -187,7 +189,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.3...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.4...HEAD
+[0.7.4]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.3...subagent-v0.7.4
 [0.7.3]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.2...subagent-v0.7.3
 [0.7.2]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.1...subagent-v0.7.2
 [0.7.1]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.0...subagent-v0.7.1
