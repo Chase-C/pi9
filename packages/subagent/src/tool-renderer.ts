@@ -31,15 +31,22 @@ export interface DispatchTaskRenderItem {
 }
 
 export interface ListedRunRenderItem {
-  conversationId: ConversationId;
   runId: RunId;
   parentRunId?: RunId;
   rootRunId: RunId;
   depth: number;
-  agent: string;
-  label?: string;
   kind: RunKind;
   status: RunStatus;
+  createdAt: number;
+}
+
+export interface ListedConversationRenderItem {
+  conversationId: ConversationId;
+  agent: string;
+  label?: string;
+  createdAt: number;
+  canResume: boolean;
+  runs: ListedRunRenderItem[];
 }
 
 export interface JoinActivityRenderItem {
@@ -144,7 +151,7 @@ export interface JoinedRunRenderItem {
 
 export type SubagentToolDetails =
   | { action: "agents"; agents: AgentRenderItem[] }
-  | { action: "list"; runs: ListedRunRenderItem[] }
+  | { action: "list"; conversations: ListedConversationRenderItem[] }
   | { action: "spawn"; tasks: DispatchTaskRenderItem[] }
   | { action: "resume"; tasks: DispatchTaskRenderItem[] }
   | { action: "steer"; tasks: DispatchTaskRenderItem[] }
@@ -209,10 +216,11 @@ function collapsedLines(details: Exclude<SubagentToolDetails, { action: "error" 
       ];
     }
     case "list": {
-      if (details.runs.length === 0) return [success(theme, "No runs found")];
+      if (details.conversations.length === 0) return [success(theme, "No conversations found")];
+      const runs = details.conversations.flatMap(conversation => conversation.runs);
       return [
-        success(theme, `Found ${count(details.runs.length, "run")}${statusSummary(details.runs.map(run => run.status), theme)}`),
-        secondary(details.runs.map(runLabel), theme),
+        success(theme, `Found ${count(details.conversations.length, "conversation")} ${paint(theme, "muted", "·")} ${count(runs.length, "run")}${statusSummary(runs.map(run => run.status), theme)}`),
+        secondary(details.conversations.map(conversationLabel), theme),
       ];
     }
     case "spawn":
@@ -269,11 +277,17 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
         `  ${tag(theme, "tools", agent.tools?.join(", ") || "default toolset")}`,
       ]);
     case "list":
-      if (details.runs.length === 0) return [success(theme, "No runs found")];
-      return blocks(details.runs, run => [
-        `${arrow(theme)} ${paint(theme, "text", runLabel(run))} ${paint(theme, "muted", `· ${run.agent} · ${run.kind}`)}`,
-        `  ${statusText(theme, run.status)} ${paint(theme, "muted", "·")} ${identity(theme, run.conversationId, run.runId)}`,
-      ]);
+      if (details.conversations.length === 0) return [success(theme, "No conversations found")];
+      return blocks(details.conversations, conversation => {
+        const lines = [
+          `${arrow(theme)} ${paint(theme, "text", conversationLabel(conversation))} ${paint(theme, "muted", `· ${conversation.agent} · ${count(conversation.runs.length, "run")}${conversation.canResume ? " · resumable" : ""}`)}`,
+          `  ${tag(theme, "conversation", conversation.conversationId)}`,
+        ];
+        for (const run of conversation.runs) {
+          lines.push(`  ${statusMarker(theme, run.status)} ${paint(theme, "text", run.runId)} ${paint(theme, "muted", `· ${run.kind} · depth ${run.depth} ·`)} ${statusText(theme, run.status)}`);
+        }
+        return lines;
+      });
     case "spawn":
     case "resume":
     case "steer":
@@ -525,8 +539,8 @@ function taskLabel(task: DispatchTaskRenderItem, index: number): string {
   return task.label || task.agent || task.conversationId || `task ${index + 1}`;
 }
 
-function runLabel(run: { label?: string; agent: string }): string {
-  return run.label || run.agent;
+function conversationLabel(conversation: { label?: string; agent: string }): string {
+  return conversation.label || conversation.agent;
 }
 
 function identity(theme: ThemeLike | undefined, conversationId: string, runId: string): string {

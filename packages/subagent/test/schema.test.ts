@@ -123,6 +123,19 @@ test("run-target actions retain malformed targets as ordered item errors", () =>
   }
 });
 
+test("run-target actions reject every occurrence after the first", () => {
+  for (const action of ["cancel", "inspect", "join"] as const) {
+    assert.deepEqual(parseSubagentInvocation({ action, runIds: [runId, runId, runId] }), {
+      action,
+      runIds: [
+        runId,
+        { runId, error: `Duplicate runId ${runId} in this request; the first occurrence was processed.` },
+        { runId, error: `Duplicate runId ${runId} in this request; the first occurrence was processed.` },
+      ],
+    });
+  }
+});
+
 test("whole invocation validation covers every action", () => {
   assert.ok("error" in parseSubagentInvocation({}));
   assert.ok("error" in parseSubagentInvocation({ action: "unknown" }));
@@ -167,6 +180,16 @@ test("schema and parser reject unknown properties", () => {
   assert.ok("error" in parseSubagentInvocation(invocation));
   assert.equal(Check(SpawnTaskSchema, { agent: "a", prompt: "x", extra: true }), false);
   assert.ok("error" in parseSpawnTask({ agent: "a", prompt: "x", extra: true }));
+});
+
+test("remove rejects every conversation ID occurrence after the first", () => {
+  assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId, conversationId] }), {
+    action: "remove",
+    conversationIds: [
+      conversationId,
+      { conversationId, error: `Duplicate conversationId ${conversationId} in this request; the first occurrence was processed.` },
+    ],
+  });
 });
 
 test("remove retains wrong-kind and malformed IDs as ordered item errors", () => {

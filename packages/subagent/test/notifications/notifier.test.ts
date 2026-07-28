@@ -11,6 +11,7 @@ function fixture(mode: "auto" | "steer" | "none" = "auto", idle = true, send?: (
   const manager: any = {
     onConversationUpdate(fn: any) { listener = fn; return () => { listener = undefined; }; },
     listConversations: () => [{ conversationId: "calm-river", config: { name: "worker" }, runs: [run] }],
+    runSnapshot: () => run,
   };
   const pi: any = {
     on(event: string, fn: any) { handlers.set(event, fn); },
@@ -41,6 +42,19 @@ test("join claim survives preparation longer than the old grace period", () => {
   f.fire("session_start"); f.flush(250); assert.equal(f.sent.length, 0);
   f.notifier.releaseJoinClaims([f.run.runId]); f.flush();
   assert.equal(f.sent.length, 1);
+  f.notifier.unsubscribe();
+});
+
+test("successful join acknowledgement remains suppressed after its claim is released", () => {
+  const f = fixture();
+  f.fire("tool_execution_start", { toolName: "subagent", args: { action: "join", runIds: [f.run.runId] } });
+  f.fire("session_start");
+  f.flush();
+  f.run.acknowledged = true;
+  f.notifier.releaseJoinClaims([f.run.runId]);
+  f.flush();
+  f.fire("turn_end");
+  assert.equal(f.sent.length, 0);
   f.notifier.unsubscribe();
 });
 

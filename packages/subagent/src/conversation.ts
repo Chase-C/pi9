@@ -230,7 +230,7 @@ export interface RunBinding { readonly runId: RunId; snapshot(): RunSnapshot; ac
 export class Conversation {
   readonly createdAt = Date.now();
   readonly agentName: string;
-  readonly parent?: ParentRun;
+  parent?: ParentRun;
   readonly requestedConfig: AgentRequestedConfig;
   readonly requestedOverrides?: ConversationRequestedOverrides;
   readonly label?: string;
@@ -271,7 +271,9 @@ export class Conversation {
   get canResume(): boolean {
     const latest = this.runs.at(-1);
     return !this.currentRun && !!this.session && latest?.state.kind === "done" &&
-      (latest.state.result.status === "completed" || latest.state.result.status === "interrupted");
+      (latest.state.result.status === "completed"
+        || latest.state.result.status === "interrupted"
+        || latest.state.result.status === "aborted");
   }
 
   private newRun(runId: RunId, kind: "spawn" | "resume", prompt: string): Run {
@@ -281,6 +283,7 @@ export class Conversation {
   beginResume(runId: RunId, prompt: string): Run {
     if (!this.canResume) throw new Error(`Conversation ${this.conversationId} cannot be resumed.`);
     if (this.runs.some(run => run.runId === runId)) throw new Error(`Run ${runId} already exists.`);
+    this.stopping = false;
     const run = this.newRun(runId, "resume", prompt);
     this.runs.push(run);
     this.currentRun = run;
@@ -300,6 +303,7 @@ export class Conversation {
     this.listener(this, "status");
   }
   sessionForResume(): AgentSession | undefined { return this.session; }
+  reparent(parent?: ParentRun): void { this.parent = parent; }
 
   steer(runId: RunId, prompt: string): Promise<SteerReceipt> {
     const pending = this.steerTail.then(async () => {

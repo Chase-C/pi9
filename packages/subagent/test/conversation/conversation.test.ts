@@ -102,7 +102,7 @@ test("resume capability requires a resumable outcome and intact context", () => 
     agent.settle(r1, status === "completed"
       ? { status, output: "ok" }
       : { status, error: status });
-    assert.equal(agent.canResume, status === "completed" || status === "interrupted", status);
+    assert.equal(agent.canResume, status === "completed" || status === "interrupted" || status === "aborted", status);
   }
   assert.equal(make().canResume, false, "active is not resumable");
   const noContext = make();

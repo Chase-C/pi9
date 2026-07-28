@@ -2,6 +2,7 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Conversation } from "./conversation.js";
 import type { RunOutcomeStatus, ConversationUpdateKind } from "./conversation.js";
 import type { SubagentRuntime } from "./runtime.js";
+import type { RunId } from "./identifiers.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisplaySettings } from "./settings.js";
 
 /** The current serializable completion summary shared by notification production and rendering. */
@@ -194,7 +195,12 @@ export class CompletionNotifier {
 
   /** Completes the claim begun by tool_execution_start, including rejected or cancelled joins. */
   releaseJoinClaims(runIds: readonly string[]): void {
-    for (const id of runIds) this.releaseClaim(id);
+    for (const id of runIds) {
+      try {
+        if (this.deps.manager.runSnapshot(id as RunId).acknowledged) this.delivered.add(id);
+      } catch {}
+      this.releaseClaim(id);
+    }
     this.arm(0);
   }
 

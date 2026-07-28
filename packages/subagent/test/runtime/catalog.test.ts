@@ -149,12 +149,26 @@ test("terminal non-resumable conversations retain the generic resume error", asy
   });
 });
 
-test("aborted conversations explain that continuation requires a new spawn", async () => {
+test("aborted conversations can resume their retained session", async () => {
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
+  let first = true;
+  let releaseResume!: () => void;
+  const resumeGate = new Promise<void>(done => { releaseResume = done; });
+  const steers: string[] = [];
+  const retainedSession = {
+    ...session(),
+    abort: () => gate,
+    steer: (message: string) => { steers.push(message); },
+  };
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession({ ...session(), abort: () => gate });
-    await gate;
+    agent.bindSession(retainedSession);
+    if (first) {
+      first = false;
+      await gate;
+    } else {
+      await resumeGate;
+    }
     return completedRun(agent, attempt.runId, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, controlled);
@@ -163,19 +177,22 @@ test("aborted conversations explain that continuation requires a new spawn", asy
   await new Promise(done => setImmediate(done));
   const cancelling = manager.cancelRun(aborted.runId);
   release();
-  await cancelling;
+  await Promise.all([cancelling, start.completion]);
 
   const resumed = manager.startRun(ctx, [{
     kind: "resume",
     conversationId: aborted.conversationId,
     prompt: "continue",
   }] as any);
+  const resumedRun = resumed.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+  await manager.steerRun(resumedRun.runId, "redirect");
+  releaseResume();
+  await resumed.completion;
 
-  expect(resumed.starts[0]).toEqual({
-    ok: false,
-    inputIndex: 0,
-    error: `Conversation ${aborted.conversationId} was aborted and cannot be resumed. Spawn a new conversation to continue.`,
-  });
+  expect(resumedRun).toMatchObject({ ok: true, conversationId: aborted.conversationId });
+  expect(output(manager.runSnapshot(resumedRun.runId))).toBe("continue");
+  expect(steers).toEqual(["redirect"]);
 });
 
 test("spawn validation is ordered, isolated, and does not allocate or consume capacity", async () => {
@@ -374,7 +391,7 @@ test("removing an intermediate conversation reparents descendant ownership", asy
   if (accessError) throw accessError;
   expect(inspected.snapshot.runId).toBe(grand.runId);
   expect(manager.runLineage(grand.runId)).toEqual({ parentRunId: owner.runId, rootRunId: owner.runId, depth: 1 });
-  expect(manager.conversation(grand.conversationId).parent).toEqual({ conversationId: child.conversationId, runId: child.runId });
+  expect(manager.conversation(grand.conversationId).parent).toEqual({ conversationId: owner.conversationId, runId: owner.runId });
   expect(() => manager.runSnapshot(child.runId)).toThrow(`Unknown run: ${child.runId}.`);
 });
 
@@ -407,7 +424,7 @@ test("ownership contraction crosses multiple removed levels in either order", as
     for (const name of order) await manager.removeConversation(identities[name].conversationId);
     const inspected = manager.inspectRuns([leaf.runId], { conversationId: owner.conversationId, runId: owner.runId });
     expect(inspected[0].snapshot.runId).toBe(leaf.runId);
-    expect(manager.conversation(leaf.conversationId).parent).toEqual({ conversationId: second.conversationId, runId: second.runId });
+    expect(manager.conversation(leaf.conversationId).parent).toEqual({ conversationId: owner.conversationId, runId: owner.runId });
 
     releases.get("leaf")!();
     releases.get("owner")!();
@@ -433,7 +450,7 @@ test("removing a root makes surviving children operational roots", async () => {
 
   await manager.removeConversation(root.conversationId);
   expect(manager.directSpawnedChildren(root.runId)).toEqual([]);
-  expect(manager.conversation(child.conversationId).parent).toEqual({ conversationId: root.conversationId, runId: root.runId });
+  expect(manager.conversation(child.conversationId).parent).toBeUndefined();
   expect(manager.inspectRuns([child.runId])[0].snapshot.runId).toBe(child.runId);
 
   releaseChild();
@@ -622,6 +639,34 @@ test("run lineage identifies recursive parents, roots, and depth", async () => {
   expect(manager.runLineage(resumed.runId)).toEqual({ rootRunId: resumed.runId, depth: 0 });
 });
 
+test("removing a conversation reparents children from each parent run independently", async () => {
+  const manager = new SubagentRuntime(registry, 4, runner);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const nestedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "nested" }] as any,
+    parent(owner.conversationId, owner.runId));
+  await nestedStart.completion;
+  const nested = nestedStart.starts[0] as any;
+  const resumedStart = manager.startRun(ctx, [{ kind: "resume", conversationId: nested.conversationId, prompt: "resume" }] as any);
+  await resumedStart.completion;
+  const resumed = resumedStart.starts[0] as any;
+  const initialChildStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "initial-child" }] as any,
+    parent(nested.conversationId, nested.runId));
+  const resumedChildStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "resumed-child" }] as any,
+    parent(nested.conversationId, resumed.runId));
+  await Promise.all([initialChildStart.completion, resumedChildStart.completion]);
+  const initialChild = initialChildStart.starts[0] as any;
+  const resumedChild = resumedChildStart.starts[0] as any;
+
+  await manager.removeConversation(nested.conversationId);
+
+  expect(manager.runLineage(initialChild.runId)).toEqual({ parentRunId: owner.runId, rootRunId: owner.runId, depth: 1 });
+  expect(manager.conversation(initialChild.conversationId).parent).toEqual({ conversationId: owner.conversationId, runId: owner.runId });
+  expect(manager.runLineage(resumedChild.runId)).toEqual({ rootRunId: resumedChild.runId, depth: 0 });
+  expect(manager.conversation(resumedChild.conversationId).parent).toBeUndefined();
+});
+
 test("exact join does not bind an unrequested descendant", async () => {
   let releaseRoot!: () => void;
   const rootGate = new Promise<void>(done => { releaseRoot = done; });
@@ -800,6 +845,11 @@ test("queued cancellation settles immediately without dispatching the executor",
   join.acknowledge();
   join.release();
   expect(executed).toEqual(["blocker"]);
+  const resumed = manager.startRun(ctx, [{ kind: "resume", conversationId: target.conversationId, prompt: "continue" }]);
+  expect(resumed.starts[0]).toMatchObject({
+    ok: false,
+    error: `Conversation ${target.conversationId} cannot be resumed.`,
+  });
   await expect(manager.removeConversation(target.conversationId)).resolves.toMatchObject({
     removed: 1,
     conversationIds: [target.conversationId],

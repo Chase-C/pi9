@@ -136,22 +136,34 @@ test("agents render configuration tags in expanded mode", () => {
   ].join("\n"));
 });
 
-test("list renders status summary and tagged run inventory", () => {
+test("list renders grouped conversations and nested run status", () => {
   const details: SubagentToolDetails = {
     action: "list",
-    runs: [
-      { conversationId: "quiet-otter" as any, runId: "search-boldly" as any, rootRunId: "search-boldly" as any, depth: 0, agent: "scout", label: "auth map", kind: "spawn", status: "running" },
-      { conversationId: "amber-fox" as any, runId: "inspect-carefully" as any, rootRunId: "inspect-carefully" as any, depth: 0, agent: "reviewer", label: "risk review", kind: "spawn", status: "completed" },
+    conversations: [
+      {
+        conversationId: "quiet-otter" as any, agent: "scout", label: "auth map", createdAt: 1, canResume: false,
+        runs: [{ runId: "search-boldly" as any, rootRunId: "search-boldly" as any, depth: 0, kind: "spawn", status: "running", createdAt: 1 }],
+      },
+      {
+        conversationId: "amber-fox" as any, agent: "reviewer", label: "risk review", createdAt: 2, canResume: true,
+        runs: [{ runId: "inspect-carefully" as any, rootRunId: "inspect-carefully" as any, depth: 0, kind: "spawn", status: "completed", createdAt: 2 }],
+      },
     ],
   };
-  assert.equal(renderResult(details), "✓ Found 2 runs · 1 running · 1 completed\n  auth map · risk review");
+  assert.equal(renderResult(details), "✓ Found 2 conversations · 2 runs · 1 running · 1 completed\n  auth map · risk review");
   assert.equal(renderResult(details, true), [
-    "→ auth map · scout · spawn",
-    "  running · conversation quiet-otter · run search-boldly",
+    "→ auth map · scout · 1 run",
+    "  conversation quiet-otter",
+    "  ● search-boldly · spawn · depth 0 · running",
     "",
-    "→ risk review · reviewer · spawn",
-    "  completed · conversation amber-fox · run inspect-carefully",
+    "→ risk review · reviewer · 1 run · resumable",
+    "  conversation amber-fox",
+    "  ✓ inspect-carefully · spawn · depth 0 · completed",
   ].join("\n"));
+});
+
+test("list renders an empty grouped result", () => {
+  assert.equal(renderResult({ action: "list", conversations: [] }), "✓ No conversations found");
 });
 
 test("join renders target errors without conversation identities", () => {

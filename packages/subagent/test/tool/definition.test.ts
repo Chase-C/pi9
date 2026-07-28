@@ -14,14 +14,17 @@ test("description names typed action inputs without restating task unions", () =
   });
   const description = tool.description;
   assert.match(description, /Conversation IDs use adjective-noun form; run IDs use verb-adverb form\./);
-  assert.match(description, /list\(status\?\)/);
+  assert.match(description, /list\(status\?\).*grouped with their runs/);
   assert.match(description, /spawn\(spawns\)/);
   assert.match(description, /resume\(resumes\)/);
   assert.match(description, /steer\(messages\)/);
   assert.match(description, /cancel\(runIds\)/);
   assert.match(description, /inspect\(runIds\)/);
   assert.match(description, /join\(runIds\)/);
-  assert.match(description, /remove\(conversationIds\)/);
+  assert.match(description, /remove\(conversationIds\).*reparented to the nearest surviving parent/);
+  assert.match(description, /ordered and best-effort, not atomic/);
+  assert.match(description, /failures do not roll back successful items/);
+  assert.match(description, /Retry only failed items/);
   assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union/);
   const properties = (tool.parameters as any).properties;
   assert.deepEqual(Object.keys(properties.spawns.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
@@ -103,8 +106,8 @@ test("mixed join target errors still release every valid requested claim", async
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
   assert.deepEqual(response.results, [
-    { ok: false, error: "join received invalid runId format 'valid-run'." },
-    { ok: false, error: "join received invalid runId format '42'." },
+    { ok: false, runId: "valid-run", error: "join received invalid runId format 'valid-run'." },
+    { ok: false, runId: "42", error: "join received invalid runId format '42'." },
   ]);
   assert.deepEqual(released, ["valid-run"]);
 });

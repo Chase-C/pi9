@@ -500,19 +500,21 @@ export class SubagentRuntime {
   }
   private contractOwnership(agent: Conversation): void {
     const removedRunIds = new Set(agent.runHistory.map(run => run.runId));
-    const replacementParentRunId = this.runs.get(agent.runHistory[0].runId)?.parentRunId;
     for (const [runId, record] of this.runs) {
       if (!record.parentRunId || !removedRunIds.has(record.parentRunId) || removedRunIds.has(runId)) continue;
+      const replacementParentRunId = this.runs.get(record.parentRunId)?.parentRunId;
+      const replacementParent = replacementParentRunId
+        ? this.runs.get(replacementParentRunId)
+        : undefined;
       const { parentRunId: _, ...child } = record;
       this.runs.set(runId, replacementParentRunId ? { ...child, parentRunId: replacementParentRunId } : child);
+      record.agent.reparent(replacementParent
+        ? { conversationId: replacementParent.conversationId, runId: replacementParent.runId }
+        : undefined);
     }
   }
   private requireConversation(id: string): Conversation { const found = this.conversations.get(id as ConversationId); if (!found) throw new Error(`Unknown conversation: ${id}.`); return found; }
   private resumeError(agent: Conversation): string {
-    const status = agent.status;
-    if (status.kind === "done" && status.outcome === "aborted") {
-      return `Conversation ${agent.conversationId} was aborted and cannot be resumed. Spawn a new conversation to continue.`;
-    }
     return `Conversation ${agent.conversationId} cannot be resumed.`;
   }
   private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Conversation capacity (${this.maxConversations}) reached. Remove terminal conversations${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }

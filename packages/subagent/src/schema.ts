@@ -80,10 +80,10 @@ export type CancelTarget = RunTarget;
 export type InspectTarget = RunTarget;
 export type JoinTarget = RunTarget;
 export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
-export type ParsedRunRequest = RunRequest | { error: string; label?: string };
-export type ParsedSpawnRequest = SpawnRequest | { error: string; label?: string };
-export type ParsedResumeRequest = ResumeRequest | { error: string };
-export type ParsedSteerRequest = SteerRequest | { error: string };
+export type ParsedRunRequest = ParsedSpawnRequest | ParsedResumeRequest;
+export type ParsedSpawnRequest = SpawnRequest | { error: string; agent?: string; label?: string };
+export type ParsedResumeRequest = ResumeRequest | { error: string; conversationId?: string };
+export type ParsedSteerRequest = SteerRequest | { error: string; runId?: string };
 
 export type SubagentInvocation =
   | { action: "agents" }
@@ -231,8 +231,18 @@ function parseRunTargets(value: unknown, action: "cancel" | "inspect" | "join"):
   if (!Array.isArray(value) || value.length === 0) {
     return { error: `${action} requires a non-empty runIds array.` };
   }
+  const seen = new Set<RunId>();
   return value.map(item => {
-    if (isRunId(item)) return item;
+    if (isRunId(item)) {
+      if (seen.has(item)) {
+        return {
+          runId: item,
+          error: `Duplicate runId ${item} in this request; the first occurrence was processed.`,
+        };
+      }
+      seen.add(item);
+      return item;
+    }
     const runId = String(item);
     return {
       runId,
@@ -262,8 +272,18 @@ function parseConversationTargets(value: unknown): ConversationTarget[] | { erro
   if (!Array.isArray(value) || value.length === 0) {
     return { error: "remove requires a non-empty conversationIds array." };
   }
+  const seen = new Set<ConversationId>();
   return value.map(item => {
-    if (isConversationId(item)) return item;
+    if (isConversationId(item)) {
+      if (seen.has(item)) {
+        return {
+          conversationId: item,
+          error: `Duplicate conversationId ${item} in this request; the first occurrence was processed.`,
+        };
+      }
+      seen.add(item);
+      return item;
+    }
     const conversationId = String(item);
     return {
       conversationId,
@@ -279,6 +299,7 @@ export function parseSpawnTask(raw: unknown): ParsedSpawnRequest {
   if (!task) return { error: "Spawn task must be an object." };
   const error = (message: string): ParsedSpawnRequest => ({
     error: message,
+    ...(typeof task.agent === "string" && task.agent.trim() ? { agent: task.agent } : {}),
     ...(typeof task.label === "string" && task.label.trim() ? { label: task.label } : {}),
   });
   const extra = Object.keys(task).find(key => !["agent", "prompt", "label", "skills", "model", "thinking", "cwd"].includes(key));
@@ -308,29 +329,33 @@ export function parseSpawnTask(raw: unknown): ParsedSpawnRequest {
 export function parseResumeTask(raw: unknown): ParsedResumeRequest {
   const task = parseObject(raw);
   if (!task) return { error: "Resume task must be an object." };
+  const identity = task.conversationId === undefined ? {} : { conversationId: String(task.conversationId) };
+  const error = (message: string): ParsedResumeRequest => ({ ...identity, error: message });
   const extra = Object.keys(task).find(key => !["conversationId", "prompt"].includes(key));
-  if (extra) return { error: `Resume task property ${extra} is not allowed.` };
+  if (extra) return error(`Resume task property ${extra} is not allowed.`);
   if (!isConversationId(task.conversationId)) {
-    return { error: isRunId(task.conversationId)
+    return error(isRunId(task.conversationId)
       ? `Resume task conversationId '${task.conversationId}' is invalid (a run ID is not accepted).`
-      : `Resume task received invalid conversationId format '${String(task.conversationId)}'.` };
+      : `Resume task received invalid conversationId format '${String(task.conversationId)}'.`);
   }
   const promptError = validateNonBlank(task.prompt, "Resume task prompt");
-  return promptError ?? { kind: "resume", conversationId: task.conversationId, prompt: task.prompt as string };
+  return promptError ? error(promptError.error) : { kind: "resume", conversationId: task.conversationId, prompt: task.prompt as string };
 }
 
 export function parseSteerMessage(raw: unknown): ParsedSteerRequest {
   const steer = parseObject(raw);
   if (!steer) return { error: "Steer message must be an object." };
+  const identity = steer.runId === undefined ? {} : { runId: String(steer.runId) };
+  const error = (message: string): ParsedSteerRequest => ({ ...identity, error: message });
   const extra = Object.keys(steer).find(key => !["runId", "message"].includes(key));
-  if (extra) return { error: `Steer message property ${extra} is not allowed.` };
+  if (extra) return error(`Steer message property ${extra} is not allowed.`);
   if (!isRunId(steer.runId)) {
-    return { error: isConversationId(steer.runId)
+    return error(isConversationId(steer.runId)
       ? `Steer message runId '${steer.runId}' is invalid (a conversation ID is not accepted).`
-      : `Steer message received invalid runId format '${String(steer.runId)}'.` };
+      : `Steer message received invalid runId format '${String(steer.runId)}'.`);
   }
   const messageError = validateNonBlank(steer.message, "Steer message");
-  return messageError ?? { kind: "steer", runId: steer.runId, message: steer.message as string };
+  return messageError ? error(messageError.error) : { kind: "steer", runId: steer.runId, message: steer.message as string };
 }
 
 function parseObject(raw: unknown): Record<string, unknown> | undefined {
