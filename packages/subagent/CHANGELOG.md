@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Show elapsed time, turns, and token usage for top-level and recursive runs in `join` tool rendering, using the same formatting as the conversation overlay.
+
 ## [0.8.1] - 2026-07-28
 
 ### Added

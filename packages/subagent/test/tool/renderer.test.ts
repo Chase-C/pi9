@@ -122,29 +122,29 @@ test("join distinguishes partial waits and terminal child errors", () => {
   const details: SubagentToolDetails = {
     action: "join",
     runs: [
-      { conversationId: "quiet-otter" as any, runId: "search-boldly" as any, label: "auth map", status: "completed", output: "Mapped auth." },
-      { conversationId: "calm-wren" as any, runId: "test-thoroughly" as any, label: "test audit", status: "error", error: "Child failed." },
+      { conversationId: "quiet-otter" as any, runId: "search-boldly" as any, label: "auth map", status: "completed", output: "Mapped auth.", elapsedMs: 12_400, turns: 3, tokens: 24_000 },
+      { conversationId: "calm-wren" as any, runId: "test-thoroughly" as any, label: "test audit", status: "error", error: "Child failed.", elapsedMs: 950, turns: 1, tokens: 800 },
     ],
   };
   const partial: SubagentToolDetails = {
     action: "join",
     runs: [
       details.runs[0],
-      { conversationId: "calm-wren" as any, runId: "test-thoroughly" as any, label: "test audit", status: "running" },
+      { conversationId: "calm-wren" as any, runId: "test-thoroughly" as any, label: "test audit", status: "running", elapsedMs: 950, turns: 1, tokens: 800 },
     ],
   };
   assert.equal(renderResult(partial, false, true), [
-    "✓ auth map · completed",
-    "● test audit · running",
+    "✓ auth map · completed · 12s · 3 turns · 24k tokens",
+    "● test audit · running · 950ms · 1 turn · 800 tokens",
     "  waiting for result",
   ].join("\n"));
   assert.equal(renderResult(details, true), [
-    "✓ auth map · completed",
+    "✓ auth map · completed · 12s · 3 turns · 24k tokens",
     "  conversation quiet-otter · run search-boldly",
     "",
     "  Mapped auth.",
     "",
-    "× test audit · error",
+    "× test audit · error · 950ms · 1 turn · 800 tokens",
     "  conversation calm-wren · run test-thoroughly",
     "",
     "  Child failed.",
@@ -289,6 +289,9 @@ test("expanded terminal joins retain recursive history, node-local filtering, an
           runId: "child-r" as any,
           label: "child",
           status: "completed",
+          elapsedMs: 2_500,
+          turns: 2,
+          tokens: 1_250,
           activity: [
             { toolCallId: "same-id", tool: "read", summary: "child activity survives" },
             { toolCallId: "child-only-id", tool: "subagent", summary: "child represented join" },
@@ -312,7 +315,7 @@ test("expanded terminal joins retain recursive history, node-local filtering, an
 
   assert.equal(renderResult(details), "✓ root · completed");
   const expanded = renderResult(details, true);
-  assert.match(expanded, /✓ joined 1 · child[\s\S]*child · completed[\s\S]*read\(child activity survives\)/);
+  assert.match(expanded, /✓ joined 1 · child[\s\S]*child · completed · 2\.5s · 2 turns · 1\.3k tokens[\s\S]*read\(child activity survives\)/);
   assert.match(expanded, /✓ joined 1 · leaf[\s\S]*leaf · completed/);
   assert.match(expanded, /conversation background-c · run background-r · detached at final/);
   assert.match(expanded, /parent activity survives/);
