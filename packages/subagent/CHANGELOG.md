@@ -10,6 +10,7 @@ This changelog starts with version `v0.2.1`.
 
 ### Changed
 
+- Defer completion delivery until synchronous tool preflight settles so same-batch joins can claim their runs without redundant notifications.
 - Report the exact queued or running run that prevents a conversation from being resumed, with status-appropriate next steps.
 
 ### Breaking

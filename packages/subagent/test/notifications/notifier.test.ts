@@ -54,11 +54,30 @@ test("join claim suppresses delivery and observer cancellation restores eligibil
   f.notifier.unsubscribe();
 });
 
+test("tool opportunities defer steer notifications until preflight settles", () => {
+  const f = fixture("steer", false);
+  f.fire("tool_execution_start", { toolName: "bash", args: {} });
+  assert.equal(f.sent.length, 0);
+  f.flush();
+  assert.equal(f.sent.length, 1);
+  f.notifier.unsubscribe();
+});
+
+test("same-preflight join claims completion before a steer notification is delivered", () => {
+  const f = fixture("steer", false);
+  f.fire("tool_execution_start", { toolName: "bash", args: {} });
+  f.fire("tool_execution_start", { toolName: "subagent", args: { action: "join", runIds: [f.run.runId] } });
+  f.flush();
+  assert.equal(f.sent.length, 0);
+  f.notifier.unsubscribe();
+});
+
 test("active steer send rejection retries with steer opportunity", async () => {
   let attempts = 0;
   const f = fixture("steer", false, () => ++attempts === 1 ? Promise.reject(new Error("closed")) : Promise.resolve());
   f.fire("session_start");
   f.fire("tool_execution_start", { toolName: "other", args: {} });
+  f.flush();
   await Promise.resolve(); await Promise.resolve();
   f.flush(500);
   assert.equal(f.sent.length, 2);

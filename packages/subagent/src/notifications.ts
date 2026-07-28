@@ -211,8 +211,9 @@ export class CompletionNotifier {
     if (ctx) this.ctx = ctx;
     const ids = joinRunIds(event);
     for (const id of ids) this.claim(id);
+    // Defer delivery until synchronous tool preflight finishes so later joins can claim runs.
     // list is deliberately not a delivery opportunity; a join starts by claiming.
-    if (ids.size === 0 && toolAction(event) !== "list") this.flush(true);
+    if (ids.size === 0 && toolAction(event) !== "list") this.arm(0, true);
   }
   private arm(delay: number, toolOpportunity = false): void {
     this.retryToolOpportunity ||= toolOpportunity;
