@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Use the dim color for the compaction reserve in the context graph and breakdown.
+
 ## [0.2.1] - 2026-07-26
 
 ### Changed

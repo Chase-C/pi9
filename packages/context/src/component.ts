@@ -18,7 +18,7 @@ const GRAPH_STYLE = {
   conversation: { glyph: "◉", color: "accent" },
   other: { glyph: "●", color: "muted" },
   free: { glyph: "○", color: "borderMuted" },
-  compaction: { glyph: "●", color: "warning" },
+  compaction: { glyph: "●", color: "dim" },
   unknown: { glyph: "●", color: "dim" },
 } as const satisfies Record<string, { glyph: string; color: ThemeColor }>;
 
