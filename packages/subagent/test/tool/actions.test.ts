@@ -166,6 +166,7 @@ test("inspect omits terminal output and completed message text", () => {
     kind: "done", outcome: "completed", completedAt: 2, startedAt: 1, output: "SECRET OUTPUT",
   }).runs[0];
   terminal.activity.messageSnippet = "SECRET MESSAGE";
+  terminal.activity.toolHistory = [{ id: "active-tool", name: "bash", startedAt: 1 }];
   const manager = {
     inspectRuns: () => [{ conversationId, snapshot: terminal }],
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
@@ -175,6 +176,7 @@ test("inspect omits terminal output and completed message text", () => {
 
   assert.equal(result.isError, false);
   assert.doesNotMatch(result.content[0].text, /SECRET/);
+  assert.equal(json(result)[0].recentTools[0].status, "interrupted");
 });
 
 test("list is output-free and filtering is pure", () => {

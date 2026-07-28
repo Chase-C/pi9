@@ -53,7 +53,7 @@ export interface InspectedRunRenderItem {
   turns: number;
   compactions: number;
   messageSnippet?: string;
-  recentTools: Array<JoinActivityRenderItem & { status: "running" | "completed" | "error" }>;
+  recentTools: Array<JoinActivityRenderItem & { status: "running" | "completed" | "error" | "interrupted" }>;
 }
 
 /** A join invocation, retained in invocation order (including repeated targets). */

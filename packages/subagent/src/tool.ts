@@ -274,7 +274,9 @@ function projectInspection(
       toolCallId: tool.id,
       tool: tool.name,
       ...(tool.inputSummary ? { summary: truncateInspectionText(tool.inputSummary, 160) } : {}),
-      status: tool.completedAt === undefined ? "running" : tool.isError ? "error" : "completed",
+      status: tool.completedAt === undefined
+        ? run.status.kind === "done" ? "interrupted" : "running"
+        : tool.isError ? "error" : "completed",
     })),
   };
 }
