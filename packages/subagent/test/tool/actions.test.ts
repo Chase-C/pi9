@@ -275,6 +275,44 @@ test("join returns projected child errors as successful tool results", async () 
   assert.ok(updates.length >= 1);
 });
 
+test("join projects elapsed time, turns, and tokens for rendering", async () => {
+  const conversation: any = snapshot({ kind: "done", outcome: "completed", startedAt: 1_000, completedAt: 13_400 });
+  conversation.runs[0].activity.turns = 3;
+  conversation.runs[0].usage = {
+    input: 20_000,
+    output: 4_000,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 24_000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  const entries = [{ conversationId, runId, status: conversation.runs[0].status }];
+  const manager = {
+    bindJoin: () => joinBinding(entries),
+    onConversationUpdate: () => () => {},
+    listConversations: () => [conversation],
+    runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
+  };
+
+  const result = await joinAction(deps(manager), { action: "join", runIds: [runId] }, undefined, undefined);
+
+  assert.deepEqual((result.details as any).runs[0], {
+    conversationId,
+    runId,
+    status: "completed",
+    agent: "helper",
+    kind: "spawn",
+    prompt: "x",
+    elapsedMs: 12_400,
+    turns: 3,
+    tokens: 24_000,
+    activity: [],
+    joins: [],
+    background: [],
+    joinToolCallIds: [],
+  });
+});
+
 test("join streams updates and preserves binding order", async () => {
   const secondRunId = "assemble-abruptly" as any;
   let listener: any;

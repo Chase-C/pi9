@@ -2,6 +2,7 @@ import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type T
 import type { Conversation, ConversationSnapshot, NestedJoinAttemptSnapshot, RunSnapshot, SteerReceipt } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
+import { runElapsedMs } from "./run-format.js";
 import type { JoinBinding, NestedJoinBinding, SubagentRuntime } from "./runtime.js";
 import { parseSubagentInvocation, SubagentParams, type RunStatus, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type TaskRequest } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
@@ -348,6 +349,7 @@ function renderJoinedRuns(
     if (!run) return base;
     return {
       ...base,
+      ...runStats(run),
       activity: activity(run),
       joins: joins(run),
       background: background(run.runId, base.label ?? base.agent),
@@ -363,9 +365,17 @@ function renderJoinedRuns(
     if (!run) return { ...value };
     const info = display(value.conversationId);
     const represented = (run.nestedJoins ?? []).flatMap(attempt => attempt.toolCallId ? [attempt.toolCallId] : []);
-    return { ...value, ...info, kind: run.kind, prompt: run.prompt, activity: activity(run), joins: joins(run),
+    return { ...value, ...info, kind: run.kind, prompt: run.prompt, ...runStats(run), activity: activity(run), joins: joins(run),
       background: background(run.runId, info.label ?? info.agent), joinToolCallIds: represented };
   });
+}
+
+function runStats(run: RunSnapshot): Pick<JoinedRunRenderItem, "elapsedMs" | "turns" | "tokens"> {
+  return {
+    elapsedMs: runElapsedMs(run),
+    turns: run.activity.turns,
+    tokens: run.usage?.totalTokens ?? 0,
+  };
 }
 
 export interface SubagentToolDeps {

@@ -3,6 +3,7 @@ import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-
 import type { AgentSource } from "./agents.js";
 import type { RunKind, RunPhase, SteerReceipt } from "./conversation.js";
 import type { ConversationId, RunId } from "./identifiers.js";
+import { formatElapsed, formatTokens } from "./run-format.js";
 import type { DispatchTaskKind, RunStatus, SubagentAction } from "./schema.js";
 
 type ThemeLike = Partial<Pick<Theme, "fg" | "bold">>;
@@ -81,6 +82,9 @@ export interface JoinTargetRenderItem {
   agent?: string;
   label?: string;
   status: RunStatus;
+  elapsedMs?: number;
+  turns?: number;
+  tokens?: number;
   activity?: JoinActivityRenderItem[];
   joins?: JoinInvocationRenderItem[];
   background?: JoinBackgroundOwnerRenderItem[];
@@ -112,6 +116,9 @@ export interface JoinedRunRenderItem {
   status: RunStatus;
   output?: string;
   error?: string;
+  elapsedMs?: number;
+  turns?: number;
+  tokens?: number;
   activity?: JoinActivityRenderItem[];
   joins?: JoinInvocationRenderItem[];
   background?: JoinBackgroundOwnerRenderItem[];
@@ -305,7 +312,7 @@ function renderJoinRoot(run: JoinedRunRenderItem, index: number, expanded: boole
   const label = run.label || run.agent || run.runId || `run ${index + 1}`;
   const meta = [run.agent, run.kind].filter(Boolean).join(" · ");
   const lines = [
-    `${statusMarker(theme, run.status)} ${paint(theme, "text", label)}${meta ? ` ${paint(theme, "muted", `· ${meta}`)}` : ""} ${paint(theme, "muted", "·")} ${statusText(theme, run.status)}`,
+    `${statusMarker(theme, run.status)} ${paint(theme, "text", label)}${meta ? ` ${paint(theme, "muted", `· ${meta}`)}` : ""} ${paint(theme, "muted", "·")} ${statusText(theme, run.status)}${runStats(run, theme)}`,
   ];
   const message = run.output ?? run.error;
   if (terminal && !expanded) {
@@ -394,7 +401,7 @@ function renderJoinTargets(targets: readonly JoinTargetRenderItem[], indent: str
     const label = target.label || target.agent || target.runId;
     const agent = target.agent && target.agent !== label ? ` · ${target.agent}` : "";
     const lines = [
-      `${indent}${paint(theme, "muted", connector)} ${statusMarker(theme, target.status)} ${paint(theme, "text", label)}${paint(theme, "muted", agent)} ${paint(theme, "muted", "·")} ${statusText(theme, target.status)}`,
+      `${indent}${paint(theme, "muted", connector)} ${statusMarker(theme, target.status)} ${paint(theme, "text", label)}${paint(theme, "muted", agent)} ${paint(theme, "muted", "·")} ${statusText(theme, target.status)}${runStats(target, theme)}`,
     ];
     const childIndent = `${indent}${last ? "   " : `${paint(theme, "muted", "│")}  `}  `;
     if (!isTerminal(target.status) || expanded) {
@@ -416,6 +423,15 @@ function renderBackground(owner: JoinBackgroundOwnerRenderItem, expanded: boolea
     lines.push(`${indent}  ${paint(theme, "muted", label)} · ${statusText(theme, entry.status)} · ${identity(theme, entry.conversationId, entry.runId)}${detached}`);
   }
   return lines;
+}
+
+function runStats(run: { elapsedMs?: number; turns?: number; tokens?: number }, theme?: ThemeLike): string {
+  const parts = [
+    run.elapsedMs !== undefined ? formatElapsed(run.elapsedMs) : undefined,
+    run.turns !== undefined ? count(run.turns, "turn") : undefined,
+    run.tokens !== undefined ? formatTokens(run.tokens) : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length ? ` ${paint(theme, "muted", `· ${parts.join(" · ")}`)}` : "";
 }
 
 function truncate(value: string, limit: number): string {
