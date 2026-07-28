@@ -8,19 +8,20 @@ const renderResult = (details: SubagentToolDetails, expanded = false, isPartial 
   renderSubagentResult({ details }, { expanded, isPartial }).render(width).map(line => line.trimEnd()).join("\n");
 
 test("call titles summarize action-specific input counts", () => {
-  assert.equal(renderCall({ action: "run", tasks: [{}, {}, {}] }), "subagent run  3 tasks");
+  assert.equal(renderCall({ action: "dispatch", tasks: [{}, {}, {}] }), "subagent dispatch  3 tasks");
+  assert.equal(renderCall({ action: "inspect", runIds: ["one"] }), "subagent inspect  1 run");
   assert.equal(renderCall({ action: "join", runIds: ["one", "two"] }), "subagent join  2 runs");
   assert.equal(renderCall({ action: "remove", conversationIds: ["one"] }), "subagent remove  1 conversation");
   assert.equal(renderCall({ action: "agents" }), "subagent agents");
   assert.equal(
-    lines(renderSubagentCall({ action: "run" }, { bold: text => `<b>${text}</b>` })),
-    "<b>subagent</b> run",
+    lines(renderSubagentCall({ action: "dispatch" }, { bold: text => `<b>${text}</b>` })),
+    "<b>subagent</b> dispatch",
   );
 });
 
-test("run uses outcome-first collapsed output and tagged delegation blocks when expanded", () => {
+test("dispatch uses outcome-first collapsed output and tagged delegation blocks when expanded", () => {
   const details: SubagentToolDetails = {
-    action: "run",
+    action: "dispatch",
     tasks: [
       { inputIndex: 0, kind: "spawn", agent: "scout", label: "auth map", prompt: "Map auth.", conversationId: "quiet-otter" as any, runId: "search-boldly" as any },
       { inputIndex: 1, kind: "spawn", agent: "reviewer", label: "risk review", prompt: "Review risks.", conversationId: "amber-fox" as any, runId: "inspect-carefully" as any },
@@ -29,7 +30,7 @@ test("run uses outcome-first collapsed output and tagged delegation blocks when 
   };
 
   assert.equal(renderResult(details), [
-    "✓ Started 2 new conversations and resumed 1",
+    "✓ Started 2 new conversations and resumed 1 conversation",
     "  auth map · risk review · follow-up",
   ].join("\n"));
   assert.equal(renderResult(details, true), [
@@ -45,6 +46,32 @@ test("run uses outcome-first collapsed output and tagged delegation blocks when 
     "  Check tests.",
     "  started · conversation bright-heron · run verify-quietly",
   ].join("\n"));
+});
+
+test("dispatch renders steering and inspect renders bounded activity", () => {
+  const dispatch: SubagentToolDetails = {
+    action: "dispatch",
+    tasks: [{ inputIndex: 0, kind: "steer", agent: "scout", prompt: "Focus tests.", conversationId: "quiet-otter" as any, runId: "search-boldly" as any }],
+  };
+  assert.equal(renderResult(dispatch), "✓ Steered 1 run\n  scout");
+  assert.match(renderResult(dispatch, true), /scout · steer[\s\S]*Focus tests\.[\s\S]*steered/);
+
+  const inspect: SubagentToolDetails = {
+    action: "inspect",
+    runs: [{
+      conversationId: "quiet-otter" as any,
+      runId: "search-boldly" as any,
+      agent: "scout",
+      status: "running",
+      elapsedMs: 25,
+      turns: 2,
+      compactions: 1,
+      messageSnippet: "Checking tests.",
+      recentTools: [{ toolCallId: "t1", tool: "read", summary: "test.ts", status: "completed" }],
+    }],
+  };
+  assert.equal(renderResult(inspect), "✓ Inspected 1 run · 1 running\n  scout");
+  assert.match(renderResult(inspect, true), /\[partial\] Checking tests\.[\s\S]*read\(test.ts\) · completed/);
 });
 
 test("agents render configuration tags in expanded mode", () => {

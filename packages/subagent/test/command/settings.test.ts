@@ -170,6 +170,17 @@ test("progress previews represent both small and large row limits", () => {
   assert.match(largeOutput, /\+2 more/);
 });
 
+test("max tasks setting describes dispatch terminology", () => {
+  const { component } = settingsComponent();
+  down(component, 5);
+  const rendered = output(component);
+
+  assert.match(rendered, /Max tasks per dispatch/);
+  assert.match(rendered, /dispatch\(tasks:/);
+  assert.match(rendered, /subagent dispatch call/);
+  assert.doesNotMatch(rendered, /run\(tasks:|subagent run call/);
+});
+
 test("completion notification preview uses behavior diagrams rather than fake UI", () => {
   const { component } = settingsComponent();
   down(component, 3);

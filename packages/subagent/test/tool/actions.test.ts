@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { joinAction, listAction, removeAction, runAction } from "../../src/tool.js";
+import { dispatchAction, inspectAction, joinAction, listAction, removeAction } from "../../src/tool.js";
 
 const conversationId = "amber-acorn" as any;
 const runId = "adapt-ably" as any;
@@ -38,44 +38,48 @@ const joinBinding = (
   release: hooks.release ?? (() => {}),
 });
 
-test("run forwards validated tasks and preserves manager outcome order", () => {
-  const starts = [
-    { ok: true, inputIndex: 0, conversationId, runId },
-    { ok: false, inputIndex: 1, error: "Unknown agent: missing." },
-  ];
+test("dispatch forwards validated tasks and preserves outcome order", async () => {
   const tasks = [
     { kind: "spawn" as const, agent: "helper", prompt: "valid" },
     { kind: "spawn" as const, agent: "missing", prompt: "unknown agent" },
   ];
+  const received: any[] = [];
   const manager = {
-    startRun: (_ctx: any, received: any[]) => {
-      assert.deepEqual(received, tasks);
-      return { starts, completion: Promise.resolve(starts) };
+    startRun: (_ctx: any, batch: any[]) => {
+      received.push(batch[0]);
+      const start = batch[0].agent === "helper"
+        ? { ok: true as const, inputIndex: 0, conversationId, runId }
+        : { ok: false as const, inputIndex: 0, error: "Unknown agent: missing." };
+      return { starts: [start], completion: Promise.resolve([start]) };
     },
+    listConversations: () => [],
   };
-  const result = runAction(deps(manager), { action: "run", tasks }, {} as any);
-  assert.deepEqual(json(result), starts);
+  const result = await dispatchAction(deps(manager), { action: "dispatch", tasks }, {} as any);
+  assert.deepEqual(received, tasks);
+  assert.deepEqual(json(result), [
+    { ok: true, inputIndex: 0, conversationId, runId },
+    { ok: false, inputIndex: 1, error: "Unknown agent: missing." },
+  ]);
   assert.equal(result.isError, false);
 });
 
-test("run returns task parse failures while starting valid siblings", () => {
+test("dispatch returns task parse failures while starting valid siblings", async () => {
   const tasks = [
     { kind: "spawn" as const, agent: "helper", prompt: "first" },
-    { error: "Task must carry exactly one of agent (spawn) or conversationId (resume)." },
+    { error: "Task must carry exactly one of agent (spawn), conversationId (resume), or runId (steer)." },
     { kind: "spawn" as const, agent: "missing", prompt: "third" },
-  ];
-  const runtimeStarts = [
-    { ok: true as const, inputIndex: 0, conversationId, runId },
-    { ok: false as const, inputIndex: 1, error: "Unknown agent: missing." },
   ];
   const manager = {
     startRun: (_ctx: any, received: any[]) => {
-      assert.deepEqual(received, [tasks[0], tasks[2]]);
-      return { starts: runtimeStarts, completion: Promise.resolve(runtimeStarts) };
+      const start = received[0].agent === "helper"
+        ? { ok: true as const, inputIndex: 0, conversationId, runId }
+        : { ok: false as const, inputIndex: 0, error: "Unknown agent: missing." };
+      return { starts: [start], completion: Promise.resolve([start]) };
     },
+    listConversations: () => [],
   };
 
-  const result = runAction(deps(manager), { action: "run", tasks }, {} as any);
+  const result = await dispatchAction(deps(manager), { action: "dispatch", tasks }, {} as any);
 
   assert.deepEqual(json(result), [
     { ok: true, inputIndex: 0, conversationId, runId },
@@ -83,6 +87,96 @@ test("run returns task parse failures while starting valid siblings", () => {
     { ok: false, inputIndex: 2, error: "Unknown agent: missing." },
   ]);
   assert.equal(result.isError, false);
+});
+
+test("dispatch steers multiple runs in input order", async () => {
+  const secondRunId = "assemble-abruptly" as any;
+  const received: any[] = [];
+  const manager = {
+    steerRun: async (target: any, prompt: string) => {
+      received.push([target, prompt]);
+      return { conversationId, runId: target };
+    },
+    listConversations: () => [snapshot()],
+  };
+  const result = await dispatchAction(deps(manager), {
+    action: "dispatch",
+    tasks: [
+      { kind: "steer", runId, prompt: "first" },
+      { kind: "steer", runId: secondRunId, prompt: "second" },
+      { kind: "steer", runId, prompt: "third" },
+    ],
+  }, {} as any);
+
+  assert.deepEqual(received, [[runId, "first"], [secondRunId, "second"], [runId, "third"]]);
+  assert.deepEqual(json(result).map((entry: any) => entry.runId), [runId, secondRunId, runId]);
+  assert.deepEqual((result.details as any).tasks.map((task: any) => task.kind), ["steer", "steer", "steer"]);
+});
+
+test("dispatch isolates steering failures from sibling tasks", async () => {
+  const secondRunId = "assemble-abruptly" as any;
+  const manager = {
+    steerRun: async (target: any) => {
+      if (target === runId) throw new Error("Run is queued and cannot be steered.");
+      return { conversationId, runId: target };
+    },
+    listConversations: () => [snapshot()],
+  };
+  const result = await dispatchAction(deps(manager), {
+    action: "dispatch",
+    tasks: [
+      { kind: "steer", runId, prompt: "first" },
+      { kind: "steer", runId: secondRunId, prompt: "second" },
+    ],
+  }, {} as any);
+
+  assert.deepEqual(json(result), [
+    { ok: false, inputIndex: 0, error: "Run is queued and cannot be steered." },
+    { ok: true, inputIndex: 1, conversationId, runId: secondRunId },
+  ]);
+});
+
+test("inspect returns bounded progress without terminal output", () => {
+  const running: any = snapshot().runs[0];
+  running.activity = {
+    messageSnippet: "working ".repeat(100), turns: 2, compactions: 1,
+    toolHistory: [1, 2, 3, 4].map(index => ({ id: `t${index}`, name: `tool${index}`, startedAt: index, inputSummary: "argument ".repeat(30) })),
+  };
+  const manager = {
+    inspectRuns: (ids: any[]) => {
+      assert.deepEqual(ids, [runId]);
+      return [{ conversationId, snapshot: running }];
+    },
+    conversationDisplay: () => ({ conversationId, agentName: "helper" }),
+  };
+  const result = inspectAction(deps(manager), { action: "inspect", runIds: [runId] });
+  const [entry] = json(result);
+
+  assert.equal(entry.status, "running");
+  assert.equal(entry.turns, 2);
+  assert.equal(entry.compactions, 1);
+  assert.ok(entry.messageSnippet.length <= 500);
+  assert.deepEqual(entry.recentTools.map((tool: any) => tool.tool), ["tool4", "tool3", "tool2"]);
+  assert.ok(entry.recentTools.every((tool: any) => tool.summary.length <= 160));
+  assert.equal("output" in entry, false);
+});
+
+test("inspect omits terminal output and completed message text", () => {
+  const terminal: any = snapshot({
+    kind: "done", outcome: "completed", completedAt: 2, startedAt: 1, output: "SECRET OUTPUT",
+  }).runs[0];
+  terminal.activity.messageSnippet = "SECRET MESSAGE";
+  terminal.activity.toolHistory = [{ id: "active-tool", name: "bash", startedAt: 1 }];
+  const manager = {
+    inspectRuns: () => [{ conversationId, snapshot: terminal }],
+    conversationDisplay: () => ({ conversationId, agentName: "helper" }),
+  };
+
+  const result = inspectAction(deps(manager), { action: "inspect", runIds: [runId] });
+
+  assert.equal(result.isError, false);
+  assert.doesNotMatch(result.content[0].text, /SECRET/);
+  assert.equal(json(result)[0].recentTools[0].status, "interrupted");
 });
 
 test("list is output-free and filtering is pure", () => {

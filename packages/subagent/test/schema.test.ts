@@ -7,15 +7,17 @@ const conversationId = "amber-acorn";
 const runId = "adapt-ably";
 
 test("public schema is flat and validates task structure", () => {
-  assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "run", "join", "remove"]);
+  assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "dispatch", "inspect", "join", "remove"]);
   assert.doesNotMatch(JSON.stringify(SubagentParams), /"anyOf"/);
   assert.equal(Check(SubagentParams, { action: "agents" }), true);
   assert.equal(Check(SubagentParams, { action: "unknown" }), false);
-  assert.equal(Check(SubagentParams, { action: "run", tasks: [] }), false);
-  assert.equal(Check(SubagentParams, { action: "run", tasks: {} }), false);
-  assert.equal(Check(SubagentParams, { action: "run", tasks: [{ agent: "helper", prompt: "work" }] }), true);
-  assert.equal(Check(SubagentParams, { action: "run", tasks: [{ agent: 42, prompt: true }, null] }), false);
+  assert.equal(Check(SubagentParams, { action: "dispatch", tasks: [] }), false);
+  assert.equal(Check(SubagentParams, { action: "dispatch", tasks: {} }), false);
+  assert.equal(Check(SubagentParams, { action: "dispatch", tasks: [{ agent: "helper", prompt: "work" }] }), true);
+  assert.equal(Check(SubagentParams, { action: "dispatch", tasks: [{ agent: 42, prompt: true }, null] }), false);
+  assert.equal(Check(SubagentParams, { action: "inspect", runIds: [runId] }), true);
   assert.equal(Check(TaskSchema, { conversationId, prompt: "continue" }), true);
+  assert.equal(Check(TaskSchema, { runId, prompt: "redirect" }), true);
 });
 
 test("spawn fields are optional where agreed and preserved", () => {
@@ -30,6 +32,19 @@ test("resume accepts conversationId and prompt only", () => {
     const parsed = parseTask({ conversationId, prompt: "next", [field]: field === "skills" ? [] : "x" });
     assert.ok("error" in parsed); assert.match(parsed.error, new RegExp(`rejects ${field}`));
   }
+});
+
+test("steer accepts a runId and prompt only", () => {
+  assert.deepEqual(parseTask({ runId, prompt: "change direction" }), {
+    kind: "steer", runId, prompt: "change direction",
+  });
+  const wrongKind = parseTask({ runId: conversationId, prompt: "change direction" });
+  assert.ok("error" in wrongKind); assert.match(wrongKind.error, /conversation ID is not accepted/);
+  const malformed = parseTask({ runId: "not-an-id", prompt: "change direction" });
+  assert.ok("error" in malformed); assert.match(malformed.error, /invalid runId format/);
+  const extra = parseTask({ runId, prompt: "change direction", model: "x" });
+  assert.ok("error" in extra); assert.match(extra.error, /rejects model/);
+  assert.ok("error" in parseTask({ agent: "helper", runId, prompt: "ambiguous" }));
 });
 
 test("tasks validate shape, blanks, and overrides", () => {
@@ -54,17 +69,18 @@ test("resume conversationId diagnostics distinguish ID kinds from invalid format
 test("invocations parse every action without aliases", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "agents" }), { action: "agents" });
   assert.deepEqual(parseSubagentInvocation({ action: "list", status: ["running"] }), { action: "list", status: ["running"] });
-  assert.deepEqual(parseSubagentInvocation({ action: "run", tasks: [{ agent: "helper", prompt: "x" }] }), {
-    action: "run",
+  assert.deepEqual(parseSubagentInvocation({ action: "dispatch", tasks: [{ agent: "helper", prompt: "x" }] }), {
+    action: "dispatch",
     tasks: [{ kind: "spawn", agent: "helper", prompt: "x" }],
   });
+  assert.deepEqual(parseSubagentInvocation({ action: "inspect", runIds: [runId] }), { action: "inspect", runIds: [runId] });
   assert.deepEqual(parseSubagentInvocation({ action: "join", runIds: [runId] }), { action: "join", runIds: [runId] });
   assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId] }), { action: "remove", conversationIds: [conversationId] });
 });
 
 test("task parse failures remain indexed within a runnable batch", () => {
   const parsed = parseSubagentInvocation({
-    action: "run",
+    action: "dispatch",
     tasks: [
       { agent: "helper", prompt: "first" },
       { prompt: "missing agent" },
@@ -72,10 +88,10 @@ test("task parse failures remain indexed within a runnable batch", () => {
     ],
   });
   assert.deepEqual(parsed, {
-    action: "run",
+    action: "dispatch",
     tasks: [
       { kind: "spawn", agent: "helper", prompt: "first" },
-      { error: "Task must carry exactly one of agent (spawn) or conversationId (resume)." },
+      { error: "Task must carry exactly one of agent (spawn), conversationId (resume), or runId (steer)." },
       { kind: "resume", conversationId, prompt: "third" },
     ],
   });
@@ -85,9 +101,10 @@ test("whole invocation validation covers limits, status, and required batches", 
   assert.ok("error" in parseSubagentInvocation({}));
   assert.ok("error" in parseSubagentInvocation({ action: "unknown" }));
   assert.ok("error" in parseSubagentInvocation({ action: "list", status: ["stale"] }));
-  assert.ok("error" in parseSubagentInvocation({ action: "run" }));
-  assert.ok("error" in parseSubagentInvocation({ action: "run", tasks: [] }));
-  assert.match((parseSubagentInvocation({ action: "run", tasks: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, { maxTasks: 1 }) as any).error, /Too many/);
+  assert.ok("error" in parseSubagentInvocation({ action: "dispatch" }));
+  assert.ok("error" in parseSubagentInvocation({ action: "dispatch", tasks: [] }));
+  assert.match((parseSubagentInvocation({ action: "dispatch", tasks: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, { maxTasks: 1 }) as any).error, /Too many/);
+  assert.ok("error" in parseSubagentInvocation({ action: "inspect", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "join", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "remove" }));
 });
@@ -144,9 +161,10 @@ test("schema and parser reject unknown properties", () => {
 
 test("unsupported actions and invocation fields receive ordinary validation errors", () => {
   const cases: Array<[unknown, RegExp]> = [
-    [{ action: "run", tasks: [], background: true }, /Property background is not allowed/],
-    [{ action: "run", tasks: [], dispatch: "background" }, /Property dispatch is not allowed/],
-    [{ action: "join", runIds: [runId], wait: true }, /Property wait is not allowed/],
+    [{ action: "dispatch", tasks: [], background: true }, /Property background is not allowed/],
+    [{ action: "dispatch", tasks: [], mode: "background" }, /Property mode is not allowed/],
+    [{ action: "inspect", runIds: [runId], wait: true }, /Property wait is not allowed/],
+    [{ action: "run", tasks: [] }, /Unknown action/],
     [{ action: "results", runIds: [runId] }, /Unknown action/],
     [{ action: "join", runIds: [runId], results: true }, /Property results is not allowed/],
     [{ action: "join", runIds: [runId], remove: true }, /Property remove is not allowed/],
@@ -163,7 +181,7 @@ test("unsupported task fields produce per-task parse failures", () => {
     [{ sessionId: conversationId, prompt: "x" }, /sessionId is not allowed/],
     [{ agent: "a", prompt: "x", retainConversation: true }, /retainConversation is not allowed/],
   ] as const) {
-    const parsed = parseSubagentInvocation({ action: "run", tasks: [task] });
+    const parsed = parseSubagentInvocation({ action: "dispatch", tasks: [task] });
     assert.ok("tasks" in parsed);
     const failure = parsed.tasks[0];
     assert.ok(failure && "error" in failure);

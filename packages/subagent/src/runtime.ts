@@ -3,7 +3,7 @@ import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
 import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type ParentRun, type Run, type RunSnapshot } from "./conversation.js";
 import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun, resolveModel, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId } from "./identifiers.js";
-import type { TaskRequest } from "./schema.js";
+import type { SpawnRequest, ResumeRequest } from "./schema.js";
 import { timingStart } from "./timing.js";
 
 /**
@@ -190,6 +190,8 @@ export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: Ru
 export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId }
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
 export interface RemoveResult { removed: number; aborted: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
+export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId }
+export interface InspectedRun { readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }
 
 type JoinStatus = ConversationSnapshot["runs"][number]["status"];
 type RunRecord =
@@ -221,7 +223,7 @@ export class SubagentRuntime {
   conversation(conversationId: string): ConversationSnapshot { return this.requireConversation(conversationId).snapshot(); }
 
   /** Resolves and reserves the complete batch synchronously; executions never inherit caller cancellation. */
-  startRun(ctx: ExtensionContext, tasks: readonly TaskRequest[], options: { parent?: ParentRun } = {}): RunHandle {
+  startRun(ctx: ExtensionContext, tasks: readonly (SpawnRequest | ResumeRequest)[], options: { parent?: ParentRun } = {}): RunHandle {
     const starts: OrderedStartOutcome[] = [];
     const executions: Promise<unknown>[] = [];
     let reserved = this.conversations.size;
@@ -263,6 +265,22 @@ export class SubagentRuntime {
       executions.push(this._scheduler.run(ctx, undefined, agent, agent.requireCurrentRun()));
     }
     return { starts, completion: Promise.allSettled(executions).then(() => starts) };
+  }
+
+  async steerRun(runId: RunId, prompt: string, owner?: ParentRun): Promise<SteerResult> {
+    const record = this.requireRunRecord(runId);
+    this.assertOwnerAccess(record, owner, "steer");
+    if (record.kind !== "live") throw new Error(`Run ${runId} is no longer active and cannot be steered.`);
+    await record.agent.steer(runId, prompt);
+    return { conversationId: record.conversationId, runId };
+  }
+
+  inspectRuns(runIds: readonly RunId[], owner?: ParentRun): InspectedRun[] {
+    return runIds.map(runId => {
+      const record = this.requireRunRecord(runId);
+      this.assertOwnerAccess(record, owner, "inspect");
+      return { conversationId: record.conversationId, snapshot: this.runSnapshot(runId) };
+    });
   }
 
   /** Binds only the requested runs. Resolution and observer attachment are all-or-nothing. */
@@ -372,6 +390,17 @@ export class SubagentRuntime {
       ...(terminal ? { completedAt: Date.now() } : {}),
     });
     record.snapshot = Object.freeze({ ...record.snapshot, nestedJoins: Object.freeze(attempts) });
+  }
+
+  private assertOwnerAccess(record: RunRecord, owner: ParentRun | undefined, action: string): void {
+    if (!owner) return;
+    const ownerRecord = this.runs.get(owner.runId);
+    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId || ownerRecord.kind !== "live") {
+      throw new Error(`Unknown ${action} owner run: ${owner.runId}.`);
+    }
+    if (!this.isDescendant(record.runId, owner.runId)) {
+      throw new Error(`Run ${record.runId} is not a descendant of owner run ${owner.runId}.`);
+    }
   }
 
   private isDescendant(candidate: RunId, owner: RunId): boolean {

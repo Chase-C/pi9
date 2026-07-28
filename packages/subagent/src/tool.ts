@@ -2,7 +2,7 @@ import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type T
 import type { Conversation, ConversationSnapshot, NestedJoinAttemptSnapshot, RunSnapshot } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
-import type { JoinBinding, NestedJoinBinding, OrderedStartOutcome, SubagentRuntime } from "./runtime.js";
+import type { JoinBinding, NestedJoinBinding, SubagentRuntime } from "./runtime.js";
 import { parseSubagentInvocation, SubagentParams, type RunStatus, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type TaskRequest } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
@@ -11,7 +11,8 @@ import {
   type JoinedRunRenderItem,
   type JoinInvocationRenderItem,
   type JoinTargetRenderItem,
-  type RunRenderItem,
+  type DispatchTaskRenderItem,
+  type InspectedRunRenderItem,
   type SubagentToolDetails,
 } from "./tool-renderer.js";
 
@@ -28,6 +29,9 @@ export interface ActionResult {
 }
 
 type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { action: A }>;
+type OrderedDispatchOutcome =
+  | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId }
+  | { readonly ok: false; readonly inputIndex: number; readonly error: string };
 
 function jsonResult(json: unknown, details: SubagentToolDetails): ActionResult {
   return {
@@ -84,34 +88,56 @@ export function listAction(
   return jsonResult(filtered, { action: "list", runs: filtered });
 }
 
-export function runAction(
+export async function dispatchAction(
   deps: ActionDeps,
-  invocation: InvocationFor<"run">,
+  invocation: InvocationFor<"dispatch">,
   ctx: ExtensionContext,
-): ActionResult {
-  const options = deps.parent
-    ? { parent: { conversationId: deps.parent.conversationId, runId: deps.parent.runId() } }
-    : {};
-  const tasks: TaskRequest[] = [];
-  const inputIndexes: number[] = [];
-  const starts: OrderedStartOutcome[] = [];
-  invocation.tasks.forEach((task, inputIndex) => {
-    if ("error" in task) starts.push({ ok: false, inputIndex, error: task.error });
-    else {
-      tasks.push(task);
-      inputIndexes.push(inputIndex);
+): Promise<ActionResult> {
+  const owner = deps.parent
+    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
+    : undefined;
+  const outcomes: OrderedDispatchOutcome[] = [];
+
+  for (let inputIndex = 0; inputIndex < invocation.tasks.length; inputIndex++) {
+    const task = invocation.tasks[inputIndex];
+    if ("error" in task) {
+      outcomes.push({ ok: false, inputIndex, error: task.error });
+      continue;
     }
+    if (task.kind === "steer") {
+      try {
+        const result = await deps.runtime.steerRun(task.runId, task.prompt, owner);
+        outcomes.push({ ok: true, inputIndex, ...result });
+      } catch (error) {
+        outcomes.push({ ok: false, inputIndex, error: error instanceof Error ? error.message : String(error) });
+      }
+      continue;
+    }
+    const handle = deps.runtime.startRun(ctx, [task], owner ? { parent: owner } : {});
+    const outcome = handle.starts[0];
+    outcomes.push({ ...outcome, inputIndex });
+  }
+
+  return jsonResult(outcomes, {
+    action: "dispatch",
+    tasks: renderDispatchItems(invocation.tasks, outcomes, conversationSnapshots(deps.runtime)),
   });
-  const handle = deps.runtime.startRun(ctx, tasks, options);
-  starts.push(...handle.starts.map(start => ({
-    ...start,
-    inputIndex: inputIndexes[start.inputIndex],
-  })));
-  starts.sort((a, b) => a.inputIndex - b.inputIndex);
-  return jsonResult(starts, {
-    action: "run",
-    tasks: renderRunItems(invocation.tasks, starts, conversationSnapshots(deps.runtime)),
-  });
+}
+
+export function inspectAction(
+  deps: ActionDeps,
+  invocation: InvocationFor<"inspect">,
+): ActionResult {
+  const owner = deps.parent
+    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
+    : undefined;
+  try {
+    const runs = deps.runtime.inspectRuns(invocation.runIds, owner).map(({ conversationId, snapshot }) =>
+      projectInspection(deps.runtime, conversationId, snapshot));
+    return jsonResult(runs, { action: "inspect", runs });
+  } catch (error) {
+    return errorResult(error instanceof Error ? error.message : String(error), "inspect");
+  }
 }
 
 export async function joinAction(
@@ -195,11 +221,11 @@ export function removeAction(
   return jsonResult(result, { action: "remove", ...result });
 }
 
-function renderRunItems(
+function renderDispatchItems(
   tasks: readonly (TaskRequest | { error: string })[],
-  starts: readonly OrderedStartOutcome[],
+  starts: readonly OrderedDispatchOutcome[],
   conversations: readonly ConversationSnapshot[],
-): RunRenderItem[] {
+): DispatchTaskRenderItem[] {
   const byConversation = new Map(conversations.map(conversation => [conversation.conversationId, conversation]));
   return starts.map(start => {
     const task = tasks[start.inputIndex];
@@ -218,6 +244,46 @@ function renderRunItems(
       ...(start.ok ? { conversationId: start.conversationId, runId: start.runId } : { error: start.error }),
     };
   });
+}
+
+function projectInspection(
+  runtime: SubagentRuntime,
+  conversationId: ConversationId,
+  run: RunSnapshot,
+): InspectedRunRenderItem {
+  const status = run.status.kind === "done" ? run.status.outcome : run.status.kind;
+  const end = run.status.kind === "done" ? run.status.completedAt : Date.now();
+  const start = run.status.kind === "queued" ? run.status.queuedAt
+    : run.status.kind === "running" ? run.status.startedAt
+    : run.status.startedAt ?? run.createdAt;
+  let display: { agentName?: string; label?: string } = {};
+  try { display = runtime.conversationDisplay(conversationId); } catch {}
+  return {
+    conversationId,
+    runId: run.runId,
+    ...(display.agentName ? { agent: display.agentName } : {}),
+    ...(display.label ? { label: display.label } : {}),
+    status,
+    elapsedMs: Math.max(0, end - start),
+    turns: run.activity.turns,
+    compactions: run.activity.compactions,
+    ...(status === "running" && run.activity.messageSnippet
+      ? { messageSnippet: truncateInspectionText(run.activity.messageSnippet, 500) }
+      : {}),
+    recentTools: run.activity.toolHistory.slice(-3).reverse().map(tool => ({
+      toolCallId: tool.id,
+      tool: tool.name,
+      ...(tool.inputSummary ? { summary: truncateInspectionText(tool.inputSummary, 160) } : {}),
+      status: tool.completedAt === undefined
+        ? run.status.kind === "done" ? "interrupted" : "running"
+        : tool.isError ? "error" : "completed",
+    })),
+  };
+}
+
+function truncateInspectionText(value: string, limit: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
 }
 
 function conversationSnapshots(runtime: SubagentRuntime): ConversationSnapshot[] {
@@ -323,12 +389,14 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(status?): List runs, optionally filtered by status.",
-      "  run(tasks): Start asynchronous parallel tasks and immediately return their run IDs.",
+      "  dispatch(tasks): Dispatch asynchronous spawn, resume, or steering tasks.",
+      "  inspect(runIds): Return bounded progress snapshots without waiting or acknowledging.",
       "  join(runIds): Wait for the given runs and return their outcomes in the same order.",
       "  remove(conversationIds): Remove retained conversations.",
       "Tasks:",
       "  Spawn: { agent, prompt, label?, skills?, model?, thinking?, cwd? }",
       "  Resume: { conversationId, prompt }",
+      "  Steer: { runId, prompt }",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",
     promptGuidelines: [
@@ -336,6 +404,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Skip subagent when delegating costs more than doing, or when you couldn't verify or use the result without repeating the work.",
       "Write each subagent prompt as if to a stranger sharing only your filesystem: every input, path, and constraint, plus what to report back or produce.",
       "Run subagent tasks in parallel only when they're independent and won't interact with the same files; join once you depend on their results or have nothing else to do.",
+      "Use subagent inspect only when progress could affect your next step; steer only to communicate newly discovered constraints or correct clear divergence.",
       "Resume a retained subagent when its context helps the follow-up, spawn fresh when it wouldn't help or would mislead, and remove any you won't need again.",
       //"Call subagent action=agents before choosing an agent unless the user named one explicitly or definitions were already listed.",
     ],
@@ -360,9 +429,10 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
         switch (invocation.action) {
           case "agents": return agentsAction(actionDeps, invocation);
           case "list": return listAction(actionDeps, invocation);
+          case "dispatch": return dispatchAction(actionDeps, invocation, ctx);
+          case "inspect": return inspectAction(actionDeps, invocation);
           case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
           case "remove": return removeAction(actionDeps, invocation);
-          case "run": return runAction(actionDeps, invocation, ctx);
         }
       } finally {
         if (requestedJoinIds.length) deps.releaseJoinClaims?.(requestedJoinIds);

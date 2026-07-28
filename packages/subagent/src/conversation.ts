@@ -220,6 +220,15 @@ export class Conversation {
   }
   sessionForResume(): AgentSession | undefined { return this.session; }
 
+  async steer(runId: RunId, prompt: string): Promise<void> {
+    const run = this.requireRun(runId);
+    if (run.state.kind !== "running") {
+      const status = run.state.kind === "queued" ? "queued" : run.state.result.status;
+      throw new Error(`Run ${runId} is ${status} and cannot be steered.`);
+    }
+    await run.state.session.steer(prompt);
+  }
+
   /** Stable exact-run observation retained independently of catalog removal. */
   bindRun(runId: RunId): RunBinding {
     const run = this.requireRun(runId);

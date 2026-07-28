@@ -119,8 +119,8 @@ function toolInputSummary(toolName: string, args: unknown): string | undefined {
       return joinParts([stringValue(input.pattern) ?? stringValue(input.name), input.path ? `in ${String(input.path)}` : undefined]);
     case "subagent": {
       const action = stringValue(input.action);
-      const count = action === "run" ? countPart(input.tasks, "task")
-        : action === "join" ? countPart(input.runIds, "run")
+      const count = action === "dispatch" ? countPart(input.tasks, "task")
+        : action === "inspect" || action === "join" ? countPart(input.runIds, "run")
         : action === "remove" ? countPart(input.conversationIds, "conversation")
         : undefined;
       return joinParts([action, count]);
