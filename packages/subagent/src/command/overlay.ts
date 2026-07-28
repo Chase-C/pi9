@@ -351,7 +351,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       }
     }
 
-    lines.push("", this.muted(`enter inspect${run.status.kind === "running" ? " · c cancel" : ""}${this.canResumeConversation(conversation) ? " · r resume" : ""} · x remove`));
+    lines.push("", this.muted(`enter inspect${run.status.kind === "queued" || run.status.kind === "running" ? " · c cancel" : ""}${this.canResumeConversation(conversation) ? " · r resume" : ""} · x remove`));
     if (this.promptTarget?.kind === "resume") lines.push("", this.accent("Resume conversation"), ...this.renderPrompt(width));
     if (this.actionError) lines.push(this.error(this.actionError));
     return lines;
@@ -470,7 +470,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const conversation = this.findConversation(conversationId);
     if (!conversation) return;
     const run = this.findRun(conversation, runId);
-    if (run?.status.kind === "running") this.options.onCancel?.(run.runId);
+    if (run?.status.kind === "queued" || run?.status.kind === "running") this.options.onCancel?.(run.runId);
   }
 
   private removeConversation(conversationId: string): void {

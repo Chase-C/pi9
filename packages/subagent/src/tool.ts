@@ -189,19 +189,14 @@ export async function cancelAction(
   const owner = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
-  const runs = [];
-
-  for (const target of invocation.runIds) {
-    if (typeof target !== "string") {
-      runs.push({ runId: target.runId, error: target.error });
-      continue;
-    }
+  const runs = await Promise.all(invocation.runIds.map(async target => {
+    if (typeof target !== "string") return { runId: target.runId, error: target.error };
     try {
-      runs.push(await deps.runtime.cancelRun(target, owner));
+      return await deps.runtime.cancelRun(target, owner);
     } catch (error) {
-      runs.push({ runId: target, error: error instanceof Error ? error.message : String(error) });
+      return { runId: target, error: error instanceof Error ? error.message : String(error) };
     }
-  }
+  }));
 
   return successResult("cancel", { runs }, { action: "cancel", runs });
 }

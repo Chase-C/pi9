@@ -712,6 +712,51 @@ test("cancelling an active run retains its conversation and exact outcome", asyn
   await batch.completion;
 });
 
+test("queued cancellation settles immediately without dispatching the executor", async () => {
+  let finishBlocker!: () => void;
+  const blockerPending = new Promise<void>(done => { finishBlocker = done; });
+  const executed: string[] = [];
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    executed.push(attempt.prompt);
+    agent.bindSession(session());
+    if (attempt.prompt === "blocker") await blockerPending;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 1, controlled);
+  const blocker = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocker" }]);
+  await new Promise(done => setImmediate(done));
+  let cancelling: Promise<any> | undefined;
+  manager.onConversationUpdate(agent => {
+    const run = agent.snapshot().currentRun;
+    if (run?.prompt === "queued" && run.status.kind === "queued") cancelling ??= manager.cancelRun(run.runId);
+  });
+  const queued = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "queued" }]);
+  const target = queued.starts[0] as any;
+  const join = manager.bindJoin([target.runId]);
+
+  expect(cancelling).toBeDefined();
+  await expect(cancelling!).resolves.toEqual({
+    conversationId: target.conversationId,
+    runId: target.runId,
+    status: "aborted",
+  });
+  await expect(queued.completion).resolves.toEqual(queued.starts);
+  await join.completion;
+  expect(join.project()[0].status).toMatchObject({ kind: "done", outcome: "aborted" });
+  join.acknowledge();
+  join.release();
+  expect(executed).toEqual(["blocker"]);
+  await expect(manager.removeConversation(target.conversationId)).resolves.toMatchObject({
+    removed: 1,
+    conversationIds: [target.conversationId],
+    errors: [],
+  });
+
+  finishBlocker();
+  await blocker.completion;
+  expect(executed).toEqual(["blocker"]);
+});
+
 test("steering rejects queued, terminal, and SDK-rejected targets", async () => {
   let finishFirst!: () => void;
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -730,7 +775,7 @@ test("steering rejects queued, terminal, and SDK-rejected targets", async () => 
   await new Promise(done => setImmediate(done));
 
   await expect(manager.steerRun(secondRun.runId, "queued")).rejects.toThrow("queued");
-  await expect(manager.cancelRun(secondRun.runId)).rejects.toThrow("queued");
+  await expect(manager.cancelRun(secondRun.runId)).resolves.toMatchObject({ runId: secondRun.runId, status: "aborted" });
   await expect(manager.steerRun(firstRun.runId, "running")).rejects.toThrow("queue rejected");
   finishFirst();
   await Promise.all([first.completion, second.completion]);

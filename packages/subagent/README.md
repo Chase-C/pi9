@@ -47,7 +47,7 @@ Inspect the repository and return concise, evidence-backed findings.
 | `tools` | no | Comma-separated allowlist; include `subagent` for recursive delegation. |
 | `skills` | no | Comma-separated default skills. A spawn-task value replaces this list. |
 
-The body becomes the child system prompt. `spawns` entries require `agent` and `prompt`; `label` is optional, and entries may override supported execution options such as model, thinking, working directory, and skills. A model requested by either the task or agent definition must resolve; an unknown or malformed value fails that task instead of falling back. When neither specifies a model, the child inherits the parent's model. An explicit task `cwd` is resolved relative to the parent's working directory and must identify an existing directory. `resumes` entries identify a conversation and create another run with the supplied prompt; the conversation's agent and execution context remain fixed. `messages` entries identify an active run and queue the supplied `message` through Pi's steering boundary without creating another run. `cancel` targets exact running runs by `runId`.
+The body becomes the child system prompt. `spawns` entries require `agent` and `prompt`; `label` is optional, and entries may override supported execution options such as model, thinking, working directory, and skills. A model requested by either the task or agent definition must resolve; an unknown or malformed value fails that task instead of falling back. When neither specifies a model, the child inherits the parent's model. An explicit task `cwd` is resolved relative to the parent's working directory and must identify an existing directory. `resumes` entries identify a conversation and create another run with the supplied prompt; the conversation's agent and execution context remain fixed. `messages` entries identify an active run and queue the supplied `message` through Pi's steering boundary without creating another run. `cancel` targets exact queued or running runs by `runId`.
 
 ## Tool actions
 
@@ -57,7 +57,7 @@ The body becomes the child system prompt. `spawns` entries require `agent` and `
 | `list` | Return a lightweight inventory of conversations and runs without run output. It is pure: it acknowledges nothing and changes no lifecycle state. |
 | `run` | Start `spawns`, `resumes`, or both and return matching receipt arrays under `data.spawns` and `data.resumes`. Both task types create asynchronous runs. |
 | `steer` | Send `messages` to existing running runs and return ordered lifecycle receipts after Pi accepts each message. |
-| `cancel` | Abort exact running runs while retaining their conversations and aborted outcomes for `inspect` and `join`. Malformed, unknown, terminal, queued, or unauthorized targets become ordered per-target errors. |
+| `cancel` | Abort exact queued or running runs while retaining their conversations and aborted outcomes for `inspect` and `join`. Malformed, unknown, terminal, or unauthorized targets become ordered per-target errors. |
 | `inspect` | Return bounded status, running phase, current message, recent tool activity, steer receipts, and terminal error diagnostics for exact runs without waiting or acknowledging them. Invalid targets become ordered per-target errors. Terminal output is omitted. |
 | `join` | Block until every valid explicitly requested exact run settles, then return and acknowledge those runs. Malformed, unknown, or unauthorized targets become ordered per-target errors without hiding valid sibling outcomes. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying runs. |
 | `remove` | Permanently delete terminal conversations and all their run records. Active conversations are rejected with the active `runId`; cancel and join that run before removal. |
@@ -104,7 +104,7 @@ Only descendants named in an explicit nested join block that caller. Unjoined de
 
 ![A technical-lead subagent joining two nested investigations with live tool activity](media/recursive-delegation.png)
 
-Cancellation settles a running run as `aborted` and preserves its conversation and exact run record, so the caller can inspect or join the outcome. It does not make the conversation resumable. Removal accepts only terminal conversations and permanently deletes the conversation, child session state, and every associated run record; removed IDs can no longer be resumed, inspected, joined, steered, or cancelled. Surviving descendants are operationally reparented to the nearest retained ancestor so recursive ownership remains intact, while their immutable `parent` snapshots continue to identify the run that originally spawned them.
+Cancellation settles a queued or running run as `aborted` and preserves its conversation and exact run record, so the caller can inspect or join the outcome. Queued runs are removed before execution. Cancellation does not make the conversation resumable. Removal accepts only terminal conversations and permanently deletes the conversation, child session state, and every associated run record; removed IDs can no longer be resumed, inspected, joined, steered, or cancelled. Surviving descendants are operationally reparented to the nearest retained ancestor so recursive ownership remains intact, while their immutable `parent` snapshots continue to identify the run that originally spawned them.
 
 ## Capacity and concurrency
 
@@ -116,7 +116,7 @@ Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. 
 
 Completion notifications concern settled runs that have not yet been acknowledged. Listing inventory and inspecting progress do not acknowledge them. Joining a run acknowledges that exact run; cleanup also clears notifications associated with the removed conversations. Notification delivery waits until synchronous tool preflight settles so a join later in the same tool batch can claim its runs before any redundant completion message is sent.
 
-`/subagents` opens the conversation, agent, and settings UI. It provides live status and progress, cancellation of running work, access to completed output, follow-up prompts when `canResume` is true, and permanent terminal-conversation cleanup.
+`/subagents` opens the conversation, agent, and settings UI. It provides live status and progress, cancellation of queued or running work, access to completed output, follow-up prompts when `canResume` is true, and permanent terminal-conversation cleanup.
 
 The package emits lifecycle updates for queued, started, and completed work. Nested join changes emit `subagent:updated` with `kind: "nestedJoin"` and the owner conversation snapshot; they do not create additional queued, started, or completed milestones. Identifiers, run records, child conversation context, and nested join-attempt history are runtime-local only. They are not restored after a process restart or extension reload.
 

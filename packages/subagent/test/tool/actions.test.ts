@@ -225,6 +225,43 @@ test("cancel aborts an exact run while retaining its identity", async () => {
   });
 });
 
+test("cancel starts valid targets concurrently while preserving input order", async () => {
+  const secondRunId = "assemble-abruptly" as any;
+  const started: any[] = [];
+  let releaseFirst!: () => void;
+  const firstPending = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const manager = {
+    cancelRun: async (target: any) => {
+      started.push(target);
+      if (target === runId) await firstPending;
+      return { conversationId, runId: target, status: "aborted" };
+    },
+    listConversations: () => [],
+  };
+
+  const resultPromise = cancelAction(deps(manager), {
+    action: "cancel",
+    runIds: [runId, secondRunId],
+  });
+
+  try {
+    assert.deepEqual(started, [runId, secondRunId]);
+  } finally {
+    releaseFirst();
+  }
+
+  assert.deepEqual(json(await resultPromise), {
+    action: "cancel",
+    ok: true,
+    data: {
+      runs: [
+        { conversationId, runId, status: "aborted" },
+        { conversationId, runId: secondRunId, status: "aborted" },
+      ],
+    },
+  });
+});
+
 test("cancel isolates malformed and runtime failures from valid siblings", async () => {
   const secondRunId = "assemble-abruptly" as any;
   const manager = {

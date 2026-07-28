@@ -15,6 +15,11 @@ export interface RunQueueLease {
   suspendDuring<T>(fn: () => Promise<T>): Promise<T>;
 }
 
+export interface RunQueueTask<T> {
+  readonly completion: Promise<T>;
+  cancel(result: T): boolean;
+}
+
 export class RunQueue {
 
   private _pending = new Array<() => void>();
@@ -23,39 +28,59 @@ export class RunQueue {
   constructor(public maxRunning: number) { }
 
   enqueue<T>(task: (lease: RunQueueLease) => Promise<T>, timingData: Record<string, unknown> = {}): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const queuedAt = Date.now();
-      this._pending.push(() => {
-        this._running++;
-        let active = true;
-        const lease: RunQueueLease = {
-          suspendDuring: async <R>(fn: () => Promise<R>): Promise<R> => {
-            if (!active) return fn();
-            active = false;
-            this._running--;
+    return this.enqueueCancellable(task, timingData).completion;
+  }
+
+  enqueueCancellable<T>(task: (lease: RunQueueLease) => Promise<T>, timingData: Record<string, unknown> = {}): RunQueueTask<T> {
+    let resolveTask!: (value: T) => void;
+    let rejectTask!: (reason?: unknown) => void;
+    let pending = true;
+    const completion = new Promise<T>((resolve, reject) => { resolveTask = resolve; rejectTask = reject; });
+    const queuedAt = Date.now();
+    const start = () => {
+      pending = false;
+      this._running++;
+      let active = true;
+      const lease: RunQueueLease = {
+        suspendDuring: async <R>(fn: () => Promise<R>): Promise<R> => {
+          if (!active) return fn();
+          active = false;
+          this._running--;
+          this._flush();
+          try {
+            return await fn();
+          } finally {
+            await this._acquire();
+            active = true;
+          }
+        },
+      };
+      const waitMs = Date.now() - queuedAt;
+      setImmediate(() => {
+        const end = timingStart("queue.task", { ...timingData, waitMs });
+        task(lease)
+          .then(resolveTask, rejectTask)
+          .finally(() => {
+            if (active) this._running--;
+            end({ running: this._running, pending: this._pending.length });
             this._flush();
-            try {
-              return await fn();
-            } finally {
-              await this._acquire();
-              active = true;
-            }
-          },
-        };
-        const waitMs = Date.now() - queuedAt;
-        setImmediate(() => {
-          const end = timingStart("queue.task", { ...timingData, waitMs });
-          task(lease)
-            .then(resolve, reject)
-            .finally(() => {
-              if (active) this._running--;
-              end({ running: this._running, pending: this._pending.length });
-              this._flush();
-            });
-        });
+          });
       });
-      this._flush();
-    });
+    };
+    this._pending.push(start);
+    this._flush();
+    return {
+      completion,
+      cancel: result => {
+        if (!pending) return false;
+        const index = this._pending.indexOf(start);
+        if (index < 0) return false;
+        this._pending.splice(index, 1);
+        pending = false;
+        resolveTask(result);
+        return true;
+      },
+    };
   }
 
   private _acquire(): Promise<void> {
@@ -96,6 +121,7 @@ export class RunScheduler {
   private readonly _queue: RunQueue;
   private readonly _leases = new Map<string, RunQueueLease>();
   private readonly _executor: RunExecutor;
+  private readonly _queued = new Map<RunId, RunQueueTask<RunSnapshot>>();
   private _isTracked: (conversationId: string) => boolean;
   private _childTool?: (agent: Conversation) => ToolDefinition;
 
@@ -141,12 +167,14 @@ export class RunScheduler {
     run: Run,
   ): Promise<RunSnapshot> {
     const kind = run.kind;
-    return this._queue.enqueue(async lease => {
+    const scheduled = this._queue.enqueueCancellable(async lease => {
       const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId });
       let result: RunSnapshot;
       let error: string | undefined;
 
-      if (signal?.aborted || !this._isTracked(agent.conversationId)) {
+      if (run.state.kind === "done") {
+        result = agent.runHistory.find(item => item.runId === run.runId)!;
+      } else if (signal?.aborted || !this._isTracked(agent.conversationId)) {
         result = skippedRun(agent, run.runId);
       } else if (agent.status.kind === "done" && !agent.hasCurrentRun) {
         result = agent.runHistory.find(run => run.runId === run.runId)!;
@@ -175,6 +203,14 @@ export class RunScheduler {
       end({ status: status.kind === "done" ? status.outcome : status.kind, error });
       return result;
     }, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId, kind });
+    this._queued.set(run.runId, scheduled);
+    const cleanup = () => { if (this._queued.get(run.runId) === scheduled) this._queued.delete(run.runId); };
+    void scheduled.completion.then(cleanup, cleanup);
+    return scheduled.completion;
+  }
+
+  cancelQueued(runId: RunId, result: RunSnapshot): boolean {
+    return this._queued.get(runId)?.cancel(result) ?? false;
   }
 }
 
@@ -270,10 +306,11 @@ export class SubagentRuntime {
         runId, conversationId: agent.conversationId, agent,
         ...(task.kind === "spawn" && options.parent ? { parentRunId: options.parent.runId } : {}),
       });
-      // Publish queued only after both indexes can resolve the event identities.
+      const execution = this._scheduler.run(ctx, undefined, agent, agent.requireCurrentRun());
+      executions.push(execution);
+      // Publish queued only after the catalog indexes and scheduler can resolve the run.
       this.updated(agent, "status");
       starts.push({ ok: true, inputIndex, conversationId: agent.conversationId, runId });
-      executions.push(this._scheduler.run(ctx, undefined, agent, agent.requireCurrentRun()));
     }
     return { starts, completion: Promise.allSettled(executions).then(() => starts) };
   }
@@ -289,11 +326,16 @@ export class SubagentRuntime {
     const record = this.requireRunRecord(runId);
     this.assertOwnerAccess(record, owner, "cancel");
     const run = this.runSnapshot(runId);
-    if (run.status.kind !== "running") {
-      const status = run.status.kind === "done" ? run.status.outcome : run.status.kind;
-      throw new Error(`Run ${runId} is ${status} and cannot be cancelled.`);
+    if (run.status.kind === "done") {
+      throw new Error(`Run ${runId} is ${run.status.outcome} and cannot be cancelled.`);
     }
-    await record.agent.abort("Run cancelled.");
+    const wasQueued = run.status.kind === "queued";
+    const aborting = record.agent.abort("Run cancelled.");
+    if (wasQueued) {
+      const aborted = record.agent.runHistory.find(item => item.runId === runId)!;
+      this._scheduler.cancelQueued(runId, aborted);
+    }
+    await aborting;
     return { conversationId: record.conversationId, runId, status: "aborted" };
   }
 

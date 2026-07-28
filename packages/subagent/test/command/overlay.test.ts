@@ -77,8 +77,8 @@ describe("subagent overlay behavior", () => {
     }
   });
 
-  it("cancels the selected running run", () => {
-    const conversation = fakeAgent({ conversationId: "conversation-1", runId: "run-1", status: { kind: "running" } });
+  it.each(["queued", "running"] as const)("cancels the selected %s run", status => {
+    const conversation = fakeAgent({ conversationId: "conversation-1", runId: "run-1", status: { kind: status } });
     const { component, callbacks } = overlay([conversation]);
     component.handleInput("c");
     expect(callbacks.onCancel).toHaveBeenCalledWith("run-1");
