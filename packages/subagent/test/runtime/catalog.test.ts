@@ -149,41 +149,58 @@ test("terminal non-resumable conversations retain the generic resume error", asy
   });
 });
 
-test("aborted conversations can resume their retained session", async () => {
-  let release!: () => void;
-  const gate = new Promise<void>(done => { release = done; });
-  let first = true;
+test("aborted conversations resume only after abort and execution settle", async () => {
+  let releaseAbort!: () => void;
+  let releaseExecution!: () => void;
   let releaseResume!: () => void;
+  const abortGate = new Promise<void>(done => { releaseAbort = done; });
+  const executionGate = new Promise<void>(done => { releaseExecution = done; });
   const resumeGate = new Promise<void>(done => { releaseResume = done; });
   const steers: string[] = [];
+  let executions = 0;
+  let activeExecutions = 0;
+  let maxActiveExecutions = 0;
   const retainedSession = {
     ...session(),
-    abort: () => gate,
+    abort: () => abortGate,
     steer: (message: string) => { steers.push(message); },
   };
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    const execution = executions++;
+    activeExecutions++;
+    maxActiveExecutions = Math.max(maxActiveExecutions, activeExecutions);
     agent.bindSession(retainedSession);
-    if (first) {
-      first = false;
-      await gate;
-    } else {
-      await resumeGate;
+    try {
+      await (execution === 0 ? executionGate : resumeGate);
+      return completedRun(agent, attempt.runId, attempt.prompt);
+    } finally {
+      activeExecutions--;
     }
-    return completedRun(agent, attempt.runId, attempt.prompt);
   };
-  const manager = new SubagentRuntime(registry, 1, controlled);
+  const manager = new SubagentRuntime(registry, 2, controlled);
   const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "stop" }] as any);
   const aborted = start.starts[0] as any;
   await new Promise(done => setImmediate(done));
   const cancelling = manager.cancelRun(aborted.runId);
-  release();
-  await Promise.all([cancelling, start.completion]);
+  const settlingError = `Conversation ${aborted.conversationId} is still settling cancelled run ${aborted.runId}. Wait for it to finish before resuming.`;
 
-  const resumed = manager.startRun(ctx, [{
-    kind: "resume",
-    conversationId: aborted.conversationId,
-    prompt: "continue",
-  }] as any);
+  expect(manager.runSnapshot(aborted.runId).status).toMatchObject({ kind: "done", outcome: "aborted" });
+  expect(manager.conversation(aborted.conversationId).canResume).toBe(false);
+  expect(manager.startRun(ctx, [{ kind: "resume", conversationId: aborted.conversationId, prompt: "too-early" }] as any).starts[0])
+    .toMatchObject({ ok: false, error: settlingError });
+
+  releaseAbort();
+  await cancelling;
+  expect(manager.conversation(aborted.conversationId).canResume).toBe(false);
+  expect(manager.startRun(ctx, [{ kind: "resume", conversationId: aborted.conversationId, prompt: "still-early" }] as any).starts[0])
+    .toMatchObject({ ok: false, error: settlingError });
+  expect(executions).toBe(1);
+
+  releaseExecution();
+  await start.completion;
+  expect(manager.conversation(aborted.conversationId).canResume).toBe(true);
+
+  const resumed = manager.startRun(ctx, [{ kind: "resume", conversationId: aborted.conversationId, prompt: "continue" }] as any);
   const resumedRun = resumed.starts[0] as any;
   await new Promise(done => setImmediate(done));
   await manager.steerRun(resumedRun.runId, "redirect");
@@ -193,6 +210,7 @@ test("aborted conversations can resume their retained session", async () => {
   expect(resumedRun).toMatchObject({ ok: true, conversationId: aborted.conversationId });
   expect(output(manager.runSnapshot(resumedRun.runId))).toBe("continue");
   expect(steers).toEqual(["redirect"]);
+  expect(maxActiveExecutions).toBe(1);
 });
 
 test("spawn validation is ordered, isolated, and does not allocate or consume capacity", async () => {

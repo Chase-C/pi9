@@ -121,9 +121,13 @@ test("logical abort terminalizes before best-effort SDK abort resolves", async (
   assert.equal(status.kind, "done");
   assert.equal(status.kind === "done" && status.outcome, "aborted");
   assert.equal(status.kind === "done" && status.error, "stopped");
+  assert.equal(agent.canResume, false);
 
+  agent.executionSettled(r1);
+  assert.equal(agent.canResume, false);
   release();
   await aborting;
+  assert.equal(agent.canResume, true);
 });
 
 test("steer receipts become delivered when the queued user message enters the turn", async () => {

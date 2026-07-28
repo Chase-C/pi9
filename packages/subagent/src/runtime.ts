@@ -307,7 +307,9 @@ export class SubagentRuntime {
         runId, conversationId: agent.conversationId, agent,
         ...(task.kind === "spawn" && options.parent ? { parentRunId: options.parent.runId } : {}),
       });
-      const execution = this._scheduler.run(ctx, undefined, agent, agent.requireCurrentRun());
+      const run = agent.requireCurrentRun();
+      const execution = this._scheduler.run(ctx, undefined, agent, run)
+        .finally(() => agent.executionSettled(run.runId));
       executions.push(execution);
       // Publish queued only after the catalog indexes and scheduler can resolve the run.
       this.updated(agent, "status");
@@ -515,6 +517,9 @@ export class SubagentRuntime {
   }
   private requireConversation(id: string): Conversation { const found = this.conversations.get(id as ConversationId); if (!found) throw new Error(`Unknown conversation: ${id}.`); return found; }
   private resumeError(agent: Conversation): string {
+    if (agent.isStopping) {
+      return `Conversation ${agent.conversationId} is still settling cancelled run ${agent.latestRunId}. Wait for it to finish before resuming.`;
+    }
     return `Conversation ${agent.conversationId} cannot be resumed.`;
   }
   private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Conversation capacity (${this.maxConversations}) reached. Remove terminal conversations${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
