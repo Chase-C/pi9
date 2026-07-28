@@ -95,7 +95,7 @@ test("dispatch steers multiple runs in input order", async () => {
   const manager = {
     steerRun: async (target: any, prompt: string) => {
       received.push([target, prompt]);
-      return { conversationId, runId: target };
+      return { conversationId, runId: target, steer: { id: received.length, state: "queued", acceptedAt: received.length } };
     },
     listConversations: () => [snapshot()],
   };
@@ -110,7 +110,9 @@ test("dispatch steers multiple runs in input order", async () => {
 
   assert.deepEqual(received, [[runId, "first"], [secondRunId, "second"], [runId, "third"]]);
   assert.deepEqual(json(result).map((entry: any) => entry.runId), [runId, secondRunId, runId]);
+  assert.deepEqual(json(result).map((entry: any) => entry.steer.id), [1, 2, 3]);
   assert.deepEqual((result.details as any).tasks.map((task: any) => task.kind), ["steer", "steer", "steer"]);
+  assert.deepEqual((result.details as any).tasks.map((task: any) => task.steer.id), [1, 2, 3]);
 });
 
 test("dispatch isolates steering failures from sibling tasks", async () => {
@@ -139,9 +141,10 @@ test("dispatch isolates steering failures from sibling tasks", async () => {
 test("inspect returns bounded progress without terminal output", () => {
   const running: any = snapshot().runs[0];
   running.activity = {
-    messageSnippet: "working ".repeat(100), turns: 2, compactions: 1,
+    phase: "thinking", messageSnippet: "working ".repeat(100), turns: 2, compactions: 1,
     toolHistory: [1, 2, 3, 4].map(index => ({ id: `t${index}`, name: `tool${index}`, startedAt: index, inputSummary: "argument ".repeat(30) })),
   };
+  running.steers = [1, 2, 3, 4, 5, 6].map(id => ({ id, state: "processed", acceptedAt: id }));
   const manager = {
     inspectRuns: (ids: any[]) => {
       assert.deepEqual(ids, [runId]);
@@ -153,12 +156,37 @@ test("inspect returns bounded progress without terminal output", () => {
   const [entry] = json(result);
 
   assert.equal(entry.status, "running");
+  assert.equal(entry.phase, "thinking");
   assert.equal(entry.turns, 2);
   assert.equal(entry.compactions, 1);
   assert.ok(entry.messageSnippet.length <= 500);
   assert.deepEqual(entry.recentTools.map((tool: any) => tool.tool), ["tool4", "tool3", "tool2"]);
   assert.ok(entry.recentTools.every((tool: any) => tool.summary.length <= 160));
+  assert.deepEqual(entry.steers.map((steer: any) => steer.id), [2, 3, 4, 5, 6]);
   assert.equal("output" in entry, false);
+});
+
+test("inspect isolates malformed and unknown targets from valid siblings", () => {
+  const unknownRunId = "assemble-abruptly" as any;
+  const malformed = { runId: "not-an-id", error: "invalid runId format" };
+  const manager = {
+    inspectRuns: ([target]: any[]) => {
+      if (target === unknownRunId) throw new Error(`Unknown run: ${target}.`);
+      return [{ conversationId, snapshot: snapshot().runs[0] }];
+    },
+    conversationDisplay: () => ({ conversationId, agentName: "helper" }),
+  };
+
+  const result = inspectAction(deps(manager), {
+    action: "inspect",
+    runIds: [runId, malformed, unknownRunId],
+  });
+
+  const entries = json(result);
+  assert.equal(entries[0].runId, runId);
+  assert.deepEqual(entries[1], { inputIndex: 1, runId: "not-an-id", error: "invalid runId format" });
+  assert.deepEqual(entries[2], { inputIndex: 2, runId: unknownRunId, error: `Unknown run: ${unknownRunId}.` });
+  assert.equal(result.isError, false);
 });
 
 test("inspect omits terminal output and completed message text", () => {
@@ -196,11 +224,11 @@ test("list is output-free and filtering is pure", () => {
   ]), [[conversationId, runId, "completed"]]);
 });
 
-test("remove forwards only the explicit conversation batch", () => {
+test("remove forwards only the explicit conversation batch", async () => {
   let received: any;
   const summary = { removed: 1, aborted: 0, conversationIds: [conversationId], errors: [] };
-  const result = removeAction(deps({
-    removeConversations: (ids: any) => {
+  const result = await removeAction(deps({
+    removeConversations: async (ids: any) => {
       received = ids;
       return summary;
     },

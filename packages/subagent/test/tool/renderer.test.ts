@@ -51,10 +51,10 @@ test("dispatch uses outcome-first collapsed output and tagged delegation blocks 
 test("dispatch renders steering and inspect renders bounded activity", () => {
   const dispatch: SubagentToolDetails = {
     action: "dispatch",
-    tasks: [{ inputIndex: 0, kind: "steer", agent: "scout", prompt: "Focus tests.", conversationId: "quiet-otter" as any, runId: "search-boldly" as any }],
+    tasks: [{ inputIndex: 0, kind: "steer", agent: "scout", prompt: "Focus tests.", conversationId: "quiet-otter" as any, runId: "search-boldly" as any, steer: { id: 1, state: "queued", acceptedAt: 1 } }],
   };
   assert.equal(renderResult(dispatch), "✓ Steered 1 run\n  scout");
-  assert.match(renderResult(dispatch, true), /scout · steer[\s\S]*Focus tests\.[\s\S]*steered/);
+  assert.match(renderResult(dispatch, true), /scout · steer[\s\S]*Focus tests\.[\s\S]*steered[\s\S]*steer #1 queued/);
 
   const inspect: SubagentToolDetails = {
     action: "inspect",
@@ -63,15 +63,27 @@ test("dispatch renders steering and inspect renders bounded activity", () => {
       runId: "search-boldly" as any,
       agent: "scout",
       status: "running",
+      phase: "thinking",
       elapsedMs: 25,
       turns: 2,
       compactions: 1,
       messageSnippet: "Checking tests.",
       recentTools: [{ toolCallId: "t1", tool: "read", summary: "test.ts", status: "completed" }],
+      steers: [{ id: 1, state: "processed", acceptedAt: 1, deliveredAt: 2, processedAt: 3 }],
     }],
   };
   assert.equal(renderResult(inspect), "✓ Inspected 1 run · 1 running\n  scout");
-  assert.match(renderResult(inspect, true), /\[partial\] Checking tests\.[\s\S]*read\(test.ts\) · completed/);
+  assert.match(renderResult(inspect, true), /running · thinking[\s\S]*\[partial\] Checking tests\.[\s\S]*read\(test.ts\) · completed[\s\S]*steer #1 · processed/);
+});
+
+test("inspect renders per-target errors without hiding the result", () => {
+  const inspect: SubagentToolDetails = {
+    action: "inspect",
+    runs: [{ inputIndex: 0, runId: "not-an-id", error: "invalid runId format" }],
+  };
+
+  assert.equal(renderResult(inspect), "✓ Inspected 1 target · 1 error\n  not-an-id");
+  assert.match(renderResult(inspect, true), /not-an-id · not inspected[\s\S]*invalid runId format/);
 });
 
 test("agents render configuration tags in expanded mode", () => {

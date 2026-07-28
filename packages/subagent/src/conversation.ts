@@ -1,5 +1,5 @@
 import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentRequestedConfig, AgentSource } from "./agents.js";
 import { resolveRequestedConfig } from "./agents.js";
 import { RunActivity, type RunActivityListener } from "./activity.js";
@@ -32,7 +32,9 @@ export type ConversationUpdateKind =
   | "compaction"
   | "acknowledgement"
   | "observer"
-  | "nestedJoin";
+  | "nestedJoin"
+  | "steer"
+  | "phase";
 
 /** The exact parent run that spawned a child conversation. */
 export interface ParentRun {
@@ -40,8 +42,26 @@ export interface ParentRun {
   readonly runId: RunId;
 }
 
+export type SteerState = "queued" | "delivered" | "processed" | "discarded";
+export interface SteerReceipt {
+  readonly id: number;
+  readonly state: SteerState;
+  readonly acceptedAt: number;
+  readonly deliveredAt?: number;
+  readonly processedAt?: number;
+}
+interface TrackedSteerReceipt {
+  id: number;
+  state: SteerState;
+  acceptedAt: number;
+  deliveredAt?: number;
+  processedAt?: number;
+  deliveryText: string;
+}
+
+export type RunPhase = "starting" | "thinking" | "processing_steer" | "responding" | "executing_tool" | "settling";
 export interface RunToolUse { readonly id: string; readonly name: string; readonly startedAt: number; readonly completedAt?: number; readonly isError?: boolean; readonly inputSummary?: string }
-export interface RunActivitySnapshot { readonly messageSnippet?: string; readonly turns: number; readonly compactions: number; readonly toolHistory: readonly RunToolUse[] }
+export interface RunActivitySnapshot { readonly phase: RunPhase; readonly messageSnippet?: string; readonly turns: number; readonly compactions: number; readonly toolHistory: readonly RunToolUse[] }
 export interface AgentViewConfig { readonly name: string; readonly description?: string; readonly source: AgentSource | undefined; readonly sourcePath?: string; readonly model: string | undefined; readonly thinking: ModelThinkingLevel | undefined; readonly tools: readonly string[] | undefined; readonly skills?: readonly string[] }
 export interface ConversationEffectiveConfig { readonly model?: string; readonly thinking?: ModelThinkingLevel; readonly cwd: string; readonly skills: readonly string[]; readonly tools: readonly string[] }
 export interface ConversationRequestedOverrides { readonly model?: string; readonly thinking?: ModelThinkingLevel }
@@ -76,6 +96,7 @@ export interface RunSnapshot {
   readonly observerCount: number;
   readonly acknowledged: boolean;
   readonly nestedJoins?: readonly NestedJoinAttemptSnapshot[];
+  readonly steers: readonly SteerReceipt[];
 }
 export interface ConversationSnapshot {
   readonly conversationId: ConversationId;
@@ -103,13 +124,44 @@ export class Run {
   observerCount = 0;
   acknowledged = false;
   readonly nestedJoins: Array<{ toolCallId?: string; targets: NestedJoinTargetSnapshot[]; state: NestedJoinAttemptState; startedAt: number; completedAt?: number; error?: string }> = [];
-  constructor(readonly runId: RunId, readonly kind: RunKind, readonly prompt: string, onChange: RunActivityListener) {
-    this.activity = new RunActivity(onChange);
+  readonly steers: TrackedSteerReceipt[] = [];
+  constructor(readonly runId: RunId, readonly kind: RunKind, readonly prompt: string, private readonly onChange: RunActivityListener) {
+    this.activity = new RunActivity(onChange, event => this.handleSessionEvent(event));
   }
 
   attach(session: AgentSession): void {
     if (this.state.kind !== "queued") throw new Error(`Cannot attach a session to a run that is ${this.state.kind}.`);
     this.state = { kind: "running", session, startedAt: Date.now() };
+  }
+
+  acceptSteer(deliveryText: string): SteerReceipt {
+    const state: SteerState = this.state.kind === "running" ? "queued" : "discarded";
+    const receipt: TrackedSteerReceipt = { id: this.steers.length + 1, state, acceptedAt: Date.now(), deliveryText };
+    this.steers.push(receipt);
+    return projectSteer(receipt);
+  }
+
+  private handleSessionEvent(event: AgentSessionEvent): RunPhase | undefined {
+    if (event.type !== "message_start") return;
+    if (event.message.role === "user") {
+      const text = messageText(event.message.content);
+      const receipt = this.steers.find(steer => steer.state === "queued" && steer.deliveryText === text);
+      if (!receipt) return;
+      receipt.state = "delivered";
+      receipt.deliveredAt = Date.now();
+      this.onChange("steer");
+      return "processing_steer";
+    }
+    if (event.message.role !== "assistant") return;
+    const delivered = this.steers.filter(steer => steer.state === "delivered");
+    if (!delivered.length) return;
+    const processedAt = Date.now();
+    for (const receipt of delivered) {
+      receipt.state = "processed";
+      receipt.processedAt = processedAt;
+    }
+    this.onChange("steer");
+    return "responding";
   }
 
   beginNestedJoin(runIds: readonly RunId[], toolCallId?: string): number {
@@ -128,6 +180,9 @@ export class Run {
 
   settle(result: RunOutcome): boolean {
     if (this.state.kind === "done") return false;
+    for (const receipt of this.steers) {
+      if (receipt.state === "queued" || receipt.state === "delivered") receipt.state = "discarded";
+    }
     const startedAt = this.state.kind === "running" ? this.state.startedAt : undefined;
     this.state = Object.freeze({ kind: "done", result: Object.freeze({ ...result }), startedAt, completedAt: Date.now() });
     return true;
@@ -144,6 +199,30 @@ export function effectiveStatus(status: RunViewStatus): string {
   return status.kind === "done" ? status.outcome : status.kind;
 }
 
+function projectSteer(steer: TrackedSteerReceipt): SteerReceipt {
+  return Object.freeze({
+    id: steer.id,
+    state: steer.state,
+    acceptedAt: steer.acceptedAt,
+    ...(steer.deliveredAt !== undefined ? { deliveredAt: steer.deliveredAt } : {}),
+    ...(steer.processedAt !== undefined ? { processedAt: steer.processedAt } : {}),
+  });
+}
+
+function clearSessionQueue(session: AgentSession | undefined): void {
+  try { session?.clearQueue?.(); } catch {}
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part): part is { type: "text"; text: string } =>
+      !!part && typeof part === "object" && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string")
+    .map(part => part.text)
+    .join("\n");
+}
+
 export type ConversationUpdateListener = (agent: Conversation, kind: ConversationUpdateKind) => void;
 export interface RunBinding { readonly runId: RunId; snapshot(): RunSnapshot; acknowledge(): void; release(): void }
 
@@ -158,6 +237,8 @@ export class Conversation {
   private readonly runs: Run[] = [];
   private currentRun?: Run;
   private session?: AgentSession;
+  private stopping = false;
+  private steerTail: Promise<void> = Promise.resolve();
   private unsubscribe?: () => void;
   private effectiveConfig?: ConversationEffectiveConfig;
 
@@ -220,13 +301,24 @@ export class Conversation {
   }
   sessionForResume(): AgentSession | undefined { return this.session; }
 
-  async steer(runId: RunId, prompt: string): Promise<void> {
-    const run = this.requireRun(runId);
-    if (run.state.kind !== "running") {
-      const status = run.state.kind === "queued" ? "queued" : run.state.result.status;
-      throw new Error(`Run ${runId} is ${status} and cannot be steered.`);
-    }
-    await run.state.session.steer(prompt);
+  steer(runId: RunId, prompt: string): Promise<SteerReceipt> {
+    const pending = this.steerTail.then(async () => {
+      if (this.stopping) throw new Error(`Run ${runId} is stopping and cannot be steered.`);
+      const run = this.requireRun(runId);
+      if (run.state.kind !== "running") {
+        const status = run.state.kind === "queued" ? "queued" : run.state.result.status;
+        throw new Error(`Run ${runId} is ${status} and cannot be steered.`);
+      }
+      const session = run.state.session;
+      await session.steer(prompt);
+      const deliveryText = session.getSteeringMessages?.().at(-1) ?? prompt;
+      if (this.stopping) clearSessionQueue(session);
+      const receipt = run.acceptSteer(deliveryText);
+      this.listener(this, "steer");
+      return receipt;
+    });
+    this.steerTail = pending.then(() => undefined, () => undefined);
+    return pending;
   }
 
   /** Stable exact-run observation retained independently of catalog removal. */
@@ -256,13 +348,18 @@ export class Conversation {
     return this.project(run);
   }
 
-  /** Terminalizes immediately; SDK cancellation is best-effort and cannot rewrite the result. */
+  /** Terminalizes immediately, then finalizes in-flight steering before cancellation completes. */
   async abort(reason = "Agent aborted."): Promise<void> {
     const run = this.currentRun;
     if (!run) return;
+    this.stopping = true;
     const runningSession = run.state.kind === "running" ? run.state.session : undefined;
+    clearSessionQueue(runningSession);
     this.settle(run.runId, { status: "aborted", error: reason });
-    await Promise.resolve(runningSession?.abort()).catch(() => undefined);
+    const aborting = Promise.resolve(runningSession?.abort()).catch(() => undefined);
+    await this.steerTail;
+    clearSessionQueue(runningSession);
+    await aborting;
   }
 
   beginNestedJoin(runId: RunId, targets: readonly RunId[], toolCallId?: string): number {
@@ -316,6 +413,6 @@ export class Conversation {
       ...(attempt.completedAt !== undefined ? { completedAt: attempt.completedAt } : {}),
       ...(attempt.error !== undefined ? { error: attempt.error } : {}),
     }));
-    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, acknowledged: run.acknowledged, nestedJoins: Object.freeze(nestedJoins) });
+    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, acknowledged: run.acknowledged, nestedJoins: Object.freeze(nestedJoins), steers: Object.freeze(run.steers.map(projectSteer)) });
   }
 }

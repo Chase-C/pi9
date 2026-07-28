@@ -1,6 +1,6 @@
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
-import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type ParentRun, type Run, type RunSnapshot } from "./conversation.js";
+import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type ParentRun, type Run, type RunSnapshot, type SteerReceipt } from "./conversation.js";
 import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun, resolveModel, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId } from "./identifiers.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
@@ -190,7 +190,7 @@ export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: Ru
 export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId }
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
 export interface RemoveResult { removed: number; aborted: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
-export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId }
+export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly steer: SteerReceipt }
 export interface InspectedRun { readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }
 
 type JoinStatus = ConversationSnapshot["runs"][number]["status"];
@@ -271,8 +271,8 @@ export class SubagentRuntime {
     const record = this.requireRunRecord(runId);
     this.assertOwnerAccess(record, owner, "steer");
     if (record.kind !== "live") throw new Error(`Run ${runId} is no longer active and cannot be steered.`);
-    await record.agent.steer(runId, prompt);
-    return { conversationId: record.conversationId, runId };
+    const steer = await record.agent.steer(runId, prompt);
+    return { conversationId: record.conversationId, runId, steer };
   }
 
   inspectRuns(runIds: readonly RunId[], owner?: ParentRun): InspectedRun[] {
@@ -414,16 +414,16 @@ export class SubagentRuntime {
   }
   private requireRunRecord(runId: RunId): RunRecord { const record = this.runs.get(runId); if (!record) throw new Error(`Unknown run: ${runId}.`); return record; }
 
-  removeConversation(conversationId: string): RemoveResult { return this.removeConversations([conversationId]); }
-  removeConversations(ids: readonly string[]): RemoveResult {
+  removeConversation(conversationId: string): Promise<RemoveResult> { return this.removeConversations([conversationId]); }
+  async removeConversations(ids: readonly string[]): Promise<RemoveResult> {
     const unique = [...new Set(ids)]; const removed: ConversationId[] = []; const errors: Array<{ conversationId: string; error: string }> = []; let aborted = 0;
     for (const id of unique) {
       const agent = this.conversations.get(id as ConversationId);
       if (!agent) { errors.push({ conversationId: id, error: `Unknown conversation: ${id}.` }); continue; }
       if (agent.hasCurrentRun) aborted++;
-      void agent.abort("Conversation removed.");
-      const runs = agent.runHistory;
       this.conversations.delete(agent.conversationId);
+      await agent.abort("Conversation removed.");
+      const runs = agent.runHistory;
       for (const run of runs) {
         const indexed = this.runs.get(run.runId);
         this.runs.set(run.runId, {

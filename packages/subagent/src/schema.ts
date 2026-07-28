@@ -65,6 +65,7 @@ export type SteerRequest = {
 };
 
 export type TaskRequest = SpawnRequest | ResumeRequest | SteerRequest;
+export type InspectTarget = RunId | { runId: string; error: string };
 export type DispatchTaskKind = TaskRequest["kind"];
 export type ParsedTask = TaskRequest | { error: string };
 
@@ -72,7 +73,7 @@ export type SubagentInvocation =
   | { action: "agents" }
   | { action: "list"; status?: RunStatus[] }
   | { action: "dispatch"; tasks: ParsedTask[] }
-  | { action: "inspect"; runIds: RunId[] }
+  | { action: "inspect"; runIds: InspectTarget[] }
   | { action: "join"; runIds: RunId[] }
   | { action: "remove"; conversationIds: ConversationId[] };
 
@@ -174,7 +175,7 @@ export function parseSubagentInvocation(
       return { action: parsedAction, tasks: params.tasks.map(parseTask) };
     }
     case "inspect": {
-      const ids = parseIds(params.runIds, parsedAction, isRunId, isConversationId, "runId", "conversation ID");
+      const ids = parseInspectTargets(params.runIds);
       return "error" in ids ? { ...ids, action: parsedAction } : { action: parsedAction, runIds: ids };
     }
     case "join": {
@@ -195,6 +196,22 @@ export function parseSubagentInvocation(
         : { action: parsedAction, conversationIds: ids };
     }
   }
+}
+
+function parseInspectTargets(value: unknown): InspectTarget[] | { error: string } {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { error: "inspect requires a non-empty runIds array." };
+  }
+  return value.map(item => {
+    if (isRunId(item)) return item;
+    const runId = String(item);
+    return {
+      runId,
+      error: isConversationId(item)
+        ? `inspect received invalid runId '${runId}' (a conversation ID is not accepted).`
+        : `inspect received invalid runId format '${runId}'.`,
+    };
+  });
 }
 
 function parseIds<T extends string>(

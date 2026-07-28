@@ -146,7 +146,7 @@ test("completed removal preserves exact runs, prevents resume, and reclaims capa
   await resumed.completion;
   const second = resumed.starts[0] as any;
 
-  expect(manager.removeConversation(first.conversationId)).toMatchObject({ removed: 1, aborted: 0 });
+  await expect(manager.removeConversation(first.conversationId)).resolves.toMatchObject({ removed: 1, aborted: 0 });
   expect(manager.listConversations()).toEqual([]);
   expect(() => manager.conversation(first.conversationId)).toThrow("Unknown conversation");
   expect((manager.startRun(ctx, [{
@@ -200,8 +200,7 @@ test("removal terminalizes immediately, wakes joins, and leaves children", async
   const child = childStart.starts[0] as any;
   const join = manager.bindJoin([parentRun.runId]);
 
-  const removed = manager.removeConversation(parentRun.conversationId);
-  expect(removed.aborted).toBe(1);
+  const removing = manager.removeConversation(parentRun.conversationId);
   expect(manager.listConversations().map(value => value.conversationId)).toContain(child.conversationId);
   const detachedJoin = manager.bindJoin([parentRun.runId]);
   await Promise.all([join.completion, detachedJoin.completion]);
@@ -215,6 +214,54 @@ test("removal terminalizes immediately, wakes joins, and leaves children", async
   }
   expect(physical).toBe(true);
   release();
+  await expect(removing).resolves.toMatchObject({ removed: 1, aborted: 1 });
+});
+
+test("removal waits for in-flight steering and detaches its discarded receipt", async () => {
+  let releaseSteer!: () => void;
+  let releaseRun!: () => void;
+  let steerQueued!: () => void;
+  const steerGate = new Promise<void>(done => { releaseSteer = done; });
+  const runGate = new Promise<void>(done => { releaseRun = done; });
+  const queued = new Promise<void>(done => { steerQueued = done; });
+  const steering: string[] = [];
+  let clears = 0;
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession({
+      ...session(),
+      async steer(prompt: string) {
+        steering.push(prompt);
+        steerQueued();
+        await steerGate;
+      },
+      getSteeringMessages: () => steering,
+      clearQueue() {
+        clears++;
+        const removed = steering.splice(0);
+        return { steering: removed, followUp: [] };
+      },
+    });
+    await runGate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 1, controlled);
+  const started = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work" }] as any);
+  const identity = started.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  const steer = manager.steerRun(identity.runId, "redirect");
+  await queued;
+  const removing = manager.removeConversation(identity.conversationId);
+  releaseSteer();
+
+  await expect(steer).resolves.toMatchObject({ steer: { state: "discarded" } });
+  await expect(removing).resolves.toMatchObject({ removed: 1, aborted: 1 });
+  expect(clears).toBeGreaterThan(0);
+  expect(steering).toEqual([]);
+  expect(manager.runSnapshot(identity.runId).steers).toMatchObject([{ id: 1, state: "discarded" }]);
+
+  releaseRun();
+  await started.completion;
 });
 
 test("root join remains exact when descendants spawn later", async () => {
@@ -285,9 +332,9 @@ test("exact root join remains exact after conversations were removed", async () 
   await grandStart.completion;
   const grand = grandStart.starts[0] as any;
 
-  manager.removeConversation(child.conversationId);
-  manager.removeConversation(root.conversationId);
-  manager.removeConversation(grand.conversationId);
+  await manager.removeConversation(child.conversationId);
+  await manager.removeConversation(root.conversationId);
+  await manager.removeConversation(grand.conversationId);
   const join = manager.bindJoin([root.runId]);
   await join.completion;
   expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([[root.runId, root.conversationId]]);
@@ -321,7 +368,7 @@ test("exact join does not bind an unrequested descendant", async () => {
   const join = manager.bindJoin([root.runId]);
   expect(join.project().map(entry => entry.runId)).toEqual([root.runId]);
 
-  manager.removeConversation(child.conversationId);
+  await manager.removeConversation(child.conversationId);
   releaseRoot();
   await rootStart.completion;
   await join.completion;
@@ -392,9 +439,10 @@ test("steering targets an exact running run without creating history", async () 
   const started = batch.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
-  await expect(manager.steerRun(started.runId, "focus on tests")).resolves.toEqual({
+  await expect(manager.steerRun(started.runId, "focus on tests")).resolves.toMatchObject({
     conversationId: started.conversationId,
     runId: started.runId,
+    steer: { id: 1, state: "queued", acceptedAt: expect.any(Number) },
   });
   expect(prompts).toEqual(["focus on tests"]);
   expect(manager.conversation(started.conversationId).runs).toHaveLength(1);
@@ -517,7 +565,7 @@ test("detached owner snapshot records nested completion after removal", async ()
   await new Promise(resolve => setImmediate(resolve));
   const binding = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [target.runId]);
 
-  manager.removeConversation(owner.conversationId);
+  await manager.removeConversation(owner.conversationId);
   finishTarget();
   await Promise.all([targetStart.completion, binding.completion]);
   expect(manager.runSnapshot(owner.runId).nestedJoins?.[0]).toMatchObject({ state: "completed" });
@@ -544,7 +592,7 @@ test("detached owner snapshot records explicit nested interruption", async () =>
   await new Promise(resolve => setImmediate(resolve));
   const binding = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [target.runId]);
 
-  manager.removeConversation(owner.conversationId);
+  await manager.removeConversation(owner.conversationId);
   binding.interrupt("caller cancelled");
   expect(manager.runSnapshot(owner.runId).nestedJoins?.[0]).toMatchObject({ state: "interrupted", error: "caller cancelled" });
   expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(0);

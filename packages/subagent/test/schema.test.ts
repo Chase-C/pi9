@@ -78,6 +78,20 @@ test("invocations parse every action without aliases", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId] }), { action: "remove", conversationIds: [conversationId] });
 });
 
+test("inspect retains malformed targets as ordered per-run errors", () => {
+  assert.deepEqual(parseSubagentInvocation({
+    action: "inspect",
+    runIds: [runId, conversationId, "not-an-id"],
+  }), {
+    action: "inspect",
+    runIds: [
+      runId,
+      { runId: conversationId, error: `inspect received invalid runId '${conversationId}' (a conversation ID is not accepted).` },
+      { runId: "not-an-id", error: "inspect received invalid runId format 'not-an-id'." },
+    ],
+  });
+});
+
 test("task parse failures remain indexed within a runnable batch", () => {
   const parsed = parseSubagentInvocation({
     action: "dispatch",

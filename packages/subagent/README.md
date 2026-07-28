@@ -55,16 +55,18 @@ The body becomes the child system prompt. Spawn tasks require `agent` and `promp
 | --- | --- |
 | `agents` | Discover agent definitions and their resolved defaults. |
 | `list` | Return a lightweight inventory of conversations and runs without run output. It is pure: it acknowledges nothing and changes no lifecycle state. |
-| `dispatch` | Dispatch spawn, resume, or steer tasks and return one ordered outcome per task. Spawn and resume create asynchronous runs; steer targets an existing running run and returns after Pi accepts the message. |
-| `inspect` | Return bounded status, timing, current message, and recent tool activity for exact runs without waiting or acknowledging them. Terminal output is omitted. |
+| `dispatch` | Dispatch spawn, resume, or steer tasks and return one ordered outcome per task. Spawn and resume create asynchronous runs; steer targets an existing running run and returns a lifecycle receipt after Pi accepts the message. |
+| `inspect` | Return bounded status, running phase, current message, recent tool activity, and steer receipts for exact runs without waiting or acknowledging them. Invalid targets become ordered per-target errors. Terminal output is omitted. |
 | `join` | Block until every explicitly requested exact run settles, then return and acknowledge exactly those runs. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying runs. |
-| `remove` | Clean up the specified conversations, aborting active work if necessary, deleting resumable child session state, and hiding them from `list`. |
+| `remove` | Clean up the specified conversations, aborting active work if necessary, draining in-flight steering, deleting resumable child session state, and hiding them from `list`. It returns only after detached run snapshots are finalized. |
 
 Parallel runs stream their current status and recent tool activity independently:
 
 ![Two parallel subagent runs with one completed and one still exploring the codebase](media/live-parallel-runs.png)
 
 Each dispatch task is handled independently after the tool call passes SDK schema validation. Task-level parsing, startup, and steering failures—such as a missing agent, an unknown agent, an invalid model, a missing working directory, or a non-running steer target—return an ordered `{ ok: false, inputIndex, error }` outcome without preventing valid sibling tasks from being dispatched. Invalid outer invocations—including a missing or unknown action, absent or empty tasks, and batch-limit violations—remain global errors. Provider-level schema violations may reject the tool call before execution.
+
+Successful steer outcomes include a `steer` receipt with a per-run numeric ID, state, and timestamps. Receipt states advance from `queued` when Pi accepts the message, to `delivered` when the steering user message enters the child turn, and to `processed` when the assistant begins responding with that message in context. `processed` does not mean the requested work succeeded. A run that terminates before a queued or delivered steer is processed marks that receipt `discarded`.
 
 For example, a three-task batch can return a successful start, a task-level failure, and another successful start in input order:
 
@@ -82,7 +84,7 @@ A run belongs to one conversation. Spawning creates both; a follow-up creates an
 
 `canResume` becomes true only after a completed run or an interrupted run that preserved its conversation context. It remains false while work is queued or active, and after failures or interruptions that did not preserve context.
 
-`inspect`, steer tasks, and `join` are keyed by `runId`, not merely by conversation. Inspection is pure and bounded; steering is accepted only while the exact target is running and takes effect after its current assistant turn finishes executing tool calls. A root/top-level join waits for, returns, and acknowledges exactly the requested runs, even when one of their conversations has newer work. An inspect, steer, or join issued by a child may target only runs spawned anywhere beneath that child's exact owner run; sibling, ancestor, and unrelated runs are rejected.
+`inspect`, steer tasks, and `join` are keyed by `runId`, not merely by conversation. Inspection is pure and bounded; it preserves input order and duplicates, and a malformed, unknown, or unauthorized target returns an inline `{ inputIndex, runId, error }` entry without hiding valid sibling snapshots. A running snapshot keeps `status: "running"` for compatibility and adds a finer `phase`: `starting`, `thinking`, `processing_steer`, `responding`, `executing_tool`, or `settling`. It also includes the five most recent steer receipts. Steering is accepted only while the exact target is running and takes effect after its current assistant turn finishes executing tool calls. A root/top-level join waits for, returns, and acknowledges exactly the requested runs, even when one of their conversations has newer work. An inspect, steer, or join issued by a child may target only runs spawned anywhere beneath that child's exact owner run; sibling, ancestor, and unrelated runs are rejected.
 
 Only descendants named in an explicit nested join block that caller. Unjoined descendants continue independently and detach when their parent finishes. Nested answers are returned directly to the child that joined them, but their output is omitted from ancestor tree rendering; ancestor views retain lifecycle and identity context without copying target answers. Nested join-attempt history is runtime-local and is not restored after restart or extension reload.
 
