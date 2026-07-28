@@ -1,6 +1,6 @@
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
-import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type ParentRun, type Run, type RunSnapshot } from "./conversation.js";
+import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type ParentRun, type Run, type RunSnapshot, type SteerReceipt } from "./conversation.js";
 import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun, resolveModel, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId } from "./identifiers.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
@@ -190,7 +190,7 @@ export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: Ru
 export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId }
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
 export interface RemoveResult { removed: number; aborted: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
-export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId }
+export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly steer: SteerReceipt }
 export interface InspectedRun { readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }
 
 type JoinStatus = ConversationSnapshot["runs"][number]["status"];
@@ -271,8 +271,8 @@ export class SubagentRuntime {
     const record = this.requireRunRecord(runId);
     this.assertOwnerAccess(record, owner, "steer");
     if (record.kind !== "live") throw new Error(`Run ${runId} is no longer active and cannot be steered.`);
-    await record.agent.steer(runId, prompt);
-    return { conversationId: record.conversationId, runId };
+    const steer = await record.agent.steer(runId, prompt);
+    return { conversationId: record.conversationId, runId, steer };
   }
 
   inspectRuns(runIds: readonly RunId[], owner?: ParentRun): InspectedRun[] {

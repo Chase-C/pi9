@@ -1,6 +1,6 @@
 import { Usage } from "@earendil-works/pi-ai";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ConversationUpdateKind, RunActivitySnapshot, RunToolUse } from "./conversation.js";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { ConversationUpdateKind, RunActivitySnapshot, RunPhase, RunToolUse } from "./conversation.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -12,13 +12,17 @@ export type RunActivityListener = (kind: ConversationUpdateKind) => void;
 export class RunActivity {
 
   private _message: string = "";
+  private _phase: RunPhase = "starting";
   private _turns: number = 0;
   private _toolHistory = new Array<RunToolUse>();
   private _compactions: number = 0;
   private _latestUsage: Usage = DefaultUsage;
   private _nextSyntheticToolId = 0;
 
-  constructor(private readonly onChange: RunActivityListener) {}
+  constructor(
+    private readonly onChange: RunActivityListener,
+    private readonly onSessionEvent?: (event: AgentSessionEvent) => RunPhase | undefined,
+  ) {}
 
   get message() { return this._message }
 
@@ -26,6 +30,7 @@ export class RunActivity {
 
   snapshot(): RunActivitySnapshot {
     return {
+      phase: this._phase,
       messageSnippet: this._message || undefined,
       turns: this._turns,
       compactions: this._compactions,
@@ -35,12 +40,17 @@ export class RunActivity {
 
   subscribe(session: AgentSession): () => void {
     return session.subscribe(event => {
-      if (event.type === "compaction_end" && !event.aborted && event.result) {
+      const phaseOverride = this.onSessionEvent?.(event);
+      if (event.type === "agent_end") this._setPhase(event.willRetry ? "thinking" : "settling");
+      else if (event.type === "turn_start") this._setPhase("thinking");
+      else if (event.type === "compaction_end" && !event.aborted && event.result) {
         this._compactions += 1;
         this.onChange("compaction");
       }
       else if (event.type === "message_start") {
         this._message = "";
+        if (phaseOverride) this._setPhase(phaseOverride);
+        else if (event.message.role === "assistant") this._setPhase("responding");
       }
       else if (event.type === "message_end" && event.message.role === "assistant") {
         // Each assistant message carries the usage for that single API call, where the
@@ -56,10 +66,12 @@ export class RunActivity {
       }
       else if (event.type === "tool_execution_start") {
         this._startToolUse(event);
+        this._setPhase("executing_tool");
         this.onChange("tool");
       }
       else if (event.type === "tool_execution_end") {
         this._finishToolUse(event);
+        this._setPhase(this._toolHistory.some(tool => tool.completedAt === undefined) ? "executing_tool" : "thinking");
         this.onChange("tool");
       }
       else if (event.type === "turn_end") {
@@ -67,6 +79,12 @@ export class RunActivity {
         this.onChange("turn");
       }
     });
+  }
+
+  private _setPhase(phase: RunPhase): void {
+    if (phase === this._phase) return;
+    this._phase = phase;
+    this.onChange("phase");
   }
 
   private _startToolUse(event: { toolCallId?: string; toolName: string; args?: unknown }) {

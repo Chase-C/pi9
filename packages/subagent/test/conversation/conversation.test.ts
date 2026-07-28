@@ -37,6 +37,41 @@ test("preserves only explicit spawn model and thinking overrides", () => {
   assert.equal(overridden.config.model, "task-model");
 });
 
+test("a newly attached run reports the starting phase", () => {
+  const agent = make();
+  agent.bindSession(session());
+
+  assert.equal(agent.snapshot().runs[0].activity.phase, "starting");
+});
+
+test("session events expose the current running phase", async () => {
+  let emit!: (event: any) => void;
+  const agent = make();
+  agent.bindSession({
+    subscribe(listener: (event: any) => void) { emit = listener; return () => {}; },
+    async steer() {},
+    getSteeringMessages: () => ["redirect"],
+  } as any);
+  const phase = () => agent.snapshot().runs[0].activity.phase;
+
+  emit({ type: "turn_start" });
+  assert.equal(phase(), "thinking");
+  emit({ type: "message_start", message: { role: "assistant", content: [] } });
+  assert.equal(phase(), "responding");
+  emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+  assert.equal(phase(), "executing_tool");
+  emit({ type: "tool_execution_end", toolCallId: "t1", toolName: "read", isError: false });
+  assert.equal(phase(), "thinking");
+
+  await agent.steer(r1, "redirect");
+  emit({ type: "message_start", message: { role: "user", content: "redirect" } });
+  assert.equal(phase(), "processing_steer");
+  emit({ type: "agent_end", messages: [], willRetry: true });
+  assert.equal(phase(), "thinking");
+  emit({ type: "agent_end", messages: [], willRetry: false });
+  assert.equal(phase(), "settling");
+});
+
 test("preserves immutable exact run history across resume", () => {
   const agent = make();
   agent.bindSession(session());
@@ -89,6 +124,119 @@ test("logical abort terminalizes before best-effort SDK abort resolves", async (
 
   release();
   await aborting;
+});
+
+test("steer receipts become delivered when the queued user message enters the turn", async () => {
+  let emit!: (event: any) => void;
+  const steering: string[] = [];
+  const agent = make();
+  agent.bindSession({
+    subscribe(listener: (event: any) => void) { emit = listener; return () => {}; },
+    async steer(prompt: string) { steering.push(prompt); },
+    getSteeringMessages: () => steering,
+  } as any);
+
+  await agent.steer(r1, "redirect");
+  assert.equal(agent.snapshot().runs[0].steers[0].state, "queued");
+
+  emit({ type: "message_start", message: { role: "user", content: "redirect" } });
+
+  const receipt = agent.snapshot().runs[0].steers[0];
+  assert.equal(receipt.state, "delivered");
+  assert.equal(typeof receipt.deliveredAt, "number");
+});
+
+test("delivered steer receipts become processed when the assistant response starts", async () => {
+  let emit!: (event: any) => void;
+  const agent = make();
+  agent.bindSession({
+    subscribe(listener: (event: any) => void) { emit = listener; return () => {}; },
+    async steer() {},
+    getSteeringMessages: () => ["redirect"],
+  } as any);
+
+  await agent.steer(r1, "redirect");
+  emit({ type: "message_start", message: { role: "user", content: "redirect" } });
+  emit({ type: "message_start", message: { role: "assistant", content: [] } });
+
+  const receipt = agent.snapshot().runs[0].steers[0];
+  assert.equal(receipt.state, "processed");
+  assert.equal(typeof receipt.processedAt, "number");
+});
+
+test("duplicate steer messages are delivered in FIFO order", async () => {
+  let emit!: (event: any) => void;
+  const steering: string[] = [];
+  const agent = make();
+  agent.bindSession({
+    subscribe(listener: (event: any) => void) { emit = listener; return () => {}; },
+    async steer(prompt: string) { steering.push(prompt); },
+    getSteeringMessages: () => steering,
+  } as any);
+
+  await agent.steer(r1, "same");
+  await agent.steer(r1, "same");
+  emit({ type: "message_start", message: { role: "user", content: "same" } });
+  assert.deepEqual(agent.snapshot().runs[0].steers.map(steer => steer.state), ["delivered", "queued"]);
+
+  emit({ type: "message_start", message: { role: "user", content: "same" } });
+  emit({ type: "message_start", message: { role: "assistant", content: [] } });
+  assert.deepEqual(agent.snapshot().runs[0].steers.map(steer => steer.state), ["processed", "processed"]);
+});
+
+test("concurrent steer calls keep receipts correlated with their queued messages", async () => {
+  let emit!: (event: any) => void;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const steering: string[] = [];
+  const agent = make();
+  agent.bindSession({
+    subscribe(listener: (event: any) => void) { emit = listener; return () => {}; },
+    async steer(prompt: string) { steering.push(prompt); await gate; },
+    getSteeringMessages: () => steering,
+  } as any);
+
+  const first = agent.steer(r1, "first");
+  const second = agent.steer(r1, "second");
+  release();
+  await Promise.all([first, second]);
+  emit({ type: "message_start", message: { role: "user", content: "first" } });
+  emit({ type: "message_start", message: { role: "user", content: "second" } });
+
+  assert.deepEqual(agent.snapshot().runs[0].steers.map(steer => steer.state), ["delivered", "delivered"]);
+});
+
+test("a steer accepted while the run settles returns a discarded receipt", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const agent = make();
+  agent.bindSession({
+    subscribe: () => () => {},
+    async steer() { await gate; },
+    getSteeringMessages: () => ["redirect"],
+  } as any);
+
+  const steering = agent.steer(r1, "redirect");
+  await Promise.resolve();
+  agent.settle(r1, { status: "aborted", error: "stopped" });
+  release();
+
+  assert.equal((await steering).state, "discarded");
+  assert.equal(agent.snapshot().runs[0].steers[0].state, "discarded");
+});
+
+test("settling a run discards steer receipts that were not processed", async () => {
+  const agent = make();
+  agent.bindSession({
+    subscribe: () => () => {},
+    async steer() {},
+    getSteeringMessages: () => ["redirect"],
+  } as any);
+  await agent.steer(r1, "redirect");
+
+  agent.settle(r1, { status: "aborted", error: "stopped" });
+
+  assert.equal(agent.snapshot().runs[0].steers[0].state, "discarded");
 });
 
 test("bindings track observers and acknowledge an exact run", () => {

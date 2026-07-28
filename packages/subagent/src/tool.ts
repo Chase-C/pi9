@@ -1,5 +1,5 @@
 import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { Conversation, ConversationSnapshot, NestedJoinAttemptSnapshot, RunSnapshot } from "./conversation.js";
+import type { Conversation, ConversationSnapshot, NestedJoinAttemptSnapshot, RunSnapshot, SteerReceipt } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
 import type { JoinBinding, NestedJoinBinding, SubagentRuntime } from "./runtime.js";
@@ -30,7 +30,7 @@ export interface ActionResult {
 
 type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { action: A }>;
 type OrderedDispatchOutcome =
-  | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId }
+  | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId; readonly steer?: SteerReceipt }
   | { readonly ok: false; readonly inputIndex: number; readonly error: string };
 
 function jsonResult(json: unknown, details: SubagentToolDetails): ActionResult {
@@ -131,13 +131,16 @@ export function inspectAction(
   const owner = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
-  try {
-    const runs = deps.runtime.inspectRuns(invocation.runIds, owner).map(({ conversationId, snapshot }) =>
-      projectInspection(deps.runtime, conversationId, snapshot));
-    return jsonResult(runs, { action: "inspect", runs });
-  } catch (error) {
-    return errorResult(error instanceof Error ? error.message : String(error), "inspect");
-  }
+  const runs = invocation.runIds.map((target, inputIndex) => {
+    if (typeof target !== "string") return { inputIndex, runId: target.runId, error: target.error };
+    try {
+      const inspected = deps.runtime.inspectRuns([target], owner)[0];
+      return projectInspection(deps.runtime, inspected.conversationId, inspected.snapshot);
+    } catch (error) {
+      return { inputIndex, runId: target, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  return jsonResult(runs, { action: "inspect", runs });
 }
 
 export async function joinAction(
@@ -241,7 +244,9 @@ function renderDispatchItems(
       agent: task.kind === "spawn" ? task.agent : conversation?.config.name,
       label: task.kind === "spawn" ? task.label : conversation?.label,
       prompt: task.prompt,
-      ...(start.ok ? { conversationId: start.conversationId, runId: start.runId } : { error: start.error }),
+      ...(start.ok
+        ? { conversationId: start.conversationId, runId: start.runId, ...(start.steer ? { steer: start.steer } : {}) }
+        : { error: start.error }),
     };
   });
 }
@@ -264,6 +269,7 @@ function projectInspection(
     ...(display.agentName ? { agent: display.agentName } : {}),
     ...(display.label ? { label: display.label } : {}),
     status,
+    ...(status === "running" ? { phase: run.activity.phase } : {}),
     elapsedMs: Math.max(0, end - start),
     turns: run.activity.turns,
     compactions: run.activity.compactions,
@@ -278,6 +284,7 @@ function projectInspection(
         ? run.status.kind === "done" ? "interrupted" : "running"
         : tool.isError ? "error" : "completed",
     })),
+    steers: (run.steers ?? []).slice(-5),
   };
 }
 
@@ -389,8 +396,8 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(status?): List runs, optionally filtered by status.",
-      "  dispatch(tasks): Dispatch asynchronous spawn, resume, or steering tasks.",
-      "  inspect(runIds): Return bounded progress snapshots without waiting or acknowledging.",
+      "  dispatch(tasks): Dispatch asynchronous spawn, resume, or steering tasks; accepted steers return lifecycle receipts.",
+      "  inspect(runIds): Return bounded progress, running phases, steer receipts, and per-target errors without waiting or acknowledging.",
       "  join(runIds): Wait for the given runs and return their outcomes in the same order.",
       "  remove(conversationIds): Remove retained conversations.",
       "Tasks:",

@@ -392,9 +392,10 @@ test("steering targets an exact running run without creating history", async () 
   const started = batch.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
-  await expect(manager.steerRun(started.runId, "focus on tests")).resolves.toEqual({
+  await expect(manager.steerRun(started.runId, "focus on tests")).resolves.toMatchObject({
     conversationId: started.conversationId,
     runId: started.runId,
+    steer: { id: 1, state: "queued", acceptedAt: expect.any(Number) },
   });
   expect(prompts).toEqual(["focus on tests"]);
   expect(manager.conversation(started.conversationId).runs).toHaveLength(1);

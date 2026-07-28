@@ -51,7 +51,7 @@ export interface FakeAgentOptions {
     thinking?: ConversationSnapshot["config"]["thinking"];
   };
   status?: StatusInput;
-  activity?: { toolHistory?: RunToolUse[] };
+  activity?: { phase?: RunSnapshot["activity"]["phase"]; toolHistory?: RunToolUse[] };
   message?: string;
   messageSnippet?: string;
   turns?: number;
@@ -103,6 +103,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     createdAt: options.createdAt ?? 1,
     status,
     activity: {
+      phase: options.activity?.phase ?? "starting",
       messageSnippet: options.messageSnippet ?? options.message,
       turns: options.turns ?? 0,
       compactions: options.compactions ?? 0,
@@ -111,6 +112,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     usage: options.totalUsage ?? options.usage ?? ZERO_USAGE,
     observerCount: 0,
     acknowledged: false,
+    steers: [],
   };
   const runs = options.runs ?? [...(options.previousRuns ?? []), run];
   return {

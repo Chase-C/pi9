@@ -4,6 +4,15 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Added
+
+- Add per-run steer receipts with queued, delivered, processed, and discarded lifecycle states.
+- Add inspect-only running phases without changing the stable run status vocabulary.
+
+### Changed
+
+- Return ordered per-target errors from `inspect` so malformed, unknown, or unauthorized targets do not hide valid sibling snapshots.
+
 ## [0.8.0] - 2026-07-28
 
 ### Breaking
