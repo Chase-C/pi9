@@ -14,16 +14,16 @@ test("description names typed action inputs without restating task unions", () =
   });
   const description = tool.description;
   assert.match(description, /list\(status\?\)/);
-  assert.match(description, /run\(spawnTasks\?, resumeTasks\?\)/);
-  assert.match(description, /steer\(steerMessages\)/);
+  assert.match(description, /run\(spawns\?, resumes\?\)/);
+  assert.match(description, /steer\(messages\)/);
   assert.match(description, /inspect\(runIds\)/);
   assert.match(description, /join\(runIds\)/);
   assert.match(description, /remove\(conversationIds\)/);
   assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union/);
   const properties = (tool.parameters as any).properties;
-  assert.deepEqual(Object.keys(properties.spawnTasks.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
-  assert.deepEqual(Object.keys(properties.resumeTasks.items.properties), ["conversationId", "prompt"]);
-  assert.deepEqual(Object.keys(properties.steerMessages.items.properties), ["runId", "message"]);
+  assert.deepEqual(Object.keys(properties.spawns.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
+  assert.deepEqual(Object.keys(properties.resumes.items.properties), ["conversationId", "prompt"]);
+  assert.deepEqual(Object.keys(properties.messages.items.properties), ["runId", "message"]);
 });
 
 const toolCall = (arguments_: Record<string, any>) => ({
@@ -41,7 +41,7 @@ test("SDK validation rejects a whole batch containing a malformed task", () => {
   });
   const raw = {
     action: "run",
-    spawnTasks: [
+    spawns: [
       { agent: "helper", prompt: "malformed", extra: true },
       { agent: "helper", prompt: "valid" },
     ],
@@ -57,7 +57,7 @@ test("SDK validation enforces the task-array minimum", () => {
     prepareInvocation: async () => settings,
   });
   assert.throws(
-    () => validateToolArguments(tool, toolCall({ action: "run", spawnTasks: [] })),
+    () => validateToolArguments(tool, toolCall({ action: "run", spawns: [] })),
     /Validation failed/,
   );
 });
@@ -65,10 +65,10 @@ test("SDK validation enforces the task-array minimum", () => {
 test("tool prepares settings, applies task limits, and renders simple typed content", async () => {
   let prepared = 0;
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => { prepared++; return settings; } });
-  const result = await tool.execute("call", { action: "run", spawnTasks: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
+  const result = await tool.execute("call", { action: "run", spawns: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
   assert.equal(prepared, 1); assert.equal(result.isError, true); assert.match(result.content[0].text, /Too many tasks/);
   assert.match(tool.renderResult(result, {}, {}).render(120).join("\n"), /Too many tasks/);
-  assert.match(tool.renderCall({ action: "run", spawnTasks: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
+  assert.match(tool.renderCall({ action: "run", spawns: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
 });
 
 test("rejected mixed join releases every valid requested claim", async () => {

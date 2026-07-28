@@ -176,7 +176,7 @@ test("max batch setting describes run and steer terminology", () => {
   const rendered = output(component);
 
   assert.match(rendered, /Max batch size/);
-  assert.match(rendered, /run\(spawnTasks\/resumeTasks:/);
+  assert.match(rendered, /run\(spawns\/resumes:/);
   assert.match(rendered, /Larger run or steer batches/);
   assert.doesNotMatch(rendered, /dispatch/);
 });

@@ -54,7 +54,7 @@ test("run forwards validated tasks and preserves outcome order", async () => {
     },
     listConversations: () => [],
   };
-  const result = await runAction(deps(manager), { action: "run", spawnTasks: tasks, resumeTasks: [] }, {} as any);
+  const result = await runAction(deps(manager), { action: "run", spawns: tasks, resumes: [] }, {} as any);
   assert.deepEqual(received, tasks);
   assert.deepEqual(json(result), [
     { ok: true, inputIndex: 0, conversationId, runId },
@@ -76,8 +76,8 @@ test("run processes spawn tasks before resume tasks with combined outcome indexe
 
   const result = await runAction(deps(manager), {
     action: "run",
-    spawnTasks: [{ kind: "spawn", agent: "helper", prompt: "new" }],
-    resumeTasks: [{ kind: "resume", conversationId, prompt: "continue" }],
+    spawns: [{ kind: "spawn", agent: "helper", prompt: "new" }],
+    resumes: [{ kind: "resume", conversationId, prompt: "continue" }],
   }, {} as any);
 
   assert.deepEqual(received.map(task => task.kind), ["spawn", "resume"]);
@@ -100,7 +100,7 @@ test("run returns task parse failures while starting valid siblings", async () =
     listConversations: () => [],
   };
 
-  const result = await runAction(deps(manager), { action: "run", spawnTasks: tasks, resumeTasks: [] }, {} as any);
+  const result = await runAction(deps(manager), { action: "run", spawns: tasks, resumes: [] }, {} as any);
 
   assert.deepEqual(json(result), [
     { ok: true, inputIndex: 0, conversationId, runId },
@@ -122,7 +122,7 @@ test("steer sends multiple messages in input order", async () => {
   };
   const result = await steerAction(deps(manager), {
     action: "steer",
-    steerMessages: [
+    messages: [
       { kind: "steer", runId, message: "first" },
       { kind: "steer", runId: secondRunId, message: "second" },
       { kind: "steer", runId, message: "third" },
@@ -147,7 +147,7 @@ test("steer isolates failures from sibling messages", async () => {
   };
   const result = await steerAction(deps(manager), {
     action: "steer",
-    steerMessages: [
+    messages: [
       { kind: "steer", runId, message: "first" },
       { kind: "steer", runId: secondRunId, message: "second" },
     ],

@@ -19,11 +19,11 @@ const runId = "adapt-ably";
 test("public schema exposes separate run and steer inputs without unions", () => {
   assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "run", "steer", "inspect", "join", "remove"]);
   assert.doesNotMatch(JSON.stringify(SubagentParams), /"anyOf"/);
-  assert.equal(Check(SubagentParams, { action: "run", spawnTasks: [{ agent: "helper", prompt: "work" }] }), true);
-  assert.equal(Check(SubagentParams, { action: "run", resumeTasks: [{ conversationId, prompt: "continue" }] }), true);
-  assert.equal(Check(SubagentParams, { action: "steer", steerMessages: [{ runId, message: "redirect" }] }), true);
-  assert.equal(Check(SubagentParams, { action: "run", spawnTasks: [] }), false);
-  assert.equal(Check(SubagentParams, { action: "steer", steerMessages: [{ runId, prompt: "old field" }] }), false);
+  assert.equal(Check(SubagentParams, { action: "run", spawns: [{ agent: "helper", prompt: "work" }] }), true);
+  assert.equal(Check(SubagentParams, { action: "run", resumes: [{ conversationId, prompt: "continue" }] }), true);
+  assert.equal(Check(SubagentParams, { action: "steer", messages: [{ runId, message: "redirect" }] }), true);
+  assert.equal(Check(SubagentParams, { action: "run", spawns: [] }), false);
+  assert.equal(Check(SubagentParams, { action: "steer", messages: [{ runId, prompt: "old field" }] }), false);
   assert.equal(Check(SpawnTaskSchema, { conversationId, prompt: "wrong kind" }), false);
   assert.equal(Check(ResumeTaskSchema, { conversationId, prompt: "continue" }), true);
   assert.equal(Check(SteerMessageSchema, { runId, message: "redirect" }), true);
@@ -64,16 +64,16 @@ test("invocations parse every action without dispatch alias", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "list", status: ["running"] }), { action: "list", status: ["running"] });
   assert.deepEqual(parseSubagentInvocation({
     action: "run",
-    spawnTasks: [{ agent: "helper", prompt: "x" }],
-    resumeTasks: [{ conversationId, prompt: "next" }],
+    spawns: [{ agent: "helper", prompt: "x" }],
+    resumes: [{ conversationId, prompt: "next" }],
   }), {
     action: "run",
-    spawnTasks: [{ kind: "spawn", agent: "helper", prompt: "x" }],
-    resumeTasks: [{ kind: "resume", conversationId, prompt: "next" }],
+    spawns: [{ kind: "spawn", agent: "helper", prompt: "x" }],
+    resumes: [{ kind: "resume", conversationId, prompt: "next" }],
   });
-  assert.deepEqual(parseSubagentInvocation({ action: "steer", steerMessages: [{ runId, message: "redirect" }] }), {
+  assert.deepEqual(parseSubagentInvocation({ action: "steer", messages: [{ runId, message: "redirect" }] }), {
     action: "steer",
-    steerMessages: [{ kind: "steer", runId, message: "redirect" }],
+    messages: [{ kind: "steer", runId, message: "redirect" }],
   });
   assert.deepEqual(parseSubagentInvocation({ action: "inspect", runIds: [runId] }), { action: "inspect", runIds: [runId] });
   assert.deepEqual(parseSubagentInvocation({ action: "join", runIds: [runId] }), { action: "join", runIds: [runId] });
@@ -82,47 +82,47 @@ test("invocations parse every action without dispatch alias", () => {
 });
 
 test("run allows either or both task arrays and applies a combined limit", () => {
-  assert.deepEqual(parseSubagentInvocation({ action: "run", spawnTasks: [{ agent: "helper", prompt: "x" }] }), {
+  assert.deepEqual(parseSubagentInvocation({ action: "run", spawns: [{ agent: "helper", prompt: "x" }] }), {
     action: "run",
-    spawnTasks: [{ kind: "spawn", agent: "helper", prompt: "x" }],
-    resumeTasks: [],
+    spawns: [{ kind: "spawn", agent: "helper", prompt: "x" }],
+    resumes: [],
   });
-  assert.deepEqual(parseSubagentInvocation({ action: "run", resumeTasks: [{ conversationId, prompt: "x" }] }), {
+  assert.deepEqual(parseSubagentInvocation({ action: "run", resumes: [{ conversationId, prompt: "x" }] }), {
     action: "run",
-    spawnTasks: [],
-    resumeTasks: [{ kind: "resume", conversationId, prompt: "x" }],
+    spawns: [],
+    resumes: [{ kind: "resume", conversationId, prompt: "x" }],
   });
   assert.ok("error" in parseSubagentInvocation({ action: "run" }));
-  assert.ok("error" in parseSubagentInvocation({ action: "run", spawnTasks: [], resumeTasks: [{ conversationId, prompt: "x" }] }));
-  assert.ok("error" in parseSubagentInvocation({ action: "run", spawnTasks: {}, resumeTasks: [{ conversationId, prompt: "x" }] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "run", spawns: [], resumes: [{ conversationId, prompt: "x" }] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "run", spawns: {}, resumes: [{ conversationId, prompt: "x" }] }));
   assert.match((parseSubagentInvocation({
     action: "run",
-    spawnTasks: [{ agent: "a", prompt: "1" }],
-    resumeTasks: [{ conversationId, prompt: "2" }],
+    spawns: [{ agent: "a", prompt: "1" }],
+    resumes: [{ conversationId, prompt: "2" }],
   }, { maxTasks: 1 }) as { error: string }).error, /Too many/);
 });
 
 test("steer validates its own batch and limit", () => {
   assert.ok("error" in parseSubagentInvocation({ action: "steer" }));
-  assert.ok("error" in parseSubagentInvocation({ action: "steer", steerMessages: [] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "steer", messages: [] }));
   assert.match((parseSubagentInvocation({
     action: "steer",
-    steerMessages: [{ runId, message: "1" }, { runId, message: "2" }],
+    messages: [{ runId, message: "1" }, { runId, message: "2" }],
   }, { maxTasks: 1 }) as { error: string }).error, /Too many/);
 });
 
 test("item parse failures remain indexed within their typed arrays", () => {
   assert.deepEqual(parseSubagentInvocation({
     action: "run",
-    spawnTasks: [{ agent: "helper", prompt: "first" }, { prompt: "missing agent" }],
-    resumeTasks: [{ conversationId, prompt: "third" }],
+    spawns: [{ agent: "helper", prompt: "first" }, { prompt: "missing agent" }],
+    resumes: [{ conversationId, prompt: "third" }],
   }), {
     action: "run",
-    spawnTasks: [
+    spawns: [
       { kind: "spawn", agent: "helper", prompt: "first" },
       { error: "Spawn task agent must be a non-empty string." },
     ],
-    resumeTasks: [{ kind: "resume", conversationId, prompt: "third" }],
+    resumes: [{ kind: "resume", conversationId, prompt: "third" }],
   });
 });
 
@@ -148,8 +148,8 @@ test("whole invocation validation covers unchanged actions", () => {
 
 test("unsupported invocation fields receive ordinary validation errors", () => {
   for (const [raw, expected] of [
-    [{ action: "run", spawnTasks: [{ agent: "a", prompt: "x" }], background: true }, /Property background is not allowed/],
-    [{ action: "steer", steerMessages: [{ runId, message: "x" }], prompt: "x" }, /Property prompt is not allowed/],
+    [{ action: "run", spawns: [{ agent: "a", prompt: "x" }], background: true }, /Property background is not allowed/],
+    [{ action: "steer", messages: [{ runId, message: "x" }], prompt: "x" }, /Property prompt is not allowed/],
     [{ action: "inspect", runIds: [runId], wait: true }, /Property wait is not allowed/],
     [{ action: "results", runIds: [runId] }, /Unknown action/],
     [{ action: "join", runIds: [runId], remove: true }, /Property remove is not allowed/],
@@ -163,7 +163,7 @@ test("unsupported invocation fields receive ordinary validation errors", () => {
 test("flat schema admits action fields while parser enforces associations", () => {
   for (const raw of [
     { action: "agents", status: ["running"] },
-    { action: "list", spawnTasks: [{ agent: "a", prompt: "x" }] },
+    { action: "list", spawns: [{ agent: "a", prompt: "x" }] },
     { action: "join", runIds: [runId], conversationIds: [conversationId] },
   ]) {
     assert.equal(Check(SubagentParams, raw), true);

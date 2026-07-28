@@ -445,11 +445,11 @@ function truncate(value: string, limit: number): string {
 function callSuffix(action: string, input: Record<string, unknown> | undefined): string {
   if (!input) return "";
   if (action === "run") {
-    const spawn = Array.isArray(input.spawnTasks) ? input.spawnTasks.length : 0;
-    const resume = Array.isArray(input.resumeTasks) ? input.resumeTasks.length : 0;
+    const spawn = Array.isArray(input.spawns) ? input.spawns.length : 0;
+    const resume = Array.isArray(input.resumes) ? input.resumes.length : 0;
     return spawn + resume ? count(spawn + resume, "task") : "";
   }
-  if (action === "steer") return arrayCount(input.steerMessages, "message");
+  if (action === "steer") return arrayCount(input.messages, "message");
   if (action === "inspect" || action === "join") return arrayCount(input.runIds, "run");
   if (action === "remove") return arrayCount(input.conversationIds, "conversation");
   return "";

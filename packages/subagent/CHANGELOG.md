@@ -6,7 +6,7 @@ This changelog starts with version `v0.2.1`.
 
 ### Breaking
 
-- Replace `dispatch(tasks)` with `run(spawnTasks?, resumeTasks?)` and `steer(steerMessages)`. Steering messages use `{ runId, message }`; there is no compatibility alias.
+- Replace `dispatch(tasks)` with `run(spawns?, resumes?)` and `steer(messages)`. Steering messages use `{ runId, message }`; there is no compatibility alias.
 - Split the shared task schema into distinct spawn, resume, and steer item schemas and remove redundant field descriptions.
 
 ## [0.8.2] - 2026-07-28

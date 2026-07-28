@@ -36,9 +36,9 @@ export const RUN_STATUSES = [
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
   status: Type.Optional(Type.Array(StringEnum(RUN_STATUSES), { minItems: 1 })),
-  spawnTasks: Type.Optional(Type.Array(SpawnTaskSchema, { minItems: 1 })),
-  resumeTasks: Type.Optional(Type.Array(ResumeTaskSchema, { minItems: 1 })),
-  steerMessages: Type.Optional(Type.Array(SteerMessageSchema, { minItems: 1 })),
+  spawns: Type.Optional(Type.Array(SpawnTaskSchema, { minItems: 1 })),
+  resumes: Type.Optional(Type.Array(ResumeTaskSchema, { minItems: 1 })),
+  messages: Type.Optional(Type.Array(SteerMessageSchema, { minItems: 1 })),
   runIds: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
   conversationIds: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
 }, { additionalProperties: false });
@@ -82,8 +82,8 @@ export type ParsedSteerRequest = SteerRequest | { error: string };
 export type SubagentInvocation =
   | { action: "agents" }
   | { action: "list"; status?: RunStatus[] }
-  | { action: "run"; spawnTasks: ParsedRunRequest[]; resumeTasks: ParsedRunRequest[] }
-  | { action: "steer"; steerMessages: ParsedSteerRequest[] }
+  | { action: "run"; spawns: ParsedRunRequest[]; resumes: ParsedRunRequest[] }
+  | { action: "steer"; messages: ParsedSteerRequest[] }
   | { action: "inspect"; runIds: InspectTarget[] }
   | { action: "join"; runIds: RunId[] }
   | { action: "remove"; conversationIds: ConversationId[] };
@@ -106,8 +106,8 @@ export interface ParseSubagentInvocationOptions {
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
   list: ["action", "status"],
-  run: ["action", "spawnTasks", "resumeTasks"],
-  steer: ["action", "steerMessages"],
+  run: ["action", "spawns", "resumes"],
+  steer: ["action", "messages"],
   inspect: ["action", "runIds"],
   join: ["action", "runIds"],
   remove: ["action", "conversationIds"],
@@ -168,18 +168,18 @@ export function parseSubagentInvocation(
       };
     }
     case "run": {
-      if (params.spawnTasks !== undefined && (!Array.isArray(params.spawnTasks) || params.spawnTasks.length === 0)) {
-        return { error: "run spawnTasks must be a non-empty array when provided.", action: parsedAction, taskCountError: true };
+      if (params.spawns !== undefined && (!Array.isArray(params.spawns) || params.spawns.length === 0)) {
+        return { error: "run spawns must be a non-empty array when provided.", action: parsedAction, taskCountError: true };
       }
-      if (params.resumeTasks !== undefined && (!Array.isArray(params.resumeTasks) || params.resumeTasks.length === 0)) {
-        return { error: "run resumeTasks must be a non-empty array when provided.", action: parsedAction, taskCountError: true };
+      if (params.resumes !== undefined && (!Array.isArray(params.resumes) || params.resumes.length === 0)) {
+        return { error: "run resumes must be a non-empty array when provided.", action: parsedAction, taskCountError: true };
       }
-      const spawnTasks = (params.spawnTasks ?? []) as unknown[];
-      const resumeTasks = (params.resumeTasks ?? []) as unknown[];
-      const taskCount = spawnTasks.length + resumeTasks.length;
+      const spawns = (params.spawns ?? []) as unknown[];
+      const resumes = (params.resumes ?? []) as unknown[];
+      const taskCount = spawns.length + resumes.length;
       if (taskCount === 0) {
         return {
-          error: "Provide at least one spawnTask or resumeTask.",
+          error: "Provide at least one spawn or resume.",
           action: parsedAction,
           taskCountError: true,
         };
@@ -195,28 +195,28 @@ export function parseSubagentInvocation(
 
       return {
         action: parsedAction,
-        spawnTasks: spawnTasks.map(parseSpawnTask),
-        resumeTasks: resumeTasks.map(parseResumeTask),
+        spawns: spawns.map(parseSpawnTask),
+        resumes: resumes.map(parseResumeTask),
       };
     }
     case "steer": {
-      if (!Array.isArray(params.steerMessages) || params.steerMessages.length === 0) {
+      if (!Array.isArray(params.messages) || params.messages.length === 0) {
         return {
-          error: "Provide at least one steerMessage.",
+          error: "Provide at least one message.",
           action: parsedAction,
           taskCountError: true,
         };
       }
 
-      if (options.maxTasks !== undefined && params.steerMessages.length > options.maxTasks) {
+      if (options.maxTasks !== undefined && params.messages.length > options.maxTasks) {
         return {
-          error: `Too many steer messages (${params.steerMessages.length}). Max is ${options.maxTasks}.`,
+          error: `Too many steer messages (${params.messages.length}). Max is ${options.maxTasks}.`,
           action: parsedAction,
           taskCountError: true,
         };
       }
 
-      return { action: parsedAction, steerMessages: params.steerMessages.map(parseSteerMessage) };
+      return { action: parsedAction, messages: params.messages.map(parseSteerMessage) };
     }
     case "inspect": {
       const ids = parseInspectTargets(params.runIds);

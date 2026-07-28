@@ -97,7 +97,7 @@ export async function runAction(
   const owner = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
-  const tasks = [...invocation.spawnTasks, ...invocation.resumeTasks];
+  const tasks = [...invocation.spawns, ...invocation.resumes];
   const outcomes: OrderedDispatchOutcome[] = [];
 
   for (let inputIndex = 0; inputIndex < tasks.length; inputIndex++) {
@@ -125,8 +125,8 @@ export async function steerAction(
     : undefined;
   const outcomes: OrderedDispatchOutcome[] = [];
 
-  for (let inputIndex = 0; inputIndex < invocation.steerMessages.length; inputIndex++) {
-    const steer = invocation.steerMessages[inputIndex];
+  for (let inputIndex = 0; inputIndex < invocation.messages.length; inputIndex++) {
+    const steer = invocation.messages[inputIndex];
     if ("error" in steer) {
       outcomes.push({ ok: false, inputIndex, error: steer.error });
       continue;
@@ -141,7 +141,7 @@ export async function steerAction(
 
   return jsonResult(outcomes, {
     action: "steer",
-    tasks: renderDispatchItems(invocation.steerMessages, outcomes, conversationSnapshots(deps.runtime)),
+    tasks: renderDispatchItems(invocation.messages, outcomes, conversationSnapshots(deps.runtime)),
   });
 }
 
@@ -426,8 +426,8 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(status?): List runs, optionally filtered by status.",
-      "  run(spawnTasks?, resumeTasks?): Start asynchronous spawn and resume tasks.",
-      "  steer(steerMessages): Send messages to running subagents and return lifecycle receipts.",
+      "  run(spawns?, resumes?): Start asynchronous spawn and resume tasks.",
+      "  steer(messages): Send messages to running subagents and return lifecycle receipts.",
       "  inspect(runIds): Return bounded progress, running phases, steer receipts, and per-target errors without waiting or acknowledging.",
       "  join(runIds): Wait for the given runs and return their outcomes in the same order.",
       "  remove(conversationIds): Remove retained conversations.",

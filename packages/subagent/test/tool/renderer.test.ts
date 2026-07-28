@@ -8,8 +8,8 @@ const renderResult = (details: SubagentToolDetails, expanded = false, isPartial 
   renderSubagentResult({ details }, { expanded, isPartial }).render(width).map(line => line.trimEnd()).join("\n");
 
 test("call titles summarize action-specific input counts", () => {
-  assert.equal(renderCall({ action: "run", spawnTasks: [{}, {}], resumeTasks: [{}] }), "subagent run  3 tasks");
-  assert.equal(renderCall({ action: "steer", steerMessages: [{}, {}] }), "subagent steer  2 messages");
+  assert.equal(renderCall({ action: "run", spawns: [{}, {}], resumes: [{}] }), "subagent run  3 tasks");
+  assert.equal(renderCall({ action: "steer", messages: [{}, {}] }), "subagent steer  2 messages");
   assert.equal(renderCall({ action: "inspect", runIds: ["one"] }), "subagent inspect  1 run");
   assert.equal(renderCall({ action: "join", runIds: ["one", "two"] }), "subagent join  2 runs");
   assert.equal(renderCall({ action: "remove", conversationIds: ["one"] }), "subagent remove  1 conversation");

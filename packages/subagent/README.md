@@ -47,7 +47,7 @@ Inspect the repository and return concise, evidence-backed findings.
 | `tools` | no | Comma-separated allowlist; include `subagent` for recursive delegation. |
 | `skills` | no | Comma-separated default skills. A spawn-task value replaces this list. |
 
-The body becomes the child system prompt. `spawnTasks` entries require `agent` and `prompt`; `label` is optional, and entries may override supported execution options such as model, thinking, working directory, and skills. A model requested by either the task or agent definition must resolve; an unknown or malformed value fails that task instead of falling back. When neither specifies a model, the child inherits the parent's model. An explicit task `cwd` is resolved relative to the parent's working directory and must identify an existing directory. `resumeTasks` entries identify a conversation and create another run with the supplied prompt; the conversation's agent and execution context remain fixed. `steerMessages` entries identify an active run and queue the supplied `message` through Pi's steering boundary without creating another run.
+The body becomes the child system prompt. `spawns` entries require `agent` and `prompt`; `label` is optional, and entries may override supported execution options such as model, thinking, working directory, and skills. A model requested by either the task or agent definition must resolve; an unknown or malformed value fails that task instead of falling back. When neither specifies a model, the child inherits the parent's model. An explicit task `cwd` is resolved relative to the parent's working directory and must identify an existing directory. `resumes` entries identify a conversation and create another run with the supplied prompt; the conversation's agent and execution context remain fixed. `messages` entries identify an active run and queue the supplied `message` through Pi's steering boundary without creating another run.
 
 ## Tool actions
 
@@ -55,8 +55,8 @@ The body becomes the child system prompt. `spawnTasks` entries require `agent` a
 | --- | --- |
 | `agents` | Discover agent definitions and their resolved defaults. |
 | `list` | Return a lightweight inventory of conversations and runs without run output. It is pure: it acknowledges nothing and changes no lifecycle state. |
-| `run` | Start `spawnTasks`, `resumeTasks`, or both and return ordered outcomes. Both task types create asynchronous runs. |
-| `steer` | Send `steerMessages` to existing running runs and return ordered lifecycle receipts after Pi accepts each message. |
+| `run` | Start `spawns`, `resumes`, or both and return ordered outcomes. Both task types create asynchronous runs. |
+| `steer` | Send `messages` to existing running runs and return ordered lifecycle receipts after Pi accepts each message. |
 | `inspect` | Return bounded status, running phase, current message, recent tool activity, and steer receipts for exact runs without waiting or acknowledging them. Invalid targets become ordered per-target errors. Terminal output is omitted. |
 | `join` | Block until every explicitly requested exact run settles, then return and acknowledge exactly those runs. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying runs. |
 | `remove` | Clean up the specified conversations, aborting active work if necessary, draining in-flight steering, deleting resumable child session state, and hiding them from `list`. It returns only after detached run snapshots are finalized. |

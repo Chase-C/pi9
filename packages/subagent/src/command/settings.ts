@@ -172,7 +172,7 @@ export class SubagentSettingsComponent implements Component, Focusable {
       const shown = Math.min(value, 6);
       return [this.success(`${"● ".repeat(shown).trim()}${value > shown ? `  +${value - shown}` : ""}`), this.muted(`${value} tree-wide running slots; additional work queues.`)];
     }
-    if (item.id === "maxTasksPerRun") return [this.success(`run(spawnTasks/resumeTasks: up to ${item.currentValue} total)`), this.muted("Larger run or steer batches are rejected before work starts.")];
+    if (item.id === "maxTasksPerRun") return [this.success(`run(spawns/resumes: up to ${item.currentValue} total)`), this.muted("Larger run or steer batches are rejected before work starts.")];
     if (item.id === "maxConversations") {
       const value = positiveInt(item.currentValue);
       return [this.success(`${Math.max(0, value - 1)} / ${value} retained`), this.muted("One spawn remains before capacity is reached."), this.success("remove → frees capacity")];
