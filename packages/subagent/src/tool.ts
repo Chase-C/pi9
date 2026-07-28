@@ -372,6 +372,9 @@ function projectInspection(
     ...(status === "running" && run.activity.messageSnippet
       ? { messageSnippet: truncateInspectionText(run.activity.messageSnippet, 500) }
       : {}),
+    ...(run.status.kind === "done" && run.status.error
+      ? { errorSnippet: truncateInspectionText(run.status.error, 500) }
+      : {}),
     recentTools: run.activity.toolHistory.slice(-3).reverse().map(tool => ({
       toolCallId: tool.id,
       tool: tool.name,
@@ -501,6 +504,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     label: "Subagent",
     description: [
       "Delegate work through context-isolated subagent conversations and runs. Subagents share the working filesystem.",
+      "Conversation IDs use adjective-noun form; run IDs use verb-adverb form.",
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(status?): List runs, optionally filtered by status.",

@@ -13,6 +13,7 @@ test("description names typed action inputs without restating task unions", () =
     prepareInvocation: async () => settings,
   });
   const description = tool.description;
+  assert.match(description, /Conversation IDs use adjective-noun form; run IDs use verb-adverb form\./);
   assert.match(description, /list\(status\?\)/);
   assert.match(description, /run\(spawns\?, resumes\?\)/);
   assert.match(description, /steer\(messages\)/);

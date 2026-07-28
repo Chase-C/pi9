@@ -281,6 +281,39 @@ test("inspect omits terminal output and completed message text", () => {
   assert.equal(json(result)[0].recentTools[0].status, "interrupted");
 });
 
+test("inspect includes a bounded diagnostic for a failed run", () => {
+  const terminal: any = snapshot({
+    kind: "done", outcome: "error", completedAt: 2, startedAt: 1, error: "Model request failed.",
+  }).runs[0];
+  const manager = {
+    inspectRuns: () => [{ conversationId, snapshot: terminal }],
+    conversationDisplay: () => ({ conversationId, agentName: "helper" }),
+  };
+
+  const result = inspectAction(deps(manager), { action: "inspect", runIds: [runId] });
+
+  assert.equal(result.isError, false);
+  assert.equal(json(result)[0].errorSnippet, "Model request failed.");
+});
+
+test("inspect bounds diagnostics for every terminal outcome with an error", () => {
+  for (const outcome of ["error", "interrupted", "aborted", "skipped"] as const) {
+    const terminal: any = snapshot({
+      kind: "done", outcome, completedAt: 2, startedAt: 1, error: "Failure \n".repeat(100),
+    }).runs[0];
+    const manager = {
+      inspectRuns: () => [{ conversationId, snapshot: terminal }],
+      conversationDisplay: () => ({ conversationId, agentName: "helper" }),
+    };
+
+    const [entry] = json(inspectAction(deps(manager), { action: "inspect", runIds: [runId] }));
+
+    assert.equal(entry.errorSnippet.length, 500);
+    assert.doesNotMatch(entry.errorSnippet, /\s{2,}/);
+    assert.match(entry.errorSnippet, /…$/);
+  }
+});
+
 test("list is output-free and filtering is pure", () => {
   let calls = 0;
   const manager = {

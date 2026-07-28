@@ -69,6 +69,7 @@ export interface InspectedRunRenderItem {
   turns: number;
   compactions: number;
   messageSnippet?: string;
+  errorSnippet?: string;
   recentTools: Array<JoinActivityRenderItem & { status: "running" | "completed" | "error" | "interrupted" }>;
   steers: readonly SteerReceipt[];
 }
@@ -297,6 +298,7 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
           `  ${identity(theme, run.conversationId, run.runId)} ${paint(theme, "muted", `· ${run.turns} turns · ${run.compactions} compactions · ${run.elapsedMs}ms`)}`,
         ];
         if (run.messageSnippet) lines.push(`  ${paint(theme, "dim", `[partial] ${run.messageSnippet}`)}`);
+        if (run.errorSnippet) lines.push(`  ${paint(theme, "error", run.errorSnippet)}`);
         for (const tool of run.recentTools) lines.push(`  ${paint(theme, "muted", `${tool.tool}${tool.summary ? `(${tool.summary})` : ""} · ${tool.status}`)}`);
         for (const steer of run.steers) lines.push(`  ${paint(theme, "muted", `steer #${steer.id} · ${steer.state}`)}`);
         return lines;

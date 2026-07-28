@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Added
+
+- Include compact, bounded terminal error diagnostics in `inspect` without exposing output or acknowledging outcomes.
+
 ### Breaking
 
 - Replace `dispatch(tasks)` with `run(spawns?, resumes?)` and `steer(messages)`. Steering messages use `{ runId, message }`; there is no compatibility alias.

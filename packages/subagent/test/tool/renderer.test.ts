@@ -78,6 +78,27 @@ test("steer renders receipts and inspect renders bounded activity", () => {
   assert.match(renderResult(inspect, true), /running · thinking[\s\S]*\[partial\] Checking tests\.[\s\S]*read\(test.ts\) · completed[\s\S]*steer #1 · processed/);
 });
 
+test("inspect renders terminal error diagnostics in expanded mode", () => {
+  const inspect: SubagentToolDetails = {
+    action: "inspect",
+    runs: [{
+      conversationId: "quiet-otter" as any,
+      runId: "search-boldly" as any,
+      agent: "scout",
+      status: "error",
+      elapsedMs: 25,
+      turns: 2,
+      compactions: 1,
+      errorSnippet: "Model request failed.",
+      recentTools: [],
+      steers: [],
+    }],
+  };
+
+  assert.doesNotMatch(renderResult(inspect), /Model request failed/);
+  assert.match(renderResult(inspect, true), /Model request failed\./);
+});
+
 test("cancel renders successful and failed targets", () => {
   const cancel: SubagentToolDetails = {
     action: "cancel",
