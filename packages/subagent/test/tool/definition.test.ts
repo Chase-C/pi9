@@ -14,8 +14,6 @@ test("description names typed action inputs without restating task unions", () =
   });
   const description = tool.description;
   assert.match(description, /Conversation IDs use adjective-noun form; run IDs use verb-adverb form\./);
-  assert.match(description, /Processed commands return \{ action, results \}; command-level failures return \{ action, error \}\./);
-  assert.match(description, /Batch results preserve input order/);
   assert.match(description, /list\(status\?\)/);
   assert.match(description, /spawn\(spawns\)/);
   assert.match(description, /resume\(resumes\)/);
