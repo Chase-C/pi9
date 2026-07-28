@@ -376,6 +376,100 @@ test("spawn execution is independent of caller cancellation", async () => {
   });
 });
 
+test("steering targets an exact running run without creating history", async () => {
+  let finish!: () => void;
+  const prompts: string[] = [];
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession({
+      ...session(),
+      steer(prompt: string) { prompts.push(prompt); },
+    });
+    await new Promise<void>(done => { finish = done; });
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 1, controlled);
+  const batch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work" }]);
+  const started = batch.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  await expect(manager.steerRun(started.runId, "focus on tests")).resolves.toEqual({
+    conversationId: started.conversationId,
+    runId: started.runId,
+  });
+  expect(prompts).toEqual(["focus on tests"]);
+  expect(manager.conversation(started.conversationId).runs).toHaveLength(1);
+
+  finish();
+  await batch.completion;
+});
+
+test("steering rejects queued, terminal, and SDK-rejected targets", async () => {
+  let finishFirst!: () => void;
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession({
+      ...session(),
+      steer() { throw new Error("queue rejected"); },
+    });
+    if (attempt.prompt === "first") await new Promise<void>(done => { finishFirst = done; });
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 1, controlled);
+  const first = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "first" }]);
+  const second = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "second" }]);
+  const firstRun = first.starts[0] as any;
+  const secondRun = second.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  await expect(manager.steerRun(secondRun.runId, "queued")).rejects.toThrow("queued");
+  await expect(manager.steerRun(firstRun.runId, "running")).rejects.toThrow("queue rejected");
+  finishFirst();
+  await Promise.all([first.completion, second.completion]);
+  await expect(manager.steerRun(firstRun.runId, "late")).rejects.toThrow("completed");
+});
+
+test("inspection is ordered and leaves observation state unchanged", async () => {
+  const manager = new SubagentRuntime(registry, 1, runner);
+  const batch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "done" }]);
+  await batch.completion;
+  const started = batch.starts[0] as any;
+  const before = manager.runSnapshot(started.runId);
+
+  const inspected = manager.inspectRuns([started.runId, started.runId]);
+
+  expect(inspected.map(item => item.snapshot.runId)).toEqual([started.runId, started.runId]);
+  expect(manager.runSnapshot(started.runId)).toMatchObject({
+    observerCount: before.observerCount,
+    acknowledged: before.acknowledged,
+  });
+});
+
+test("nested callers may inspect and steer descendants only", async () => {
+  const releases = new Map<string, () => void>();
+  const messages: string[] = [];
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession({ ...session(), steer(prompt: string) { messages.push(prompt); } });
+    await new Promise<void>(done => releases.set(attempt.prompt, done));
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 2, controlled);
+  const ownerBatch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }]);
+  const owner = ownerBatch.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+  const childBatch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }], parent(owner.conversationId, owner.runId));
+  const child = childBatch.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+  const caller = { conversationId: owner.conversationId, runId: owner.runId };
+
+  expect(manager.inspectRuns([child.runId], caller)[0].snapshot.runId).toBe(child.runId);
+  await expect(manager.steerRun(child.runId, "redirect", caller)).resolves.toMatchObject({ runId: child.runId });
+  expect(messages).toEqual(["redirect"]);
+  expect(() => manager.inspectRuns([owner.runId], caller)).toThrow("not a descendant");
+  await expect(manager.steerRun(owner.runId, "self", caller)).rejects.toThrow("not a descendant");
+
+  releases.get("child")!(); releases.get("owner")!();
+  await Promise.all([childBatch.completion, ownerBatch.completion]);
+});
+
 test("nested joins validate descendants and preserve ordered attempts without target output", async () => {
   const manager = new SubagentRuntime(registry, 4, runner);
   const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);

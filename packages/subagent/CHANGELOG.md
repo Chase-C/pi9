@@ -4,6 +4,15 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Rename the `run` action to `dispatch` without a compatibility alias. Dispatch tasks now use exactly one of `agent` (spawn), `conversationId` (resume), or `runId` (steer).
+
+### Added
+
+- Add exact-run steering through `{ runId, prompt }` dispatch tasks, including ordered batching and recursive descendant authorization.
+- Add pure `inspect(runIds)` snapshots with bounded partial-message and recent-tool activity; inspection does not expose terminal output or acknowledge completion.
+
 ## [0.7.4] - 2026-07-26
 
 ### Added

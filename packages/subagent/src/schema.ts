@@ -12,15 +12,16 @@ const NonBlankString = (description: string) =>
 export const TaskSchema = Type.Object({
   agent: Type.Optional(Type.String({ description: "Agent definition to `Spawn`." })),
   conversationId: Type.Optional(Type.String({ description: "Conversation to `Resume`." })),
-  prompt: NonBlankString("The subagent's complete instructions."),
+  runId: Type.Optional(Type.String({ description: "Running subagent to `Steer`." })),
+  prompt: NonBlankString("Instructions to send to the subagent."),
   label: Type.Optional(NonBlankString("3–5 plain words describing the task, for display; not an identifier.")),
   skills: Type.Optional(Type.Array(Type.String(), { description: "Skills override." })),
   model: Type.Optional(Type.String({ description: "Model override." })),
-  thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
+  thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS, { description: "Thinking override." })),
   cwd: Type.Optional(Type.String({ description: "Working directory override." })),
 }, { additionalProperties: false });
 
-export const SUBAGENT_ACTIONS = ["agents", "list", "run", "join", "remove"] as const;
+export const SUBAGENT_ACTIONS = ["agents", "list", "dispatch", "inspect", "join", "remove"] as const;
 export const RUN_STATUSES = [
   "queued", "running", "completed", "error", "aborted", "interrupted", "skipped",
 ] as const;
@@ -57,13 +58,21 @@ export type ResumeRequest = {
   prompt: string;
 };
 
-export type TaskRequest = SpawnRequest | ResumeRequest;
+export type SteerRequest = {
+  kind: "steer";
+  runId: RunId;
+  prompt: string;
+};
+
+export type TaskRequest = SpawnRequest | ResumeRequest | SteerRequest;
+export type DispatchTaskKind = TaskRequest["kind"];
 export type ParsedTask = TaskRequest | { error: string };
 
 export type SubagentInvocation =
   | { action: "agents" }
   | { action: "list"; status?: RunStatus[] }
-  | { action: "run"; tasks: ParsedTask[] }
+  | { action: "dispatch"; tasks: ParsedTask[] }
+  | { action: "inspect"; runIds: RunId[] }
   | { action: "join"; runIds: RunId[] }
   | { action: "remove"; conversationIds: ConversationId[] };
 
@@ -85,7 +94,8 @@ export interface ParseSubagentInvocationOptions {
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
   list: ["action", "status"],
-  run: ["action", "tasks"],
+  dispatch: ["action", "tasks"],
+  inspect: ["action", "runIds"],
   join: ["action", "runIds"],
   remove: ["action", "conversationIds"],
 };
@@ -101,14 +111,14 @@ export function parseSubagentInvocation(
 
   if (!action) {
     return {
-      error: 'Provide an action: "agents", "list", "run", "join", or "remove".',
+      error: 'Provide an action: "agents", "list", "dispatch", "inspect", "join", or "remove".',
       missingAction: true,
     };
   }
 
   if (typeof action !== "string" || !SUBAGENT_ACTIONS.includes(action as SubagentAction)) {
     return {
-      error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "join", or "remove".`,
+      error: `Unknown action: ${String(action)}. Use "agents", "list", "dispatch", "inspect", "join", or "remove".`,
     };
   }
 
@@ -144,7 +154,7 @@ export function parseSubagentInvocation(
         ...(params.status ? { status: params.status as RunStatus[] } : {}),
       };
     }
-    case "run": {
+    case "dispatch": {
       if (!Array.isArray(params.tasks) || params.tasks.length === 0) {
         return {
           error: "Provide at least one task.",
@@ -163,18 +173,13 @@ export function parseSubagentInvocation(
 
       return { action: parsedAction, tasks: params.tasks.map(parseTask) };
     }
+    case "inspect": {
+      const ids = parseIds(params.runIds, parsedAction, isRunId, isConversationId, "runId", "conversation ID");
+      return "error" in ids ? { ...ids, action: parsedAction } : { action: parsedAction, runIds: ids };
+    }
     case "join": {
-      const ids = parseIds(
-        params.runIds,
-        "join",
-        isRunId,
-        isConversationId,
-        "runId",
-        "conversation ID",
-      );
-      return "error" in ids
-        ? { ...ids, action: parsedAction }
-        : { action: parsedAction, runIds: ids };
+      const ids = parseIds(params.runIds, parsedAction, isRunId, isConversationId, "runId", "conversation ID");
+      return "error" in ids ? { ...ids, action: parsedAction } : { action: parsedAction, runIds: ids };
     }
     case "remove": {
       const ids = parseIds(
@@ -225,25 +230,46 @@ export function parseTask(raw: unknown): ParsedTask {
   const task = raw as Record<string, unknown>;
   const isSpawn = task.agent !== undefined;
   const isResume = task.conversationId !== undefined;
-  const allowed = isResume
-    ? ["conversationId", "prompt"]
-    : ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"];
+  const isSteer = task.runId !== undefined;
+  const allowed = isSteer
+    ? ["runId", "prompt"]
+    : isResume
+      ? ["conversationId", "prompt"]
+      : ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"];
   const extra = Object.keys(task).find(key => !allowed.includes(key));
 
   if (extra) {
     return {
-      error: isResume
-        ? `Task with conversationId rejects ${extra}; that field belongs to a spawn task.`
-        : `Task property ${extra} is not allowed for a spawn task.`,
+      error: isSteer
+        ? `Task with runId rejects ${extra}; that field belongs to a spawn task.`
+        : isResume
+          ? `Task with conversationId rejects ${extra}; that field belongs to a spawn task.`
+          : `Task property ${extra} is not allowed for a spawn task.`,
     };
   }
 
-  if (isSpawn === isResume) {
-    return { error: "Task must carry exactly one of agent (spawn) or conversationId (resume)." };
+  if ([isSpawn, isResume, isSteer].filter(Boolean).length !== 1) {
+    return { error: "Task must carry exactly one of agent (spawn), conversationId (resume), or runId (steer)." };
   }
 
   if (typeof task.prompt !== "string" || !task.prompt.trim()) {
     return { error: "Task prompt must be a non-empty string." };
+  }
+
+  if (isSteer) {
+    if (!isRunId(task.runId)) {
+      return {
+        error: isConversationId(task.runId)
+          ? `Task runId '${task.runId}' is invalid (a conversation ID is not accepted).`
+          : `Task received invalid runId format '${String(task.runId)}'.`,
+      };
+    }
+
+    return {
+      kind: "steer",
+      runId: task.runId,
+      prompt: task.prompt,
+    };
   }
 
   if (isResume) {
