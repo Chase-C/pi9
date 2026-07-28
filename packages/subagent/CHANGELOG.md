@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-28
+
 ### Added
 
 - Add per-run steer receipts with queued, delivered, processed, and discarded lifecycle states.
@@ -210,7 +212,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.0...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.1...HEAD
+[0.8.1]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.0...subagent-v0.8.1
 [0.8.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.4...subagent-v0.8.0
 [0.7.4]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.3...subagent-v0.7.4
 [0.7.3]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.2...subagent-v0.7.3
