@@ -27,7 +27,8 @@ export interface CompletionNotificationMessage {
 export type CompletionNotificationMessagePayload = CompletionNotificationMessage;
 
 const MAX_LISTED_COMPLETIONS = 20;
-const RESULTS_INSTRUCTION = "Call subagent join with these runIds to retrieve output.";
+const COMPLETION_GRACE_MS = 500;
+const RESULTS_INSTRUCTION = "Use `subagent join` when you need these terminal outcomes.";
 
 type EntrySurface = "notification" | "renderer";
 
@@ -56,7 +57,7 @@ export function formatCompletionNotificationMessage(
   display: SubagentDisplaySettings = DEFAULT_SUBAGENT_SETTINGS.display,
 ): string {
   const completions = details.completions;
-  const header = formatCompletionHeader(completions.length, expanded);
+  const header = formatCompletionHeader(completions.length);
   const lines = completions.map(entry => formatCompletionEntry(entry, {
     display,
     surface: "renderer",
@@ -73,7 +74,7 @@ export function formatCompletionNotificationMessage(
 function formatNotificationContent(entries: readonly CompletionNotification[], display: SubagentDisplaySettings): string {
   const visible = entries.slice(0, MAX_LISTED_COMPLETIONS);
   const overflow = entries.length - visible.length;
-  const header = formatCompletionHeader(entries.length, true);
+  const header = formatCompletionHeader(entries.length);
   const lines = visible.map(entry => formatCompletionEntry(entry, {
     display,
     surface: "notification",
@@ -96,8 +97,8 @@ function copyCompletionNotification(entry: CompletionNotification): CompletionNo
   };
 }
 
-function formatCompletionHeader(count: number, includeSinceLastNotification: boolean): string {
-  return `${count} subagent${count === 1 ? "" : "s"} finished${includeSinceLastNotification ? " since the last notification:" : ""}`;
+function formatCompletionHeader(count: number): string {
+  return `${count} subagent${count === 1 ? "" : "s"} finished:`;
 }
 
 interface CompletionEntryFormatOptions {
@@ -174,27 +175,31 @@ export interface CompletionNotifierDeps {
 }
 const schedule = (fn: () => void, ms: number) => { const handle = setTimeout(fn, ms); return () => clearTimeout(handle); };
 
-/** Delivers one notification for each unacknowledged terminal run, not each conversation. */
+/** Delivers batched notifications for terminal runs the parent has not observed or acknowledged. */
 export class CompletionNotifier {
   private ctx?: NotifierContext;
   private cancelTimer?: () => void;
+  private cancelGraceTimer?: () => void;
   private retryToolOpportunity = false;
   private readonly delivered = new Set<string>();
+  private readonly observed = new Set<string>();
+  private readonly gracePending = new Set<string>();
   private readonly claimed = new Map<string, () => void>();
   private readonly unsubscribeAgent: () => void;
 
   constructor(private readonly deps: CompletionNotifierDeps) {
     this.unsubscribeAgent = deps.manager.onConversationUpdate?.(this.onUpdate) ?? (() => {});
     deps.pi.on?.("session_start", (_e, ctx) => { this.ctx = ctx; this.arm(0); });
-    deps.pi.on?.("session_shutdown", () => { this.ctx = undefined; this.cancel(); this.clearClaims(); });
+    deps.pi.on?.("session_shutdown", () => { this.ctx = undefined; this.cancel(); this.cancelGrace(); this.clearClaims(); });
     deps.pi.on?.("agent_end", (_e, ctx) => this.opportunity(ctx));
     deps.pi.on?.("turn_end", (_e, ctx) => this.opportunity(ctx));
     deps.pi.on?.("tool_execution_start", (event, ctx) => this.onToolStart(event, ctx));
   }
-  unsubscribe(): void { this.unsubscribeAgent(); this.cancel(); this.clearClaims(); }
+  unsubscribe(): void { this.unsubscribeAgent(); this.cancel(); this.cancelGrace(); this.clearClaims(); }
 
-  /** Completes the claim begun by tool_execution_start, including rejected or cancelled joins. */
-  releaseJoinClaims(runIds: readonly string[]): void {
+  /** Completes claims begun by tool_execution_start and records terminal outcomes shown by the tool. */
+  releaseRunClaims(runIds: readonly string[], observedRunIds: readonly string[] = []): void {
+    for (const id of observedRunIds) this.observed.add(id);
     for (const id of runIds) {
       try {
         if (this.deps.manager.runSnapshot(id as RunId).acknowledged) this.delivered.add(id);
@@ -204,18 +209,25 @@ export class CompletionNotifier {
     this.arm(0);
   }
 
-  private onUpdate = (_agent: Conversation, kind: ConversationUpdateKind): void => {
+  private onUpdate = (agent: Conversation, kind: ConversationUpdateKind): void => {
+    if (kind === "status") {
+      const run = agent.snapshot().runs.at(-1);
+      if (run?.status.kind === "done" && !this.delivered.has(run.runId) && !this.observed.has(run.runId)) {
+        this.gracePending.add(run.runId);
+        this.armGrace();
+      }
+    }
     if (kind === "observer") {
       const active = new Map<string, number>(this.catalog().map(value => [value.run.runId, value.run.observerCount]));
       for (const [id] of this.claimed) if (active.get(id) === 0) this.releaseClaim(id);
     }
-    // A grace turn lets a join tool start claim a run before completion delivery.
+    // A short grace window lets inspect, cancel, or join claim a run before completion delivery.
     if (kind === "status" || kind === "observer" || kind === "acknowledgement") this.arm(0);
   };
   private opportunity(ctx?: NotifierContext): void { if (ctx) this.ctx = ctx; this.flush(); }
   private onToolStart(event: unknown, ctx?: NotifierContext): void {
     if (ctx) this.ctx = ctx;
-    const ids = joinRunIds(event);
+    const ids = claimedRunIds(event);
     for (const id of ids) this.claim(id);
     // Defer delivery until synchronous tool preflight finishes so later joins can claim runs.
     // list is deliberately not a delivery opportunity; a join starts by claiming.
@@ -233,6 +245,16 @@ export class CompletionNotifier {
     }, delay);
   }
   private cancel(): void { this.cancelTimer?.(); this.cancelTimer = undefined; this.retryToolOpportunity = false; }
+  private armGrace(): void {
+    this.cancelGrace();
+    const scheduler = this.deps.scheduleRetry ?? schedule;
+    this.cancelGraceTimer = scheduler(() => {
+      this.cancelGraceTimer = undefined;
+      this.gracePending.clear();
+      this.arm(0);
+    }, COMPLETION_GRACE_MS);
+  }
+  private cancelGrace(): void { this.cancelGraceTimer?.(); this.cancelGraceTimer = undefined; }
   private claim(id: string): void {
     this.releaseClaim(id);
     const scheduler = this.deps.scheduleRetry ?? schedule;
@@ -247,7 +269,7 @@ export class CompletionNotifier {
   private flush(toolOpportunity = false): void {
     const mode = this.deps.getMode();
     if (mode === "none") { this.cancel(); return; }
-    const eligible = this.catalog().filter(({ run }) => !this.delivered.has(run.runId) && !this.claimed.has(run.runId) && !run.acknowledged && run.observerCount === 0);
+    const eligible = this.catalog().filter(({ run }) => !this.delivered.has(run.runId) && !this.observed.has(run.runId) && !this.gracePending.has(run.runId) && !this.claimed.has(run.runId) && !run.acknowledged && run.observerCount === 0);
     if (!eligible.length) return;
     if (!this.ctx) return;
     if (mode === "auto" && !this.ctx.isIdle()) { this.arm(500); return; }
@@ -289,9 +311,11 @@ function toolAction(event: unknown): unknown {
   const value = event as { toolName?: unknown; args?: { action?: unknown } };
   return value.toolName === "subagent" ? value.args?.action : undefined;
 }
-function joinRunIds(event: unknown): Set<string> {
+function claimedRunIds(event: unknown): Set<string> {
   if (!event || typeof event !== "object") return new Set();
   const value = event as { toolName?: unknown; args?: { action?: unknown; runIds?: unknown } };
-  if (value.toolName !== "subagent" || value.args?.action !== "join" || !Array.isArray(value.args.runIds)) return new Set();
-  return new Set(value.args.runIds.filter((id): id is string => typeof id === "string"));
+  const args = value.args;
+  const action = args?.action;
+  if (value.toolName !== "subagent" || (action !== "inspect" && action !== "cancel" && action !== "join") || !Array.isArray(args?.runIds)) return new Set();
+  return new Set(args.runIds.filter((id): id is string => typeof id === "string"));
 }

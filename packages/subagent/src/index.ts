@@ -62,7 +62,7 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   pi.registerTool(defineSubagentTool({
     runtime,
     agentRegistry,
-    releaseJoinClaims: runIds => completionNotifier.releaseJoinClaims(runIds),
+    releaseRunClaims: (runIds, observedRunIds) => completionNotifier.releaseRunClaims(runIds, observedRunIds),
     prepareInvocation: async (ctx: ExtensionContext) => {
       const settings = await timingAsync(
         "tool.prepareRuntime",

@@ -112,7 +112,7 @@ Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. 
 
 ## Notifications, UI, and lifecycle
 
-Completion notifications concern settled runs that have not yet been acknowledged. Their status-neutral header says subagents “finished,” while each entry retains its exact terminal status. Listing inventory and inspecting progress do not acknowledge them. Joining a run acknowledges that exact run; cleanup also clears notifications associated with the removed conversations. Notification delivery waits until synchronous tool preflight settles so a join later in the same tool batch can claim its runs before any redundant completion message is sent.
+Completion notifications alert the parent to terminal outcomes it has not otherwise observed. Their status-neutral header says subagents “finished,” while each entry retains its exact terminal status. A terminal `inspect` or successful `cancel` suppresses a later notification for that run without retrieving or acknowledging its outcome; inspecting an active run does not suppress notification if it settles later. `list` remains pure and does not suppress notifications. Joining a run retrieves and acknowledges that exact outcome, while cleanup clears notifications associated with removed conversations. Delivery waits through a short grace window and active inspect, cancel, or join tool claims so immediate lifecycle handling can finish before notifications are coalesced and sent.
 
 `/subagents` opens the conversation, agent, and settings UI. It provides live status and progress, cancellation of queued or running work, access to completed output, follow-up prompts when `canResume` is true, and permanent terminal-conversation cleanup.
 

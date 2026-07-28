@@ -592,8 +592,8 @@ export interface SubagentToolDeps {
    * a no-op here because the parent's invocation already performed all of those steps.
    */
   prepareInvocation: (ctx: ExtensionContext) => Promise<SubagentSettings>;
-  /** Releases notifier claims made by tool_execution_start after every join exit path. */
-  releaseJoinClaims?: (runIds: readonly string[]) => void;
+  /** Releases notifier claims and records terminal outcomes returned by inspect or cancel. */
+  releaseRunClaims?: (runIds: readonly string[], observedRunIds: readonly string[]) => void;
   /** Set on child factories; links spawned conversations and suspends its queue slot while joining. */
   parent?: { conversationId: ConversationId; runId: () => RunId };
 }
@@ -640,9 +640,8 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     },
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const requestedJoinIds = params?.action === "join" && Array.isArray(params.runIds)
-        ? params.runIds.filter((id): id is string => typeof id === "string")
-        : [];
+      const claimedRunIds = requestedClaimRunIds(params);
+      let observedRunIds: readonly string[] = [];
       try {
         const settings = await prepareInvocation(ctx);
 
@@ -655,15 +654,41 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
           case "spawn": return spawnAction(actionDeps, invocation, ctx);
           case "resume": return resumeAction(actionDeps, invocation, ctx);
           case "steer": return steerAction(actionDeps, invocation);
-          case "cancel": return cancelAction(actionDeps, invocation);
-          case "inspect": return inspectAction(actionDeps, invocation);
+          case "cancel": {
+            const result = await cancelAction(actionDeps, invocation);
+            observedRunIds = terminalRunIdsFromResult(result);
+            return result;
+          }
+          case "inspect": {
+            const result = inspectAction(actionDeps, invocation);
+            observedRunIds = terminalRunIdsFromResult(result);
+            return result;
+          }
           case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
           case "remove": return removeAction(actionDeps, invocation);
         }
       } finally {
-        if (requestedJoinIds.length) deps.releaseJoinClaims?.(requestedJoinIds);
+        if (claimedRunIds.length) deps.releaseRunClaims?.(claimedRunIds, observedRunIds);
       }
     },
+  });
+}
+
+function requestedClaimRunIds(params: unknown): string[] {
+  if (!params || typeof params !== "object") return [];
+  const value = params as { action?: unknown; runIds?: unknown };
+  if ((value.action !== "inspect" && value.action !== "cancel" && value.action !== "join") || !Array.isArray(value.runIds)) return [];
+  return value.runIds.filter((id): id is string => typeof id === "string");
+}
+
+function terminalRunIdsFromResult(result: ActionResult): string[] {
+  const details = result.details as { action?: unknown; runs?: unknown };
+  if ((details.action !== "inspect" && details.action !== "cancel") || !Array.isArray(details.runs)) return [];
+  return details.runs.flatMap(value => {
+    if (!value || typeof value !== "object" || "error" in value) return [];
+    const run = value as { runId?: unknown; status?: unknown };
+    if (typeof run.runId !== "string" || run.status === "queued" || run.status === "running") return [];
+    return [run.runId];
   });
 }
 
