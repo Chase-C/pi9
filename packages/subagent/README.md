@@ -96,7 +96,7 @@ Only descendants named in an explicit nested join block that caller. Unjoined de
 
 ![A technical-lead subagent joining two nested investigations with live tool activity](media/recursive-delegation.png)
 
-Cancellation settles a running run as `aborted` and preserves its conversation and exact run record, so the caller can inspect or join the outcome. It does not make the conversation resumable. Removal accepts only terminal conversations and permanently deletes the conversation, child session state, and every associated run record; removed IDs can no longer be resumed, inspected, joined, steered, or cancelled.
+Cancellation settles a running run as `aborted` and preserves its conversation and exact run record, so the caller can inspect or join the outcome. It does not make the conversation resumable. Removal accepts only terminal conversations and permanently deletes the conversation, child session state, and every associated run record; removed IDs can no longer be resumed, inspected, joined, steered, or cancelled. Surviving descendants are operationally reparented to the nearest retained ancestor so recursive ownership remains intact, while their immutable `parent` snapshots continue to identify the run that originally spawned them.
 
 ## Capacity and concurrency
 

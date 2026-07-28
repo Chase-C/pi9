@@ -195,7 +195,13 @@ export interface SteerResult { readonly conversationId: ConversationId; readonly
 export interface InspectedRun { readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }
 
 type JoinStatus = ConversationSnapshot["runs"][number]["status"];
-type RunRecord = { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly agent: Conversation };
+type RunRecord = {
+  readonly runId: RunId;
+  readonly conversationId: ConversationId;
+  /** Current ownership parent; contracted across removed conversations. */
+  readonly parentRunId?: RunId;
+  readonly agent: Conversation;
+};
 interface BoundRun { readonly runId: RunId; snapshot(): { readonly status: JoinStatus }; acknowledge(): void; release(): void }
 interface BoundRecord { readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly binding: BoundRun }
 
@@ -418,13 +424,26 @@ export class SubagentRuntime {
         });
         continue;
       }
+      this.contractOwnership(agent);
       this.conversations.delete(agent.conversationId);
       for (const run of agent.runHistory) this.runs.delete(run.runId);
       removed.push(agent.conversationId);
     }
     return { removed: removed.length, conversationIds: removed, errors };
   }
+  private contractOwnership(agent: Conversation): void {
+    const removedRunIds = new Set(agent.runHistory.map(run => run.runId));
+    const replacementParentRunId = this.runs.get(agent.runHistory[0].runId)?.parentRunId;
+    for (const [runId, record] of this.runs) {
+      if (!record.parentRunId || !removedRunIds.has(record.parentRunId) || removedRunIds.has(runId)) continue;
+      const { parentRunId: _, ...child } = record;
+      this.runs.set(runId, replacementParentRunId ? { ...child, parentRunId: replacementParentRunId } : child);
+    }
+  }
   private requireConversation(id: string): Conversation { const found = this.conversations.get(id as ConversationId); if (!found) throw new Error(`Unknown conversation: ${id}.`); return found; }
   private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Conversation capacity (${this.maxConversations}) reached. Remove terminal conversations${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
-  private updated(agent: Conversation, kind: ConversationUpdateKind): void { for (const listener of this.listeners) listener(agent, kind); }
+  private updated(agent: Conversation, kind: ConversationUpdateKind): void {
+    if (this.conversations.get(agent.conversationId) !== agent) return;
+    for (const listener of this.listeners) listener(agent, kind);
+  }
 }
