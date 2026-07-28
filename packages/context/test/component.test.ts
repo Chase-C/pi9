@@ -205,8 +205,9 @@ describe("context report formatting", () => {
       .filter((line) => /^(?:<[^>]+>[●○◉]<\/[^>]+>(?: |$))+$/.test(line))
       .join("");
 
-    expect(graph.match(/<warning>●<\/warning>/g)).toHaveLength(28);
-    expect(text).toContain("<warning>●</warning> Compaction reserve: <accent>1K</accent><text> tokens</text><muted> · 20.0%</muted>");
+    expect(graph.match(/<warning>●<\/warning>/g)).toHaveLength(14);
+    expect(graph.match(/<dim>●<\/dim>/g)).toHaveLength(14);
+    expect(text).toContain("<dim>●</dim> Compaction reserve: <accent>1K</accent><text> tokens</text><muted> · 20.0%</muted>");
   });
 
   it("shows how much reserve remains when usage crosses the compaction threshold", () => {
