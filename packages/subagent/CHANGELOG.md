@@ -15,6 +15,7 @@ This changelog starts with version `v0.2.1`.
 
 ### Breaking
 
+- Wrap every processed tool result in `{ action, ok, data }` on success or `{ action, ok, error }` on global failure; action-specific payloads now live under `data`.
 - Replace `dispatch(tasks)` with `run(spawns?, resumes?)` and `steer(messages)`. Steering messages use `{ runId, message }`; there is no compatibility alias.
 - Split the shared task schema into distinct spawn, resume, and steer item schemas and remove redundant field descriptions.
 - Return `run` outcomes as matching `{ spawns, resumes }` receipt arrays without `inputIndex`; include each task's optional label when known.

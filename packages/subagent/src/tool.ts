@@ -29,6 +29,22 @@ export interface ActionResult {
   isError?: boolean;
 }
 
+export interface SubagentSuccessEnvelope<A extends SubagentAction = SubagentAction, D = unknown> {
+  action: A;
+  ok: true;
+  data: D;
+}
+
+export interface SubagentErrorEnvelope {
+  action: SubagentAction | "unknown";
+  ok: false;
+  error: string;
+}
+
+export type SubagentResponseEnvelope<A extends SubagentAction = SubagentAction, D = unknown> =
+  | SubagentSuccessEnvelope<A, D>
+  | SubagentErrorEnvelope;
+
 type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { action: A }>;
 type OrderedDispatchOutcome =
   | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId; readonly steer?: SteerReceipt }
@@ -45,9 +61,22 @@ function jsonResult(json: unknown, details: SubagentToolDetails): ActionResult {
   };
 }
 
+function successEnvelope<A extends SubagentAction, D>(action: A, data: D): SubagentSuccessEnvelope<A, D> {
+  return { action, ok: true, data };
+}
+
+function successResult<A extends SubagentAction, D>(action: A, data: D, details: SubagentToolDetails): ActionResult {
+  return jsonResult(successEnvelope(action, data), details);
+}
+
 export function errorResult(message: string, requestedAction?: SubagentAction): ActionResult {
+  const envelope: SubagentErrorEnvelope = {
+    action: requestedAction ?? "unknown",
+    ok: false,
+    error: message,
+  };
   return {
-    content: [{ type: "text", text: message }],
+    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
     details: { action: "error", ...(requestedAction ? { requestedAction } : {}), message },
     isError: true,
   };
@@ -68,7 +97,7 @@ export function agentsAction(
   _invocation: InvocationFor<"agents">,
 ): ActionResult {
   const agents = listAgentDefinitions(deps.agentRegistry);
-  return jsonResult({ agents }, { action: "agents", agents });
+  return successResult("agents", { agents }, { action: "agents", agents });
 }
 
 export function listAction(
@@ -89,7 +118,7 @@ export function listAction(
   const filtered = invocation.status
     ? runs.filter(run => invocation.status!.includes(run.status))
     : runs;
-  return jsonResult(filtered, { action: "list", runs: filtered });
+  return successResult("list", { runs: filtered }, { action: "list", runs: filtered });
 }
 
 export async function runAction(
@@ -115,7 +144,7 @@ export async function runAction(
 
   const conversations = conversationSnapshots(deps.runtime);
   const receipts = outcomes.map((outcome, index) => projectRunReceipt(tasks[index], outcome, conversations));
-  return jsonResult({
+  return successResult("run", {
     spawns: receipts.slice(0, invocation.spawns.length),
     resumes: receipts.slice(invocation.spawns.length),
   }, {
@@ -147,7 +176,7 @@ export async function steerAction(
     }
   }
 
-  return jsonResult(outcomes, {
+  return successResult("steer", { messages: outcomes }, {
     action: "steer",
     tasks: renderDispatchItems(invocation.messages, outcomes, conversationSnapshots(deps.runtime)),
   });
@@ -174,7 +203,7 @@ export async function cancelAction(
     }
   }
 
-  return jsonResult(runs, { action: "cancel", runs });
+  return successResult("cancel", { runs }, { action: "cancel", runs });
 }
 
 export function inspectAction(
@@ -193,7 +222,7 @@ export function inspectAction(
       return { inputIndex, runId: target, error: error instanceof Error ? error.message : String(error) };
     }
   });
-  return jsonResult(runs, { action: "inspect", runs });
+  return successResult("inspect", { runs }, { action: "inspect", runs });
 }
 
 export async function joinAction(
@@ -219,7 +248,7 @@ export async function joinAction(
 
   if (validRunIds.length === 0) {
     const result = targets as JoinOutput[];
-    return jsonResult(result, { action: "join", runs: renderJoinedRuns(result, deps.runtime, true) });
+    return successResult("join", { runs: result }, { action: "join", runs: renderJoinedRuns(result, deps.runtime, true) });
   }
 
   let binding: JoinBinding | NestedJoinBinding;
@@ -228,7 +257,7 @@ export async function joinAction(
       ? deps.runtime.bindNestedJoin(owner, validRunIds, toolCallId)
       : deps.runtime.bindJoin(validRunIds);
   } catch (error) {
-    return errorResult(error instanceof Error ? error.message : String(error));
+    return errorResult(error instanceof Error ? error.message : String(error), "join");
   }
 
   const output = (): JoinOutput[] => {
@@ -243,7 +272,7 @@ export async function joinAction(
     runs: renderJoinedRuns(output(), deps.runtime, final),
   });
   const emit = () => onUpdate?.({
-    content: [{ type: "text", text: JSON.stringify(output()) }],
+    content: [{ type: "text", text: JSON.stringify(successEnvelope("join", { runs: output() })) }],
     details: renderDetails(),
   });
   const unsubscribe = deps.runtime.onConversationUpdate(emit);
@@ -267,11 +296,11 @@ export async function joinAction(
       : wait());
     binding.acknowledge();
     const result = output();
-    return jsonResult(result, renderDetails(true));
+    return successResult("join", { runs: result }, renderDetails(true));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (owner) (binding as NestedJoinBinding).interrupt(message);
-    return errorResult(message);
+    return errorResult(message, "join");
   } finally {
     unsubscribe();
     binding.release();
@@ -300,7 +329,11 @@ export async function removeAction(
   invocation: InvocationFor<"remove">,
 ): Promise<ActionResult> {
   const result = await deps.runtime.removeConversations(invocation.conversationIds);
-  return jsonResult(result, { action: "remove", ...result });
+  return successResult("remove", {
+    removed: result.removed,
+    conversations: result.conversationIds,
+    errors: result.errors,
+  }, { action: "remove", ...result });
 }
 
 function projectRunReceipt(
@@ -505,6 +538,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     description: [
       "Delegate work through context-isolated subagent conversations and runs. Subagents share the working filesystem.",
       "Conversation IDs use adjective-noun form; run IDs use verb-adverb form.",
+      "Results use { action, ok, data } on success or { action, ok, error } on global failure.",
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(status?): List runs, optionally filtered by status.",

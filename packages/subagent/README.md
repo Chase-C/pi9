@@ -55,7 +55,7 @@ The body becomes the child system prompt. `spawns` entries require `agent` and `
 | --- | --- |
 | `agents` | Discover agent definitions and their resolved defaults. |
 | `list` | Return a lightweight inventory of conversations and runs without run output. It is pure: it acknowledges nothing and changes no lifecycle state. |
-| `run` | Start `spawns`, `resumes`, or both and return matching `spawns` and `resumes` receipt arrays. Both task types create asynchronous runs. |
+| `run` | Start `spawns`, `resumes`, or both and return matching receipt arrays under `data.spawns` and `data.resumes`. Both task types create asynchronous runs. |
 | `steer` | Send `messages` to existing running runs and return ordered lifecycle receipts after Pi accepts each message. |
 | `cancel` | Abort exact running runs while retaining their conversations and aborted outcomes for `inspect` and `join`. Malformed, unknown, terminal, queued, or unauthorized targets become ordered per-target errors. |
 | `inspect` | Return bounded status, running phase, current message, recent tool activity, steer receipts, and terminal error diagnostics for exact runs without waiting or acknowledging them. Invalid targets become ordered per-target errors. Terminal output is omitted. |
@@ -66,7 +66,11 @@ Parallel runs stream their current status and recent tool activity independently
 
 ![Two parallel subagent runs with one completed and one still exploring the codebase](media/live-parallel-runs.png)
 
-Each run task, steer message, or cancel target is handled independently after the tool call passes SDK schema validation. Item-level failures do not prevent valid siblings from proceeding. `run` returns `{ spawns, resumes }`, with each receipt in the same position as its input task; receipts include the task's optional label when known. Steer failures return an ordered `{ ok: false, inputIndex, error }` outcome, while cancel failures return inline `{ runId, error }` entries. Invalid outer invocations—including a missing or unknown action, absent or empty inputs, and batch-limit violations—remain global errors. Provider-level schema violations may reject the tool call before execution.
+Every processed invocation returns a common JSON envelope: `{ action, ok: true, data }` on success or `{ action, ok: false, error }` for a global failure. A successful envelope means the action was processed; its `data` may still contain ordered item-level failures. Provider-level schema violations can reject a tool call before execution and settings-preparation failures can prevent an envelope from being produced.
+
+Success data is action-specific: `agents` returns `{ agents }`; `run` returns `{ spawns, resumes }`; `steer` returns `{ messages }`; `list`, `cancel`, `inspect`, and `join` return `{ runs }`; and `remove` returns `{ removed, conversations, errors }`. Streaming `join` updates use the same envelope as its final result.
+
+Each run task, steer message, or cancel target is handled independently after the tool call passes SDK schema validation. Item-level failures do not prevent valid siblings from proceeding. `run` places `{ spawns, resumes }` inside `data`, with each receipt in the same position as its input task; receipts include the task's optional label when known. Steer failures return an ordered `{ ok: false, inputIndex, error }` outcome, while cancel failures return inline `{ runId, error }` entries. Invalid outer invocations—including a missing or unknown action, absent or empty inputs, and batch-limit violations—return global error envelopes.
 
 Successful steer outcomes include a `steer` receipt with a per-run numeric ID, state, and timestamps. Receipt states advance from `queued` when Pi accepts the message, to `delivered` when the steering user message enters the child turn, and to `processed` when the assistant begins responding with that message in context. `processed` does not mean the requested work succeeded. A run that terminates before a queued or delivered steer is processed marks that receipt `discarded`.
 
@@ -74,13 +78,17 @@ For example, a mixed `run` call returns spawn and resume receipts in arrays matc
 
 ```json
 {
-  "spawns": [
-    { "ok": true, "label": "auth map", "conversationId": "quiet-otter", "runId": "search-boldly" },
-    { "ok": false, "label": "risk review", "error": "Unknown agent: missing." }
-  ],
-  "resumes": [
-    { "ok": true, "label": "follow-up", "conversationId": "calm-fox", "runId": "inspect-carefully" }
-  ]
+  "action": "run",
+  "ok": true,
+  "data": {
+    "spawns": [
+      { "ok": true, "label": "auth map", "conversationId": "quiet-otter", "runId": "search-boldly" },
+      { "ok": false, "label": "risk review", "error": "Unknown agent: missing." }
+    ],
+    "resumes": [
+      { "ok": true, "label": "follow-up", "conversationId": "calm-fox", "runId": "inspect-carefully" }
+    ]
+  }
 }
 ```
 

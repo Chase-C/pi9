@@ -14,6 +14,7 @@ test("description names typed action inputs without restating task unions", () =
   });
   const description = tool.description;
   assert.match(description, /Conversation IDs use adjective-noun form; run IDs use verb-adverb form\./);
+  assert.match(description, /Results use \{ action, ok, data \} on success or \{ action, ok, error \} on global failure\./);
   assert.match(description, /list\(status\?\)/);
   assert.match(description, /run\(spawns\?, resumes\?\)/);
   assert.match(description, /steer\(messages\)/);
@@ -68,9 +69,32 @@ test("tool prepares settings, applies task limits, and renders simple typed cont
   let prepared = 0;
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => { prepared++; return settings; } });
   const result = await tool.execute("call", { action: "run", spawns: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
-  assert.equal(prepared, 1); assert.equal(result.isError, true); assert.match(result.content[0].text, /Too many tasks/);
+  assert.equal(prepared, 1);
+  assert.equal(result.isError, true);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    action: "run",
+    ok: false,
+    error: "Too many tasks (2). Max is 1.\n\nAvailable agents:\nhelper",
+  });
   assert.match(tool.renderResult(result, {}, {}).render(120).join("\n"), /Too many tasks/);
   assert.match(tool.renderCall({ action: "run", spawns: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
+});
+
+test("unknown actions return a structured global error envelope", async () => {
+  const tool: any = defineSubagentTool({
+    runtime: {} as any,
+    agentRegistry: registry,
+    prepareInvocation: async () => settings,
+  });
+
+  const result = await tool.execute("call", { action: "bogus" }, undefined, undefined, {});
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    action: "unknown",
+    ok: false,
+    error: 'Unknown action: bogus. Use "agents", "list", "run", "steer", "cancel", "inspect", "join", or "remove".',
+  });
 });
 
 test("mixed join target errors still release every valid requested claim", async () => {
@@ -78,7 +102,10 @@ test("mixed join target errors still release every valid requested claim", async
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings, releaseJoinClaims: ids => { released = ids; } });
   const result = await tool.execute("call", { action: "join", runIds: ["valid-run", 42] }, undefined, undefined, {});
   assert.equal(result.isError, false);
-  assert.deepEqual(JSON.parse(result.content[0].text).map((entry: any) => entry.runId), ["valid-run", "42"]);
+  const response = JSON.parse(result.content[0].text);
+  assert.equal(response.action, "join");
+  assert.equal(response.ok, true);
+  assert.deepEqual(response.data.runs.map((entry: any) => entry.runId), ["valid-run", "42"]);
   assert.deepEqual(released, ["valid-run"]);
 });
 
