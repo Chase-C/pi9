@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-28
+
 ### Changed
 
 - Show elapsed time, turns, and token usage for top-level and recursive runs in `join` tool rendering, using the same formatting as the conversation overlay.
@@ -216,7 +218,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.1...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.2...HEAD
+[0.8.2]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.1...subagent-v0.8.2
 [0.8.1]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.0...subagent-v0.8.1
 [0.8.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.4...subagent-v0.8.0
 [0.7.4]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.3...subagent-v0.7.4
