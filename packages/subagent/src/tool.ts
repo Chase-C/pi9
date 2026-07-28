@@ -4,7 +4,7 @@ import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
 import { runElapsedMs } from "./run-format.js";
 import type { JoinBinding, NestedJoinBinding, SubagentRuntime } from "./runtime.js";
-import { parseSubagentInvocation, SubagentParams, type RunStatus, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type TaskRequest } from "./schema.js";
+import { parseSubagentInvocation, SubagentParams, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
   renderSubagentCall,
@@ -89,39 +89,59 @@ export function listAction(
   return jsonResult(filtered, { action: "list", runs: filtered });
 }
 
-export async function dispatchAction(
+export async function runAction(
   deps: ActionDeps,
-  invocation: InvocationFor<"dispatch">,
+  invocation: InvocationFor<"run">,
   ctx: ExtensionContext,
+): Promise<ActionResult> {
+  const owner = deps.parent
+    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
+    : undefined;
+  const tasks = [...invocation.spawnTasks, ...invocation.resumeTasks];
+  const outcomes: OrderedDispatchOutcome[] = [];
+
+  for (let inputIndex = 0; inputIndex < tasks.length; inputIndex++) {
+    const task = tasks[inputIndex];
+    if ("error" in task) {
+      outcomes.push({ ok: false, inputIndex, error: task.error });
+      continue;
+    }
+    const handle = deps.runtime.startRun(ctx, [task], owner ? { parent: owner } : {});
+    outcomes.push({ ...handle.starts[0], inputIndex });
+  }
+
+  return jsonResult(outcomes, {
+    action: "run",
+    tasks: renderDispatchItems(tasks, outcomes, conversationSnapshots(deps.runtime)),
+  });
+}
+
+export async function steerAction(
+  deps: ActionDeps,
+  invocation: InvocationFor<"steer">,
 ): Promise<ActionResult> {
   const owner = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
   const outcomes: OrderedDispatchOutcome[] = [];
 
-  for (let inputIndex = 0; inputIndex < invocation.tasks.length; inputIndex++) {
-    const task = invocation.tasks[inputIndex];
-    if ("error" in task) {
-      outcomes.push({ ok: false, inputIndex, error: task.error });
+  for (let inputIndex = 0; inputIndex < invocation.steerMessages.length; inputIndex++) {
+    const steer = invocation.steerMessages[inputIndex];
+    if ("error" in steer) {
+      outcomes.push({ ok: false, inputIndex, error: steer.error });
       continue;
     }
-    if (task.kind === "steer") {
-      try {
-        const result = await deps.runtime.steerRun(task.runId, task.prompt, owner);
-        outcomes.push({ ok: true, inputIndex, ...result });
-      } catch (error) {
-        outcomes.push({ ok: false, inputIndex, error: error instanceof Error ? error.message : String(error) });
-      }
-      continue;
+    try {
+      const result = await deps.runtime.steerRun(steer.runId, steer.message, owner);
+      outcomes.push({ ok: true, inputIndex, ...result });
+    } catch (error) {
+      outcomes.push({ ok: false, inputIndex, error: error instanceof Error ? error.message : String(error) });
     }
-    const handle = deps.runtime.startRun(ctx, [task], owner ? { parent: owner } : {});
-    const outcome = handle.starts[0];
-    outcomes.push({ ...outcome, inputIndex });
   }
 
   return jsonResult(outcomes, {
-    action: "dispatch",
-    tasks: renderDispatchItems(invocation.tasks, outcomes, conversationSnapshots(deps.runtime)),
+    action: "steer",
+    tasks: renderDispatchItems(invocation.steerMessages, outcomes, conversationSnapshots(deps.runtime)),
   });
 }
 
@@ -226,7 +246,7 @@ export async function removeAction(
 }
 
 function renderDispatchItems(
-  tasks: readonly (TaskRequest | { error: string })[],
+  tasks: readonly (RunRequest | SteerRequest | { error: string })[],
   starts: readonly OrderedDispatchOutcome[],
   conversations: readonly ConversationSnapshot[],
 ): DispatchTaskRenderItem[] {
@@ -244,7 +264,7 @@ function renderDispatchItems(
       kind: task.kind,
       agent: task.kind === "spawn" ? task.agent : conversation?.config.name,
       label: task.kind === "spawn" ? task.label : conversation?.label,
-      prompt: task.prompt,
+      prompt: task.kind === "steer" ? task.message : task.prompt,
       ...(start.ok
         ? { conversationId: start.conversationId, runId: start.runId, ...(start.steer ? { steer: start.steer } : {}) }
         : { error: start.error }),
@@ -406,14 +426,11 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(status?): List runs, optionally filtered by status.",
-      "  dispatch(tasks): Dispatch asynchronous spawn, resume, or steering tasks; accepted steers return lifecycle receipts.",
+      "  run(spawnTasks?, resumeTasks?): Start asynchronous spawn and resume tasks.",
+      "  steer(steerMessages): Send messages to running subagents and return lifecycle receipts.",
       "  inspect(runIds): Return bounded progress, running phases, steer receipts, and per-target errors without waiting or acknowledging.",
       "  join(runIds): Wait for the given runs and return their outcomes in the same order.",
       "  remove(conversationIds): Remove retained conversations.",
-      "Tasks:",
-      "  Spawn: { agent, prompt, label?, skills?, model?, thinking?, cwd? }",
-      "  Resume: { conversationId, prompt }",
-      "  Steer: { runId, prompt }",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",
     promptGuidelines: [
@@ -446,7 +463,8 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
         switch (invocation.action) {
           case "agents": return agentsAction(actionDeps, invocation);
           case "list": return listAction(actionDeps, invocation);
-          case "dispatch": return dispatchAction(actionDeps, invocation, ctx);
+          case "run": return runAction(actionDeps, invocation, ctx);
+          case "steer": return steerAction(actionDeps, invocation);
           case "inspect": return inspectAction(actionDeps, invocation);
           case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
           case "remove": return removeAction(actionDeps, invocation);

@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { dispatchAction, inspectAction, joinAction, listAction, removeAction } from "../../src/tool.js";
+import { inspectAction, joinAction, listAction, removeAction, runAction, steerAction } from "../../src/tool.js";
 
 const conversationId = "amber-acorn" as any;
 const runId = "adapt-ably" as any;
@@ -38,7 +38,7 @@ const joinBinding = (
   release: hooks.release ?? (() => {}),
 });
 
-test("dispatch forwards validated tasks and preserves outcome order", async () => {
+test("run forwards validated tasks and preserves outcome order", async () => {
   const tasks = [
     { kind: "spawn" as const, agent: "helper", prompt: "valid" },
     { kind: "spawn" as const, agent: "missing", prompt: "unknown agent" },
@@ -54,7 +54,7 @@ test("dispatch forwards validated tasks and preserves outcome order", async () =
     },
     listConversations: () => [],
   };
-  const result = await dispatchAction(deps(manager), { action: "dispatch", tasks }, {} as any);
+  const result = await runAction(deps(manager), { action: "run", spawnTasks: tasks, resumeTasks: [] }, {} as any);
   assert.deepEqual(received, tasks);
   assert.deepEqual(json(result), [
     { ok: true, inputIndex: 0, conversationId, runId },
@@ -63,7 +63,28 @@ test("dispatch forwards validated tasks and preserves outcome order", async () =
   assert.equal(result.isError, false);
 });
 
-test("dispatch returns task parse failures while starting valid siblings", async () => {
+test("run processes spawn tasks before resume tasks with combined outcome indexes", async () => {
+  const received: any[] = [];
+  const manager = {
+    startRun: (_ctx: any, [task]: any[]) => {
+      received.push(task);
+      const start = { ok: true as const, inputIndex: 0, conversationId, runId };
+      return { starts: [start], completion: Promise.resolve([start]) };
+    },
+    listConversations: () => [],
+  };
+
+  const result = await runAction(deps(manager), {
+    action: "run",
+    spawnTasks: [{ kind: "spawn", agent: "helper", prompt: "new" }],
+    resumeTasks: [{ kind: "resume", conversationId, prompt: "continue" }],
+  }, {} as any);
+
+  assert.deepEqual(received.map(task => task.kind), ["spawn", "resume"]);
+  assert.deepEqual(json(result).map((outcome: any) => outcome.inputIndex), [0, 1]);
+});
+
+test("run returns task parse failures while starting valid siblings", async () => {
   const tasks = [
     { kind: "spawn" as const, agent: "helper", prompt: "first" },
     { error: "Task must carry exactly one of agent (spawn), conversationId (resume), or runId (steer)." },
@@ -79,7 +100,7 @@ test("dispatch returns task parse failures while starting valid siblings", async
     listConversations: () => [],
   };
 
-  const result = await dispatchAction(deps(manager), { action: "dispatch", tasks }, {} as any);
+  const result = await runAction(deps(manager), { action: "run", spawnTasks: tasks, resumeTasks: [] }, {} as any);
 
   assert.deepEqual(json(result), [
     { ok: true, inputIndex: 0, conversationId, runId },
@@ -89,7 +110,7 @@ test("dispatch returns task parse failures while starting valid siblings", async
   assert.equal(result.isError, false);
 });
 
-test("dispatch steers multiple runs in input order", async () => {
+test("steer sends multiple messages in input order", async () => {
   const secondRunId = "assemble-abruptly" as any;
   const received: any[] = [];
   const manager = {
@@ -99,14 +120,14 @@ test("dispatch steers multiple runs in input order", async () => {
     },
     listConversations: () => [snapshot()],
   };
-  const result = await dispatchAction(deps(manager), {
-    action: "dispatch",
-    tasks: [
-      { kind: "steer", runId, prompt: "first" },
-      { kind: "steer", runId: secondRunId, prompt: "second" },
-      { kind: "steer", runId, prompt: "third" },
+  const result = await steerAction(deps(manager), {
+    action: "steer",
+    steerMessages: [
+      { kind: "steer", runId, message: "first" },
+      { kind: "steer", runId: secondRunId, message: "second" },
+      { kind: "steer", runId, message: "third" },
     ],
-  }, {} as any);
+  });
 
   assert.deepEqual(received, [[runId, "first"], [secondRunId, "second"], [runId, "third"]]);
   assert.deepEqual(json(result).map((entry: any) => entry.runId), [runId, secondRunId, runId]);
@@ -115,7 +136,7 @@ test("dispatch steers multiple runs in input order", async () => {
   assert.deepEqual((result.details as any).tasks.map((task: any) => task.steer.id), [1, 2, 3]);
 });
 
-test("dispatch isolates steering failures from sibling tasks", async () => {
+test("steer isolates failures from sibling messages", async () => {
   const secondRunId = "assemble-abruptly" as any;
   const manager = {
     steerRun: async (target: any) => {
@@ -124,13 +145,13 @@ test("dispatch isolates steering failures from sibling tasks", async () => {
     },
     listConversations: () => [snapshot()],
   };
-  const result = await dispatchAction(deps(manager), {
-    action: "dispatch",
-    tasks: [
-      { kind: "steer", runId, prompt: "first" },
-      { kind: "steer", runId: secondRunId, prompt: "second" },
+  const result = await steerAction(deps(manager), {
+    action: "steer",
+    steerMessages: [
+      { kind: "steer", runId, message: "first" },
+      { kind: "steer", runId: secondRunId, message: "second" },
     ],
-  }, {} as any);
+  });
 
   assert.deepEqual(json(result), [
     { ok: false, inputIndex: 0, error: "Run is queued and cannot be steered." },

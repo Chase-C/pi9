@@ -129,7 +129,8 @@ export interface JoinedRunRenderItem {
 export type SubagentToolDetails =
   | { action: "agents"; agents: AgentRenderItem[] }
   | { action: "list"; runs: ListedRunRenderItem[] }
-  | { action: "dispatch"; tasks: DispatchTaskRenderItem[] }
+  | { action: "run"; tasks: DispatchTaskRenderItem[] }
+  | { action: "steer"; tasks: DispatchTaskRenderItem[] }
   | { action: "inspect"; runs: Array<InspectedRunRenderItem | InspectedRunErrorRenderItem> }
   | { action: "join"; runs: JoinedRunRenderItem[] }
   | {
@@ -197,7 +198,8 @@ function collapsedLines(details: Exclude<SubagentToolDetails, { action: "error" 
         secondary(details.runs.map(runLabel), theme),
       ];
     }
-    case "dispatch": {
+    case "run":
+    case "steer": {
       const accepted = details.tasks.filter(task => task.runId);
       const rejected = details.tasks.length - accepted.length;
       const spawned = accepted.filter(task => task.kind === "spawn").length;
@@ -248,7 +250,8 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
         `${arrow(theme)} ${paint(theme, "text", runLabel(run))} ${paint(theme, "muted", `· ${run.agent} · ${run.kind}`)}`,
         `  ${statusText(theme, run.status)} ${paint(theme, "muted", "·")} ${identity(theme, run.conversationId, run.runId)}`,
       ]);
-    case "dispatch":
+    case "run":
+    case "steer":
       return blocks(details.tasks, (task, index) => {
         const label = taskLabel(task, index);
         const meta = [task.agent, task.kind].filter(Boolean).join(" · ");
@@ -441,7 +444,12 @@ function truncate(value: string, limit: number): string {
 
 function callSuffix(action: string, input: Record<string, unknown> | undefined): string {
   if (!input) return "";
-  if (action === "dispatch") return arrayCount(input.tasks, "task");
+  if (action === "run") {
+    const spawn = Array.isArray(input.spawnTasks) ? input.spawnTasks.length : 0;
+    const resume = Array.isArray(input.resumeTasks) ? input.resumeTasks.length : 0;
+    return spawn + resume ? count(spawn + resume, "task") : "";
+  }
+  if (action === "steer") return arrayCount(input.steerMessages, "message");
   if (action === "inspect" || action === "join") return arrayCount(input.runIds, "run");
   if (action === "remove") return arrayCount(input.conversationIds, "conversation");
   return "";
@@ -456,7 +464,7 @@ function dispatchOutcomeSummary(spawned: number, resumed: number, steered: numbe
   if (spawned) parts.push(`Started ${count(spawned, "new conversation")}`);
   if (resumed) parts.push(`${parts.length ? "resumed" : "Resumed"} ${count(resumed, "conversation")}`);
   if (steered) parts.push(`${parts.length ? "steered" : "Steered"} ${count(steered, "run")}`);
-  if (!parts.length) parts.push("No tasks dispatched");
+  if (!parts.length) parts.push("No tasks accepted");
   let summary = parts.join(" and ");
   if (rejected) summary += paint(theme, "muted", ` · ${count(rejected, "rejected task")}`);
   return summary;

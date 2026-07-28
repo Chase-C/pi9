@@ -1,88 +1,133 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
-import { SubagentParams, TaskSchema, parseSubagentInvocation, parseTask, SUBAGENT_ACTIONS } from "../src/schema.js";
+import {
+  parseResumeTask,
+  parseSpawnTask,
+  parseSteerMessage,
+  parseSubagentInvocation,
+  ResumeTaskSchema,
+  SpawnTaskSchema,
+  SteerMessageSchema,
+  SubagentParams,
+  SUBAGENT_ACTIONS,
+} from "../src/schema.js";
 
 const conversationId = "amber-acorn";
 const runId = "adapt-ably";
 
-test("public schema is flat and validates task structure", () => {
-  assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "dispatch", "inspect", "join", "remove"]);
+test("public schema exposes separate run and steer inputs without unions", () => {
+  assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "run", "steer", "inspect", "join", "remove"]);
   assert.doesNotMatch(JSON.stringify(SubagentParams), /"anyOf"/);
-  assert.equal(Check(SubagentParams, { action: "agents" }), true);
-  assert.equal(Check(SubagentParams, { action: "unknown" }), false);
-  assert.equal(Check(SubagentParams, { action: "dispatch", tasks: [] }), false);
-  assert.equal(Check(SubagentParams, { action: "dispatch", tasks: {} }), false);
-  assert.equal(Check(SubagentParams, { action: "dispatch", tasks: [{ agent: "helper", prompt: "work" }] }), true);
-  assert.equal(Check(SubagentParams, { action: "dispatch", tasks: [{ agent: 42, prompt: true }, null] }), false);
-  assert.equal(Check(SubagentParams, { action: "inspect", runIds: [runId] }), true);
-  assert.equal(Check(TaskSchema, { conversationId, prompt: "continue" }), true);
-  assert.equal(Check(TaskSchema, { runId, prompt: "redirect" }), true);
+  assert.equal(Check(SubagentParams, { action: "run", spawnTasks: [{ agent: "helper", prompt: "work" }] }), true);
+  assert.equal(Check(SubagentParams, { action: "run", resumeTasks: [{ conversationId, prompt: "continue" }] }), true);
+  assert.equal(Check(SubagentParams, { action: "steer", steerMessages: [{ runId, message: "redirect" }] }), true);
+  assert.equal(Check(SubagentParams, { action: "run", spawnTasks: [] }), false);
+  assert.equal(Check(SubagentParams, { action: "steer", steerMessages: [{ runId, prompt: "old field" }] }), false);
+  assert.equal(Check(SpawnTaskSchema, { conversationId, prompt: "wrong kind" }), false);
+  assert.equal(Check(ResumeTaskSchema, { conversationId, prompt: "continue" }), true);
+  assert.equal(Check(SteerMessageSchema, { runId, message: "redirect" }), true);
 });
 
-test("spawn fields are optional where agreed and preserved", () => {
-  assert.deepEqual(parseTask({ agent: "helper", prompt: "work", label: "label", skills: ["review"], model: "m", thinking: "high", cwd: "sub" }),
-    { kind: "spawn", agent: "helper", prompt: "work", label: "label", skills: ["review"], model: "m", thinking: "high", cwd: "sub" });
-  assert.deepEqual(parseTask({ agent: "helper", prompt: "work" }), { kind: "spawn", agent: "helper", prompt: "work" });
-});
-
-test("resume accepts conversationId and prompt only", () => {
-  assert.deepEqual(parseTask({ conversationId, prompt: "next" }), { kind: "resume", conversationId, prompt: "next" });
-  for (const field of ["label", "skills", "model", "thinking", "cwd"]) {
-    const parsed = parseTask({ conversationId, prompt: "next", [field]: field === "skills" ? [] : "x" });
-    assert.ok("error" in parsed); assert.match(parsed.error, new RegExp(`rejects ${field}`));
+test("spawn fields are validated and preserved", () => {
+  assert.deepEqual(
+    parseSpawnTask({ agent: "helper", prompt: "work", label: "label", skills: ["review"], model: "m", thinking: "high", cwd: "sub" }),
+    { kind: "spawn", agent: "helper", prompt: "work", label: "label", skills: ["review"], model: "m", thinking: "high", cwd: "sub" },
+  );
+  for (const task of [null, { prompt: "x" }, { agent: "", prompt: "x" }, { agent: "a", prompt: " " }, { agent: "a", prompt: "x", skills: [""] }, { agent: "a", prompt: "x", thinking: "extreme" }]) {
+    assert.ok("error" in parseSpawnTask(task));
   }
 });
 
-test("steer accepts a runId and prompt only", () => {
-  assert.deepEqual(parseTask({ runId, prompt: "change direction" }), {
-    kind: "steer", runId, prompt: "change direction",
-  });
-  const wrongKind = parseTask({ runId: conversationId, prompt: "change direction" });
-  assert.ok("error" in wrongKind); assert.match(wrongKind.error, /conversation ID is not accepted/);
-  const malformed = parseTask({ runId: "not-an-id", prompt: "change direction" });
-  assert.ok("error" in malformed); assert.match(malformed.error, /invalid runId format/);
-  const extra = parseTask({ runId, prompt: "change direction", model: "x" });
-  assert.ok("error" in extra); assert.match(extra.error, /rejects model/);
-  assert.ok("error" in parseTask({ agent: "helper", runId, prompt: "ambiguous" }));
-});
-
-test("tasks validate shape, blanks, and overrides", () => {
-  for (const task of [null, { prompt: "x" }, { agent: "", prompt: "x" }, { agent: "a", prompt: " " }, { agent: "a", prompt: "x", skills: [""] }, { agent: "a", prompt: "x", thinking: "extreme" }]) assert.ok("error" in parseTask(task));
-});
-
-test("resume conversationId diagnostics distinguish ID kinds from invalid formats", () => {
-  assert.deepEqual(parseTask({ conversationId, prompt: "next" }), {
-    kind: "resume", conversationId, prompt: "next",
-  });
-
-  const wrongKind = parseTask({ conversationId: runId, prompt: "next" });
+test("resume task accepts conversationId and prompt only", () => {
+  assert.deepEqual(parseResumeTask({ conversationId, prompt: "next" }), { kind: "resume", conversationId, prompt: "next" });
+  const wrongKind = parseResumeTask({ conversationId: runId, prompt: "next" });
   assert.ok("error" in wrongKind);
   assert.match(wrongKind.error, /run ID is not accepted/);
-
-  const malformed = parseTask({ conversationId: "not-an-id", prompt: "next" });
-  assert.ok("error" in malformed);
-  assert.match(malformed.error, /invalid conversationId format/);
-  assert.doesNotMatch(malformed.error, /run ID is not accepted/);
+  const extra = parseResumeTask({ conversationId, prompt: "next", model: "x" });
+  assert.ok("error" in extra);
+  assert.match(extra.error, /model is not allowed/);
 });
 
-test("invocations parse every action without aliases", () => {
+test("steer message accepts runId and message only", () => {
+  assert.deepEqual(parseSteerMessage({ runId, message: "change direction" }), { kind: "steer", runId, message: "change direction" });
+  const wrongKind = parseSteerMessage({ runId: conversationId, message: "change direction" });
+  assert.ok("error" in wrongKind);
+  assert.match(wrongKind.error, /conversation ID is not accepted/);
+  const oldField = parseSteerMessage({ runId, prompt: "change direction" });
+  assert.ok("error" in oldField);
+  assert.match(oldField.error, /prompt is not allowed/);
+});
+
+test("invocations parse every action without dispatch alias", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "agents" }), { action: "agents" });
   assert.deepEqual(parseSubagentInvocation({ action: "list", status: ["running"] }), { action: "list", status: ["running"] });
-  assert.deepEqual(parseSubagentInvocation({ action: "dispatch", tasks: [{ agent: "helper", prompt: "x" }] }), {
-    action: "dispatch",
-    tasks: [{ kind: "spawn", agent: "helper", prompt: "x" }],
+  assert.deepEqual(parseSubagentInvocation({
+    action: "run",
+    spawnTasks: [{ agent: "helper", prompt: "x" }],
+    resumeTasks: [{ conversationId, prompt: "next" }],
+  }), {
+    action: "run",
+    spawnTasks: [{ kind: "spawn", agent: "helper", prompt: "x" }],
+    resumeTasks: [{ kind: "resume", conversationId, prompt: "next" }],
+  });
+  assert.deepEqual(parseSubagentInvocation({ action: "steer", steerMessages: [{ runId, message: "redirect" }] }), {
+    action: "steer",
+    steerMessages: [{ kind: "steer", runId, message: "redirect" }],
   });
   assert.deepEqual(parseSubagentInvocation({ action: "inspect", runIds: [runId] }), { action: "inspect", runIds: [runId] });
   assert.deepEqual(parseSubagentInvocation({ action: "join", runIds: [runId] }), { action: "join", runIds: [runId] });
   assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId] }), { action: "remove", conversationIds: [conversationId] });
+  assert.ok("error" in parseSubagentInvocation({ action: "dispatch", tasks: [] }));
+});
+
+test("run allows either or both task arrays and applies a combined limit", () => {
+  assert.deepEqual(parseSubagentInvocation({ action: "run", spawnTasks: [{ agent: "helper", prompt: "x" }] }), {
+    action: "run",
+    spawnTasks: [{ kind: "spawn", agent: "helper", prompt: "x" }],
+    resumeTasks: [],
+  });
+  assert.deepEqual(parseSubagentInvocation({ action: "run", resumeTasks: [{ conversationId, prompt: "x" }] }), {
+    action: "run",
+    spawnTasks: [],
+    resumeTasks: [{ kind: "resume", conversationId, prompt: "x" }],
+  });
+  assert.ok("error" in parseSubagentInvocation({ action: "run" }));
+  assert.ok("error" in parseSubagentInvocation({ action: "run", spawnTasks: [], resumeTasks: [{ conversationId, prompt: "x" }] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "run", spawnTasks: {}, resumeTasks: [{ conversationId, prompt: "x" }] }));
+  assert.match((parseSubagentInvocation({
+    action: "run",
+    spawnTasks: [{ agent: "a", prompt: "1" }],
+    resumeTasks: [{ conversationId, prompt: "2" }],
+  }, { maxTasks: 1 }) as { error: string }).error, /Too many/);
+});
+
+test("steer validates its own batch and limit", () => {
+  assert.ok("error" in parseSubagentInvocation({ action: "steer" }));
+  assert.ok("error" in parseSubagentInvocation({ action: "steer", steerMessages: [] }));
+  assert.match((parseSubagentInvocation({
+    action: "steer",
+    steerMessages: [{ runId, message: "1" }, { runId, message: "2" }],
+  }, { maxTasks: 1 }) as { error: string }).error, /Too many/);
+});
+
+test("item parse failures remain indexed within their typed arrays", () => {
+  assert.deepEqual(parseSubagentInvocation({
+    action: "run",
+    spawnTasks: [{ agent: "helper", prompt: "first" }, { prompt: "missing agent" }],
+    resumeTasks: [{ conversationId, prompt: "third" }],
+  }), {
+    action: "run",
+    spawnTasks: [
+      { kind: "spawn", agent: "helper", prompt: "first" },
+      { error: "Spawn task agent must be a non-empty string." },
+    ],
+    resumeTasks: [{ kind: "resume", conversationId, prompt: "third" }],
+  });
 });
 
 test("inspect retains malformed targets as ordered per-run errors", () => {
-  assert.deepEqual(parseSubagentInvocation({
-    action: "inspect",
-    runIds: [runId, conversationId, "not-an-id"],
-  }), {
+  assert.deepEqual(parseSubagentInvocation({ action: "inspect", runIds: [runId, conversationId, "not-an-id"] }), {
     action: "inspect",
     runIds: [
       runId,
@@ -92,52 +137,55 @@ test("inspect retains malformed targets as ordered per-run errors", () => {
   });
 });
 
-test("task parse failures remain indexed within a runnable batch", () => {
-  const parsed = parseSubagentInvocation({
-    action: "dispatch",
-    tasks: [
-      { agent: "helper", prompt: "first" },
-      { prompt: "missing agent" },
-      { conversationId, prompt: "third" },
-    ],
-  });
-  assert.deepEqual(parsed, {
-    action: "dispatch",
-    tasks: [
-      { kind: "spawn", agent: "helper", prompt: "first" },
-      { error: "Task must carry exactly one of agent (spawn), conversationId (resume), or runId (steer)." },
-      { kind: "resume", conversationId, prompt: "third" },
-    ],
-  });
-});
-
-test("whole invocation validation covers limits, status, and required batches", () => {
+test("whole invocation validation covers unchanged actions", () => {
   assert.ok("error" in parseSubagentInvocation({}));
   assert.ok("error" in parseSubagentInvocation({ action: "unknown" }));
   assert.ok("error" in parseSubagentInvocation({ action: "list", status: ["stale"] }));
-  assert.ok("error" in parseSubagentInvocation({ action: "dispatch" }));
-  assert.ok("error" in parseSubagentInvocation({ action: "dispatch", tasks: [] }));
-  assert.match((parseSubagentInvocation({ action: "dispatch", tasks: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, { maxTasks: 1 }) as any).error, /Too many/);
   assert.ok("error" in parseSubagentInvocation({ action: "inspect", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "join", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "remove" }));
 });
 
-test("join and remove ID diagnostics distinguish ID kinds from invalid formats", () => {
-  assert.deepEqual(parseSubagentInvocation({ action: "join", runIds: [runId] }), {
-    action: "join", runIds: [runId],
-  });
-  assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId] }), {
-    action: "remove", conversationIds: [conversationId],
-  });
+test("unsupported invocation fields receive ordinary validation errors", () => {
+  for (const [raw, expected] of [
+    [{ action: "run", spawnTasks: [{ agent: "a", prompt: "x" }], background: true }, /Property background is not allowed/],
+    [{ action: "steer", steerMessages: [{ runId, message: "x" }], prompt: "x" }, /Property prompt is not allowed/],
+    [{ action: "inspect", runIds: [runId], wait: true }, /Property wait is not allowed/],
+    [{ action: "results", runIds: [runId] }, /Unknown action/],
+    [{ action: "join", runIds: [runId], remove: true }, /Property remove is not allowed/],
+  ] as const) {
+    const parsed = parseSubagentInvocation(raw);
+    assert.ok("error" in parsed);
+    assert.match(parsed.error, expected);
+  }
+});
 
+test("flat schema admits action fields while parser enforces associations", () => {
+  for (const raw of [
+    { action: "agents", status: ["running"] },
+    { action: "list", spawnTasks: [{ agent: "a", prompt: "x" }] },
+    { action: "join", runIds: [runId], conversationIds: [conversationId] },
+  ]) {
+    assert.equal(Check(SubagentParams, raw), true);
+    assert.ok("error" in parseSubagentInvocation(raw));
+  }
+});
+
+test("schema and parser reject unknown properties", () => {
+  const invocation = { action: "remove", conversationIds: [conversationId], extra: true };
+  assert.equal(Check(SubagentParams, invocation), false);
+  assert.ok("error" in parseSubagentInvocation(invocation));
+  assert.equal(Check(SpawnTaskSchema, { agent: "a", prompt: "x", extra: true }), false);
+  assert.ok("error" in parseSpawnTask({ agent: "a", prompt: "x", extra: true }));
+});
+
+test("join and remove ID diagnostics distinguish ID kinds and malformed IDs", () => {
   const wrongJoin = parseSubagentInvocation({ action: "join", runIds: [conversationId] });
   assert.ok("error" in wrongJoin);
   assert.match(wrongJoin.error, /conversation ID is not accepted/);
   const malformedJoin = parseSubagentInvocation({ action: "join", runIds: ["not-an-id"] });
   assert.ok("error" in malformedJoin);
   assert.match(malformedJoin.error, /invalid runId format/);
-  assert.doesNotMatch(malformedJoin.error, /conversation ID is not accepted/);
 
   const wrongRemove = parseSubagentInvocation({ action: "remove", conversationIds: [runId] });
   assert.ok("error" in wrongRemove);
@@ -145,60 +193,4 @@ test("join and remove ID diagnostics distinguish ID kinds from invalid formats",
   const malformedRemove = parseSubagentInvocation({ action: "remove", conversationIds: ["not-an-id"] });
   assert.ok("error" in malformedRemove);
   assert.match(malformedRemove.error, /invalid conversationId format/);
-  assert.doesNotMatch(malformedRemove.error, /run ID is not accepted/);
-});
-
-test("flat schema admits action fields while the parser enforces their associations", () => {
-  for (const raw of [
-    { action: "agents", status: ["running"] },
-    { action: "list", tasks: [{ agent: "a", prompt: "x" }] },
-    { action: "join", runIds: [runId], conversationIds: [conversationId] },
-  ]) {
-    assert.equal(Check(SubagentParams, raw), true);
-    assert.ok("error" in parseSubagentInvocation(raw));
-  }
-
-  const mixedTask = { conversationId, prompt: "x", label: "no" };
-  assert.equal(Check(TaskSchema, mixedTask), true);
-  assert.ok("error" in parseTask(mixedTask));
-});
-
-test("schema and parser reject unknown properties", () => {
-  const invocation = { action: "remove", conversationIds: [conversationId], extra: true };
-  assert.equal(Check(SubagentParams, invocation), false);
-  assert.ok("error" in parseSubagentInvocation(invocation));
-
-  const task = { agent: "a", prompt: "x", extra: true };
-  assert.equal(Check(TaskSchema, task), false);
-  assert.ok("error" in parseTask(task));
-});
-
-test("unsupported actions and invocation fields receive ordinary validation errors", () => {
-  const cases: Array<[unknown, RegExp]> = [
-    [{ action: "dispatch", tasks: [], background: true }, /Property background is not allowed/],
-    [{ action: "dispatch", tasks: [], mode: "background" }, /Property mode is not allowed/],
-    [{ action: "inspect", runIds: [runId], wait: true }, /Property wait is not allowed/],
-    [{ action: "run", tasks: [] }, /Unknown action/],
-    [{ action: "results", runIds: [runId] }, /Unknown action/],
-    [{ action: "join", runIds: [runId], results: true }, /Property results is not allowed/],
-    [{ action: "join", runIds: [runId], remove: true }, /Property remove is not allowed/],
-  ];
-  for (const [raw, expected] of cases) {
-    const parsed = parseSubagentInvocation(raw);
-    assert.ok("error" in parsed);
-    assert.match(parsed.error, expected);
-  }
-});
-
-test("unsupported task fields produce per-task parse failures", () => {
-  for (const [task, expected] of [
-    [{ sessionId: conversationId, prompt: "x" }, /sessionId is not allowed/],
-    [{ agent: "a", prompt: "x", retainConversation: true }, /retainConversation is not allowed/],
-  ] as const) {
-    const parsed = parseSubagentInvocation({ action: "dispatch", tasks: [task] });
-    assert.ok("tasks" in parsed);
-    const failure = parsed.tasks[0];
-    assert.ok(failure && "error" in failure);
-    assert.match(failure.error, expected);
-  }
 });

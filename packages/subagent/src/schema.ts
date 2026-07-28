@@ -6,22 +6,29 @@ import { isRunId, type RunId } from "./identifiers.js";
 
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 
-const NonBlankString = (description: string) =>
-  Type.String({ minLength: 1, description });
+const NonBlankString = () => Type.String({ minLength: 1 });
 
-export const TaskSchema = Type.Object({
-  agent: Type.Optional(Type.String({ description: "Agent definition to `Spawn`." })),
-  conversationId: Type.Optional(Type.String({ description: "Conversation to `Resume`." })),
-  runId: Type.Optional(Type.String({ description: "Running subagent to `Steer`." })),
-  prompt: NonBlankString("Instructions to send to the subagent."),
-  label: Type.Optional(NonBlankString("3–5 plain words describing the task, for display; not an identifier.")),
-  skills: Type.Optional(Type.Array(Type.String(), { description: "Skills override." })),
-  model: Type.Optional(Type.String({ description: "Model override." })),
-  thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS, { description: "Thinking override." })),
-  cwd: Type.Optional(Type.String({ description: "Working directory override." })),
+export const SpawnTaskSchema = Type.Object({
+  agent: NonBlankString(),
+  prompt: NonBlankString(),
+  label: Type.Optional(NonBlankString()),
+  skills: Type.Optional(Type.Array(NonBlankString())),
+  model: Type.Optional(NonBlankString()),
+  thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
+  cwd: Type.Optional(NonBlankString()),
 }, { additionalProperties: false });
 
-export const SUBAGENT_ACTIONS = ["agents", "list", "dispatch", "inspect", "join", "remove"] as const;
+export const ResumeTaskSchema = Type.Object({
+  conversationId: NonBlankString(),
+  prompt: NonBlankString(),
+}, { additionalProperties: false });
+
+export const SteerMessageSchema = Type.Object({
+  runId: NonBlankString(),
+  message: NonBlankString(),
+}, { additionalProperties: false });
+
+export const SUBAGENT_ACTIONS = ["agents", "list", "run", "steer", "inspect", "join", "remove"] as const;
 export const RUN_STATUSES = [
   "queued", "running", "completed", "error", "aborted", "interrupted", "skipped",
 ] as const;
@@ -29,7 +36,9 @@ export const RUN_STATUSES = [
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
   status: Type.Optional(Type.Array(StringEnum(RUN_STATUSES), { minItems: 1 })),
-  tasks: Type.Optional(Type.Array(TaskSchema, { minItems: 1 })),
+  spawnTasks: Type.Optional(Type.Array(SpawnTaskSchema, { minItems: 1 })),
+  resumeTasks: Type.Optional(Type.Array(ResumeTaskSchema, { minItems: 1 })),
+  steerMessages: Type.Optional(Type.Array(SteerMessageSchema, { minItems: 1 })),
   runIds: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
   conversationIds: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
 }, { additionalProperties: false });
@@ -61,18 +70,20 @@ export type ResumeRequest = {
 export type SteerRequest = {
   kind: "steer";
   runId: RunId;
-  prompt: string;
+  message: string;
 };
 
-export type TaskRequest = SpawnRequest | ResumeRequest | SteerRequest;
+export type RunRequest = SpawnRequest | ResumeRequest;
 export type InspectTarget = RunId | { runId: string; error: string };
-export type DispatchTaskKind = TaskRequest["kind"];
-export type ParsedTask = TaskRequest | { error: string };
+export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
+export type ParsedRunRequest = RunRequest | { error: string };
+export type ParsedSteerRequest = SteerRequest | { error: string };
 
 export type SubagentInvocation =
   | { action: "agents" }
   | { action: "list"; status?: RunStatus[] }
-  | { action: "dispatch"; tasks: ParsedTask[] }
+  | { action: "run"; spawnTasks: ParsedRunRequest[]; resumeTasks: ParsedRunRequest[] }
+  | { action: "steer"; steerMessages: ParsedSteerRequest[] }
   | { action: "inspect"; runIds: InspectTarget[] }
   | { action: "join"; runIds: RunId[] }
   | { action: "remove"; conversationIds: ConversationId[] };
@@ -95,7 +106,8 @@ export interface ParseSubagentInvocationOptions {
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
   list: ["action", "status"],
-  dispatch: ["action", "tasks"],
+  run: ["action", "spawnTasks", "resumeTasks"],
+  steer: ["action", "steerMessages"],
   inspect: ["action", "runIds"],
   join: ["action", "runIds"],
   remove: ["action", "conversationIds"],
@@ -112,14 +124,14 @@ export function parseSubagentInvocation(
 
   if (!action) {
     return {
-      error: 'Provide an action: "agents", "list", "dispatch", "inspect", "join", or "remove".',
+      error: 'Provide an action: "agents", "list", "run", "steer", "inspect", "join", or "remove".',
       missingAction: true,
     };
   }
 
   if (typeof action !== "string" || !SUBAGENT_ACTIONS.includes(action as SubagentAction)) {
     return {
-      error: `Unknown action: ${String(action)}. Use "agents", "list", "dispatch", "inspect", "join", or "remove".`,
+      error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "steer", "inspect", "join", or "remove".`,
     };
   }
 
@@ -155,24 +167,56 @@ export function parseSubagentInvocation(
         ...(params.status ? { status: params.status as RunStatus[] } : {}),
       };
     }
-    case "dispatch": {
-      if (!Array.isArray(params.tasks) || params.tasks.length === 0) {
+    case "run": {
+      if (params.spawnTasks !== undefined && (!Array.isArray(params.spawnTasks) || params.spawnTasks.length === 0)) {
+        return { error: "run spawnTasks must be a non-empty array when provided.", action: parsedAction, taskCountError: true };
+      }
+      if (params.resumeTasks !== undefined && (!Array.isArray(params.resumeTasks) || params.resumeTasks.length === 0)) {
+        return { error: "run resumeTasks must be a non-empty array when provided.", action: parsedAction, taskCountError: true };
+      }
+      const spawnTasks = (params.spawnTasks ?? []) as unknown[];
+      const resumeTasks = (params.resumeTasks ?? []) as unknown[];
+      const taskCount = spawnTasks.length + resumeTasks.length;
+      if (taskCount === 0) {
         return {
-          error: "Provide at least one task.",
+          error: "Provide at least one spawnTask or resumeTask.",
           action: parsedAction,
           taskCountError: true,
         };
       }
 
-      if (options.maxTasks !== undefined && params.tasks.length > options.maxTasks) {
+      if (options.maxTasks !== undefined && taskCount > options.maxTasks) {
         return {
-          error: `Too many tasks (${params.tasks.length}). Max is ${options.maxTasks}.`,
+          error: `Too many tasks (${taskCount}). Max is ${options.maxTasks}.`,
           action: parsedAction,
           taskCountError: true,
         };
       }
 
-      return { action: parsedAction, tasks: params.tasks.map(parseTask) };
+      return {
+        action: parsedAction,
+        spawnTasks: spawnTasks.map(parseSpawnTask),
+        resumeTasks: resumeTasks.map(parseResumeTask),
+      };
+    }
+    case "steer": {
+      if (!Array.isArray(params.steerMessages) || params.steerMessages.length === 0) {
+        return {
+          error: "Provide at least one steerMessage.",
+          action: parsedAction,
+          taskCountError: true,
+        };
+      }
+
+      if (options.maxTasks !== undefined && params.steerMessages.length > options.maxTasks) {
+        return {
+          error: `Too many steer messages (${params.steerMessages.length}). Max is ${options.maxTasks}.`,
+          action: parsedAction,
+          taskCountError: true,
+        };
+      }
+
+      return { action: parsedAction, steerMessages: params.steerMessages.map(parseSteerMessage) };
     }
     case "inspect": {
       const ids = parseInspectTargets(params.runIds);
@@ -239,108 +283,69 @@ function parseIds<T extends string>(
   return value as T[];
 }
 
-export function parseTask(raw: unknown): ParsedTask {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return { error: "Task must be an object." };
-  }
-
-  const task = raw as Record<string, unknown>;
-  const isSpawn = task.agent !== undefined;
-  const isResume = task.conversationId !== undefined;
-  const isSteer = task.runId !== undefined;
-  const allowed = isSteer
-    ? ["runId", "prompt"]
-    : isResume
-      ? ["conversationId", "prompt"]
-      : ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"];
-  const extra = Object.keys(task).find(key => !allowed.includes(key));
-
-  if (extra) {
-    return {
-      error: isSteer
-        ? `Task with runId rejects ${extra}; that field belongs to a spawn task.`
-        : isResume
-          ? `Task with conversationId rejects ${extra}; that field belongs to a spawn task.`
-          : `Task property ${extra} is not allowed for a spawn task.`,
-    };
-  }
-
-  if ([isSpawn, isResume, isSteer].filter(Boolean).length !== 1) {
-    return { error: "Task must carry exactly one of agent (spawn), conversationId (resume), or runId (steer)." };
-  }
-
-  if (typeof task.prompt !== "string" || !task.prompt.trim()) {
-    return { error: "Task prompt must be a non-empty string." };
-  }
-
-  if (isSteer) {
-    if (!isRunId(task.runId)) {
-      return {
-        error: isConversationId(task.runId)
-          ? `Task runId '${task.runId}' is invalid (a conversation ID is not accepted).`
-          : `Task received invalid runId format '${String(task.runId)}'.`,
-      };
-    }
-
-    return {
-      kind: "steer",
-      runId: task.runId,
-      prompt: task.prompt,
-    };
-  }
-
-  if (isResume) {
-    if (!isConversationId(task.conversationId)) {
-      return {
-        error: isRunId(task.conversationId)
-          ? `Task conversationId '${task.conversationId}' is invalid (a run ID is not accepted).`
-          : `Task received invalid conversationId format '${String(task.conversationId)}'.`,
-      };
-    }
-
-    return {
-      kind: "resume",
-      conversationId: task.conversationId,
-      prompt: task.prompt,
-    };
-  }
-
-  if (typeof task.agent !== "string" || !task.agent.trim()) {
-    return { error: "Task agent must be a non-empty string." };
-  }
-
-  if (task.label !== undefined && (typeof task.label !== "string" || !task.label.trim())) {
-    return { error: "Task label must be a non-empty string when present." };
-  }
-
-  if (task.skills !== undefined && (
-    !Array.isArray(task.skills)
-    || !task.skills.every(skill => typeof skill === "string" && skill.trim())
-  )) {
-    return { error: "Task skills must contain only non-empty strings." };
-  }
-
+export function parseSpawnTask(raw: unknown): ParsedRunRequest {
+  const task = parseObject(raw);
+  if (!task) return { error: "Spawn task must be an object." };
+  const extra = Object.keys(task).find(key => !["agent", "prompt", "label", "skills", "model", "thinking", "cwd"].includes(key));
+  if (extra) return { error: `Spawn task property ${extra} is not allowed.` };
+  if (typeof task.agent !== "string" || !task.agent.trim()) return { error: "Spawn task agent must be a non-empty string." };
+  const promptError = validateNonBlank(task.prompt, "Spawn task prompt");
+  if (promptError) return promptError;
+  if (task.label !== undefined && (typeof task.label !== "string" || !task.label.trim())) return { error: "Spawn task label must be a non-empty string when present." };
+  if (task.skills !== undefined && (!Array.isArray(task.skills) || !task.skills.every(skill => typeof skill === "string" && skill.trim()))) return { error: "Spawn task skills must contain only non-empty strings." };
   for (const field of ["model", "cwd"] as const) {
     const value = task[field];
-    if (value !== undefined && (typeof value !== "string" || !value.trim())) {
-      return { error: `Task ${field} must be a non-empty string when present.` };
-    }
+    if (value !== undefined && (typeof value !== "string" || !value.trim())) return { error: `Spawn task ${field} must be a non-empty string when present.` };
   }
-
-  if (task.thinking !== undefined && !isModelThinkingLevel(task.thinking)) {
-    return {
-      error: `Task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.`,
-    };
-  }
-
+  if (task.thinking !== undefined && !isModelThinkingLevel(task.thinking)) return { error: `Spawn task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.` };
   return {
     kind: "spawn",
     agent: task.agent,
-    prompt: task.prompt,
+    prompt: task.prompt as string,
     ...(task.label !== undefined ? { label: task.label as string } : {}),
     ...(task.skills !== undefined ? { skills: task.skills as string[] } : {}),
     ...(task.model !== undefined ? { model: task.model as string } : {}),
     ...(task.thinking !== undefined ? { thinking: task.thinking as ModelThinkingLevel } : {}),
     ...(task.cwd !== undefined ? { cwd: task.cwd as string } : {}),
   };
+}
+
+export function parseResumeTask(raw: unknown): ParsedRunRequest {
+  const task = parseObject(raw);
+  if (!task) return { error: "Resume task must be an object." };
+  const extra = Object.keys(task).find(key => !["conversationId", "prompt"].includes(key));
+  if (extra) return { error: `Resume task property ${extra} is not allowed.` };
+  if (!isConversationId(task.conversationId)) {
+    return { error: isRunId(task.conversationId)
+      ? `Resume task conversationId '${task.conversationId}' is invalid (a run ID is not accepted).`
+      : `Resume task received invalid conversationId format '${String(task.conversationId)}'.` };
+  }
+  const promptError = validateNonBlank(task.prompt, "Resume task prompt");
+  return promptError ?? { kind: "resume", conversationId: task.conversationId, prompt: task.prompt as string };
+}
+
+export function parseSteerMessage(raw: unknown): ParsedSteerRequest {
+  const steer = parseObject(raw);
+  if (!steer) return { error: "Steer message must be an object." };
+  const extra = Object.keys(steer).find(key => !["runId", "message"].includes(key));
+  if (extra) return { error: `Steer message property ${extra} is not allowed.` };
+  if (!isRunId(steer.runId)) {
+    return { error: isConversationId(steer.runId)
+      ? `Steer message runId '${steer.runId}' is invalid (a conversation ID is not accepted).`
+      : `Steer message received invalid runId format '${String(steer.runId)}'.` };
+  }
+  const messageError = validateNonBlank(steer.message, "Steer message");
+  return messageError ?? { kind: "steer", runId: steer.runId, message: steer.message as string };
+}
+
+function parseObject(raw: unknown): Record<string, unknown> | undefined {
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : undefined;
+}
+
+function validateNonBlank(value: unknown, name: string): { error: string } | undefined {
+  return typeof value === "string" && value.trim()
+    ? undefined
+    : { error: `${name} must be a non-empty string.` };
 }
