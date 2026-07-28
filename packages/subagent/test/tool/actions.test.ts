@@ -38,10 +38,10 @@ const joinBinding = (
   release: hooks.release ?? (() => {}),
 });
 
-test("run forwards validated tasks and preserves outcome order", async () => {
+test("run groups spawn receipts, preserves order, and includes labels", async () => {
   const tasks = [
-    { kind: "spawn" as const, agent: "helper", prompt: "valid" },
-    { kind: "spawn" as const, agent: "missing", prompt: "unknown agent" },
+    { kind: "spawn" as const, agent: "helper", prompt: "valid", label: "valid task" },
+    { kind: "spawn" as const, agent: "missing", prompt: "unknown agent", label: "missing agent" },
   ];
   const received: any[] = [];
   const manager = {
@@ -56,14 +56,17 @@ test("run forwards validated tasks and preserves outcome order", async () => {
   };
   const result = await runAction(deps(manager), { action: "run", spawns: tasks, resumes: [] }, {} as any);
   assert.deepEqual(received, tasks);
-  assert.deepEqual(json(result), [
-    { ok: true, inputIndex: 0, conversationId, runId },
-    { ok: false, inputIndex: 1, error: "Unknown agent: missing." },
-  ]);
+  assert.deepEqual(json(result), {
+    spawns: [
+      { ok: true, label: "valid task", conversationId, runId },
+      { ok: false, label: "missing agent", error: "Unknown agent: missing." },
+    ],
+    resumes: [],
+  });
   assert.equal(result.isError, false);
 });
 
-test("run processes spawn tasks before resume tasks with combined outcome indexes", async () => {
+test("run returns spawn and resume receipts in separate arrays", async () => {
   const received: any[] = [];
   const manager = {
     startRun: (_ctx: any, [task]: any[]) => {
@@ -71,7 +74,7 @@ test("run processes spawn tasks before resume tasks with combined outcome indexe
       const start = { ok: true as const, inputIndex: 0, conversationId, runId };
       return { starts: [start], completion: Promise.resolve([start]) };
     },
-    listConversations: () => [],
+    listConversations: () => [{ ...snapshot(), label: "retained task" }],
   };
 
   const result = await runAction(deps(manager), {
@@ -81,13 +84,16 @@ test("run processes spawn tasks before resume tasks with combined outcome indexe
   }, {} as any);
 
   assert.deepEqual(received.map(task => task.kind), ["spawn", "resume"]);
-  assert.deepEqual(json(result).map((outcome: any) => outcome.inputIndex), [0, 1]);
+  assert.deepEqual(json(result), {
+    spawns: [{ ok: true, conversationId, runId }],
+    resumes: [{ ok: true, label: "retained task", conversationId, runId }],
+  });
 });
 
 test("run returns task parse failures while starting valid siblings", async () => {
   const tasks = [
     { kind: "spawn" as const, agent: "helper", prompt: "first" },
-    { error: "Task must carry exactly one of agent (spawn), conversationId (resume), or runId (steer)." },
+    { error: "Spawn task agent must be a non-empty string.", label: "invalid spawn" },
     { kind: "spawn" as const, agent: "missing", prompt: "third" },
   ];
   const manager = {
@@ -102,11 +108,14 @@ test("run returns task parse failures while starting valid siblings", async () =
 
   const result = await runAction(deps(manager), { action: "run", spawns: tasks, resumes: [] }, {} as any);
 
-  assert.deepEqual(json(result), [
-    { ok: true, inputIndex: 0, conversationId, runId },
-    { ok: false, inputIndex: 1, error: tasks[1].error },
-    { ok: false, inputIndex: 2, error: "Unknown agent: missing." },
-  ]);
+  assert.deepEqual(json(result), {
+    spawns: [
+      { ok: true, conversationId, runId },
+      { ok: false, label: "invalid spawn", error: tasks[1].error },
+      { ok: false, error: "Unknown agent: missing." },
+    ],
+    resumes: [],
+  });
   assert.equal(result.isError, false);
 });
 

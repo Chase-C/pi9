@@ -114,13 +114,13 @@ test("steer validates its own batch and limit", () => {
 test("item parse failures remain indexed within their typed arrays", () => {
   assert.deepEqual(parseSubagentInvocation({
     action: "run",
-    spawns: [{ agent: "helper", prompt: "first" }, { prompt: "missing agent" }],
+    spawns: [{ agent: "helper", prompt: "first" }, { prompt: "missing agent", label: "invalid spawn" }],
     resumes: [{ conversationId, prompt: "third" }],
   }), {
     action: "run",
     spawns: [
       { kind: "spawn", agent: "helper", prompt: "first" },
-      { error: "Spawn task agent must be a non-empty string." },
+      { error: "Spawn task agent must be a non-empty string.", label: "invalid spawn" },
     ],
     resumes: [{ kind: "resume", conversationId, prompt: "third" }],
   });

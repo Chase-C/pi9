@@ -55,7 +55,7 @@ The body becomes the child system prompt. `spawns` entries require `agent` and `
 | --- | --- |
 | `agents` | Discover agent definitions and their resolved defaults. |
 | `list` | Return a lightweight inventory of conversations and runs without run output. It is pure: it acknowledges nothing and changes no lifecycle state. |
-| `run` | Start `spawns`, `resumes`, or both and return ordered outcomes. Both task types create asynchronous runs. |
+| `run` | Start `spawns`, `resumes`, or both and return matching `spawns` and `resumes` receipt arrays. Both task types create asynchronous runs. |
 | `steer` | Send `messages` to existing running runs and return ordered lifecycle receipts after Pi accepts each message. |
 | `inspect` | Return bounded status, running phase, current message, recent tool activity, and steer receipts for exact runs without waiting or acknowledging them. Invalid targets become ordered per-target errors. Terminal output is omitted. |
 | `join` | Block until every explicitly requested exact run settles, then return and acknowledge exactly those runs. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying runs. |
@@ -65,18 +65,22 @@ Parallel runs stream their current status and recent tool activity independently
 
 ![Two parallel subagent runs with one completed and one still exploring the codebase](media/live-parallel-runs.png)
 
-Each run task or steer message is handled independently after the tool call passes SDK schema validation. Item-level parsing, startup, and steering failures—such as a missing agent, an unknown agent, an invalid model, a missing working directory, or a non-running steer target—return an ordered `{ ok: false, inputIndex, error }` outcome without preventing valid siblings from proceeding. For `run`, spawn outcomes precede resume outcomes because the inputs are separate arrays. Invalid outer invocations—including a missing or unknown action, absent or empty inputs, and batch-limit violations—remain global errors. Provider-level schema violations may reject the tool call before execution.
+Each run task or steer message is handled independently after the tool call passes SDK schema validation. Item-level failures do not prevent valid siblings from proceeding. `run` returns `{ spawns, resumes }`, with each receipt in the same position as its input task; receipts include the task's optional label when known. Steer failures return an ordered `{ ok: false, inputIndex, error }` outcome. Invalid outer invocations—including a missing or unknown action, absent or empty inputs, and batch-limit violations—remain global errors. Provider-level schema violations may reject the tool call before execution.
 
 Successful steer outcomes include a `steer` receipt with a per-run numeric ID, state, and timestamps. Receipt states advance from `queued` when Pi accepts the message, to `delivered` when the steering user message enters the child turn, and to `processed` when the assistant begins responding with that message in context. `processed` does not mean the requested work succeeded. A run that terminates before a queued or delivered steer is processed marks that receipt `discarded`.
 
-For example, a three-task `run` call can return a successful start, a task-level failure, and another successful start in array order:
+For example, a mixed `run` call returns spawn and resume receipts in arrays matching the request:
 
 ```json
-[
-  { "ok": true, "inputIndex": 0, "conversationId": "quiet-otter", "runId": "search-boldly" },
-  { "ok": false, "inputIndex": 1, "error": "Spawn task agent must be a non-empty string." },
-  { "ok": true, "inputIndex": 2, "conversationId": "calm-fox", "runId": "inspect-carefully" }
-]
+{
+  "spawns": [
+    { "ok": true, "label": "auth map", "conversationId": "quiet-otter", "runId": "search-boldly" },
+    { "ok": false, "label": "risk review", "error": "Unknown agent: missing." }
+  ],
+  "resumes": [
+    { "ok": true, "label": "follow-up", "conversationId": "calm-fox", "runId": "inspect-carefully" }
+  ]
+}
 ```
 
 Rejected tasks and messages receive no `conversationId` or `runId`. Accepted spawn and resume tasks enter the run lifecycle; accepted steer messages return the existing target identities and do not create lifecycle records.

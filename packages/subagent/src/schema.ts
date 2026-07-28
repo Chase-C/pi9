@@ -76,7 +76,7 @@ export type SteerRequest = {
 export type RunRequest = SpawnRequest | ResumeRequest;
 export type InspectTarget = RunId | { runId: string; error: string };
 export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
-export type ParsedRunRequest = RunRequest | { error: string };
+export type ParsedRunRequest = RunRequest | { error: string; label?: string };
 export type ParsedSteerRequest = SteerRequest | { error: string };
 
 export type SubagentInvocation =
@@ -286,18 +286,22 @@ function parseIds<T extends string>(
 export function parseSpawnTask(raw: unknown): ParsedRunRequest {
   const task = parseObject(raw);
   if (!task) return { error: "Spawn task must be an object." };
+  const error = (message: string): ParsedRunRequest => ({
+    error: message,
+    ...(typeof task.label === "string" && task.label.trim() ? { label: task.label } : {}),
+  });
   const extra = Object.keys(task).find(key => !["agent", "prompt", "label", "skills", "model", "thinking", "cwd"].includes(key));
-  if (extra) return { error: `Spawn task property ${extra} is not allowed.` };
-  if (typeof task.agent !== "string" || !task.agent.trim()) return { error: "Spawn task agent must be a non-empty string." };
+  if (extra) return error(`Spawn task property ${extra} is not allowed.`);
+  if (typeof task.agent !== "string" || !task.agent.trim()) return error("Spawn task agent must be a non-empty string.");
   const promptError = validateNonBlank(task.prompt, "Spawn task prompt");
-  if (promptError) return promptError;
-  if (task.label !== undefined && (typeof task.label !== "string" || !task.label.trim())) return { error: "Spawn task label must be a non-empty string when present." };
-  if (task.skills !== undefined && (!Array.isArray(task.skills) || !task.skills.every(skill => typeof skill === "string" && skill.trim()))) return { error: "Spawn task skills must contain only non-empty strings." };
+  if (promptError) return error(promptError.error);
+  if (task.label !== undefined && (typeof task.label !== "string" || !task.label.trim())) return error("Spawn task label must be a non-empty string when present.");
+  if (task.skills !== undefined && (!Array.isArray(task.skills) || !task.skills.every(skill => typeof skill === "string" && skill.trim()))) return error("Spawn task skills must contain only non-empty strings.");
   for (const field of ["model", "cwd"] as const) {
     const value = task[field];
-    if (value !== undefined && (typeof value !== "string" || !value.trim())) return { error: `Spawn task ${field} must be a non-empty string when present.` };
+    if (value !== undefined && (typeof value !== "string" || !value.trim())) return error(`Spawn task ${field} must be a non-empty string when present.`);
   }
-  if (task.thinking !== undefined && !isModelThinkingLevel(task.thinking)) return { error: `Spawn task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.` };
+  if (task.thinking !== undefined && !isModelThinkingLevel(task.thinking)) return error(`Spawn task thinking must be one of: ${MODEL_THINKING_LEVELS.join(", ")}.`);
   return {
     kind: "spawn",
     agent: task.agent,

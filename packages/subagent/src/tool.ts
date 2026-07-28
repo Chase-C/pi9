@@ -33,6 +33,9 @@ type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { act
 type OrderedDispatchOutcome =
   | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId; readonly steer?: SteerReceipt }
   | { readonly ok: false; readonly inputIndex: number; readonly error: string };
+type RunReceipt =
+  | { readonly ok: true; readonly label?: string; readonly conversationId: ConversationId; readonly runId: RunId }
+  | { readonly ok: false; readonly label?: string; readonly error: string };
 
 function jsonResult(json: unknown, details: SubagentToolDetails): ActionResult {
   return {
@@ -110,9 +113,14 @@ export async function runAction(
     outcomes.push({ ...handle.starts[0], inputIndex });
   }
 
-  return jsonResult(outcomes, {
+  const conversations = conversationSnapshots(deps.runtime);
+  const receipts = outcomes.map((outcome, index) => projectRunReceipt(tasks[index], outcome, conversations));
+  return jsonResult({
+    spawns: receipts.slice(0, invocation.spawns.length),
+    resumes: receipts.slice(invocation.spawns.length),
+  }, {
     action: "run",
-    tasks: renderDispatchItems(tasks, outcomes, conversationSnapshots(deps.runtime)),
+    tasks: renderDispatchItems(tasks, outcomes, conversations),
   });
 }
 
@@ -245,8 +253,25 @@ export async function removeAction(
   return jsonResult(result, { action: "remove", ...result });
 }
 
+function projectRunReceipt(
+  task: RunRequest | { error: string; label?: string } | undefined,
+  outcome: OrderedDispatchOutcome,
+  conversations: readonly ConversationSnapshot[],
+): RunReceipt {
+  const label = task && "error" in task
+    ? task.label
+    : task?.kind === "spawn"
+      ? task.label
+      : task?.kind === "resume"
+        ? conversations.find(conversation => conversation.conversationId === task.conversationId)?.label
+        : undefined;
+  return outcome.ok
+    ? { ok: true, ...(label ? { label } : {}), conversationId: outcome.conversationId, runId: outcome.runId }
+    : { ok: false, ...(label ? { label } : {}), error: outcome.error };
+}
+
 function renderDispatchItems(
-  tasks: readonly (RunRequest | SteerRequest | { error: string })[],
+  tasks: readonly (RunRequest | SteerRequest | { error: string; label?: string })[],
   starts: readonly OrderedDispatchOutcome[],
   conversations: readonly ConversationSnapshot[],
 ): DispatchTaskRenderItem[] {
