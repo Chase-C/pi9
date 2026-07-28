@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { agentsAction, cancelAction, inspectAction, joinAction, listAction, removeAction, runAction, steerAction } from "../../src/tool.js";
+import { agentsAction, cancelAction, inspectAction, joinAction, listAction, removeAction, resumeAction, spawnAction, steerAction } from "../../src/tool.js";
 
 const conversationId = "amber-acorn" as any;
 const runId = "adapt-ably" as any;
@@ -50,12 +50,11 @@ test("agents returns definitions in the common response envelope", () => {
 
   assert.deepEqual(json(result), {
     action: "agents",
-    ok: true,
-    data: { agents: [agent] },
+    results: [agent],
   });
 });
 
-test("run groups spawn receipts, preserves order, and includes labels", async () => {
+test("spawn preserves receipt order and includes labels", async () => {
   const tasks = [
     { kind: "spawn" as const, agent: "helper", prompt: "valid", label: "valid task" },
     { kind: "spawn" as const, agent: "missing", prompt: "unknown agent", label: "missing agent" },
@@ -71,23 +70,19 @@ test("run groups spawn receipts, preserves order, and includes labels", async ()
     },
     listConversations: () => [],
   };
-  const result = await runAction(deps(manager), { action: "run", spawns: tasks, resumes: [] }, {} as any);
+  const result = await spawnAction(deps(manager), { action: "spawn", spawns: tasks }, {} as any);
   assert.deepEqual(received, tasks);
   assert.deepEqual(json(result), {
-    action: "run",
-    ok: true,
-    data: {
-      spawns: [
-        { ok: true, label: "valid task", conversationId, runId },
-        { ok: false, label: "missing agent", error: "Unknown agent: missing." },
-      ],
-      resumes: [],
-    },
+    action: "spawn",
+    results: [
+      { ok: true, data: { label: "valid task", conversationId, runId } },
+      { ok: false, error: "Unknown agent: missing." },
+    ],
   });
   assert.equal(result.isError, false);
 });
 
-test("run returns spawn and resume receipts in separate arrays", async () => {
+test("spawn and resume return independent ordered receipt arrays", async () => {
   const received: any[] = [];
   const manager = {
     startRun: (_ctx: any, [task]: any[]) => {
@@ -98,24 +93,27 @@ test("run returns spawn and resume receipts in separate arrays", async () => {
     listConversations: () => [{ ...snapshot(), label: "retained task" }],
   };
 
-  const result = await runAction(deps(manager), {
-    action: "run",
+  const spawned = await spawnAction(deps(manager), {
+    action: "spawn",
     spawns: [{ kind: "spawn", agent: "helper", prompt: "new" }],
+  }, {} as any);
+  const resumed = await resumeAction(deps(manager), {
+    action: "resume",
     resumes: [{ kind: "resume", conversationId, prompt: "continue" }],
   }, {} as any);
 
   assert.deepEqual(received.map(task => task.kind), ["spawn", "resume"]);
-  assert.deepEqual(json(result), {
-    action: "run",
-    ok: true,
-    data: {
-      spawns: [{ ok: true, conversationId, runId }],
-      resumes: [{ ok: true, label: "retained task", conversationId, runId }],
-    },
+  assert.deepEqual(json(spawned), {
+    action: "spawn",
+    results: [{ ok: true, data: { conversationId, runId } }],
+  });
+  assert.deepEqual(json(resumed), {
+    action: "resume",
+    results: [{ ok: true, data: { label: "retained task", conversationId, runId } }],
   });
 });
 
-test("run returns task parse failures while starting valid siblings", async () => {
+test("spawn returns task parse failures while starting valid siblings", async () => {
   const tasks = [
     { kind: "spawn" as const, agent: "helper", prompt: "first" },
     { error: "Spawn task agent must be a non-empty string.", label: "invalid spawn" },
@@ -131,19 +129,15 @@ test("run returns task parse failures while starting valid siblings", async () =
     listConversations: () => [],
   };
 
-  const result = await runAction(deps(manager), { action: "run", spawns: tasks, resumes: [] }, {} as any);
+  const result = await spawnAction(deps(manager), { action: "spawn", spawns: tasks }, {} as any);
 
   assert.deepEqual(json(result), {
-    action: "run",
-    ok: true,
-    data: {
-      spawns: [
-        { ok: true, conversationId, runId },
-        { ok: false, label: "invalid spawn", error: tasks[1].error },
-        { ok: false, error: "Unknown agent: missing." },
-      ],
-      resumes: [],
-    },
+    action: "spawn",
+    results: [
+      { ok: true, data: { conversationId, runId } },
+      { ok: false, error: tasks[1].error },
+      { ok: false, error: "Unknown agent: missing." },
+    ],
   });
   assert.equal(result.isError, false);
 });
@@ -170,9 +164,8 @@ test("steer sends multiple messages in input order", async () => {
   assert.deepEqual(received, [[runId, "first"], [secondRunId, "second"], [runId, "third"]]);
   const response = json(result);
   assert.equal(response.action, "steer");
-  assert.equal(response.ok, true);
-  assert.deepEqual(response.data.messages.map((entry: any) => entry.runId), [runId, secondRunId, runId]);
-  assert.deepEqual(response.data.messages.map((entry: any) => entry.steer.id), [1, 2, 3]);
+  assert.deepEqual(response.results.map((entry: any) => entry.data.runId), [runId, secondRunId, runId]);
+  assert.deepEqual(response.results.map((entry: any) => entry.data.steer.id), [1, 2, 3]);
   assert.deepEqual((result.details as any).tasks.map((task: any) => task.kind), ["steer", "steer", "steer"]);
   assert.deepEqual((result.details as any).tasks.map((task: any) => task.steer.id), [1, 2, 3]);
 });
@@ -196,13 +189,10 @@ test("steer isolates failures from sibling messages", async () => {
 
   assert.deepEqual(json(result), {
     action: "steer",
-    ok: true,
-    data: {
-      messages: [
-        { ok: false, inputIndex: 0, error: "Run is queued and cannot be steered." },
-        { ok: true, inputIndex: 1, conversationId, runId: secondRunId },
-      ],
-    },
+    results: [
+      { ok: false, error: "Run is queued and cannot be steered." },
+      { ok: true, data: { conversationId, runId: secondRunId } },
+    ],
   });
 });
 
@@ -220,8 +210,7 @@ test("cancel aborts an exact run while retaining its identity", async () => {
   assert.equal(result.isError, false);
   assert.deepEqual(json(result), {
     action: "cancel",
-    ok: true,
-    data: { runs: [{ conversationId, runId, status: "aborted" }] },
+    results: [{ ok: true, data: { conversationId, runId, status: "aborted" } }],
   });
 });
 
@@ -252,13 +241,10 @@ test("cancel starts valid targets concurrently while preserving input order", as
 
   assert.deepEqual(json(await resultPromise), {
     action: "cancel",
-    ok: true,
-    data: {
-      runs: [
-        { conversationId, runId, status: "aborted" },
-        { conversationId, runId: secondRunId, status: "aborted" },
-      ],
-    },
+    results: [
+      { ok: true, data: { conversationId, runId, status: "aborted" } },
+      { ok: true, data: { conversationId, runId: secondRunId, status: "aborted" } },
+    ],
   });
 });
 
@@ -283,14 +269,11 @@ test("cancel isolates malformed and runtime failures from valid siblings", async
 
   assert.deepEqual(json(result), {
     action: "cancel",
-    ok: true,
-    data: {
-      runs: [
-        { runId: "not-an-id", error: "invalid runId format" },
-        { runId, error: `Run ${runId} is completed and cannot be cancelled.` },
-        { conversationId, runId: secondRunId, status: "aborted" },
-      ],
-    },
+    results: [
+      { ok: false, error: "invalid runId format" },
+      { ok: false, error: `Run ${runId} is completed and cannot be cancelled.` },
+      { ok: true, data: { conversationId, runId: secondRunId, status: "aborted" } },
+    ],
   });
 });
 
@@ -311,8 +294,7 @@ test("inspect returns bounded progress without terminal output", () => {
   const result = inspectAction(deps(manager), { action: "inspect", runIds: [runId] });
   const response = json(result);
   assert.equal(response.action, "inspect");
-  assert.equal(response.ok, true);
-  const [entry] = response.data.runs;
+  const [{ data: entry }] = response.results;
 
   assert.equal(entry.status, "running");
   assert.equal(entry.phase, "thinking");
@@ -341,10 +323,10 @@ test("inspect isolates malformed and unknown targets from valid siblings", () =>
     runIds: [runId, malformed, unknownRunId],
   });
 
-  const entries = json(result).data.runs;
-  assert.equal(entries[0].runId, runId);
-  assert.deepEqual(entries[1], { inputIndex: 1, runId: "not-an-id", error: "invalid runId format" });
-  assert.deepEqual(entries[2], { inputIndex: 2, runId: unknownRunId, error: `Unknown run: ${unknownRunId}.` });
+  const entries = json(result).results;
+  assert.equal(entries[0].data.runId, runId);
+  assert.deepEqual(entries[1], { ok: false, error: "invalid runId format" });
+  assert.deepEqual(entries[2], { ok: false, error: `Unknown run: ${unknownRunId}.` });
   assert.equal(result.isError, false);
 });
 
@@ -363,7 +345,7 @@ test("inspect omits terminal output and completed message text", () => {
 
   assert.equal(result.isError, false);
   assert.doesNotMatch(result.content[0].text, /SECRET/);
-  assert.equal(json(result).data.runs[0].recentTools[0].status, "interrupted");
+  assert.equal(json(result).results[0].data.recentTools[0].status, "interrupted");
 });
 
 test("inspect includes a bounded diagnostic for a failed run", () => {
@@ -378,7 +360,7 @@ test("inspect includes a bounded diagnostic for a failed run", () => {
   const result = inspectAction(deps(manager), { action: "inspect", runIds: [runId] });
 
   assert.equal(result.isError, false);
-  assert.equal(json(result).data.runs[0].errorSnippet, "Model request failed.");
+  assert.equal(json(result).results[0].data.errorSnippet, "Model request failed.");
 });
 
 test("inspect bounds diagnostics for every terminal outcome with an error", () => {
@@ -391,7 +373,7 @@ test("inspect bounds diagnostics for every terminal outcome with an error", () =
       conversationDisplay: () => ({ conversationId, agentName: "helper" }),
     };
 
-    const [entry] = json(inspectAction(deps(manager), { action: "inspect", runIds: [runId] })).data.runs;
+    const [{ data: entry }] = json(inspectAction(deps(manager), { action: "inspect", runIds: [runId] })).results;
 
     assert.equal(entry.errorSnippet.length, 500);
     assert.doesNotMatch(entry.errorSnippet, /\s{2,}/);
@@ -411,8 +393,7 @@ test("list is output-free and filtering is pure", () => {
   assert.equal(calls, 1);
   const response = json(result);
   assert.equal(response.action, "list");
-  assert.equal(response.ok, true);
-  assert.deepEqual(response.data.runs.map((entry: any) => [
+  assert.deepEqual(response.results.map((entry: any) => [
     entry.conversationId,
     entry.runId,
     entry.status,
@@ -431,12 +412,33 @@ test("remove forwards only the explicit conversation batch", async () => {
   assert.deepEqual(received, [conversationId]);
   assert.deepEqual(json(result), {
     action: "remove",
-    ok: true,
-    data: {
-      removed: 1,
-      conversations: [conversationId],
-      errors: [],
+    results: [{ ok: true, data: { conversationId, removed: true } }],
+  });
+});
+
+test("remove preserves ordered malformed and runtime failures without hiding valid siblings", async () => {
+  const unknownConversationId = "silent-meadow" as any;
+  const malformed = { conversationId: "not-an-id", error: "invalid conversationId format" };
+  let received: any;
+  const result = await removeAction(deps({
+    removeConversations: async (ids: any) => {
+      received = ids;
+      return {
+        removed: 1,
+        conversationIds: [conversationId],
+        errors: [{ conversationId: unknownConversationId, error: `Unknown conversation: ${unknownConversationId}.` }],
+      };
     },
+  }), { action: "remove", conversationIds: [conversationId, malformed, unknownConversationId] });
+
+  assert.deepEqual(received, [conversationId, unknownConversationId]);
+  assert.deepEqual(json(result), {
+    action: "remove",
+    results: [
+      { ok: true, data: { conversationId, removed: true } },
+      { ok: false, error: "invalid conversationId format" },
+      { ok: false, error: `Unknown conversation: ${unknownConversationId}.` },
+    ],
   });
 });
 
@@ -469,25 +471,17 @@ test("join returns projected child errors as successful tool results", async () 
   assert.equal(result.isError, false);
   assert.deepEqual(json(result), {
     action: "join",
-    ok: true,
-    data: {
-      runs: [{
-        conversationId,
-        runId,
-        status: "error",
-        error: "child failed",
-      }],
-    },
+    results: [{
+      ok: true,
+      data: { conversationId, runId, status: "error", error: "child failed" },
+    }],
   });
   assert.equal(released, 1);
   assert.equal(acknowledged, 1);
   assert.ok(updates.length >= 1);
   assert.deepEqual(JSON.parse(updates[0].content[0].text), {
     action: "join",
-    ok: true,
-    data: {
-      runs: [{ conversationId, runId, status: "error", error: "child failed" }],
-    },
+    results: [{ ok: true, data: { conversationId, runId, status: "error", error: "child failed" } }],
   });
 });
 
@@ -552,7 +546,7 @@ test("join streams updates and preserves binding order", async () => {
     update => updates.push(update),
   );
   listener();
-  assert.deepEqual(json(await promise).data.runs.map((entry: any) => entry.runId), [runId, secondRunId]);
+  assert.deepEqual(json(await promise).results.map((entry: any) => entry.data.runId), [runId, secondRunId]);
   assert.ok(updates.length >= 2);
 });
 
@@ -577,7 +571,6 @@ test("caller cancellation releases join without cancelling child work", async ()
   assert.equal(result.isError, true);
   assert.deepEqual(json(result), {
     action: "join",
-    ok: false,
     error: "Join cancelled by caller.",
   });
   assert.equal(released, 1);
@@ -642,10 +635,10 @@ test("nested join records one binding for valid siblings and returns invalid tar
   }, undefined, undefined);
 
   assert.deepEqual(boundIds, [childRunId]);
-  assert.deepEqual(json(result).data.runs, [
-    { runId: "not-an-id", error: "invalid runId format" },
-    { conversationId, runId: childRunId, status: "completed" },
-    { runId: unknownRunId, error: `Unknown run: ${unknownRunId}.` },
+  assert.deepEqual(json(result).results, [
+    { ok: false, error: "invalid runId format" },
+    { ok: true, data: { conversationId, runId: childRunId, status: "completed" } },
+    { ok: false, error: `Unknown run: ${unknownRunId}.` },
   ]);
 });
 
@@ -677,11 +670,9 @@ test("a bound join acknowledges an aborted outcome after cancellation", async ()
     undefined,
   );
   resolve();
-  assert.deepEqual(json(await pending).data.runs, [{
-    conversationId,
-    runId,
-    status: "aborted",
-    error: "Run cancelled.",
+  assert.deepEqual(json(await pending).results, [{
+    ok: true,
+    data: { conversationId, runId, status: "aborted", error: "Run cancelled." },
   }]);
   assert.equal(acknowledged, 1);
 });
@@ -749,10 +740,10 @@ test("join isolates malformed and unknown targets from valid siblings", async ()
 
   assert.equal(result.isError, false);
   assert.equal(subscribed, true);
-  assert.deepEqual(json(result).data.runs, [
-    { conversationId, runId, status: "completed", output: "done" },
-    malformed,
-    { runId: unknownRunId, error: `Unknown run: ${unknownRunId}.` },
+  assert.deepEqual(json(result).results, [
+    { ok: true, data: { conversationId, runId, status: "completed", output: "done" } },
+    { ok: false, error: malformed.error },
+    { ok: false, error: `Unknown run: ${unknownRunId}.` },
   ]);
 });
 
@@ -777,8 +768,8 @@ test("join returns item errors without binding when no target resolves", async (
   );
   assert.equal(result.isError, false);
   assert.equal(subscribed, false);
-  assert.deepEqual(json(result).data.runs, [
-    { runId: "not-an-id", error: "invalid runId format" },
-    { runId: "assemble-abruptly", error: "Unknown run: assemble-abruptly." },
+  assert.deepEqual(json(result).results, [
+    { ok: false, error: "invalid runId format" },
+    { ok: false, error: "Unknown run: assemble-abruptly." },
   ]);
 });

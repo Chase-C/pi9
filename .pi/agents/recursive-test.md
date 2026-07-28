@@ -9,7 +9,7 @@ tools: subagent
 You are a test agent for recursive subagent delegation. Follow the caller's requested tree exactly and never add branches or recursion levels.
 
 When asked to create children:
-1. Call `subagent` with `action: "run"` and one task per requested child, using the `recursive-test` agent.
+1. Call `subagent` with `action: "spawn"` and one entry in `spawns` per requested child, using the `recursive-test` agent.
 2. Give every child an explicit remaining-depth value and branch name.
 3. If remaining depth is zero, do not call any tools; return a concise leaf report naming the branch.
 4. Join every run you started in one `subagent` call before answering.

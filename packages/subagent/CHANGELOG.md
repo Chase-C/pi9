@@ -15,11 +15,10 @@ This changelog starts with version `v0.2.1`.
 
 ### Breaking
 
-- Wrap every processed tool result in `{ action, ok, data }` on success or `{ action, ok, error }` on global failure; action-specific payloads now live under `data`.
-- Replace `dispatch(tasks)` with `run(spawns?, resumes?)` and `steer(messages)`. Steering messages use `{ runId, message }`; there is no compatibility alias.
+- Return `{ action, results }` for processed commands and `{ action, error }` for command-level failures. Ordered batch entries use `{ ok: true, data }` or `{ ok: false, error }`.
+- Replace `dispatch(tasks)` and `run(spawns?, resumes?)` with separate `spawn(spawns)`, `resume(resumes)`, and `steer(messages)` actions; there are no compatibility aliases.
 - Split the shared task schema into distinct spawn, resume, and steer item schemas and remove redundant field descriptions.
-- Return `run` outcomes as matching `{ spawns, resumes }` receipt arrays without `inputIndex`; include each task's optional label when known.
-- Return malformed, unknown, and unauthorized `join` targets as ordered per-target errors instead of rejecting the whole batch.
+- Return malformed, unknown, and unauthorized batch targets as ordered per-item errors instead of rejecting valid siblings.
 - Add `cancel(runIds)` for stopping exact queued or running runs while retaining their conversations and aborted outcomes.
 - Make `remove(conversationIds)` reject active conversations and permanently delete terminal conversations with all associated run records; removed runs are no longer inspectable or joinable.
 - Preserve recursive access by reparenting surviving descendant ownership when an intermediate conversation is removed, and suppress stale updates from join bindings to deleted conversations.

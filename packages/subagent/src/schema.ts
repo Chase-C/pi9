@@ -28,7 +28,7 @@ export const SteerMessageSchema = Type.Object({
   message: NonBlankString(),
 }, { additionalProperties: false });
 
-export const SUBAGENT_ACTIONS = ["agents", "list", "run", "steer", "cancel", "inspect", "join", "remove"] as const;
+export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
 export const RUN_STATUSES = [
   "queued", "running", "completed", "error", "aborted", "interrupted", "skipped",
 ] as const;
@@ -75,22 +75,26 @@ export type SteerRequest = {
 
 export type RunRequest = SpawnRequest | ResumeRequest;
 export type RunTarget = RunId | { runId: string; error: string };
+export type ConversationTarget = ConversationId | { conversationId: string; error: string };
 export type CancelTarget = RunTarget;
 export type InspectTarget = RunTarget;
 export type JoinTarget = RunTarget;
 export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
 export type ParsedRunRequest = RunRequest | { error: string; label?: string };
+export type ParsedSpawnRequest = SpawnRequest | { error: string; label?: string };
+export type ParsedResumeRequest = ResumeRequest | { error: string };
 export type ParsedSteerRequest = SteerRequest | { error: string };
 
 export type SubagentInvocation =
   | { action: "agents" }
   | { action: "list"; status?: RunStatus[] }
-  | { action: "run"; spawns: ParsedRunRequest[]; resumes: ParsedRunRequest[] }
+  | { action: "spawn"; spawns: ParsedSpawnRequest[] }
+  | { action: "resume"; resumes: ParsedResumeRequest[] }
   | { action: "steer"; messages: ParsedSteerRequest[] }
   | { action: "cancel"; runIds: CancelTarget[] }
   | { action: "inspect"; runIds: InspectTarget[] }
   | { action: "join"; runIds: JoinTarget[] }
-  | { action: "remove"; conversationIds: ConversationId[] };
+  | { action: "remove"; conversationIds: ConversationTarget[] };
 
 export type SubagentInvocationParseError = {
   error: string;
@@ -110,7 +114,8 @@ export interface ParseSubagentInvocationOptions {
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
   list: ["action", "status"],
-  run: ["action", "spawns", "resumes"],
+  spawn: ["action", "spawns"],
+  resume: ["action", "resumes"],
   steer: ["action", "messages"],
   cancel: ["action", "runIds"],
   inspect: ["action", "runIds"],
@@ -129,14 +134,14 @@ export function parseSubagentInvocation(
 
   if (!action) {
     return {
-      error: 'Provide an action: "agents", "list", "run", "steer", "cancel", "inspect", "join", or "remove".',
+      error: 'Provide an action: "agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", or "remove".',
       missingAction: true,
     };
   }
 
   if (typeof action !== "string" || !SUBAGENT_ACTIONS.includes(action as SubagentAction)) {
     return {
-      error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "steer", "cancel", "inspect", "join", or "remove".`,
+      error: `Unknown action: ${String(action)}. Use "agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", or "remove".`,
     };
   }
 
@@ -172,37 +177,15 @@ export function parseSubagentInvocation(
         ...(params.status ? { status: params.status as RunStatus[] } : {}),
       };
     }
-    case "run": {
-      if (params.spawns !== undefined && (!Array.isArray(params.spawns) || params.spawns.length === 0)) {
-        return { error: "run spawns must be a non-empty array when provided.", action: parsedAction, taskCountError: true };
-      }
-      if (params.resumes !== undefined && (!Array.isArray(params.resumes) || params.resumes.length === 0)) {
-        return { error: "run resumes must be a non-empty array when provided.", action: parsedAction, taskCountError: true };
-      }
-      const spawns = (params.spawns ?? []) as unknown[];
-      const resumes = (params.resumes ?? []) as unknown[];
-      const taskCount = spawns.length + resumes.length;
-      if (taskCount === 0) {
-        return {
-          error: "Provide at least one spawn or resume.",
-          action: parsedAction,
-          taskCountError: true,
-        };
-      }
-
-      if (options.maxTasks !== undefined && taskCount > options.maxTasks) {
-        return {
-          error: `Too many tasks (${taskCount}). Max is ${options.maxTasks}.`,
-          action: parsedAction,
-          taskCountError: true,
-        };
-      }
-
-      return {
-        action: parsedAction,
-        spawns: spawns.map(parseSpawnTask),
-        resumes: resumes.map(parseResumeTask),
-      };
+    case "spawn": {
+      const error = validateTaskArray(params.spawns, "spawn", "spawns", options.maxTasks);
+      if (error) return { ...error, action: parsedAction };
+      return { action: parsedAction, spawns: (params.spawns as unknown[]).map(parseSpawnTask) };
+    }
+    case "resume": {
+      const error = validateTaskArray(params.resumes, "resume", "resumes", options.maxTasks);
+      if (error) return { ...error, action: parsedAction };
+      return { action: parsedAction, resumes: (params.resumes as unknown[]).map(parseResumeTask) };
     }
     case "steer": {
       if (!Array.isArray(params.messages) || params.messages.length === 0) {
@@ -236,14 +219,7 @@ export function parseSubagentInvocation(
       return "error" in ids ? { ...ids, action: parsedAction } : { action: parsedAction, runIds: ids };
     }
     case "remove": {
-      const ids = parseIds(
-        params.conversationIds,
-        "remove",
-        isConversationId,
-        isRunId,
-        "conversationId",
-        "run ID",
-      );
+      const ids = parseConversationTargets(params.conversationIds);
       return "error" in ids
         ? { ...ids, action: parsedAction }
         : { action: parsedAction, conversationIds: ids };
@@ -267,35 +243,41 @@ function parseRunTargets(value: unknown, action: "cancel" | "inspect" | "join"):
   });
 }
 
-function parseIds<T extends string>(
+function validateTaskArray(
   value: unknown,
-  action: string,
-  guard: (value: unknown) => value is T,
-  wrongIdGuard: (value: unknown) => boolean,
-  name: string,
-  wrongId: string,
-): T[] | { error: string } {
+  action: "spawn" | "resume",
+  property: "spawns" | "resumes",
+  maxTasks: number | undefined,
+): { error: string; taskCountError: true } | undefined {
   if (!Array.isArray(value) || value.length === 0) {
-    return { error: `${action} requires a non-empty ${name}s array.` };
+    return { error: `${action} requires a non-empty ${property} array.`, taskCountError: true };
   }
-
-  const invalidIndex = value.findIndex(item => !guard(item));
-  if (invalidIndex >= 0) {
-    const invalidId = value[invalidIndex];
-    return {
-      error: wrongIdGuard(invalidId)
-        ? `${action} received invalid ${name} '${String(invalidId)}' (a ${wrongId} is not accepted).`
-        : `${action} received invalid ${name} format '${String(invalidId)}'.`,
-    };
+  if (maxTasks !== undefined && value.length > maxTasks) {
+    return { error: `Too many tasks (${value.length}). Max is ${maxTasks}.`, taskCountError: true };
   }
-
-  return value as T[];
+  return undefined;
 }
 
-export function parseSpawnTask(raw: unknown): ParsedRunRequest {
+function parseConversationTargets(value: unknown): ConversationTarget[] | { error: string } {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { error: "remove requires a non-empty conversationIds array." };
+  }
+  return value.map(item => {
+    if (isConversationId(item)) return item;
+    const conversationId = String(item);
+    return {
+      conversationId,
+      error: isRunId(item)
+        ? `remove received invalid conversationId '${conversationId}' (a run ID is not accepted).`
+        : `remove received invalid conversationId format '${conversationId}'.`,
+    };
+  });
+}
+
+export function parseSpawnTask(raw: unknown): ParsedSpawnRequest {
   const task = parseObject(raw);
   if (!task) return { error: "Spawn task must be an object." };
-  const error = (message: string): ParsedRunRequest => ({
+  const error = (message: string): ParsedSpawnRequest => ({
     error: message,
     ...(typeof task.label === "string" && task.label.trim() ? { label: task.label } : {}),
   });
@@ -323,7 +305,7 @@ export function parseSpawnTask(raw: unknown): ParsedRunRequest {
   };
 }
 
-export function parseResumeTask(raw: unknown): ParsedRunRequest {
+export function parseResumeTask(raw: unknown): ParsedResumeRequest {
   const task = parseObject(raw);
   if (!task) return { error: "Resume task must be an object." };
   const extra = Object.keys(task).find(key => !["conversationId", "prompt"].includes(key));

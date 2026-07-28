@@ -14,9 +14,11 @@ test("description names typed action inputs without restating task unions", () =
   });
   const description = tool.description;
   assert.match(description, /Conversation IDs use adjective-noun form; run IDs use verb-adverb form\./);
-  assert.match(description, /Results use \{ action, ok, data \} on success or \{ action, ok, error \} on global failure\./);
+  assert.match(description, /Processed commands return \{ action, results \}; command-level failures return \{ action, error \}\./);
+  assert.match(description, /Batch results preserve input order/);
   assert.match(description, /list\(status\?\)/);
-  assert.match(description, /run\(spawns\?, resumes\?\)/);
+  assert.match(description, /spawn\(spawns\)/);
+  assert.match(description, /resume\(resumes\)/);
   assert.match(description, /steer\(messages\)/);
   assert.match(description, /cancel\(runIds\)/);
   assert.match(description, /inspect\(runIds\)/);
@@ -43,7 +45,7 @@ test("SDK validation rejects a whole batch containing a malformed task", () => {
     prepareInvocation: async () => ({ runtime: { maxTasksPerRun: 2 }, display: {} }) as any,
   });
   const raw = {
-    action: "run",
+    action: "spawn",
     spawns: [
       { agent: "helper", prompt: "malformed", extra: true },
       { agent: "helper", prompt: "valid" },
@@ -60,7 +62,7 @@ test("SDK validation enforces the task-array minimum", () => {
     prepareInvocation: async () => settings,
   });
   assert.throws(
-    () => validateToolArguments(tool, toolCall({ action: "run", spawns: [] })),
+    () => validateToolArguments(tool, toolCall({ action: "spawn", spawns: [] })),
     /Validation failed/,
   );
 });
@@ -68,16 +70,15 @@ test("SDK validation enforces the task-array minimum", () => {
 test("tool prepares settings, applies task limits, and renders simple typed content", async () => {
   let prepared = 0;
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => { prepared++; return settings; } });
-  const result = await tool.execute("call", { action: "run", spawns: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
+  const result = await tool.execute("call", { action: "spawn", spawns: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
   assert.equal(prepared, 1);
   assert.equal(result.isError, true);
   assert.deepEqual(JSON.parse(result.content[0].text), {
-    action: "run",
-    ok: false,
+    action: "spawn",
     error: "Too many tasks (2). Max is 1.\n\nAvailable agents:\nhelper",
   });
   assert.match(tool.renderResult(result, {}, {}).render(120).join("\n"), /Too many tasks/);
-  assert.match(tool.renderCall({ action: "run", spawns: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
+  assert.match(tool.renderCall({ action: "spawn", spawns: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
 });
 
 test("unknown actions return a structured global error envelope", async () => {
@@ -92,8 +93,7 @@ test("unknown actions return a structured global error envelope", async () => {
   assert.equal(result.isError, true);
   assert.deepEqual(JSON.parse(result.content[0].text), {
     action: "unknown",
-    ok: false,
-    error: 'Unknown action: bogus. Use "agents", "list", "run", "steer", "cancel", "inspect", "join", or "remove".',
+    error: 'Unknown action: bogus. Use "agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", or "remove".',
   });
 });
 
@@ -104,8 +104,10 @@ test("mixed join target errors still release every valid requested claim", async
   assert.equal(result.isError, false);
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
-  assert.equal(response.ok, true);
-  assert.deepEqual(response.data.runs.map((entry: any) => entry.runId), ["valid-run", "42"]);
+  assert.deepEqual(response.results, [
+    { ok: false, error: "join received invalid runId format 'valid-run'." },
+    { ok: false, error: "join received invalid runId format '42'." },
+  ]);
   assert.deepEqual(released, ["valid-run"]);
 });
 

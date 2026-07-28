@@ -137,7 +137,8 @@ export interface JoinedRunRenderItem {
 export type SubagentToolDetails =
   | { action: "agents"; agents: AgentRenderItem[] }
   | { action: "list"; runs: ListedRunRenderItem[] }
-  | { action: "run"; tasks: DispatchTaskRenderItem[] }
+  | { action: "spawn"; tasks: DispatchTaskRenderItem[] }
+  | { action: "resume"; tasks: DispatchTaskRenderItem[] }
   | { action: "steer"; tasks: DispatchTaskRenderItem[] }
   | { action: "cancel"; runs: CancelledRunRenderItem[] }
   | { action: "inspect"; runs: Array<InspectedRunRenderItem | InspectedRunErrorRenderItem> }
@@ -206,7 +207,8 @@ function collapsedLines(details: Exclude<SubagentToolDetails, { action: "error" 
         secondary(details.runs.map(runLabel), theme),
       ];
     }
-    case "run":
+    case "spawn":
+    case "resume":
     case "steer": {
       const accepted = details.tasks.filter(task => task.runId);
       const rejected = details.tasks.length - accepted.length;
@@ -264,7 +266,8 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
         `${arrow(theme)} ${paint(theme, "text", runLabel(run))} ${paint(theme, "muted", `· ${run.agent} · ${run.kind}`)}`,
         `  ${statusText(theme, run.status)} ${paint(theme, "muted", "·")} ${identity(theme, run.conversationId, run.runId)}`,
       ]);
-    case "run":
+    case "spawn":
+    case "resume":
     case "steer":
       return blocks(details.tasks, (task, index) => {
         const label = taskLabel(task, index);
@@ -463,11 +466,8 @@ function truncate(value: string, limit: number): string {
 
 function callSuffix(action: string, input: Record<string, unknown> | undefined): string {
   if (!input) return "";
-  if (action === "run") {
-    const spawn = Array.isArray(input.spawns) ? input.spawns.length : 0;
-    const resume = Array.isArray(input.resumes) ? input.resumes.length : 0;
-    return spawn + resume ? count(spawn + resume, "task") : "";
-  }
+  if (action === "spawn") return arrayCount(input.spawns, "task");
+  if (action === "resume") return arrayCount(input.resumes, "task");
   if (action === "steer") return arrayCount(input.messages, "message");
   if (action === "cancel" || action === "inspect" || action === "join") return arrayCount(input.runIds, "run");
   if (action === "remove") return arrayCount(input.conversationIds, "conversation");

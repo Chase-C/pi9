@@ -8,7 +8,8 @@ const renderResult = (details: SubagentToolDetails, expanded = false, isPartial 
   renderSubagentResult({ details }, { expanded, isPartial }).render(width).map(line => line.trimEnd()).join("\n");
 
 test("call titles summarize action-specific input counts", () => {
-  assert.equal(renderCall({ action: "run", spawns: [{}, {}], resumes: [{}] }), "subagent run  3 tasks");
+  assert.equal(renderCall({ action: "spawn", spawns: [{}, {}] }), "subagent spawn  2 tasks");
+  assert.equal(renderCall({ action: "resume", resumes: [{}] }), "subagent resume  1 task");
   assert.equal(renderCall({ action: "steer", messages: [{}, {}] }), "subagent steer  2 messages");
   assert.equal(renderCall({ action: "cancel", runIds: ["one", "two"] }), "subagent cancel  2 runs");
   assert.equal(renderCall({ action: "inspect", runIds: ["one"] }), "subagent inspect  1 run");
@@ -16,24 +17,23 @@ test("call titles summarize action-specific input counts", () => {
   assert.equal(renderCall({ action: "remove", conversationIds: ["one"] }), "subagent remove  1 conversation");
   assert.equal(renderCall({ action: "agents" }), "subagent agents");
   assert.equal(
-    lines(renderSubagentCall({ action: "run" }, { bold: text => `<b>${text}</b>` })),
-    "<b>subagent</b> run",
+    lines(renderSubagentCall({ action: "spawn" }, { bold: text => `<b>${text}</b>` })),
+    "<b>subagent</b> spawn",
   );
 });
 
-test("run uses outcome-first collapsed output and tagged delegation blocks when expanded", () => {
+test("spawn uses outcome-first collapsed output and tagged delegation blocks when expanded", () => {
   const details: SubagentToolDetails = {
-    action: "run",
+    action: "spawn",
     tasks: [
       { inputIndex: 0, kind: "spawn", agent: "scout", label: "auth map", prompt: "Map auth.", conversationId: "quiet-otter" as any, runId: "search-boldly" as any },
       { inputIndex: 1, kind: "spawn", agent: "reviewer", label: "risk review", prompt: "Review risks.", conversationId: "amber-fox" as any, runId: "inspect-carefully" as any },
-      { inputIndex: 2, kind: "resume", agent: "scout", label: "follow-up", prompt: "Check tests.", conversationId: "bright-heron" as any, runId: "verify-quietly" as any },
     ],
   };
 
   assert.equal(renderResult(details), [
-    "✓ Started 2 new conversations and resumed 1 conversation",
-    "  auth map · risk review · follow-up",
+    "✓ Started 2 new conversations",
+    "  auth map · risk review",
   ].join("\n"));
   assert.equal(renderResult(details, true), [
     "→ auth map · scout · spawn",
@@ -43,10 +43,6 @@ test("run uses outcome-first collapsed output and tagged delegation blocks when 
     "→ risk review · reviewer · spawn",
     "  Review risks.",
     "  started · conversation amber-fox · run inspect-carefully",
-    "",
-    "→ follow-up · scout · resume",
-    "  Check tests.",
-    "  started · conversation bright-heron · run verify-quietly",
   ].join("\n"));
 });
 

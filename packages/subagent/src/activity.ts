@@ -137,7 +137,8 @@ function toolInputSummary(toolName: string, args: unknown): string | undefined {
       return joinParts([stringValue(input.pattern) ?? stringValue(input.name), input.path ? `in ${String(input.path)}` : undefined]);
     case "subagent": {
       const action = stringValue(input.action);
-      const count = action === "run" ? sumCountParts(input.spawns, input.resumes, "task")
+      const count = action === "spawn" ? countPart(input.spawns, "task")
+        : action === "resume" ? countPart(input.resumes, "task")
         : action === "steer" ? countPart(input.messages, "message")
         : action === "cancel" || action === "inspect" || action === "join" ? countPart(input.runIds, "run")
         : action === "remove" ? countPart(input.conversationIds, "conversation")
@@ -164,11 +165,6 @@ function numericPart(label: string, value: unknown): string | undefined {
 function countPart(value: unknown, noun: string): string | undefined {
   if (!Array.isArray(value)) return undefined;
   return `${value.length} ${noun}${value.length === 1 ? "" : "s"}`;
-}
-
-function sumCountParts(first: unknown, second: unknown, noun: string): string | undefined {
-  const total = (Array.isArray(first) ? first.length : 0) + (Array.isArray(second) ? second.length : 0);
-  return total ? `${total} ${noun}${total === 1 ? "" : "s"}` : undefined;
 }
 
 function quote(value: string | undefined): string | undefined {
