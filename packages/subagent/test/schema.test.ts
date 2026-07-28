@@ -17,11 +17,12 @@ const conversationId = "amber-acorn";
 const runId = "adapt-ably";
 
 test("public schema exposes separate run and steer inputs without unions", () => {
-  assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "run", "steer", "inspect", "join", "remove"]);
+  assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "run", "steer", "cancel", "inspect", "join", "remove"]);
   assert.doesNotMatch(JSON.stringify(SubagentParams), /"anyOf"/);
   assert.equal(Check(SubagentParams, { action: "run", spawns: [{ agent: "helper", prompt: "work" }] }), true);
   assert.equal(Check(SubagentParams, { action: "run", resumes: [{ conversationId, prompt: "continue" }] }), true);
   assert.equal(Check(SubagentParams, { action: "steer", messages: [{ runId, message: "redirect" }] }), true);
+  assert.equal(Check(SubagentParams, { action: "cancel", runIds: [runId] }), true);
   assert.equal(Check(SubagentParams, { action: "run", spawns: [] }), false);
   assert.equal(Check(SubagentParams, { action: "steer", messages: [{ runId, prompt: "old field" }] }), false);
   assert.equal(Check(SpawnTaskSchema, { conversationId, prompt: "wrong kind" }), false);
@@ -75,6 +76,7 @@ test("invocations parse every action without dispatch alias", () => {
     action: "steer",
     messages: [{ kind: "steer", runId, message: "redirect" }],
   });
+  assert.deepEqual(parseSubagentInvocation({ action: "cancel", runIds: [runId] }), { action: "cancel", runIds: [runId] });
   assert.deepEqual(parseSubagentInvocation({ action: "inspect", runIds: [runId] }), { action: "inspect", runIds: [runId] });
   assert.deepEqual(parseSubagentInvocation({ action: "join", runIds: [runId] }), { action: "join", runIds: [runId] });
   assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId] }), { action: "remove", conversationIds: [conversationId] });
@@ -126,7 +128,15 @@ test("item parse failures remain indexed within their typed arrays", () => {
   });
 });
 
-test("inspect and join retain malformed targets as ordered per-run errors", () => {
+test("cancel, inspect, and join retain malformed targets as ordered per-run errors", () => {
+  assert.deepEqual(parseSubagentInvocation({ action: "cancel", runIds: [runId, conversationId, "not-an-id"] }), {
+    action: "cancel",
+    runIds: [
+      runId,
+      { runId: conversationId, error: `cancel received invalid runId '${conversationId}' (a conversation ID is not accepted).` },
+      { runId: "not-an-id", error: "cancel received invalid runId format 'not-an-id'." },
+    ],
+  });
   assert.deepEqual(parseSubagentInvocation({ action: "inspect", runIds: [runId, conversationId, "not-an-id"] }), {
     action: "inspect",
     runIds: [
@@ -149,8 +159,8 @@ test("whole invocation validation covers unchanged actions", () => {
   assert.ok("error" in parseSubagentInvocation({}));
   assert.ok("error" in parseSubagentInvocation({ action: "unknown" }));
   assert.ok("error" in parseSubagentInvocation({ action: "list", status: ["stale"] }));
-  assert.ok("error" in parseSubagentInvocation({ action: "inspect", runIds: [] }));
-  assert.ok("error" in parseSubagentInvocation({ action: "join", runIds: [] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "cancel", runIds: [] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "inspect", runIds: [] }));  assert.ok("error" in parseSubagentInvocation({ action: "join", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "remove" }));
 });
 
@@ -158,6 +168,7 @@ test("unsupported invocation fields receive ordinary validation errors", () => {
   for (const [raw, expected] of [
     [{ action: "run", spawns: [{ agent: "a", prompt: "x" }], background: true }, /Property background is not allowed/],
     [{ action: "steer", messages: [{ runId, message: "x" }], prompt: "x" }, /Property prompt is not allowed/],
+    [{ action: "cancel", runIds: [runId], force: true }, /Property force is not allowed/],
     [{ action: "inspect", runIds: [runId], wait: true }, /Property wait is not allowed/],
     [{ action: "results", runIds: [runId] }, /Unknown action/],
     [{ action: "join", runIds: [runId], remove: true }, /Property remove is not allowed/],

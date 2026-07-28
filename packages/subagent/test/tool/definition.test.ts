@@ -16,6 +16,7 @@ test("description names typed action inputs without restating task unions", () =
   assert.match(description, /list\(status\?\)/);
   assert.match(description, /run\(spawns\?, resumes\?\)/);
   assert.match(description, /steer\(messages\)/);
+  assert.match(description, /cancel\(runIds\)/);
   assert.match(description, /inspect\(runIds\)/);
   assert.match(description, /join\(runIds\)/);
   assert.match(description, /remove\(conversationIds\)/);

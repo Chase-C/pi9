@@ -28,7 +28,7 @@ export const SteerMessageSchema = Type.Object({
   message: NonBlankString(),
 }, { additionalProperties: false });
 
-export const SUBAGENT_ACTIONS = ["agents", "list", "run", "steer", "inspect", "join", "remove"] as const;
+export const SUBAGENT_ACTIONS = ["agents", "list", "run", "steer", "cancel", "inspect", "join", "remove"] as const;
 export const RUN_STATUSES = [
   "queued", "running", "completed", "error", "aborted", "interrupted", "skipped",
 ] as const;
@@ -75,6 +75,7 @@ export type SteerRequest = {
 
 export type RunRequest = SpawnRequest | ResumeRequest;
 export type RunTarget = RunId | { runId: string; error: string };
+export type CancelTarget = RunTarget;
 export type InspectTarget = RunTarget;
 export type JoinTarget = RunTarget;
 export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
@@ -86,6 +87,7 @@ export type SubagentInvocation =
   | { action: "list"; status?: RunStatus[] }
   | { action: "run"; spawns: ParsedRunRequest[]; resumes: ParsedRunRequest[] }
   | { action: "steer"; messages: ParsedSteerRequest[] }
+  | { action: "cancel"; runIds: CancelTarget[] }
   | { action: "inspect"; runIds: InspectTarget[] }
   | { action: "join"; runIds: JoinTarget[] }
   | { action: "remove"; conversationIds: ConversationId[] };
@@ -110,6 +112,7 @@ const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   list: ["action", "status"],
   run: ["action", "spawns", "resumes"],
   steer: ["action", "messages"],
+  cancel: ["action", "runIds"],
   inspect: ["action", "runIds"],
   join: ["action", "runIds"],
   remove: ["action", "conversationIds"],
@@ -126,14 +129,14 @@ export function parseSubagentInvocation(
 
   if (!action) {
     return {
-      error: 'Provide an action: "agents", "list", "run", "steer", "inspect", "join", or "remove".',
+      error: 'Provide an action: "agents", "list", "run", "steer", "cancel", "inspect", "join", or "remove".',
       missingAction: true,
     };
   }
 
   if (typeof action !== "string" || !SUBAGENT_ACTIONS.includes(action as SubagentAction)) {
     return {
-      error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "steer", "inspect", "join", or "remove".`,
+      error: `Unknown action: ${String(action)}. Use "agents", "list", "run", "steer", "cancel", "inspect", "join", or "remove".`,
     };
   }
 
@@ -220,6 +223,10 @@ export function parseSubagentInvocation(
 
       return { action: parsedAction, messages: params.messages.map(parseSteerMessage) };
     }
+    case "cancel": {
+      const ids = parseRunTargets(params.runIds, parsedAction);
+      return "error" in ids ? { ...ids, action: parsedAction } : { action: parsedAction, runIds: ids };
+    }
     case "inspect": {
       const ids = parseRunTargets(params.runIds, parsedAction);
       return "error" in ids ? { ...ids, action: parsedAction } : { action: parsedAction, runIds: ids };
@@ -244,7 +251,7 @@ export function parseSubagentInvocation(
   }
 }
 
-function parseRunTargets(value: unknown, action: "inspect" | "join"): RunTarget[] | { error: string } {
+function parseRunTargets(value: unknown, action: "cancel" | "inspect" | "join"): RunTarget[] | { error: string } {
   if (!Array.isArray(value) || value.length === 0) {
     return { error: `${action} requires a non-empty runIds array.` };
   }

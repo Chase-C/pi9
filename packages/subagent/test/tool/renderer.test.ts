@@ -10,6 +10,7 @@ const renderResult = (details: SubagentToolDetails, expanded = false, isPartial 
 test("call titles summarize action-specific input counts", () => {
   assert.equal(renderCall({ action: "run", spawns: [{}, {}], resumes: [{}] }), "subagent run  3 tasks");
   assert.equal(renderCall({ action: "steer", messages: [{}, {}] }), "subagent steer  2 messages");
+  assert.equal(renderCall({ action: "cancel", runIds: ["one", "two"] }), "subagent cancel  2 runs");
   assert.equal(renderCall({ action: "inspect", runIds: ["one"] }), "subagent inspect  1 run");
   assert.equal(renderCall({ action: "join", runIds: ["one", "two"] }), "subagent join  2 runs");
   assert.equal(renderCall({ action: "remove", conversationIds: ["one"] }), "subagent remove  1 conversation");
@@ -75,6 +76,19 @@ test("steer renders receipts and inspect renders bounded activity", () => {
   };
   assert.equal(renderResult(inspect), "✓ Inspected 1 run · 1 running\n  scout");
   assert.match(renderResult(inspect, true), /running · thinking[\s\S]*\[partial\] Checking tests\.[\s\S]*read\(test.ts\) · completed[\s\S]*steer #1 · processed/);
+});
+
+test("cancel renders successful and failed targets", () => {
+  const cancel: SubagentToolDetails = {
+    action: "cancel",
+    runs: [
+      { conversationId: "quiet-otter" as any, runId: "search-boldly", status: "aborted" },
+      { runId: "not-an-id", error: "invalid runId format" },
+    ],
+  };
+
+  assert.equal(renderResult(cancel), "✓ Cancelled 1 run · 1 error\n  search-boldly · not-an-id");
+  assert.match(renderResult(cancel, true), /search-boldly · cancelled[\s\S]*not-an-id · not cancelled[\s\S]*invalid runId format/);
 });
 
 test("inspect renders per-target errors without hiding the result", () => {
@@ -366,24 +380,15 @@ test("expanded joins order and separate sections while preserving indentation ac
   ].join("\n"));
 });
 
-test("remove renders aggregate aborts without assigning them to a conversation", () => {
+test("remove renders deleted conversations and item-local errors", () => {
   const details: SubagentToolDetails = {
     action: "remove",
     removed: 2,
-    aborted: 1,
     conversationIds: ["quiet-otter", "amber-fox"] as any,
-    errors: [],
+    errors: [{ conversationId: "busy-newt", error: "Conversation busy-newt has active run work-slowly. Cancel and join it before removal." }],
   };
-  assert.equal(renderResult(details), "✓ Removed 2 conversations · 1 active run aborted\n  quiet-otter · amber-fox");
-  assert.equal(renderResult(details, true), [
-    "→ quiet-otter · removed",
-    "  conversation quiet-otter",
-    "",
-    "→ amber-fox · removed",
-    "  conversation amber-fox",
-    "",
-    "  1 active run aborted",
-  ].join("\n"));
+  assert.equal(renderResult(details), "✓ Removed 2 conversations · 1 error\n  quiet-otter · amber-fox");
+  assert.match(renderResult(details, true), /quiet-otter · removed[\s\S]*amber-fox · removed[\s\S]*busy-newt · not removed[\s\S]*Cancel and join/);
 });
 
 test("errors render their message instead of structured output", () => {

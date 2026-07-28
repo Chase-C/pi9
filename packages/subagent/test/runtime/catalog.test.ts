@@ -129,7 +129,7 @@ test("joins exact historical runs and remains stable across resume", async () =>
   join.release();
 });
 
-test("completed removal preserves exact runs, prevents resume, and reclaims capacity", async () => {
+test("completed removal deletes exact runs, prevents resume, and reclaims capacity", async () => {
   const manager = new SubagentRuntime(registry, 1, runner, 1);
   const initial = manager.startRun(ctx, [{
     kind: "spawn",
@@ -146,7 +146,11 @@ test("completed removal preserves exact runs, prevents resume, and reclaims capa
   await resumed.completion;
   const second = resumed.starts[0] as any;
 
-  await expect(manager.removeConversation(first.conversationId)).resolves.toMatchObject({ removed: 1, aborted: 0 });
+  await expect(manager.removeConversation(first.conversationId)).resolves.toEqual({
+    removed: 1,
+    conversationIds: [first.conversationId],
+    errors: [],
+  });
   expect(manager.listConversations()).toEqual([]);
   expect(() => manager.conversation(first.conversationId)).toThrow("Unknown conversation");
   expect((manager.startRun(ctx, [{
@@ -155,10 +159,8 @@ test("completed removal preserves exact runs, prevents resume, and reclaims capa
     prompt: "again",
   }] as any).starts[0] as any).error).toContain("Unknown conversation");
 
-  const join = manager.bindJoin([first.runId, second.runId]);
-  await join.completion;
-  expect(join.project().map(output)).toEqual(["old", "new"]);
-  join.release();
+  expect(() => manager.inspectRuns([first.runId])).toThrow(`Unknown run: ${first.runId}.`);
+  expect(() => manager.bindJoin([second.runId])).toThrow(`Unknown run: ${second.runId}.`);
 
   const replacement = manager.startRun(ctx, [{
     kind: "spawn",
@@ -169,55 +171,69 @@ test("completed removal preserves exact runs, prevents resume, and reclaims capa
   await replacement.completion;
 });
 
-test("removal terminalizes immediately, wakes joins, and leaves children", async () => {
+test("removal rejects active conversations without changing their runs", async () => {
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
-  let physical = false;
   const slow = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession({
-      ...session(),
-      abort() {
-        physical = true;
-        return gate;
-      },
-    });
-    if (attempt.prompt === "parent") await gate;
+    agent.bindSession(session());
+    await gate;
     return completedRun(agent, attempt.runId, attempt.prompt);
   };
-  const manager = new SubagentRuntime(registry, 2, slow);
-  const parentStart = manager.startRun(ctx, [{
-    kind: "spawn",
-    agent: "worker",
-    prompt: "parent",
-  }] as any);
-  const parentRun = parentStart.starts[0] as any;
+  const manager = new SubagentRuntime(registry, 1, slow);
+  const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work" }] as any);
+  const active = start.starts[0] as any;
   await new Promise(done => setImmediate(done));
-  const childStart = manager.startRun(ctx, [{
-    kind: "spawn",
-    agent: "worker",
-    prompt: "child",
-  }] as any, parent(parentRun.conversationId, parentRun.runId));
-  const child = childStart.starts[0] as any;
-  const join = manager.bindJoin([parentRun.runId]);
 
-  const removing = manager.removeConversation(parentRun.conversationId);
-  expect(manager.listConversations().map(value => value.conversationId)).toContain(child.conversationId);
-  const detachedJoin = manager.bindJoin([parentRun.runId]);
-  await Promise.all([join.completion, detachedJoin.completion]);
-  for (const binding of [join, detachedJoin]) {
-    expect(binding.project()[0].status).toMatchObject({
-      kind: "done",
-      outcome: "aborted",
-      error: "Conversation removed.",
-    });
-    binding.release();
-  }
-  expect(physical).toBe(true);
+  await expect(manager.removeConversation(active.conversationId)).resolves.toEqual({
+    removed: 0,
+    conversationIds: [],
+    errors: [{
+      conversationId: active.conversationId,
+      error: `Conversation ${active.conversationId} has active run ${active.runId}. Cancel and join it before removal.`,
+    }],
+  });
+  expect(manager.conversation(active.conversationId).runs[0].status.kind).toBe("running");
+  expect(manager.inspectRuns([active.runId])[0].snapshot.runId).toBe(active.runId);
+
   release();
-  await expect(removing).resolves.toMatchObject({ removed: 1, aborted: 1 });
+  await start.completion;
 });
 
-test("removal waits for in-flight steering and detaches its discarded receipt", async () => {
+test("batch removal isolates terminal, active, and unknown conversations", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(session());
+    if (attempt.prompt === "active") await gate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 2, controlled);
+  const terminalStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "terminal" }] as any);
+  await terminalStart.completion;
+  const terminal = terminalStart.starts[0] as any;
+  const activeStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "active" }] as any);
+  const active = activeStart.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  await expect(manager.removeConversations([terminal.conversationId, active.conversationId, "amber-acorn"])).resolves.toEqual({
+    removed: 1,
+    conversationIds: [terminal.conversationId],
+    errors: [
+      {
+        conversationId: active.conversationId,
+        error: `Conversation ${active.conversationId} has active run ${active.runId}. Cancel and join it before removal.`,
+      },
+      { conversationId: "amber-acorn", error: "Unknown conversation: amber-acorn." },
+    ],
+  });
+  expect(() => manager.runSnapshot(terminal.runId)).toThrow(`Unknown run: ${terminal.runId}.`);
+  expect(manager.inspectRuns([active.runId])[0].snapshot.status.kind).toBe("running");
+
+  release();
+  await activeStart.completion;
+});
+
+test("cancellation waits for in-flight steering and retains its discarded receipt", async () => {
   let releaseSteer!: () => void;
   let releaseRun!: () => void;
   let steerQueued!: () => void;
@@ -251,14 +267,15 @@ test("removal waits for in-flight steering and detaches its discarded receipt", 
 
   const steer = manager.steerRun(identity.runId, "redirect");
   await queued;
-  const removing = manager.removeConversation(identity.conversationId);
+  const cancelling = manager.cancelRun(identity.runId);
   releaseSteer();
 
   await expect(steer).resolves.toMatchObject({ steer: { state: "discarded" } });
-  await expect(removing).resolves.toMatchObject({ removed: 1, aborted: 1 });
+  await expect(cancelling).resolves.toMatchObject({ conversationId: identity.conversationId, runId: identity.runId, status: "aborted" });
   expect(clears).toBeGreaterThan(0);
   expect(steering).toEqual([]);
   expect(manager.runSnapshot(identity.runId).steers).toMatchObject([{ id: 1, state: "discarded" }]);
+  expect(manager.conversation(identity.conversationId).runs).toHaveLength(1);
 
   releaseRun();
   await started.completion;
@@ -308,7 +325,7 @@ test("root join remains exact when descendants spawn later", async () => {
   join.release();
 });
 
-test("exact root join remains exact after conversations were removed", async () => {
+test("removed conversation runs cannot be joined", async () => {
   const manager = new SubagentRuntime(registry, 4, runner);
   const rootStart = manager.startRun(ctx, [{
     kind: "spawn",
@@ -335,11 +352,9 @@ test("exact root join remains exact after conversations were removed", async () 
   await manager.removeConversation(child.conversationId);
   await manager.removeConversation(root.conversationId);
   await manager.removeConversation(grand.conversationId);
-  const join = manager.bindJoin([root.runId]);
-  await join.completion;
-  expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([[root.runId, root.conversationId]]);
-  expect(join.project().map(output)).toEqual(["root"]);
-  join.release();
+  expect(() => manager.bindJoin([root.runId])).toThrow(`Unknown run: ${root.runId}.`);
+  expect(() => manager.inspectRuns([child.runId])).toThrow(`Unknown run: ${child.runId}.`);
+  expect(() => manager.runSnapshot(grand.runId)).toThrow(`Unknown run: ${grand.runId}.`);
 });
 
 test("exact join does not bind an unrequested descendant", async () => {
@@ -451,6 +466,41 @@ test("steering targets an exact running run without creating history", async () 
   await batch.completion;
 });
 
+test("cancelling an active run retains its conversation and exact outcome", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession({ ...session(), abort: () => gate });
+    await gate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 1, controlled);
+  const batch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work" }]);
+  const started = batch.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  const cancelling = manager.cancelRun(started.runId);
+  expect(manager.inspectRuns([started.runId])[0].snapshot.status).toMatchObject({
+    kind: "done",
+    outcome: "aborted",
+    error: "Run cancelled.",
+  });
+  release();
+  await expect(cancelling).resolves.toEqual({
+    conversationId: started.conversationId,
+    runId: started.runId,
+    status: "aborted",
+  });
+  expect(manager.listConversations().map(value => value.conversationId)).toContain(started.conversationId);
+  await expect(manager.cancelRun(started.runId)).rejects.toThrow(`Run ${started.runId} is aborted and cannot be cancelled.`);
+
+  const join = manager.bindJoin([started.runId]);
+  await join.completion;
+  expect(join.project()[0].status).toMatchObject({ kind: "done", outcome: "aborted" });
+  join.release();
+  await batch.completion;
+});
+
 test("steering rejects queued, terminal, and SDK-rejected targets", async () => {
   let finishFirst!: () => void;
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -469,6 +519,7 @@ test("steering rejects queued, terminal, and SDK-rejected targets", async () => 
   await new Promise(done => setImmediate(done));
 
   await expect(manager.steerRun(secondRun.runId, "queued")).rejects.toThrow("queued");
+  await expect(manager.cancelRun(secondRun.runId)).rejects.toThrow("queued");
   await expect(manager.steerRun(firstRun.runId, "running")).rejects.toThrow("queue rejected");
   finishFirst();
   await Promise.all([first.completion, second.completion]);
@@ -491,7 +542,7 @@ test("inspection is ordered and leaves observation state unchanged", async () =>
   });
 });
 
-test("nested callers may inspect and steer descendants only", async () => {
+test("nested callers may inspect, steer, and cancel descendants only", async () => {
   const releases = new Map<string, () => void>();
   const messages: string[] = [];
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -513,6 +564,8 @@ test("nested callers may inspect and steer descendants only", async () => {
   expect(messages).toEqual(["redirect"]);
   expect(() => manager.inspectRuns([owner.runId], caller)).toThrow("not a descendant");
   await expect(manager.steerRun(owner.runId, "self", caller)).rejects.toThrow("not a descendant");
+  await expect(manager.cancelRun(owner.runId, caller)).rejects.toThrow("not a descendant");
+  await expect(manager.cancelRun(child.runId, caller)).resolves.toMatchObject({ runId: child.runId, status: "aborted" });
 
   releases.get("child")!(); releases.get("owner")!();
   await Promise.all([childBatch.completion, ownerBatch.completion]);
@@ -547,7 +600,7 @@ test("nested joins validate descendants and preserve ordered attempts without ta
   expect(manager.runSnapshot(owner.runId).observerCount).toBe(0);
 });
 
-test("detached owner snapshot records nested completion after removal", async () => {
+test("nested completion tolerates a deleted owner", async () => {
   let finishTarget!: () => void;
   const targetGate = new Promise<void>(resolve => { finishTarget = resolve; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -566,15 +619,16 @@ test("detached owner snapshot records nested completion after removal", async ()
   const binding = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [target.runId]);
 
   await manager.removeConversation(owner.conversationId);
+  expect(() => manager.runSnapshot(owner.runId)).toThrow(`Unknown run: ${owner.runId}.`);
   finishTarget();
   await Promise.all([targetStart.completion, binding.completion]);
-  expect(manager.runSnapshot(owner.runId).nestedJoins?.[0]).toMatchObject({ state: "completed" });
+  expect(binding.project()[0].status).toMatchObject({ kind: "done", outcome: "completed" });
   expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(1);
   binding.release();
   expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(0);
 });
 
-test("detached owner snapshot records explicit nested interruption", async () => {
+test("nested interruption tolerates a deleted owner", async () => {
   let finishTarget!: () => void;
   const targetGate = new Promise<void>(resolve => { finishTarget = resolve; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -593,10 +647,9 @@ test("detached owner snapshot records explicit nested interruption", async () =>
   const binding = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [target.runId]);
 
   await manager.removeConversation(owner.conversationId);
-  binding.interrupt("caller cancelled");
-  expect(manager.runSnapshot(owner.runId).nestedJoins?.[0]).toMatchObject({ state: "interrupted", error: "caller cancelled" });
+  expect(() => binding.interrupt("caller cancelled")).not.toThrow();
   expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(0);
   finishTarget();
   await targetStart.completion;
-  expect(manager.runSnapshot(owner.runId).nestedJoins?.[0]).toMatchObject({ state: "interrupted", error: "caller cancelled" });
+  expect(() => manager.runSnapshot(owner.runId)).toThrow(`Unknown run: ${owner.runId}.`);
 });

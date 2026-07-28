@@ -10,6 +10,8 @@ This changelog starts with version `v0.2.1`.
 - Split the shared task schema into distinct spawn, resume, and steer item schemas and remove redundant field descriptions.
 - Return `run` outcomes as matching `{ spawns, resumes }` receipt arrays without `inputIndex`; include each task's optional label when known.
 - Return malformed, unknown, and unauthorized `join` targets as ordered per-target errors instead of rejecting the whole batch.
+- Add `cancel(runIds)` for stopping exact running runs while retaining their conversations and aborted outcomes.
+- Make `remove(conversationIds)` reject active conversations and permanently delete terminal conversations with all associated run records; removed runs are no longer inspectable or joinable.
 
 ## [0.8.2] - 2026-07-28
 

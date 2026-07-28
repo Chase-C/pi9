@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { inspectAction, joinAction, listAction, removeAction, runAction, steerAction } from "../../src/tool.js";
+import { cancelAction, inspectAction, joinAction, listAction, removeAction, runAction, steerAction } from "../../src/tool.js";
 
 const conversationId = "amber-acorn" as any;
 const runId = "adapt-ably" as any;
@@ -171,6 +171,47 @@ test("steer isolates failures from sibling messages", async () => {
   ]);
 });
 
+test("cancel aborts an exact run while retaining its identity", async () => {
+  const manager = {
+    cancelRun: async (target: any) => {
+      assert.equal(target, runId);
+      return { conversationId, runId: target, status: "aborted" };
+    },
+    listConversations: () => [snapshot({ kind: "done", outcome: "aborted", completedAt: 2, error: "Run cancelled." })],
+  };
+
+  const result = await cancelAction(deps(manager), { action: "cancel", runIds: [runId] });
+
+  assert.equal(result.isError, false);
+  assert.deepEqual(json(result), [{ conversationId, runId, status: "aborted" }]);
+});
+
+test("cancel isolates malformed and runtime failures from valid siblings", async () => {
+  const secondRunId = "assemble-abruptly" as any;
+  const manager = {
+    cancelRun: async (target: any) => {
+      if (target === runId) throw new Error(`Run ${target} is completed and cannot be cancelled.`);
+      return { conversationId, runId: target, status: "aborted" };
+    },
+    listConversations: () => [],
+  };
+
+  const result = await cancelAction(deps(manager), {
+    action: "cancel",
+    runIds: [
+      { runId: "not-an-id", error: "invalid runId format" },
+      runId,
+      secondRunId,
+    ],
+  });
+
+  assert.deepEqual(json(result), [
+    { runId: "not-an-id", error: "invalid runId format" },
+    { runId, error: `Run ${runId} is completed and cannot be cancelled.` },
+    { conversationId, runId: secondRunId, status: "aborted" },
+  ]);
+});
+
 test("inspect returns bounded progress without terminal output", () => {
   const running: any = snapshot().runs[0];
   running.activity = {
@@ -259,7 +300,7 @@ test("list is output-free and filtering is pure", () => {
 
 test("remove forwards only the explicit conversation batch", async () => {
   let received: any;
-  const summary = { removed: 1, aborted: 0, conversationIds: [conversationId], errors: [] };
+  const summary = { removed: 1, conversationIds: [conversationId], errors: [] };
   const result = await removeAction(deps({
     removeConversations: async (ids: any) => {
       received = ids;
@@ -461,7 +502,7 @@ test("nested join records one binding for valid siblings and returns invalid tar
   ]);
 });
 
-test("a bound join acknowledges an aborted outcome after removal", async () => {
+test("a bound join acknowledges an aborted outcome after cancellation", async () => {
   let resolve!: () => void;
   let acknowledged = 0;
   const entries = [{
@@ -471,7 +512,7 @@ test("a bound join acknowledges an aborted outcome after removal", async () => {
       kind: "done",
       outcome: "aborted",
       completedAt: 2,
-      error: "Conversation removed.",
+      error: "Run cancelled.",
     },
   }];
   const binding = joinBinding(entries, new Promise<void>(done => { resolve = done; }), {
@@ -493,7 +534,7 @@ test("a bound join acknowledges an aborted outcome after removal", async () => {
     conversationId,
     runId,
     status: "aborted",
-    error: "Conversation removed.",
+    error: "Run cancelled.",
   }]);
   assert.equal(acknowledged, 1);
 });

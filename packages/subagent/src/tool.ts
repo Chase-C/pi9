@@ -153,6 +153,30 @@ export async function steerAction(
   });
 }
 
+export async function cancelAction(
+  deps: ActionDeps,
+  invocation: InvocationFor<"cancel">,
+): Promise<ActionResult> {
+  const owner = deps.parent
+    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
+    : undefined;
+  const runs = [];
+
+  for (const target of invocation.runIds) {
+    if (typeof target !== "string") {
+      runs.push({ runId: target.runId, error: target.error });
+      continue;
+    }
+    try {
+      runs.push(await deps.runtime.cancelRun(target, owner));
+    } catch (error) {
+      runs.push({ runId: target, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return jsonResult(runs, { action: "cancel", runs });
+}
+
 export function inspectAction(
   deps: ActionDeps,
   invocation: InvocationFor<"inspect">,
@@ -484,7 +508,8 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "  steer(messages): Send messages to running subagents.",
       "  inspect(runIds): Check run status and progress without waiting.",
       "  join(runIds): Wait for the given runs and return their outcomes.",
-      "  remove(conversationIds): Remove retained conversations.",
+      "  cancel(runIds): Abort active runs while retaining their conversations and outcomes.",
+      "  remove(conversationIds): Delete terminal conversations and their runs.",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",
     promptGuidelines: [
@@ -493,7 +518,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Write each subagent prompt as if to a stranger sharing only your filesystem: every input, path, and constraint, plus what to report back or produce.",
       "Run subagent tasks in parallel only when they're independent and won't interact with the same files; join once you depend on their results or have nothing else to do.",
       "Use subagent inspect only when progress could affect your next step; steer only to communicate newly discovered constraints or correct clear divergence.",
-      "Resume a retained subagent when its context helps the follow-up, spawn fresh when it wouldn't help or would mislead, and remove any you won't need again.",
+      "Resume a retained subagent when its context helps the follow-up, spawn fresh when it wouldn't help or would mislead, and permanently remove terminal conversations you no longer need.",
       //"Call subagent action=agents before choosing an agent unless the user named one explicitly or definitions were already listed.",
     ],
     parameters: SubagentParams,
@@ -519,6 +544,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
           case "list": return listAction(actionDeps, invocation);
           case "run": return runAction(actionDeps, invocation, ctx);
           case "steer": return steerAction(actionDeps, invocation);
+          case "cancel": return cancelAction(actionDeps, invocation);
           case "inspect": return inspectAction(actionDeps, invocation);
           case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
           case "remove": return removeAction(actionDeps, invocation);

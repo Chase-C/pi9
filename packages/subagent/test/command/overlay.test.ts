@@ -12,6 +12,7 @@ function overlay(conversations: any[], overrides: Partial<OverlayOptions> = {}, 
     notify: vi.fn(),
     onStart: vi.fn(),
     onResume: vi.fn(),
+    onCancel: vi.fn(),
     onRemove: vi.fn(),
     onSettingsChange: vi.fn(),
   };
@@ -74,6 +75,14 @@ describe("subagent overlay behavior", () => {
       component.handleInput("\r");
       expect(callbacks.onResume).not.toHaveBeenCalled();
     }
+  });
+
+  it("cancels the selected running run", () => {
+    const conversation = fakeAgent({ conversationId: "conversation-1", runId: "run-1", status: { kind: "running" } });
+    const { component, callbacks } = overlay([conversation]);
+    component.handleInput("c");
+    expect(callbacks.onCancel).toHaveBeenCalledWith("run-1");
+    expect(callbacks.onRemove).not.toHaveBeenCalled();
   });
 
   it("removes the selected conversation", () => {

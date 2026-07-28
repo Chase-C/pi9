@@ -189,18 +189,17 @@ export interface JoinBinding { readonly runIds: readonly RunId[]; readonly compl
 export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: RunId; readonly attemptIndex: number; interrupt(error?: string): void }
 export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId }
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
-export interface RemoveResult { removed: number; aborted: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
+export interface RemoveResult { removed: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
+export interface CancelResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: "aborted" }
 export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly steer: SteerReceipt }
 export interface InspectedRun { readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }
 
 type JoinStatus = ConversationSnapshot["runs"][number]["status"];
-type RunRecord =
-  | { readonly kind: "live"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly agent: Conversation }
-  | { readonly kind: "detached"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; snapshot: RunSnapshot; readonly display: ConversationDisplayIdentity };
+type RunRecord = { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly agent: Conversation };
 interface BoundRun { readonly runId: RunId; snapshot(): { readonly status: JoinStatus }; acknowledge(): void; release(): void }
 interface BoundRecord { readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly binding: BoundRun }
 
-/** Owns resumable conversations and compact exact-run records that outlive them. */
+/** Owns retained conversations and their exact-run records. */
 export class SubagentRuntime {
   private readonly conversations = new Map<ConversationId, Conversation>();
   private readonly runs = new Map<RunId, RunRecord>();
@@ -256,7 +255,7 @@ export class SubagentRuntime {
       }
       if (!agent || !runId || error) { starts.push({ ok: false, inputIndex, error: error ?? "Could not start run." }); continue; }
       this.runs.set(runId, {
-        kind: "live", runId, conversationId: agent.conversationId, agent,
+        runId, conversationId: agent.conversationId, agent,
         ...(task.kind === "spawn" && options.parent ? { parentRunId: options.parent.runId } : {}),
       });
       // Publish queued only after both indexes can resolve the event identities.
@@ -270,9 +269,20 @@ export class SubagentRuntime {
   async steerRun(runId: RunId, prompt: string, owner?: ParentRun): Promise<SteerResult> {
     const record = this.requireRunRecord(runId);
     this.assertOwnerAccess(record, owner, "steer");
-    if (record.kind !== "live") throw new Error(`Run ${runId} is no longer active and cannot be steered.`);
     const steer = await record.agent.steer(runId, prompt);
     return { conversationId: record.conversationId, runId, steer };
+  }
+
+  async cancelRun(runId: RunId, owner?: ParentRun): Promise<CancelResult> {
+    const record = this.requireRunRecord(runId);
+    this.assertOwnerAccess(record, owner, "cancel");
+    const run = this.runSnapshot(runId);
+    if (run.status.kind !== "running") {
+      const status = run.status.kind === "done" ? run.status.outcome : run.status.kind;
+      throw new Error(`Run ${runId} is ${status} and cannot be cancelled.`);
+    }
+    await record.agent.abort("Run cancelled.");
+    return { conversationId: record.conversationId, runId, status: "aborted" };
   }
 
   inspectRuns(runIds: readonly RunId[], owner?: ParentRun): InspectedRun[] {
@@ -292,7 +302,7 @@ export class SubagentRuntime {
   /** Records and binds one nested join attempt on its exact owner run. */
   bindNestedJoin(owner: ParentRun, runIds: readonly RunId[], toolCallId?: string): NestedJoinBinding {
     const ownerRecord = this.runs.get(owner.runId);
-    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId || ownerRecord.kind !== "live")
+    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId)
       throw new Error(`Unknown join owner run: ${owner.runId}.`);
     const attemptIndex = ownerRecord.agent.beginNestedJoin(owner.runId, runIds, toolCallId);
     let records: RunRecord[];
@@ -332,14 +342,12 @@ export class SubagentRuntime {
 
   runSnapshot(runId: RunId): RunSnapshot {
     const record = this.requireRunRecord(runId);
-    return record.kind === "live" ? record.agent.runHistory.find(run => run.runId === runId)! : record.snapshot;
+    return record.agent.runHistory.find(run => run.runId === runId)!;
   }
   conversationDisplay(conversationId: ConversationId): ConversationDisplayIdentity {
     const live = this.conversations.get(conversationId);
     if (live) return { conversationId, ...(live.label ? { label: live.label } : {}), agentName: live.agentName };
-    const record = [...this.runs.values()].find(value => value.conversationId === conversationId && value.kind === "detached");
-    if (!record || record.kind !== "detached") throw new Error(`Unknown conversation: ${conversationId}.`);
-    return record.display;
+    throw new Error(`Unknown conversation: ${conversationId}.`);
   }
   directSpawnedChildren(runId: RunId): readonly RunIdentity[] {
     return [...this.runs.values()].filter(value => value.parentRunId === runId).map(value => ({ runId: value.runId, conversationId: value.conversationId, parentRunId: runId }));
@@ -353,10 +361,7 @@ export class SubagentRuntime {
     const attached: BoundRecord[] = [];
     try {
       for (const record of records) {
-        const binding: BoundRun = record.kind === "live" ? record.agent.bindRun(record.runId) : {
-          runId: record.runId, snapshot: () => ({ status: record.snapshot.status }),
-          acknowledge: () => { record.snapshot = Object.freeze({ ...record.snapshot, acknowledged: true }); }, release: () => {},
-        };
+        const binding: BoundRun = record.agent.bindRun(record.runId);
         attached.push({ conversationId: record.conversationId, binding, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}) });
       }
     } catch (error) { for (const item of attached) item.binding.release(); throw error; }
@@ -373,29 +378,15 @@ export class SubagentRuntime {
     };
   }
   private updateNestedJoin(runId: RunId, index: number, update: { targets?: readonly NestedJoinTargetSnapshot[]; state?: "running" | "completed" | "failed" | "interrupted"; error?: string }): void {
-    const record = this.requireRunRecord(runId);
-    if (record.kind === "live") {
-      record.agent.updateNestedJoin(runId, index, update);
-      return;
-    }
-    const attempts = [...(record.snapshot.nestedJoins ?? [])];
-    const current = attempts[index];
-    if (!current || current.state !== "running") return;
-    const terminal = update.state !== undefined && update.state !== "running";
-    attempts[index] = Object.freeze({
-      ...current,
-      ...(update.targets ? { targets: Object.freeze(update.targets.map(target => Object.freeze({ ...target }))) } : {}),
-      ...(update.state ? { state: update.state } : {}),
-      ...(update.error !== undefined ? { error: update.error } : {}),
-      ...(terminal ? { completedAt: Date.now() } : {}),
-    });
-    record.snapshot = Object.freeze({ ...record.snapshot, nestedJoins: Object.freeze(attempts) });
+    const record = this.runs.get(runId);
+    if (!record) return;
+    record.agent.updateNestedJoin(runId, index, update);
   }
 
   private assertOwnerAccess(record: RunRecord, owner: ParentRun | undefined, action: string): void {
     if (!owner) return;
     const ownerRecord = this.runs.get(owner.runId);
-    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId || ownerRecord.kind !== "live") {
+    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId) {
       throw new Error(`Unknown ${action} owner run: ${owner.runId}.`);
     }
     if (!this.isDescendant(record.runId, owner.runId)) {
@@ -416,24 +407,22 @@ export class SubagentRuntime {
 
   removeConversation(conversationId: string): Promise<RemoveResult> { return this.removeConversations([conversationId]); }
   async removeConversations(ids: readonly string[]): Promise<RemoveResult> {
-    const unique = [...new Set(ids)]; const removed: ConversationId[] = []; const errors: Array<{ conversationId: string; error: string }> = []; let aborted = 0;
+    const unique = [...new Set(ids)]; const removed: ConversationId[] = []; const errors: Array<{ conversationId: string; error: string }> = [];
     for (const id of unique) {
       const agent = this.conversations.get(id as ConversationId);
       if (!agent) { errors.push({ conversationId: id, error: `Unknown conversation: ${id}.` }); continue; }
-      if (agent.hasCurrentRun) aborted++;
-      this.conversations.delete(agent.conversationId);
-      await agent.abort("Conversation removed.");
-      const runs = agent.runHistory;
-      for (const run of runs) {
-        const indexed = this.runs.get(run.runId);
-        this.runs.set(run.runId, {
-          kind: "detached", runId: run.runId, conversationId: agent.conversationId, snapshot: run, display: { conversationId: agent.conversationId, ...(agent.label ? { label: agent.label } : {}), agentName: agent.agentName },
-          ...(indexed?.parentRunId ? { parentRunId: indexed.parentRunId } : {}),
+      if (agent.hasCurrentRun) {
+        errors.push({
+          conversationId: id,
+          error: `Conversation ${id} has active run ${agent.latestRunId}. Cancel and join it before removal.`,
         });
+        continue;
       }
+      this.conversations.delete(agent.conversationId);
+      for (const run of agent.runHistory) this.runs.delete(run.runId);
       removed.push(agent.conversationId);
     }
-    return { removed: removed.length, aborted, conversationIds: removed, errors };
+    return { removed: removed.length, conversationIds: removed, errors };
   }
   private requireConversation(id: string): Conversation { const found = this.conversations.get(id as ConversationId); if (!found) throw new Error(`Unknown conversation: ${id}.`); return found; }
   private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Conversation capacity (${this.maxConversations}) reached. Remove terminal conversations${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }

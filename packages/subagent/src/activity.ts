@@ -139,7 +139,7 @@ function toolInputSummary(toolName: string, args: unknown): string | undefined {
       const action = stringValue(input.action);
       const count = action === "run" ? sumCountParts(input.spawns, input.resumes, "task")
         : action === "steer" ? countPart(input.messages, "message")
-        : action === "inspect" || action === "join" ? countPart(input.runIds, "run")
+        : action === "cancel" || action === "inspect" || action === "join" ? countPart(input.runIds, "run")
         : action === "remove" ? countPart(input.conversationIds, "conversation")
         : undefined;
       return joinParts([action, count]);

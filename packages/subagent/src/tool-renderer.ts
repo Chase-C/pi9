@@ -45,6 +45,13 @@ export interface JoinActivityRenderItem {
   summary?: string;
 }
 
+export interface CancelledRunRenderItem {
+  conversationId?: ConversationId;
+  runId: string;
+  status?: "aborted";
+  error?: string;
+}
+
 export interface InspectedRunErrorRenderItem {
   inputIndex: number;
   runId: string;
@@ -131,12 +138,12 @@ export type SubagentToolDetails =
   | { action: "list"; runs: ListedRunRenderItem[] }
   | { action: "run"; tasks: DispatchTaskRenderItem[] }
   | { action: "steer"; tasks: DispatchTaskRenderItem[] }
+  | { action: "cancel"; runs: CancelledRunRenderItem[] }
   | { action: "inspect"; runs: Array<InspectedRunRenderItem | InspectedRunErrorRenderItem> }
   | { action: "join"; runs: JoinedRunRenderItem[] }
   | {
       action: "remove";
       removed: number;
-      aborted: number;
       conversationIds: ConversationId[];
       errors: Array<{ conversationId: string; error: string }>;
     }
@@ -209,6 +216,13 @@ function collapsedLines(details: Exclude<SubagentToolDetails, { action: "error" 
       const labels = details.tasks.map((task, index) => taskLabel(task, index));
       return labels.length ? [success(theme, outcome), secondary(labels, theme)] : [success(theme, outcome)];
     }
+    case "cancel": {
+      const cancelled = details.runs.filter(run => run.status === "aborted").length;
+      const errors = details.runs.length - cancelled;
+      const summary = [`Cancelled ${count(cancelled, "run")}`];
+      if (errors) summary.push(count(errors, "error"));
+      return [success(theme, summary.join(paint(theme, "muted", " · "))), secondary(details.runs.map(run => run.runId), theme)];
+    }
     case "inspect": {
       if (details.runs.length === 0) return [success(theme, "No runs inspected")];
       const inspected = details.runs.filter((run): run is InspectedRunRenderItem => !("error" in run));
@@ -225,7 +239,6 @@ function collapsedLines(details: Exclude<SubagentToolDetails, { action: "error" 
       return joinLines(details.runs, false, partial, theme);
     case "remove": {
       const summary = [`Removed ${count(details.removed, "conversation")}`];
-      if (details.aborted) summary.push(`${count(details.aborted, "active run")} aborted`);
       if (details.errors.length) summary.push(count(details.errors.length, "error"));
       const lines = [success(theme, summary.join(paint(theme, "muted", " · ")))];
       if (details.conversationIds.length) lines.push(secondary(details.conversationIds, theme));
@@ -264,6 +277,14 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
         }
         return lines;
       });
+    case "cancel":
+      return blocks(details.runs, run => run.error ? [
+        `${errorMarker(theme)} ${paint(theme, "text", run.runId)} ${paint(theme, "muted", "· not cancelled")}`,
+        `  ${paint(theme, "error", run.error)}`,
+      ] : [
+        `${arrow(theme)} ${paint(theme, "text", run.runId)} ${paint(theme, "muted", "· cancelled")}`,
+        ...(run.conversationId ? [`  ${identity(theme, run.conversationId, run.runId)}`] : []),
+      ]);
     case "inspect":
       return blocks(details.runs, run => {
         if ("error" in run) return [
@@ -294,10 +315,6 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
         ]);
       }
       const lines = joinBlocks(items);
-      if (details.aborted) {
-        if (lines.length) lines.push("");
-        lines.push(`  ${paint(theme, "warning", `${count(details.aborted, "active run")} aborted`)}`);
-      }
       return lines.length ? lines : [success(theme, "No conversations removed")];
     }
   }
@@ -450,7 +467,7 @@ function callSuffix(action: string, input: Record<string, unknown> | undefined):
     return spawn + resume ? count(spawn + resume, "task") : "";
   }
   if (action === "steer") return arrayCount(input.messages, "message");
-  if (action === "inspect" || action === "join") return arrayCount(input.runIds, "run");
+  if (action === "cancel" || action === "inspect" || action === "join") return arrayCount(input.runIds, "run");
   if (action === "remove") return arrayCount(input.conversationIds, "conversation");
   return "";
 }
