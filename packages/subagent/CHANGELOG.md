@@ -8,6 +8,10 @@ This changelog starts with version `v0.2.1`.
 
 - Include compact, bounded terminal error diagnostics in `inspect` without exposing output or acknowledging outcomes.
 
+### Changed
+
+- Report the exact queued or running run that prevents a conversation from being resumed, with status-appropriate next steps.
+
 ### Breaking
 
 - Replace `dispatch(tasks)` with `run(spawns?, resumes?)` and `steer(messages)`. Steering messages use `{ runId, message }`; there is no compatibility alias.

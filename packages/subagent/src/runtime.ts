@@ -256,6 +256,12 @@ export class SubagentRuntime {
       } else {
         agent = this.conversations.get(task.conversationId);
         if (!agent) error = `Unknown conversation: ${task.conversationId}.`;
+        else if (agent.hasCurrentRun) {
+          const status = agent.status.kind;
+          if (status === "running") error = `Conversation ${task.conversationId} has running run ${agent.latestRunId}. Join it before resuming, or steer it while it runs.`;
+          else if (status === "queued") error = `Conversation ${task.conversationId} has queued run ${agent.latestRunId}. Wait for or join it before resuming.`;
+          else error = `Conversation ${task.conversationId} cannot be resumed.`;
+        }
         else if (!agent.canResume) error = `Conversation ${task.conversationId} cannot be resumed.`;
         else { runId = this.runIds.allocate(); if (!runId) error = "Run ID space exhausted."; else agent.beginResume(runId, task.prompt); }
       }

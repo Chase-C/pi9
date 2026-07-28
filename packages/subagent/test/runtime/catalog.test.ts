@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { test, expect } from "vitest";
 import { SubagentRuntime } from "../../src/runtime.js";
-import { completedRun } from "../../src/conversation.js";
+import { completedRun, errorRun } from "../../src/conversation.js";
 
 const knownModel = { provider: "test", id: "known" } as any;
 const config = {
@@ -62,6 +62,91 @@ test("ordered starts reserve capacity and resumes work at capacity", async () =>
     first.runId,
     (resumed.starts[0] as any).runId,
   ]);
+});
+
+test("resume identifies the queued run blocking a conversation", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(session());
+    if (attempt.prompt === "blocker") await gate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 1, controlled);
+  const blocker = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocker" }] as any);
+  await new Promise(done => setImmediate(done));
+  const queued = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "queued" }] as any);
+  const active = queued.starts[0] as any;
+
+  const resumed = manager.startRun(ctx, [{
+    kind: "resume",
+    conversationId: active.conversationId,
+    prompt: "continue",
+  }] as any);
+
+  expect(resumed.starts[0]).toEqual({
+    ok: false,
+    inputIndex: 0,
+    error: `Conversation ${active.conversationId} has queued run ${active.runId}. Wait for or join it before resuming.`,
+  });
+
+  release();
+  await Promise.all([blocker.completion, queued.completion]);
+});
+
+test("active resume failures remain isolated from resumable siblings", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(session());
+    if (attempt.prompt === "busy") await gate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 2, controlled);
+  const completed = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "completed" }] as any);
+  await completed.completion;
+  const resumable = completed.starts[0] as any;
+  const busyStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "busy" }] as any);
+  const busy = busyStart.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  const batch = manager.startRun(ctx, [
+    { kind: "resume", conversationId: busy.conversationId, prompt: "blocked" },
+    { kind: "resume", conversationId: resumable.conversationId, prompt: "continue" },
+  ] as any);
+
+  expect(batch.starts[0]).toMatchObject({
+    ok: false,
+    inputIndex: 0,
+    error: `Conversation ${busy.conversationId} has running run ${busy.runId}. Join it before resuming, or steer it while it runs.`,
+  });
+  expect(batch.starts[1]).toMatchObject({ ok: true, inputIndex: 1, conversationId: resumable.conversationId });
+
+  release();
+  await Promise.all([busyStart.completion, batch.completion]);
+});
+
+test("terminal non-resumable conversations retain the generic resume error", async () => {
+  const failing = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(session());
+    return errorRun(agent, attempt.runId, "failed");
+  };
+  const manager = new SubagentRuntime(registry, 1, failing);
+  const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "fail" }] as any);
+  await start.completion;
+  const terminal = start.starts[0] as any;
+
+  const resumed = manager.startRun(ctx, [{
+    kind: "resume",
+    conversationId: terminal.conversationId,
+    prompt: "continue",
+  }] as any);
+
+  expect(resumed.starts[0]).toEqual({
+    ok: false,
+    inputIndex: 0,
+    error: `Conversation ${terminal.conversationId} cannot be resumed.`,
+  });
 });
 
 test("spawn validation is ordered, isolated, and does not allocate or consume capacity", async () => {
