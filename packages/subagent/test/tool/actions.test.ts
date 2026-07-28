@@ -224,11 +224,11 @@ test("list is output-free and filtering is pure", () => {
   ]), [[conversationId, runId, "completed"]]);
 });
 
-test("remove forwards only the explicit conversation batch", () => {
+test("remove forwards only the explicit conversation batch", async () => {
   let received: any;
   const summary = { removed: 1, aborted: 0, conversationIds: [conversationId], errors: [] };
-  const result = removeAction(deps({
-    removeConversations: (ids: any) => {
+  const result = await removeAction(deps({
+    removeConversations: async (ids: any) => {
       received = ids;
       return summary;
     },

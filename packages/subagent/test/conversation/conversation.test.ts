@@ -239,6 +239,26 @@ test("settling a run discards steer receipts that were not processed", async () 
   assert.equal(agent.snapshot().runs[0].steers[0].state, "discarded");
 });
 
+test("new steers reject without reaching the SDK once shutdown starts", async () => {
+  let releaseAbort!: () => void;
+  const abortGate = new Promise<void>(resolve => { releaseAbort = resolve; });
+  let steerCalls = 0;
+  const agent = make();
+  agent.bindSession({
+    subscribe: () => () => {},
+    async steer() { steerCalls++; },
+    clearQueue() { return { steering: [], followUp: [] }; },
+    abort: () => abortGate,
+  } as any);
+
+  const aborting = agent.abort("stopped");
+  await assert.rejects(agent.steer(r1, "too late"), /stopping/);
+  assert.equal(steerCalls, 0);
+
+  releaseAbort();
+  await aborting;
+});
+
 test("bindings track observers and acknowledge an exact run", () => {
   const agent = make();
   const first = agent.bindRun(r1);

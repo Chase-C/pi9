@@ -58,7 +58,7 @@ The body becomes the child system prompt. Spawn tasks require `agent` and `promp
 | `dispatch` | Dispatch spawn, resume, or steer tasks and return one ordered outcome per task. Spawn and resume create asynchronous runs; steer targets an existing running run and returns a lifecycle receipt after Pi accepts the message. |
 | `inspect` | Return bounded status, running phase, current message, recent tool activity, and steer receipts for exact runs without waiting or acknowledging them. Invalid targets become ordered per-target errors. Terminal output is omitted. |
 | `join` | Block until every explicitly requested exact run settles, then return and acknowledge exactly those runs. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying runs. |
-| `remove` | Clean up the specified conversations, aborting active work if necessary, deleting resumable child session state, and hiding them from `list`. |
+| `remove` | Clean up the specified conversations, aborting active work if necessary, draining in-flight steering, deleting resumable child session state, and hiding them from `list`. It returns only after detached run snapshots are finalized. |
 
 Parallel runs stream their current status and recent tool activity independently:
 

@@ -414,16 +414,16 @@ export class SubagentRuntime {
   }
   private requireRunRecord(runId: RunId): RunRecord { const record = this.runs.get(runId); if (!record) throw new Error(`Unknown run: ${runId}.`); return record; }
 
-  removeConversation(conversationId: string): RemoveResult { return this.removeConversations([conversationId]); }
-  removeConversations(ids: readonly string[]): RemoveResult {
+  removeConversation(conversationId: string): Promise<RemoveResult> { return this.removeConversations([conversationId]); }
+  async removeConversations(ids: readonly string[]): Promise<RemoveResult> {
     const unique = [...new Set(ids)]; const removed: ConversationId[] = []; const errors: Array<{ conversationId: string; error: string }> = []; let aborted = 0;
     for (const id of unique) {
       const agent = this.conversations.get(id as ConversationId);
       if (!agent) { errors.push({ conversationId: id, error: `Unknown conversation: ${id}.` }); continue; }
       if (agent.hasCurrentRun) aborted++;
-      void agent.abort("Conversation removed.");
-      const runs = agent.runHistory;
       this.conversations.delete(agent.conversationId);
+      await agent.abort("Conversation removed.");
+      const runs = agent.runHistory;
       for (const run of runs) {
         const indexed = this.runs.get(run.runId);
         this.runs.set(run.runId, {

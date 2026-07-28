@@ -216,11 +216,11 @@ export async function joinAction(
   }
 }
 
-export function removeAction(
+export async function removeAction(
   deps: ActionDeps,
   invocation: InvocationFor<"remove">,
-): ActionResult {
-  const result = deps.runtime.removeConversations(invocation.conversationIds);
+): Promise<ActionResult> {
+  const result = await deps.runtime.removeConversations(invocation.conversationIds);
   return jsonResult(result, { action: "remove", ...result });
 }
 

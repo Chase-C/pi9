@@ -12,6 +12,7 @@ This changelog starts with version `v0.2.1`.
 ### Changed
 
 - Return ordered per-target errors from `inspect` so malformed, unknown, or unauthorized targets do not hide valid sibling snapshots.
+- Wait for in-flight steering to finalize during removal so discarded receipts remain inspectable and queued messages cannot continue after abort.
 
 ## [0.8.0] - 2026-07-28
 

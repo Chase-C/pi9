@@ -209,6 +209,10 @@ function projectSteer(steer: TrackedSteerReceipt): SteerReceipt {
   });
 }
 
+function clearSessionQueue(session: AgentSession | undefined): void {
+  try { session?.clearQueue?.(); } catch {}
+}
+
 function messageText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -233,6 +237,7 @@ export class Conversation {
   private readonly runs: Run[] = [];
   private currentRun?: Run;
   private session?: AgentSession;
+  private stopping = false;
   private steerTail: Promise<void> = Promise.resolve();
   private unsubscribe?: () => void;
   private effectiveConfig?: ConversationEffectiveConfig;
@@ -298,6 +303,7 @@ export class Conversation {
 
   steer(runId: RunId, prompt: string): Promise<SteerReceipt> {
     const pending = this.steerTail.then(async () => {
+      if (this.stopping) throw new Error(`Run ${runId} is stopping and cannot be steered.`);
       const run = this.requireRun(runId);
       if (run.state.kind !== "running") {
         const status = run.state.kind === "queued" ? "queued" : run.state.result.status;
@@ -306,6 +312,7 @@ export class Conversation {
       const session = run.state.session;
       await session.steer(prompt);
       const deliveryText = session.getSteeringMessages?.().at(-1) ?? prompt;
+      if (this.stopping) clearSessionQueue(session);
       const receipt = run.acceptSteer(deliveryText);
       this.listener(this, "steer");
       return receipt;
@@ -341,13 +348,18 @@ export class Conversation {
     return this.project(run);
   }
 
-  /** Terminalizes immediately; SDK cancellation is best-effort and cannot rewrite the result. */
+  /** Terminalizes immediately, then finalizes in-flight steering before cancellation completes. */
   async abort(reason = "Agent aborted."): Promise<void> {
     const run = this.currentRun;
     if (!run) return;
+    this.stopping = true;
     const runningSession = run.state.kind === "running" ? run.state.session : undefined;
+    clearSessionQueue(runningSession);
     this.settle(run.runId, { status: "aborted", error: reason });
-    await Promise.resolve(runningSession?.abort()).catch(() => undefined);
+    const aborting = Promise.resolve(runningSession?.abort()).catch(() => undefined);
+    await this.steerTail;
+    clearSessionQueue(runningSession);
+    await aborting;
   }
 
   beginNestedJoin(runId: RunId, targets: readonly RunId[], toolCallId?: string): number {
