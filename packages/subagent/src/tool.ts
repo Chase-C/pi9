@@ -116,6 +116,7 @@ export function listAction(
       kind: run.kind,
       status: (run.status.kind === "done" ? run.status.outcome : run.status.kind) as RunStatus,
       createdAt: run.createdAt,
+      ...deps.runtime.runLineage(run.runId),
     })),
   );
   const filtered = invocation.status
@@ -424,10 +425,20 @@ function projectInspection(
     : run.status.kind === "running" ? run.status.startedAt
     : run.status.startedAt ?? run.createdAt;
   let display: { agentName?: string; label?: string } = {};
+  let config: Pick<ConversationSnapshot, "requestedOverrides" | "effectiveConfig"> = {};
   try { display = runtime.conversationDisplay(conversationId); } catch {}
+  try {
+    const conversation = runtime.conversation(conversationId);
+    config = {
+      ...(conversation.requestedOverrides ? { requestedOverrides: conversation.requestedOverrides } : {}),
+      ...(conversation.effectiveConfig ? { effectiveConfig: conversation.effectiveConfig } : {}),
+    };
+  } catch {}
   return {
     conversationId,
     runId: run.runId,
+    ...runtime.runLineage(run.runId),
+    ...config,
     ...(display.agentName ? { agent: display.agentName } : {}),
     ...(display.label ? { label: display.label } : {}),
     status,

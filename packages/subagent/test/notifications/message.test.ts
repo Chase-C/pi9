@@ -22,6 +22,14 @@ test("background completion factory keeps content and structured details on the 
   assert.equal(message.content, formatCompletionNotificationMessage(message.details, true, undefined));
 });
 
+test("terminal notification header stays status-neutral for aborted and mixed outcomes", () => {
+  const aborted = { ...entry, status: "aborted" as const };
+  const errored = { ...entry, runId: "run-2", status: "error" as const };
+
+  assert.match(createCompletionNotificationMessage([aborted]).content, /^1 subagent finished since the last notification:/);
+  assert.match(createCompletionNotificationMessage([entry, aborted, errored]).content, /^3 subagents finished since the last notification:/);
+});
+
 test("background completion content lists 20 of 21 entries with exact overflow and boundary truncation", () => {
   const display = {
     ...DEFAULT_SUBAGENT_SETTINGS.display,
@@ -48,6 +56,6 @@ test("background completion content lists 20 of 21 entries with exact overflow a
   assert.doesNotMatch(message.content, /run-21/);
 
   const collapsed = formatCompletionNotificationMessage(message.details, false, undefined);
-  assert.match(collapsed, /^21 subagents completed/);
+  assert.match(collapsed, /^21 subagents finished/);
   assert.doesNotMatch(collapsed, /run-1|run-21|Call subagent results/);
 });

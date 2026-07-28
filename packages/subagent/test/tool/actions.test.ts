@@ -25,6 +25,7 @@ const snapshot = (status: any = { kind: "running", startedAt: 1 }) => ({
 const deps = (manager: any) => ({
   runtime: {
     inspectRuns: (ids: any[]) => ids.map(target => ({ conversationId, snapshot: { ...snapshot().runs[0], runId: target } })),
+    runLineage: (target: any) => ({ rootRunId: target, depth: 0 }),
     ...manager,
   },
   agentRegistry: { agents: new Map(), summarizeAgent: () => "" },
@@ -111,6 +112,24 @@ test("spawn and resume return independent ordered receipt arrays", async () => {
     action: "resume",
     results: [{ ok: true, data: { label: "retained task", conversationId, runId } }],
   });
+});
+
+test("resume preserves actionable aborted-conversation guidance", async () => {
+  const error = `Conversation ${conversationId} was aborted and cannot be resumed. Spawn a new conversation to continue.`;
+  const manager = {
+    startRun: () => {
+      const start = { ok: false as const, inputIndex: 0, error };
+      return { starts: [start], completion: Promise.resolve([start]) };
+    },
+    listConversations: () => [snapshot({ kind: "done", outcome: "aborted", completedAt: 2, error: "Run cancelled." })],
+  };
+
+  const result = await resumeAction(deps(manager), {
+    action: "resume",
+    resumes: [{ kind: "resume", conversationId, prompt: "continue" }],
+  }, {} as any);
+
+  assert.deepEqual(json(result), { action: "resume", results: [{ ok: false, error }] });
 });
 
 test("spawn returns task parse failures while starting valid siblings", async () => {
@@ -290,6 +309,12 @@ test("inspect returns bounded progress without terminal output", () => {
       return [{ conversationId, snapshot: running }];
     },
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
+    conversation: () => ({
+      ...snapshot(),
+      requestedOverrides: { model: "requested/model", thinking: "high" },
+      effectiveConfig: { model: "effective/model", thinking: "medium", cwd: "/work", skills: ["review"], tools: ["read"] },
+    }),
+    runLineage: () => ({ parentRunId: "branch-boldly", rootRunId: "start-safely", depth: 2 }),
   };
   const result = inspectAction(deps(manager), { action: "inspect", runIds: [runId] });
   const response = json(result);
@@ -297,7 +322,15 @@ test("inspect returns bounded progress without terminal output", () => {
   const [{ data: entry }] = response.results;
 
   assert.equal(entry.status, "running");
+  assert.deepEqual(
+    { parentRunId: entry.parentRunId, rootRunId: entry.rootRunId, depth: entry.depth },
+    { parentRunId: "branch-boldly", rootRunId: "start-safely", depth: 2 },
+  );
   assert.equal(entry.phase, "thinking");
+  assert.deepEqual(entry.requestedOverrides, { model: "requested/model", thinking: "high" });
+  assert.deepEqual(entry.effectiveConfig, {
+    model: "effective/model", thinking: "medium", cwd: "/work", skills: ["review"], tools: ["read"],
+  });
   assert.equal(entry.turns, 2);
   assert.equal(entry.compactions, 1);
   assert.ok(entry.messageSnippet.length <= 500);
@@ -305,6 +338,20 @@ test("inspect returns bounded progress without terminal output", () => {
   assert.ok(entry.recentTools.every((tool: any) => tool.summary.length <= 160));
   assert.deepEqual(entry.steers.map((steer: any) => steer.id), [2, 3, 4, 5, 6]);
   assert.equal("output" in entry, false);
+});
+
+test("inspect shows requested overrides before effective configuration is available", () => {
+  const manager = {
+    inspectRuns: () => [{ conversationId, snapshot: snapshot().runs[0] }],
+    conversationDisplay: () => ({ conversationId, agentName: "helper" }),
+    conversation: () => ({ ...snapshot(), requestedOverrides: { model: "requested/model", thinking: "high" } }),
+    runLineage: () => ({ rootRunId: runId, depth: 0 }),
+  };
+
+  const [{ data: entry }] = json(inspectAction(deps(manager), { action: "inspect", runIds: [runId] })).results;
+
+  assert.deepEqual(entry.requestedOverrides, { model: "requested/model", thinking: "high" });
+  assert.equal("effectiveConfig" in entry, false);
 });
 
 test("inspect isolates malformed and unknown targets from valid siblings", () => {
@@ -345,7 +392,10 @@ test("inspect omits terminal output and completed message text", () => {
 
   assert.equal(result.isError, false);
   assert.doesNotMatch(result.content[0].text, /SECRET/);
-  assert.equal(json(result).results[0].data.recentTools[0].status, "interrupted");
+  const entry = json(result).results[0].data;
+  assert.equal("requestedOverrides" in entry, false);
+  assert.equal("effectiveConfig" in entry, false);
+  assert.equal(entry.recentTools[0].status, "interrupted");
 });
 
 test("inspect includes a bounded diagnostic for a failed run", () => {
@@ -388,6 +438,7 @@ test("list is output-free and filtering is pure", () => {
       calls++;
       return [snapshot(), snapshot({ kind: "done", outcome: "completed", completedAt: 2 })];
     },
+    runLineage: () => ({ parentRunId: "branch-boldly", rootRunId: "start-safely", depth: 2 }),
   };
   const result = listAction(deps(manager), { action: "list", status: ["completed"] });
   assert.equal(calls, 1);
@@ -397,7 +448,10 @@ test("list is output-free and filtering is pure", () => {
     entry.conversationId,
     entry.runId,
     entry.status,
-  ]), [[conversationId, runId, "completed"]]);
+    entry.parentRunId,
+    entry.rootRunId,
+    entry.depth,
+  ]), [[conversationId, runId, "completed", "branch-boldly", "start-safely", 2]]);
 });
 
 test("remove forwards only the explicit conversation batch", async () => {

@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import type { AgentSource } from "./agents.js";
-import type { RunKind, RunPhase, SteerReceipt } from "./conversation.js";
+import type { ConversationEffectiveConfig, ConversationRequestedOverrides, RunKind, RunPhase, SteerReceipt } from "./conversation.js";
 import type { ConversationId, RunId } from "./identifiers.js";
 import { formatElapsed, formatTokens } from "./run-format.js";
 import type { DispatchTaskKind, RunStatus, SubagentAction } from "./schema.js";
@@ -33,6 +33,9 @@ export interface DispatchTaskRenderItem {
 export interface ListedRunRenderItem {
   conversationId: ConversationId;
   runId: RunId;
+  parentRunId?: RunId;
+  rootRunId: RunId;
+  depth: number;
   agent: string;
   label?: string;
   kind: RunKind;
@@ -61,6 +64,11 @@ export interface InspectedRunErrorRenderItem {
 export interface InspectedRunRenderItem {
   conversationId: ConversationId;
   runId: RunId;
+  parentRunId?: RunId;
+  rootRunId: RunId;
+  depth: number;
+  requestedOverrides?: ConversationRequestedOverrides;
+  effectiveConfig?: ConversationEffectiveConfig;
   agent?: string;
   label?: string;
   status: RunStatus;

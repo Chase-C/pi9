@@ -59,6 +59,8 @@ test("steer renders receipts and inspect renders bounded activity", () => {
     runs: [{
       conversationId: "quiet-otter" as any,
       runId: "search-boldly" as any,
+      rootRunId: "search-boldly" as any,
+      depth: 0,
       agent: "scout",
       status: "running",
       phase: "thinking",
@@ -80,6 +82,8 @@ test("inspect renders terminal error diagnostics in expanded mode", () => {
     runs: [{
       conversationId: "quiet-otter" as any,
       runId: "search-boldly" as any,
+      rootRunId: "search-boldly" as any,
+      depth: 0,
       agent: "scout",
       status: "error",
       elapsedMs: 25,
@@ -136,8 +140,8 @@ test("list renders status summary and tagged run inventory", () => {
   const details: SubagentToolDetails = {
     action: "list",
     runs: [
-      { conversationId: "quiet-otter" as any, runId: "search-boldly" as any, agent: "scout", label: "auth map", kind: "spawn", status: "running" },
-      { conversationId: "amber-fox" as any, runId: "inspect-carefully" as any, agent: "reviewer", label: "risk review", kind: "spawn", status: "completed" },
+      { conversationId: "quiet-otter" as any, runId: "search-boldly" as any, rootRunId: "search-boldly" as any, depth: 0, agent: "scout", label: "auth map", kind: "spawn", status: "running" },
+      { conversationId: "amber-fox" as any, runId: "inspect-carefully" as any, rootRunId: "inspect-carefully" as any, depth: 0, agent: "reviewer", label: "risk review", kind: "spawn", status: "completed" },
     ],
   };
   assert.equal(renderResult(details), "✓ Found 2 runs · 1 running · 1 completed\n  auth map · risk review");

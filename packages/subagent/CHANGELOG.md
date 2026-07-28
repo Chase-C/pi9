@@ -7,11 +7,15 @@ This changelog starts with version `v0.2.1`.
 ### Added
 
 - Include compact, bounded terminal error diagnostics in `inspect` without exposing output or acknowledging outcomes.
+- Expose `parentRunId`, `rootRunId`, and `depth` through `list` and `inspect` so recursive run trees are machine-readable.
+- Include explicit requested overrides and resolved effective execution configuration in `inspect` when available.
 
 ### Changed
 
 - Defer completion delivery until synchronous tool preflight settles so same-batch joins can claim their runs without redundant notifications.
 - Report the exact queued or running run that prevents a conversation from being resumed, with status-appropriate next steps.
+- Describe terminal subagents as “finished” in notification headers so aborted and failed runs are not collectively called completed.
+- Explain that aborted conversations cannot be resumed and direct callers to spawn a new conversation.
 
 ### Breaking
 

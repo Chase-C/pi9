@@ -149,6 +149,35 @@ test("terminal non-resumable conversations retain the generic resume error", asy
   });
 });
 
+test("aborted conversations explain that continuation requires a new spawn", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession({ ...session(), abort: () => gate });
+    await gate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 1, controlled);
+  const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "stop" }] as any);
+  const aborted = start.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+  const cancelling = manager.cancelRun(aborted.runId);
+  release();
+  await cancelling;
+
+  const resumed = manager.startRun(ctx, [{
+    kind: "resume",
+    conversationId: aborted.conversationId,
+    prompt: "continue",
+  }] as any);
+
+  expect(resumed.starts[0]).toEqual({
+    ok: false,
+    inputIndex: 0,
+    error: `Conversation ${aborted.conversationId} was aborted and cannot be resumed. Spawn a new conversation to continue.`,
+  });
+});
+
 test("spawn validation is ordered, isolated, and does not allocate or consume capacity", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "agent-manager-validation-"));
   const prompts: string[] = [];
@@ -344,6 +373,7 @@ test("removing an intermediate conversation reparents descendant ownership", asy
 
   if (accessError) throw accessError;
   expect(inspected.snapshot.runId).toBe(grand.runId);
+  expect(manager.runLineage(grand.runId)).toEqual({ parentRunId: owner.runId, rootRunId: owner.runId, depth: 1 });
   expect(manager.conversation(grand.conversationId).parent).toEqual({ conversationId: child.conversationId, runId: child.runId });
   expect(() => manager.runSnapshot(child.runId)).toThrow(`Unknown run: ${child.runId}.`);
 });
@@ -566,6 +596,30 @@ test("removed conversation runs cannot be joined", async () => {
   expect(() => manager.bindJoin([root.runId])).toThrow(`Unknown run: ${root.runId}.`);
   expect(() => manager.inspectRuns([child.runId])).toThrow(`Unknown run: ${child.runId}.`);
   expect(() => manager.runSnapshot(grand.runId)).toThrow(`Unknown run: ${grand.runId}.`);
+});
+
+test("run lineage identifies recursive parents, roots, and depth", async () => {
+  const manager = new SubagentRuntime(registry, 3, runner);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    parent(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand" }] as any,
+    parent(child.conversationId, child.runId));
+  await grandStart.completion;
+  const grand = grandStart.starts[0] as any;
+
+  const resumeStart = manager.startRun(ctx, [{ kind: "resume", conversationId: root.conversationId, prompt: "resume" }] as any);
+  await resumeStart.completion;
+  const resumed = resumeStart.starts[0] as any;
+
+  expect(manager.runLineage(root.runId)).toEqual({ rootRunId: root.runId, depth: 0 });
+  expect(manager.runLineage(child.runId)).toEqual({ parentRunId: root.runId, rootRunId: root.runId, depth: 1 });
+  expect(manager.runLineage(grand.runId)).toEqual({ parentRunId: child.runId, rootRunId: root.runId, depth: 2 });
+  expect(manager.runLineage(resumed.runId)).toEqual({ rootRunId: resumed.runId, depth: 0 });
 });
 
 test("exact join does not bind an unrequested descendant", async () => {

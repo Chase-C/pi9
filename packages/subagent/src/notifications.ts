@@ -96,7 +96,7 @@ function copyCompletionNotification(entry: CompletionNotification): CompletionNo
 }
 
 function formatCompletionHeader(count: number, includeSinceLastNotification: boolean): string {
-  return `${count} subagent${count === 1 ? "" : "s"} completed${includeSinceLastNotification ? " since the last notification:" : ""}`;
+  return `${count} subagent${count === 1 ? "" : "s"} finished${includeSinceLastNotification ? " since the last notification:" : ""}`;
 }
 
 interface CompletionEntryFormatOptions {

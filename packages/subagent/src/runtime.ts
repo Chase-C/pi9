@@ -224,6 +224,7 @@ export interface JoinProjection { readonly conversationId: ConversationId; reado
 export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; acknowledge(): void; release(): void }
 export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: RunId; readonly attemptIndex: number; interrupt(error?: string): void }
 export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId }
+export interface RunLineage { readonly parentRunId?: RunId; readonly rootRunId: RunId; readonly depth: number }
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
 export interface RemoveResult { removed: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
 export interface CancelResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: "aborted" }
@@ -298,7 +299,7 @@ export class SubagentRuntime {
           else if (status === "queued") error = `Conversation ${task.conversationId} has queued run ${agent.latestRunId}. Wait for or join it before resuming.`;
           else error = `Conversation ${task.conversationId} cannot be resumed.`;
         }
-        else if (!agent.canResume) error = `Conversation ${task.conversationId} cannot be resumed.`;
+        else if (!agent.canResume) error = this.resumeError(agent);
         else { runId = this.runIds.allocate(); if (!runId) error = "Run ID space exhausted."; else agent.beginResume(runId, task.prompt); }
       }
       if (!agent || !runId || error) { starts.push({ ok: false, inputIndex, error: error ?? "Could not start run." }); continue; }
@@ -398,6 +399,24 @@ export class SubagentRuntime {
     const record = this.requireRunRecord(runId);
     return record.agent.runHistory.find(run => run.runId === runId)!;
   }
+  runLineage(runId: RunId): RunLineage {
+    const record = this.requireRunRecord(runId);
+    let current = record;
+    let depth = 0;
+    const seen = new Set<RunId>([runId]);
+    while (current.parentRunId) {
+      const parent = this.requireRunRecord(current.parentRunId);
+      if (seen.has(parent.runId)) break;
+      seen.add(parent.runId);
+      current = parent;
+      depth++;
+    }
+    return {
+      ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
+      rootRunId: current.runId,
+      depth,
+    };
+  }
   conversationDisplay(conversationId: ConversationId): ConversationDisplayIdentity {
     const live = this.conversations.get(conversationId);
     if (live) return { conversationId, ...(live.label ? { label: live.label } : {}), agentName: live.agentName };
@@ -489,6 +508,13 @@ export class SubagentRuntime {
     }
   }
   private requireConversation(id: string): Conversation { const found = this.conversations.get(id as ConversationId); if (!found) throw new Error(`Unknown conversation: ${id}.`); return found; }
+  private resumeError(agent: Conversation): string {
+    const status = agent.status;
+    if (status.kind === "done" && status.outcome === "aborted") {
+      return `Conversation ${agent.conversationId} was aborted and cannot be resumed. Spawn a new conversation to continue.`;
+    }
+    return `Conversation ${agent.conversationId} cannot be resumed.`;
+  }
   private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Conversation capacity (${this.maxConversations}) reached. Remove terminal conversations${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
   private updated(agent: Conversation, kind: ConversationUpdateKind): void {
     if (this.conversations.get(agent.conversationId) !== agent) return;
