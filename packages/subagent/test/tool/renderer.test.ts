@@ -119,6 +119,19 @@ test("list renders status summary and tagged run inventory", () => {
   ].join("\n"));
 });
 
+test("join renders target errors without conversation identities", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{ runId: "not-an-id", status: "error", error: "invalid runId format" }],
+  };
+  assert.equal(renderResult(details, true), [
+    "× not-an-id · error",
+    "  not-an-id",
+    "",
+    "  invalid runId format",
+  ].join("\n"));
+});
+
 test("join distinguishes partial waits and terminal child errors", () => {
   const details: SubagentToolDetails = {
     action: "join",

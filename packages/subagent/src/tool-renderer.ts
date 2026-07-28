@@ -107,8 +107,8 @@ export interface JoinBackgroundOwnerRenderItem {
 }
 
 export interface JoinedRunRenderItem {
-  conversationId: ConversationId;
-  runId: RunId;
+  conversationId?: ConversationId;
+  runId: string;
   agent?: string;
   label?: string;
   kind?: RunKind;
@@ -324,7 +324,7 @@ function renderJoinRoot(run: JoinedRunRenderItem, index: number, expanded: boole
   }
 
   if (expanded) {
-    lines.push(`  ${identity(theme, run.conversationId, run.runId)}`);
+    lines.push(`  ${run.conversationId ? identity(theme, run.conversationId, run.runId) : paint(theme, "muted", run.runId)}`);
     if (run.prompt) appendSection(lines, [`  ${paint(theme, "dim", run.prompt)}`]);
   } else if (partial && !run.activity?.length && !run.joins?.length) {
     lines.push(`  ${paint(theme, "dim", "waiting for result")}`);

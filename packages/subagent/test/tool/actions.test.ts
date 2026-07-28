@@ -23,7 +23,10 @@ const snapshot = (status: any = { kind: "running", startedAt: 1 }) => ({
   canResume: false,
 });
 const deps = (manager: any) => ({
-  runtime: manager,
+  runtime: {
+    inspectRuns: (ids: any[]) => ids.map(target => ({ conversationId, snapshot: { ...snapshot().runs[0], runId: target } })),
+    ...manager,
+  },
   agentRegistry: { agents: new Map(), summarizeAgent: () => "" },
 }) as any;
 const json = (result: any) => JSON.parse(result.content[0].text);
@@ -419,6 +422,45 @@ test("child join binds its captured owner and suspends the parent queue slot", a
   assert.equal(boundToolCallId, "join-call-1");
 });
 
+test("nested join records one binding for valid siblings and returns invalid targets in place", async () => {
+  const childRunId = "assemble-abruptly" as any;
+  const unknownRunId = "capture-keenly" as any;
+  let boundIds: any[] = [];
+  const manager = {
+    inspectRuns: ([target]: any[]) => {
+      if (target === unknownRunId) throw new Error(`Unknown run: ${target}.`);
+      return [{ conversationId, snapshot: { ...snapshot().runs[0], runId: target } }];
+    },
+    bindNestedJoin: (_owner: any, ids: any[]) => {
+      boundIds = ids;
+      return {
+        ...joinBinding([{ conversationId, runId: childRunId, status: { kind: "done", outcome: "completed", completedAt: 2 } }]),
+        interrupt: () => {},
+      };
+    },
+    onConversationUpdate: () => () => {},
+    scheduler: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
+  };
+  const result = await joinAction({
+    ...deps(manager),
+    parent: { conversationId, runId: () => runId },
+  }, {
+    action: "join",
+    runIds: [
+      { runId: "not-an-id", error: "invalid runId format" },
+      childRunId,
+      unknownRunId,
+    ],
+  }, undefined, undefined);
+
+  assert.deepEqual(boundIds, [childRunId]);
+  assert.deepEqual(json(result), [
+    { runId: "not-an-id", error: "invalid runId format" },
+    { conversationId, runId: childRunId, status: "completed" },
+    { runId: unknownRunId, error: `Unknown run: ${unknownRunId}.` },
+  ]);
+});
+
 test("a bound join acknowledges an aborted outcome after removal", async () => {
   let resolve!: () => void;
   let acknowledged = 0;
@@ -490,10 +532,47 @@ test("join projection retains terminal descendant joins and final detached backg
   assert.equal("output" in child, false);
 });
 
-test("whole-batch bind errors return before update subscription", async () => {
+test("join isolates malformed and unknown targets from valid siblings", async () => {
+  const unknownRunId = "assemble-abruptly" as any;
+  const malformed = { runId: "not-an-id", error: "join received invalid runId format 'not-an-id'." };
+  const entries = [{ conversationId, runId, status: { kind: "done", outcome: "completed", completedAt: 2, output: "done" } }];
   let subscribed = false;
   const manager = {
-    bindJoin: () => { throw new Error("Unknown or removed run"); },
+    inspectRuns: ([target]: any[]) => {
+      if (target === unknownRunId) throw new Error(`Unknown run: ${target}.`);
+      return [{ conversationId, snapshot: snapshot().runs[0] }];
+    },
+    bindJoin: (ids: any[]) => {
+      assert.deepEqual(ids, [runId]);
+      return joinBinding(entries);
+    },
+    onConversationUpdate: () => {
+      subscribed = true;
+      return () => {};
+    },
+  };
+
+  const result = await joinAction(
+    deps(manager),
+    { action: "join", runIds: [runId, malformed, unknownRunId] },
+    undefined,
+    undefined,
+  );
+
+  assert.equal(result.isError, false);
+  assert.equal(subscribed, true);
+  assert.deepEqual(json(result), [
+    { conversationId, runId, status: "completed", output: "done" },
+    malformed,
+    { runId: unknownRunId, error: `Unknown run: ${unknownRunId}.` },
+  ]);
+});
+
+test("join returns item errors without binding when no target resolves", async () => {
+  let subscribed = false;
+  const manager = {
+    inspectRuns: () => { throw new Error("Unknown run: assemble-abruptly."); },
+    bindJoin: () => { throw new Error("must not bind"); },
     onConversationUpdate: () => {
       subscribed = true;
       return () => {};
@@ -501,11 +580,17 @@ test("whole-batch bind errors return before update subscription", async () => {
   };
   const result = await joinAction(
     deps(manager),
-    { action: "join", runIds: [runId] },
+    { action: "join", runIds: [
+      { runId: "not-an-id", error: "invalid runId format" },
+      "assemble-abruptly" as any,
+    ] },
     undefined,
     undefined,
   );
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /Unknown/);
+  assert.equal(result.isError, false);
   assert.equal(subscribed, false);
+  assert.deepEqual(json(result), [
+    { runId: "not-an-id", error: "invalid runId format" },
+    { runId: "assemble-abruptly", error: "Unknown run: assemble-abruptly." },
+  ]);
 });

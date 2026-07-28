@@ -179,31 +179,41 @@ export async function joinAction(
   onUpdate: AgentToolUpdateCallback<SubagentToolDetails> | undefined,
   toolCallId?: string,
 ): Promise<ActionResult> {
-  let binding: JoinBinding | NestedJoinBinding;
   const owner = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
+  const targets = invocation.runIds.map(target => {
+    if (typeof target !== "string") return target;
+    try {
+      deps.runtime.inspectRuns([target], owner);
+      return target;
+    } catch (error) {
+      return { runId: target, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  const validRunIds = targets.filter((target): target is RunId => typeof target === "string");
+
+  if (validRunIds.length === 0) {
+    const result = targets as JoinOutput[];
+    return jsonResult(result, { action: "join", runs: renderJoinedRuns(result, deps.runtime, true) });
+  }
+
+  let binding: JoinBinding | NestedJoinBinding;
   try {
     binding = owner
-      ? deps.runtime.bindNestedJoin(owner, invocation.runIds, toolCallId)
-      : deps.runtime.bindJoin(invocation.runIds);
+      ? deps.runtime.bindNestedJoin(owner, validRunIds, toolCallId)
+      : deps.runtime.bindJoin(validRunIds);
   } catch (error) {
     return errorResult(error instanceof Error ? error.message : String(error));
   }
 
-  const output = () => binding.project().map(entry => entry.status.kind === "done"
-    ? {
-        conversationId: entry.conversationId,
-        runId: entry.runId,
-        status: entry.status.outcome,
-        ...(entry.status.output !== undefined ? { output: entry.status.output } : {}),
-        ...(entry.status.error !== undefined ? { error: entry.status.error } : {}),
-      }
-    : {
-        conversationId: entry.conversationId,
-        runId: entry.runId,
-        status: entry.status.kind,
-      });
+  const output = (): JoinOutput[] => {
+    const entries = binding.project();
+    let entryIndex = 0;
+    return targets.map(target => typeof target === "string"
+      ? projectJoinedEntry(entries[entryIndex++])
+      : target);
+  };
   const renderDetails = (final = false): SubagentToolDetails => ({
     action: "join",
     runs: renderJoinedRuns(output(), deps.runtime, final),
@@ -243,6 +253,22 @@ export async function joinAction(
     binding.release();
     if (abort) signal?.removeEventListener("abort", abort);
   }
+}
+
+function projectJoinedEntry(entry: ReturnType<JoinBinding["project"]>[number]): JoinedOutput {
+  return entry.status.kind === "done"
+    ? {
+        conversationId: entry.conversationId,
+        runId: entry.runId,
+        status: entry.status.outcome,
+        ...(entry.status.output !== undefined ? { output: entry.status.output } : {}),
+        ...(entry.status.error !== undefined ? { error: entry.status.error } : {}),
+      }
+    : {
+        conversationId: entry.conversationId,
+        runId: entry.runId,
+        status: entry.status.kind,
+      };
 }
 
 export async function removeAction(
@@ -351,9 +377,11 @@ type JoinedOutput = {
   output?: string;
   error?: string;
 };
+type JoinOutputError = { runId: string; error: string };
+type JoinOutput = JoinedOutput | JoinOutputError;
 
 function renderJoinedRuns(
-  output: readonly JoinedOutput[],
+  output: readonly JoinOutput[],
   runtime: SubagentRuntime,
   final: boolean,
 ): JoinedRunRenderItem[] {
@@ -406,6 +434,7 @@ function renderJoinedRuns(
     targets: attempt.targets.map(target), ...(attempt.error ? { error: attempt.error } : {}), ...(attempt.toolCallId ? { toolCallId: attempt.toolCallId } : {}),
   }));
   return output.map(value => {
+    if (!("status" in value)) return { ...value, status: "error" };
     const run = snapshot(value.runId);
     if (!run) return { ...value };
     const info = display(value.conversationId);

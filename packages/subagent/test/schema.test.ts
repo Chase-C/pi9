@@ -126,13 +126,21 @@ test("item parse failures remain indexed within their typed arrays", () => {
   });
 });
 
-test("inspect retains malformed targets as ordered per-run errors", () => {
+test("inspect and join retain malformed targets as ordered per-run errors", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "inspect", runIds: [runId, conversationId, "not-an-id"] }), {
     action: "inspect",
     runIds: [
       runId,
       { runId: conversationId, error: `inspect received invalid runId '${conversationId}' (a conversation ID is not accepted).` },
       { runId: "not-an-id", error: "inspect received invalid runId format 'not-an-id'." },
+    ],
+  });
+  assert.deepEqual(parseSubagentInvocation({ action: "join", runIds: [runId, conversationId, "not-an-id"] }), {
+    action: "join",
+    runIds: [
+      runId,
+      { runId: conversationId, error: `join received invalid runId '${conversationId}' (a conversation ID is not accepted).` },
+      { runId: "not-an-id", error: "join received invalid runId format 'not-an-id'." },
     ],
   });
 });
@@ -179,14 +187,7 @@ test("schema and parser reject unknown properties", () => {
   assert.ok("error" in parseSpawnTask({ agent: "a", prompt: "x", extra: true }));
 });
 
-test("join and remove ID diagnostics distinguish ID kinds and malformed IDs", () => {
-  const wrongJoin = parseSubagentInvocation({ action: "join", runIds: [conversationId] });
-  assert.ok("error" in wrongJoin);
-  assert.match(wrongJoin.error, /conversation ID is not accepted/);
-  const malformedJoin = parseSubagentInvocation({ action: "join", runIds: ["not-an-id"] });
-  assert.ok("error" in malformedJoin);
-  assert.match(malformedJoin.error, /invalid runId format/);
-
+test("remove ID diagnostics distinguish ID kinds and malformed IDs", () => {
   const wrongRemove = parseSubagentInvocation({ action: "remove", conversationIds: [runId] });
   assert.ok("error" in wrongRemove);
   assert.match(wrongRemove.error, /run ID is not accepted/);

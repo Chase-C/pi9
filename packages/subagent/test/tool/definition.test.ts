@@ -71,11 +71,12 @@ test("tool prepares settings, applies task limits, and renders simple typed cont
   assert.match(tool.renderCall({ action: "run", spawns: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
 });
 
-test("rejected mixed join releases every valid requested claim", async () => {
+test("mixed join target errors still release every valid requested claim", async () => {
   let released: readonly string[] = [];
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings, releaseJoinClaims: ids => { released = ids; } });
   const result = await tool.execute("call", { action: "join", runIds: ["valid-run", 42] }, undefined, undefined, {});
-  assert.equal(result.isError, true);
+  assert.equal(result.isError, false);
+  assert.deepEqual(JSON.parse(result.content[0].text).map((entry: any) => entry.runId), ["valid-run", "42"]);
   assert.deepEqual(released, ["valid-run"]);
 });
 

@@ -74,7 +74,9 @@ export type SteerRequest = {
 };
 
 export type RunRequest = SpawnRequest | ResumeRequest;
-export type InspectTarget = RunId | { runId: string; error: string };
+export type RunTarget = RunId | { runId: string; error: string };
+export type InspectTarget = RunTarget;
+export type JoinTarget = RunTarget;
 export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
 export type ParsedRunRequest = RunRequest | { error: string; label?: string };
 export type ParsedSteerRequest = SteerRequest | { error: string };
@@ -85,7 +87,7 @@ export type SubagentInvocation =
   | { action: "run"; spawns: ParsedRunRequest[]; resumes: ParsedRunRequest[] }
   | { action: "steer"; messages: ParsedSteerRequest[] }
   | { action: "inspect"; runIds: InspectTarget[] }
-  | { action: "join"; runIds: RunId[] }
+  | { action: "join"; runIds: JoinTarget[] }
   | { action: "remove"; conversationIds: ConversationId[] };
 
 export type SubagentInvocationParseError = {
@@ -219,11 +221,11 @@ export function parseSubagentInvocation(
       return { action: parsedAction, messages: params.messages.map(parseSteerMessage) };
     }
     case "inspect": {
-      const ids = parseInspectTargets(params.runIds);
+      const ids = parseRunTargets(params.runIds, parsedAction);
       return "error" in ids ? { ...ids, action: parsedAction } : { action: parsedAction, runIds: ids };
     }
     case "join": {
-      const ids = parseIds(params.runIds, parsedAction, isRunId, isConversationId, "runId", "conversation ID");
+      const ids = parseRunTargets(params.runIds, parsedAction);
       return "error" in ids ? { ...ids, action: parsedAction } : { action: parsedAction, runIds: ids };
     }
     case "remove": {
@@ -242,9 +244,9 @@ export function parseSubagentInvocation(
   }
 }
 
-function parseInspectTargets(value: unknown): InspectTarget[] | { error: string } {
+function parseRunTargets(value: unknown, action: "inspect" | "join"): RunTarget[] | { error: string } {
   if (!Array.isArray(value) || value.length === 0) {
-    return { error: "inspect requires a non-empty runIds array." };
+    return { error: `${action} requires a non-empty runIds array.` };
   }
   return value.map(item => {
     if (isRunId(item)) return item;
@@ -252,8 +254,8 @@ function parseInspectTargets(value: unknown): InspectTarget[] | { error: string 
     return {
       runId,
       error: isConversationId(item)
-        ? `inspect received invalid runId '${runId}' (a conversation ID is not accepted).`
-        : `inspect received invalid runId format '${runId}'.`,
+        ? `${action} received invalid runId '${runId}' (a conversation ID is not accepted).`
+        : `${action} received invalid runId format '${runId}'.`,
     };
   });
 }

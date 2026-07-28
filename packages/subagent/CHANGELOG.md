@@ -9,6 +9,7 @@ This changelog starts with version `v0.2.1`.
 - Replace `dispatch(tasks)` with `run(spawns?, resumes?)` and `steer(messages)`. Steering messages use `{ runId, message }`; there is no compatibility alias.
 - Split the shared task schema into distinct spawn, resume, and steer item schemas and remove redundant field descriptions.
 - Return `run` outcomes as matching `{ spawns, resumes }` receipt arrays without `inputIndex`; include each task's optional label when known.
+- Return malformed, unknown, and unauthorized `join` targets as ordered per-target errors instead of rejecting the whole batch.
 
 ## [0.8.2] - 2026-07-28
 
