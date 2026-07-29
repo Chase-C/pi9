@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-29
+
 ### Added
 
 - Include compact, bounded terminal error diagnostics in `inspect` without exposing output or acknowledging outcomes.
@@ -244,7 +246,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.2...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.9.0...HEAD
+[0.9.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.2...subagent-v0.9.0
 [0.8.2]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.1...subagent-v0.8.2
 [0.8.1]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.0...subagent-v0.8.1
 [0.8.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.7.4...subagent-v0.8.0
