@@ -1,4 +1,4 @@
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
 import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type ParentRun, type Run, type RunSnapshot, type SteerReceipt } from "./conversation.js";
 import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun, resolveModel, resolveTaskCwd } from "./execute.js";
@@ -124,6 +124,7 @@ export class RunScheduler {
   private readonly _queued = new Map<RunId, RunQueueTask<RunSnapshot>>();
   private _isTracked: (conversationId: string) => boolean;
   private _childTool?: (agent: Conversation) => ToolDefinition;
+  private _childSessionEvent?: (agent: Conversation, run: Run, event: AgentSessionEvent) => void;
 
   constructor(opts: RunSchedulerOptions) {
     this._queue = new RunQueue(opts.maxRunning);
@@ -132,11 +133,16 @@ export class RunScheduler {
       executeRun(ctx, agent, run, signal, {
         ...DEFAULT_EXECUTE_RUN_DEPENDENCIES,
         ...(this._childTool ? { childToolFor: this._childTool } : {}),
+        ...(this._childSessionEvent ? { childSessionEvent: this._childSessionEvent } : {}),
       }));
   }
 
   setChildTool(fn: (agent: Conversation) => ToolDefinition): void {
     this._childTool = fn;
+  }
+
+  setChildSessionEvent(fn: (agent: Conversation, run: Run, event: AgentSessionEvent) => void): void {
+    this._childSessionEvent = fn;
   }
 
   configure(opts: { maxRunning?: number }): void {

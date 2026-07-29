@@ -98,46 +98,6 @@ test("unknown actions return a structured global error envelope", async () => {
   });
 });
 
-test("child terminal inspect reports its full lifecycle to shared notification hooks", async () => {
-  const events: Array<{ kind: string; scope: string; toolCallId: string; value: unknown }> = [];
-  const runtime = {
-    inspectRuns: ([runId]: string[]) => [{
-      conversationId: "amber-acorn",
-      snapshot: {
-        runId,
-        kind: "spawn",
-        prompt: "done",
-        createdAt: 1,
-        status: { kind: "done", outcome: "completed", completedAt: 2 },
-        activity: { turns: 1, compactions: 0, toolHistory: [] },
-        observerCount: 0,
-        acknowledged: false,
-      },
-    }],
-    runLineage: (runId: string) => ({ rootRunId: runId, depth: 0 }),
-    conversationDisplay: () => ({ agentName: "worker" }),
-    conversation: () => ({}),
-  } as any;
-  const tool: any = defineSubagentTool({
-    runtime,
-    agentRegistry: registry,
-    prepareInvocation: async () => settings,
-    parent: { conversationId: "amber-acorn" as any, runId: () => "build-boldly" as any },
-    notificationHooks: {
-      beginTool: (scope, toolCallId, params) => events.push({ kind: "begin", scope, toolCallId, value: params }),
-      completeTool: (scope, toolCallId, result) => events.push({ kind: "complete", scope, toolCallId, value: result }),
-    },
-  });
-
-  const params = { action: "inspect", runIds: ["adapt-ably"] };
-  const result = await tool.execute("call", params, undefined, undefined, {});
-
-  assert.deepEqual(events, [
-    { kind: "begin", scope: "child:build-boldly", toolCallId: "call", value: params },
-    { kind: "complete", scope: "child:build-boldly", toolCallId: "call", value: result },
-  ]);
-});
-
 test("mixed join target errors remain ordered item failures", async () => {
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings });
   const result = await tool.execute("call", { action: "join", runIds: ["valid-run", 42] }, undefined, undefined, {});
@@ -148,23 +108,6 @@ test("mixed join target errors remain ordered item failures", async () => {
     { ok: false, runId: "valid-run", error: "join received invalid runId format 'valid-run'." },
     { ok: false, runId: "42", error: "join received invalid runId format '42'." },
   ]);
-});
-
-test("child failures still complete shared notification hooks", async () => {
-  const events: Array<{ kind: string; result?: unknown }> = [];
-  const tool: any = defineSubagentTool({
-    runtime: {} as any,
-    agentRegistry: registry,
-    prepareInvocation: async () => { throw new Error("settings unavailable"); },
-    parent: { conversationId: "amber-acorn" as any, runId: () => "build-boldly" as any },
-    notificationHooks: {
-      beginTool: () => events.push({ kind: "begin" }),
-      completeTool: (_scope, _toolCallId, result) => events.push({ kind: "complete", result }),
-    },
-  });
-
-  await assert.rejects(() => tool.execute("call", { action: "inspect", runIds: ["adapt-ably"] }, undefined, undefined, {}), /settings unavailable/);
-  assert.deepEqual(events, [{ kind: "begin" }, { kind: "complete", result: undefined }]);
 });
 
 test("settings preparation failures propagate without starting manager work", async () => {

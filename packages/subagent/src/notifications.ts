@@ -28,6 +28,7 @@ export type CompletionNotificationMessagePayload = CompletionNotificationMessage
 
 const MAX_LISTED_COMPLETIONS = 20;
 const COMPLETION_GRACE_MS = 500;
+const TERMINAL_RUN_STATUSES = new Set<unknown>(["completed", "error", "aborted", "interrupted"]);
 const RESULTS_INSTRUCTION = "Use `subagent join` when you need these terminal outcomes.";
 
 type EntrySurface = "notification" | "renderer";
@@ -184,7 +185,7 @@ export class CompletionNotifier {
   private readonly delivered = new Set<string>();
   private readonly observed = new Set<string>();
   private readonly gracePending = new Set<string>();
-  private readonly claimsByToolCall = new Map<string, { action: unknown; runIds: Set<string>; cancelWatchdog: () => void }>();
+  private readonly claimsByToolCall = new Map<string, { action: unknown; runIds: Set<string> }>();
   private readonly claimCountByRun = new Map<string, number>();
   private readonly unsubscribeAgent: () => void;
 
@@ -205,13 +206,7 @@ export class CompletionNotifier {
     const key = `${scope}:${toolCallId}`;
     this.releaseToolClaim(key);
     for (const runId of target.runIds) this.claimCountByRun.set(runId, (this.claimCountByRun.get(runId) ?? 0) + 1);
-    const scheduler = this.deps.scheduleRetry ?? schedule;
-    const cancelWatchdog = scheduler(() => {
-      if (this.claimsByToolCall.get(key)?.cancelWatchdog !== cancelWatchdog) return;
-      this.releaseToolClaim(key);
-      this.arm(0);
-    }, 300_000);
-    this.claimsByToolCall.set(key, { action: target.action, runIds: target.runIds, cancelWatchdog });
+    this.claimsByToolCall.set(key, { action: target.action, runIds: target.runIds });
   }
 
   completeTool(scope: string, toolCallId: string, result?: unknown): void {
@@ -226,6 +221,17 @@ export class CompletionNotifier {
     }
     this.releaseToolClaim(key);
     this.arm(0);
+  }
+
+  handleToolEvent(scope: string, event: unknown): void {
+    const type = event && typeof event === "object" ? (event as { type?: unknown }).type : undefined;
+    if (type === "tool_execution_start") {
+      const call = toolEvent(event);
+      if (call?.toolName === "subagent") this.beginTool(scope, call.toolCallId, call.args);
+    } else if (type === "tool_execution_end") {
+      const call = toolEndEvent(event);
+      if (call?.toolName === "subagent") this.completeTool(scope, call.toolCallId, call.result);
+    }
   }
 
   private onUpdate = (agent: Conversation, kind: ConversationUpdateKind): void => {
@@ -278,7 +284,6 @@ export class CompletionNotifier {
   private releaseToolClaim(key: string): void {
     const claim = this.claimsByToolCall.get(key);
     if (!claim) return;
-    claim.cancelWatchdog();
     this.claimsByToolCall.delete(key);
     for (const runId of claim.runIds) {
       const remaining = (this.claimCountByRun.get(runId) ?? 1) - 1;
@@ -363,7 +368,7 @@ function observedTerminalRunIds(action: unknown, result: unknown): string[] {
   return runs.flatMap(value => {
     if (!value || typeof value !== "object" || "error" in value) return [];
     const run = value as { runId?: unknown; status?: unknown };
-    if (typeof run.runId !== "string" || run.status === "queued" || run.status === "running") return [];
+    if (typeof run.runId !== "string" || !TERMINAL_RUN_STATUSES.has(run.status)) return [];
     return [run.runId];
   });
 }

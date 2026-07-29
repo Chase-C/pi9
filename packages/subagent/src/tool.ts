@@ -592,8 +592,6 @@ export interface SubagentToolDeps {
    * a no-op here because the parent's invocation already performed all of those steps.
    */
   prepareInvocation: (ctx: ExtensionContext) => Promise<SubagentSettings>;
-  /** Child-only hooks share notification coordination with the root extension runtime. */
-  notificationHooks?: SubagentNotificationHooks;
   /** Set on child factories; links spawned conversations and suspends its queue slot while joining. */
   parent?: { conversationId: ConversationId; runId: () => RunId };
 }
@@ -640,41 +638,23 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     },
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const executeAction = async (): Promise<ActionResult> => {
-        const settings = await prepareInvocation(ctx);
-        const invocation = parseSubagentInvocation(params, { maxTasks: settings.runtime.maxTasksPerRun });
-        if ("error" in invocation) return invocationErrorResult(actionDeps, invocation);
+      const settings = await prepareInvocation(ctx);
+      const invocation = parseSubagentInvocation(params, { maxTasks: settings.runtime.maxTasksPerRun });
+      if ("error" in invocation) return invocationErrorResult(actionDeps, invocation);
 
-        switch (invocation.action) {
-          case "agents": return agentsAction(actionDeps, invocation);
-          case "list": return listAction(actionDeps, invocation);
-          case "spawn": return spawnAction(actionDeps, invocation, ctx);
-          case "resume": return resumeAction(actionDeps, invocation, ctx);
-          case "steer": return steerAction(actionDeps, invocation);
-          case "cancel": return cancelAction(actionDeps, invocation);
-          case "inspect": return inspectAction(actionDeps, invocation);
-          case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
-          case "remove": return removeAction(actionDeps, invocation);
-        }
-      };
-
-      if (!parent || !deps.notificationHooks) return executeAction();
-      const scope = `child:${parent.runId()}`;
-      deps.notificationHooks.beginTool(scope, toolCallId, params);
-      let result: ActionResult | undefined;
-      try {
-        result = await executeAction();
-        return result;
-      } finally {
-        deps.notificationHooks.completeTool(scope, toolCallId, result);
+      switch (invocation.action) {
+        case "agents": return agentsAction(actionDeps, invocation);
+        case "list": return listAction(actionDeps, invocation);
+        case "spawn": return spawnAction(actionDeps, invocation, ctx);
+        case "resume": return resumeAction(actionDeps, invocation, ctx);
+        case "steer": return steerAction(actionDeps, invocation);
+        case "cancel": return cancelAction(actionDeps, invocation);
+        case "inspect": return inspectAction(actionDeps, invocation);
+        case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
+        case "remove": return removeAction(actionDeps, invocation);
       }
     },
   });
-}
-
-export interface SubagentNotificationHooks {
-  beginTool(scope: string, toolCallId: string, params: unknown): void;
-  completeTool(scope: string, toolCallId: string, result?: ActionResult): void;
 }
 
 export interface ChildToolDeps {
@@ -682,7 +662,6 @@ export interface ChildToolDeps {
   registry: AgentRegistry;
   parent: Conversation;
   getCurrentSettings: () => SubagentSettings;
-  notificationHooks?: SubagentNotificationHooks;
 }
 
 export function makeChildSubagentTool(deps: ChildToolDeps): ToolDefinition {
@@ -691,7 +670,6 @@ export function makeChildSubagentTool(deps: ChildToolDeps): ToolDefinition {
     runtime: manager,
     agentRegistry: registry,
     prepareInvocation: async () => getCurrentSettings(),
-    ...(deps.notificationHooks ? { notificationHooks: deps.notificationHooks } : {}),
     parent: {
       conversationId: parent.conversationId,
       runId: () => parent.requireCurrentRun().runId,

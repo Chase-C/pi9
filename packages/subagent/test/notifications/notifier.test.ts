@@ -98,6 +98,16 @@ test("recursive cancel holds its descendant claim through grace and marks the ou
   f.notifier.unsubscribe();
 });
 
+test("malformed finalized statuses do not suppress unseen outcomes", () => {
+  const f = fixture();
+  f.fire("tool_execution_start", { toolCallId: "malformed-inspect", toolName: "subagent", args: { action: "inspect", runIds: [f.run.runId] } });
+  f.fire("session_start"); f.flush();
+  f.fire("tool_execution_end", { toolCallId: "malformed-inspect", toolName: "subagent", result: { content: [], details: { action: "inspect", runs: [{ runId: f.run.runId }] } } });
+  f.flush();
+  assert.equal(f.sent.length, 1);
+  f.notifier.unsubscribe();
+});
+
 test("terminal outcomes returned by cancel stay silent when their claims are released", () => {
   const f = fixture();
   f.fire("tool_execution_start", { toolCallId: "cancel-call", toolName: "subagent", args: { action: "cancel", runIds: [f.run.runId] } });

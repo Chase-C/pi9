@@ -42,12 +42,11 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
     getMode: () => currentSettings.runtime.completionNotify,
     getDisplay: () => currentSettings.display,
   });
-  const notificationHooks = {
-    beginTool: (scope: string, toolCallId: string, params: unknown) => completionNotifier.beginTool(scope, toolCallId, params),
-    completeTool: (scope: string, toolCallId: string, result?: unknown) => completionNotifier.completeTool(scope, toolCallId, result),
-  };
   runtime.scheduler?.setChildTool?.(parent =>
-    makeChildSubagentTool({ manager: runtime, registry: agentRegistry, parent, getCurrentSettings, notificationHooks })
+    makeChildSubagentTool({ manager: runtime, registry: agentRegistry, parent, getCurrentSettings })
+  );
+  runtime.scheduler?.setChildSessionEvent?.((_parent, run, event) =>
+    completionNotifier.handleToolEvent(`child:${run.runId}`, event)
   );
 
   registerSubagentLifecycleEvents(pi.events, runtime);

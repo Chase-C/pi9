@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { Conversation } from "../../src/conversation.js";
 import { completedRun } from "../../src/conversation.js";
-import { resolveModel, resolveTaskCwd, executeRun } from "../../src/execute.js";
+import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, resolveModel, resolveTaskCwd, executeRun } from "../../src/execute.js";
 
 const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
 function resumable(messages: any[], prompt: () => Promise<void>, abort = vi.fn()) {
@@ -19,6 +19,33 @@ function resumable(messages: any[], prompt: () => Promise<void>, abort = vi.fn()
 test("resume completes with the final assistant text", async () => {
   const f = resumable([{ role: "assistant", content: [{ type: "text", text: "finished" }] }], async () => {});
   await expect(executeRun({} as any, f.agent, f.attempt)).resolves.toMatchObject({ status: { kind: "done", outcome: "completed", output: "finished" } });
+});
+
+test("child session lifecycle observers span finalized tool execution events", async () => {
+  const listeners: Array<(event: any) => void> = [];
+  const session = {
+    messages: [{ role: "assistant", content: [{ type: "text", text: "finished" }] }],
+    subscribe(listener: (event: any) => void) { listeners.push(listener); return () => { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); }; },
+    async prompt() {
+      const start = { type: "tool_execution_start", toolCallId: "child-call", toolName: "subagent", args: { action: "inspect", runIds: ["adapt-ably"] } };
+      const end = { type: "tool_execution_end", toolCallId: "child-call", toolName: "subagent", result: { details: { action: "inspect", runs: [{ runId: "adapt-ably", status: "completed" }] } } };
+      for (const listener of [...listeners]) listener(start);
+      for (const listener of [...listeners]) listener(end);
+    },
+    abort: vi.fn(),
+  } as any;
+  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first" }, () => {});
+  agent.bindSession(session); completedRun(agent, "adapt-ably" as any, "first");
+  const attempt = agent.beginResume("balance-boldly" as any, "continue");
+  const observed: any[] = [];
+
+  await executeRun({} as any, agent, attempt, undefined, {
+    ...DEFAULT_EXECUTE_RUN_DEPENDENCIES,
+    childSessionEvent: (_agent: any, _run: any, event: any) => observed.push(event),
+  } as any);
+
+  expect(observed.map(event => event.type)).toEqual(["tool_execution_start", "tool_execution_end"]);
+  expect(listeners).toHaveLength(0);
 });
 
 test("assistant errors and prompt failures terminalize the run as errors", async () => {
