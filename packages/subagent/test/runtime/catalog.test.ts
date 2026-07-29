@@ -148,6 +148,43 @@ test("removing a conversation deletes its complete terminal subtree", async () =
   expect(manager.conversation(root.conversationId).conversationId).toBe(root.conversationId);
 });
 
+test("removal completes before notifying listeners and isolates listener failures", async () => {
+  const manager = new SubagentRuntime(registry, 3, runner);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand" }] as any,
+    caller(child.conversationId, child.runId));
+  await grandStart.completion;
+  const grand = grandStart.starts[0] as any;
+  const updates: string[] = [];
+
+  manager.onConversationUpdate(() => { throw new Error("listener failed"); });
+  manager.onConversationUpdate((conversation, kind) => {
+    expect(manager.listConversations()).toEqual([]);
+    updates.push(`${conversation.conversationId}:${kind}`);
+  });
+
+  await expect(manager.removeConversation(root.conversationId)).resolves.toEqual({
+    removed: 3,
+    conversationIds: [grand.conversationId, child.conversationId, root.conversationId],
+    errors: [],
+  });
+  expect(updates).toEqual([
+    `${grand.conversationId}:removed`,
+    `${child.conversationId}:removed`,
+    `${root.conversationId}:removed`,
+  ]);
+  for (const identity of [root, child, grand]) {
+    expect(() => manager.conversation(identity.conversationId)).toThrow(`Unknown conversation: ${identity.conversationId}.`);
+    expect(() => manager.runSnapshot(identity.runId)).toThrow(`Unknown run: ${identity.runId}.`);
+  }
+});
+
 test("removal rejects an entire subtree when a descendant is active", async () => {
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });

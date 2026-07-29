@@ -514,6 +514,7 @@ export class SubagentRuntime {
   async removeConversations(ids: readonly string[], caller?: SubagentCaller): Promise<RemoveResult> {
     const unique = [...new Set(ids)];
     const removed: ConversationId[] = [];
+    const removedConversations: Conversation[] = [];
     const errors: Array<{ conversationId: string; error: string }> = [];
     const candidates: Conversation[] = [];
     for (const id of unique) {
@@ -549,7 +550,12 @@ export class SubagentRuntime {
         this.conversations.delete(conversation.conversationId);
         for (const run of conversation.runHistory) this.runs.delete(run.runId);
         removed.push(conversation.conversationId);
-        for (const listener of this.listeners) listener(conversation, "removed");
+        removedConversations.push(conversation);
+      }
+    }
+    for (const conversation of removedConversations) {
+      for (const listener of [...this.listeners]) {
+        try { listener(conversation, "removed"); } catch {}
       }
     }
     const inputOrder = new Map(unique.map((id, index) => [id, index]));
