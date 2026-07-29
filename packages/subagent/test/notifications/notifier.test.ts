@@ -370,7 +370,7 @@ test("same-preflight join claims completion before a steer notification is deliv
   f.notifier.unsubscribe();
 });
 
-test("active steer send rejection retries with steer opportunity", async () => {
+test("active steer send rejection retries without duplicating the UI notification", async () => {
   let attempts = 0;
   const f = fixture("steer", false, () => ++attempts === 1 ? Promise.reject(new Error("closed")) : Promise.resolve());
   f.fire("session_start");
@@ -380,5 +380,6 @@ test("active steer send rejection retries with steer opportunity", async () => {
   f.flush(500);
   assert.equal(f.sent.length, 2);
   assert.deepEqual(f.sent.map(value => value.options), [{ deliverAs: "steer" }, { deliverAs: "steer" }]);
+  assert.equal(f.notified.length, 1);
   f.notifier.unsubscribe();
 });

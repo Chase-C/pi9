@@ -7,7 +7,7 @@ This changelog starts with version `v0.2.1`.
 ### Changed
 
 - Deliver compact hidden `<subagent-notification>` messages and reconcile their runs against live observation state immediately before model requests, without mutating stored session history.
-- Show human-facing completion status through Pi notifications instead of model-visible custom-message rendering.
+- Show human-facing completion status through Pi notifications instead of model-visible custom-message rendering, without duplicating UI alerts when model-message delivery retries.
 
 ## [0.9.1] - 2026-07-29
 

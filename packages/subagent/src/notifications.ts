@@ -176,6 +176,7 @@ export class CompletionNotifier {
   private cancelGraceTimer?: () => void;
   private retryToolOpportunity = false;
   private readonly delivered = new Set<string>();
+  private readonly uiNotified = new Set<string>();
   private readonly observed = new Set<string>();
   private readonly gracePending = new Set<string>();
   private readonly claimsByToolCall = new Map<string, { action: unknown; runIds: Set<string> }>();
@@ -356,9 +357,12 @@ export class CompletionNotifier {
     }
   }
   private notifyUi(entries: readonly CompletionNotification[]): void {
-    if (!this.ctx?.hasUI) return;
+    if (!this.ctx?.hasUI || !this.ctx.ui?.notify) return;
+    const pending = entries.filter(entry => !this.uiNotified.has(entry.runId));
+    if (!pending.length) return;
     try {
-      this.ctx.ui?.notify?.(formatUiNotification(entries), completionNotificationLevel(entries));
+      this.ctx.ui.notify(formatUiNotification(pending), completionNotificationLevel(pending));
+      for (const entry of pending) this.uiNotified.add(entry.runId);
     } catch {}
   }
 
