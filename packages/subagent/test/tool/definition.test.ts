@@ -13,7 +13,7 @@ test("description names typed action inputs without restating task unions", () =
     prepareInvocation: async () => settings,
   });
   const description = tool.description;
-  assert.match(description, /list\(scope\?, state\?\).*complete run histories.*scope defaults to children/);
+  assert.match(description, /list\(scope\?, state\?\): List conversations by lifecycle; scope defaults to children/);
   assert.match(description, /spawn\(spawns\)/);
   assert.match(description, /resume\(resumes\)/);
   assert.match(description, /steer\(messages\)/);
