@@ -11,6 +11,10 @@ This changelog starts with version `v0.2.1`.
 - Distinguish wrong-kind identifiers from unknown or invalid identifiers with concise, actionable errors across resume, steer, cancel, inspect, join, and remove.
 - Tighten model-facing delegation guidance and accurately describe cancellation as the only prerequisite for removing active conversation subtrees.
 
+### Breaking
+
+- Replace `list` run-status filtering with mutually exclusive `active`, `resumable`, and `terminal` conversation-state filtering, always returning complete run histories for matching conversations.
+
 ## [0.9.1] - 2026-07-29
 
 ### Changed

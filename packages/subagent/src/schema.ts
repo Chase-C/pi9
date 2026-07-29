@@ -28,11 +28,12 @@ export const SteerMessageSchema = Type.Object({
 
 export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
 export const RUN_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
+export const CONVERSATION_STATES = ["active", "resumable", "terminal"] as const;
 export const LIST_SCOPES = ["children", "descendants"] as const;
 
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
-  status: Type.Optional(Type.Array(StringEnum(RUN_STATUSES), { minItems: 1 })),
+  state: Type.Optional(Type.Array(StringEnum(CONVERSATION_STATES), { minItems: 1 })),
   scope: Type.Optional(StringEnum(LIST_SCOPES)),
   spawns: Type.Optional(Type.Array(SpawnTaskSchema, { minItems: 1 })),
   resumes: Type.Optional(Type.Array(ResumeTaskSchema, { minItems: 1 })),
@@ -44,10 +45,11 @@ export const SubagentParams = Type.Object({
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 export type RunStatus = (typeof RUN_STATUSES)[number];
+export type ConversationState = (typeof CONVERSATION_STATES)[number];
 export type ListScope = (typeof LIST_SCOPES)[number];
 
-export const isRunStatus = (value: unknown): value is RunStatus =>
-  typeof value === "string" && (RUN_STATUSES as readonly string[]).includes(value);
+export const isConversationState = (value: unknown): value is ConversationState =>
+  typeof value === "string" && (CONVERSATION_STATES as readonly string[]).includes(value);
 
 export type SpawnRequest = {
   kind: "spawn";
@@ -86,7 +88,7 @@ export type ParsedSteerRequest = SteerRequest | { error: string; runId?: string 
 
 export type SubagentInvocation =
   | { action: "agents" }
-  | { action: "list"; scope: ListScope; status?: RunStatus[] }
+  | { action: "list"; scope: ListScope; state?: ConversationState[] }
   | { action: "spawn"; spawns: ParsedSpawnRequest[] }
   | { action: "resume"; resumes: ParsedResumeRequest[] }
   | { action: "steer"; messages: ParsedSteerRequest[] }
@@ -112,7 +114,7 @@ export interface ParseSubagentInvocationOptions {
 
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
-  list: ["action", "scope", "status"],
+  list: ["action", "scope", "state"],
   spawn: ["action", "spawns"],
   resume: ["action", "resumes"],
   steer: ["action", "messages"],
@@ -162,14 +164,14 @@ export function parseSubagentInvocation(
       if (params.scope !== undefined && !LIST_SCOPES.includes(params.scope as ListScope)) {
         return { error: "list scope must be children or descendants.", action: parsedAction };
       }
-      const invalidStatus = params.status !== undefined && (
-        !Array.isArray(params.status)
-        || params.status.length === 0
-        || !params.status.every(isRunStatus)
+      const invalidState = params.state !== undefined && (
+        !Array.isArray(params.state)
+        || params.state.length === 0
+        || !params.state.every(isConversationState)
       );
-      if (invalidStatus) {
+      if (invalidState) {
         return {
-          error: "list status must be a non-empty array of valid run statuses.",
+          error: "list state must be a non-empty array of active, resumable, or terminal.",
           action: parsedAction,
         };
       }
@@ -177,7 +179,7 @@ export function parseSubagentInvocation(
       return {
         action: parsedAction,
         scope: (params.scope as ListScope | undefined) ?? "children",
-        ...(params.status ? { status: params.status as RunStatus[] } : {}),
+        ...(params.state ? { state: params.state as ConversationState[] } : {}),
       };
     }
     case "spawn": {

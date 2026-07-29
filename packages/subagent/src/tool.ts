@@ -4,7 +4,7 @@ import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
 import { runElapsedMs } from "./run-format.js";
 import type { JoinBinding, NestedJoinBinding, SubagentRuntime } from "./runtime.js";
-import { parseSubagentInvocation, SubagentParams, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
+import { parseSubagentInvocation, SubagentParams, type ConversationState, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
   renderSubagentCall,
@@ -112,24 +112,28 @@ export function listAction(
   invocation: InvocationFor<"list">,
 ): ActionResult {
   const callerConversationId = deps.parent?.conversationId;
-  const conversations = deps.runtime.queryConversations(callerConversationId, invocation.scope).map(conversation => ({
-    conversationId: conversation.conversationId,
-    ...(conversation.parentConversationId ? { parentConversationId: conversation.parentConversationId } : {}),
-    ...(conversation.spawnedByRunId ? { spawnedByRunId: conversation.spawnedByRunId } : {}),
-    depth: deps.runtime.conversationDepth(conversation.conversationId, callerConversationId),
-    agent: conversation.config.name,
-    ...(conversation.label ? { label: conversation.label } : {}),
-    createdAt: conversation.createdAt,
-    canResume: conversation.canResume,
-    runs: conversation.runs
-      .map(run => ({
+  const conversations = deps.runtime.queryConversations(callerConversationId, invocation.scope).map(conversation => {
+    const state: ConversationState = conversation.currentRun || conversation.isStopping
+      ? "active"
+      : conversation.canResume ? "resumable" : "terminal";
+    return {
+      conversationId: conversation.conversationId,
+      ...(conversation.parentConversationId ? { parentConversationId: conversation.parentConversationId } : {}),
+      ...(conversation.spawnedByRunId ? { spawnedByRunId: conversation.spawnedByRunId } : {}),
+      depth: deps.runtime.conversationDepth(conversation.conversationId, callerConversationId),
+      agent: conversation.config.name,
+      ...(conversation.label ? { label: conversation.label } : {}),
+      createdAt: conversation.createdAt,
+      state,
+      canResume: conversation.canResume,
+      runs: conversation.runs.map(run => ({
         runId: run.runId,
         kind: run.kind,
         status: (run.status.kind === "done" ? run.status.outcome : run.status.kind) as RunStatus,
         createdAt: run.createdAt,
-      }))
-      .filter(run => !invocation.status || invocation.status.includes(run.status)),
-  })).filter(conversation => conversation.runs.length > 0);
+      })),
+    };
+  }).filter(conversation => !invocation.state || invocation.state.includes(conversation.state));
   return resultsResult("list", conversations, { action: "list", conversations });
 }
 
@@ -621,7 +625,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Delegate work asynchronously through context-isolated subagent conversations and runs. Subagents share the working filesystem.",
       "Actions:",
       "  agents(): List available agent definitions.",
-      "  list(scope?, status?): List conversations/runs by scope and status; scope defaults to children.",
+      "  list(scope?, state?): List conversations by lifecycle state with complete run histories; scope defaults to children.",
       "  spawn(spawns): Start subagent conversations.",
       "  resume(resumes): Continue existing subagent conversations.",
       "  steer(messages): Send messages to running subagents.",

@@ -4,7 +4,7 @@ import type { AgentSource } from "./agents.js";
 import type { ConversationEffectiveConfig, ConversationRequestedOverrides, RunKind, RunPhase, SteerReceipt } from "./conversation.js";
 import type { ConversationId, RunId } from "./identifiers.js";
 import { formatElapsed, formatTokens } from "./run-format.js";
-import type { DispatchTaskKind, RunStatus, SubagentAction } from "./schema.js";
+import type { ConversationState, DispatchTaskKind, RunStatus, SubagentAction } from "./schema.js";
 
 type ThemeLike = Partial<Pick<Theme, "fg" | "bold">>;
 type ThemeColor = Parameters<Theme["fg"]>[0];
@@ -45,6 +45,7 @@ export interface ListedConversationRenderItem {
   agent: string;
   label?: string;
   createdAt: number;
+  state: ConversationState;
   canResume: boolean;
   runs: ListedRunRenderItem[];
 }
@@ -280,7 +281,7 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
       if (details.conversations.length === 0) return [success(theme, "No conversations found")];
       return blocks(details.conversations, conversation => {
         const lines = [
-          `${arrow(theme)} ${paint(theme, "text", conversationLabel(conversation))} ${paint(theme, "muted", `· ${conversation.agent} · depth ${conversation.depth} · ${count(conversation.runs.length, "run")}${conversation.canResume ? " · resumable" : ""}`)}`,
+          `${arrow(theme)} ${paint(theme, "text", conversationLabel(conversation))} ${paint(theme, "muted", `· ${conversation.agent} · depth ${conversation.depth} · ${conversation.state} · ${count(conversation.runs.length, "run")}`)}`,
           `  ${tag(theme, "conversation", conversation.conversationId)}`,
         ];
         for (const run of conversation.runs) {

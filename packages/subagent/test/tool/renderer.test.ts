@@ -137,22 +137,22 @@ test("list renders grouped conversations and nested run status", () => {
     action: "list",
     conversations: [
       {
-        conversationId: "quiet-otter" as any, depth: 1, agent: "scout", label: "auth map", createdAt: 1, canResume: false,
+        conversationId: "quiet-otter" as any, depth: 1, agent: "scout", label: "auth map", createdAt: 1, state: "active", canResume: false,
         runs: [{ runId: "search-boldly" as any, kind: "spawn", status: "running", createdAt: 1 }],
       },
       {
-        conversationId: "amber-fox" as any, depth: 1, agent: "reviewer", label: "risk review", createdAt: 2, canResume: true,
+        conversationId: "amber-fox" as any, depth: 1, agent: "reviewer", label: "risk review", createdAt: 2, state: "resumable", canResume: true,
         runs: [{ runId: "inspect-carefully" as any, kind: "spawn", status: "completed", createdAt: 2 }],
       },
     ],
   };
   assert.equal(renderResult(details), "✓ Found 2 conversations · 2 runs · 1 running · 1 completed\n  auth map · risk review");
   assert.equal(renderResult(details, true), [
-    "→ auth map · scout · depth 1 · 1 run",
+    "→ auth map · scout · depth 1 · active · 1 run",
     "  conversation quiet-otter",
     "  ● search-boldly · spawn · running",
     "",
-    "→ risk review · reviewer · depth 1 · 1 run · resumable",
+    "→ risk review · reviewer · depth 1 · resumable · 1 run",
     "  conversation amber-fox",
     "  ✓ inspect-carefully · spawn · completed",
   ].join("\n"));

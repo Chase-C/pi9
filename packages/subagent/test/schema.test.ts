@@ -19,8 +19,9 @@ const runId = "adapt-ably";
 test("public schema exposes separate typed actions without unions", () => {
   assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"]);
   assert.doesNotMatch(JSON.stringify(SubagentParams), /"anyOf"/);
-  assert.equal(Check(SubagentParams, { action: "list", scope: "descendants" }), true);
+  assert.equal(Check(SubagentParams, { action: "list", scope: "descendants", state: ["active"] }), true);
   assert.equal(Check(SubagentParams, { action: "list", scope: "global" }), false);
+  assert.equal(Check(SubagentParams, { action: "list", status: ["running"] }), false);
   assert.equal(Check(SubagentParams, { action: "spawn", spawns: [{ agent: "helper", prompt: "work" }] }), true);
   assert.equal(Check(SubagentParams, { action: "resume", resumes: [{ conversationId, prompt: "continue" }] }), true);
   assert.equal(Check(SubagentParams, { action: "steer", messages: [{ runId, message: "redirect" }] }), true);
@@ -83,7 +84,7 @@ test("steer message accepts runId and message only", () => {
 
 test("invocations parse every action", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "agents" }), { action: "agents" });
-  assert.deepEqual(parseSubagentInvocation({ action: "list", status: ["running"] }), { action: "list", scope: "children", status: ["running"] });
+  assert.deepEqual(parseSubagentInvocation({ action: "list", state: ["active", "resumable"] }), { action: "list", scope: "children", state: ["active", "resumable"] });
   assert.deepEqual(parseSubagentInvocation({ action: "spawn", spawns: [{ agent: "helper", prompt: "x" }] }), {
     action: "spawn", spawns: [{ kind: "spawn", agent: "helper", prompt: "x" }],
   });
@@ -161,7 +162,9 @@ test("run-target actions reject every occurrence after the first", () => {
 test("whole invocation validation covers every action", () => {
   assert.ok("error" in parseSubagentInvocation({}));
   assert.ok("error" in parseSubagentInvocation({ action: "unknown" }));
-  assert.ok("error" in parseSubagentInvocation({ action: "list", status: ["stale"] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "list", state: ["stale"] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "list", state: [] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "list", status: ["running"] }));
   assert.ok("error" in parseSubagentInvocation({ action: "cancel", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "inspect", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "join", runIds: [] }));
@@ -186,7 +189,7 @@ test("unsupported invocation fields receive ordinary validation errors", () => {
 
 test("flat schema admits action fields while parser enforces associations", () => {
   for (const raw of [
-    { action: "agents", status: ["running"] },
+    { action: "agents", state: ["active"] },
     { action: "list", spawns: [{ agent: "a", prompt: "x" }] },
     { action: "resume", spawns: [{ agent: "a", prompt: "x" }] },
     { action: "join", runIds: [runId], conversationIds: [conversationId] },
