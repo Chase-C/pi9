@@ -6,32 +6,28 @@ import { isRunId, type RunId } from "./identifiers.js";
 
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 
-const NonBlankString = () => Type.String({ minLength: 1 });
-
 export const SpawnTaskSchema = Type.Object({
-  agent: NonBlankString(),
-  prompt: NonBlankString(),
-  label: Type.Optional(NonBlankString()),
-  skills: Type.Optional(Type.Array(NonBlankString())),
-  model: Type.Optional(NonBlankString()),
+  agent: Type.String(),
+  prompt: Type.String(),
+  label: Type.Optional(Type.String()),
+  skills: Type.Optional(Type.Array(Type.String())),
+  model: Type.Optional(Type.String()),
   thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
-  cwd: Type.Optional(NonBlankString()),
+  cwd: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 export const ResumeTaskSchema = Type.Object({
-  conversationId: NonBlankString(),
-  prompt: NonBlankString(),
+  conversationId: Type.String(),
+  prompt: Type.String(),
 }, { additionalProperties: false });
 
 export const SteerMessageSchema = Type.Object({
-  runId: NonBlankString(),
-  message: NonBlankString(),
+  runId: Type.String(),
+  message: Type.String(),
 }, { additionalProperties: false });
 
 export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
-export const RUN_STATUSES = [
-  "queued", "running", "completed", "error", "aborted", "interrupted", "skipped",
-] as const;
+export const RUN_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
 export const LIST_SCOPES = ["children", "descendants"] as const;
 
 export const SubagentParams = Type.Object({
