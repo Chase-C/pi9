@@ -3,6 +3,7 @@ import { CONVERSATION_ID_ADJECTIVES, CONVERSATION_ID_NOUNS, RUN_ID_ADVERBS, RUN_
 
 declare const conversationIdBrand: unique symbol;
 export type ConversationId = string & { readonly [conversationIdBrand]: true };
+export type SubagentId = ConversationId;
 
 const adjectives: ReadonlySet<string> = new Set(CONVERSATION_ID_ADJECTIVES);
 const nouns: ReadonlySet<string> = new Set(CONVERSATION_ID_NOUNS);
@@ -13,6 +14,8 @@ export function isConversationId(value: unknown): value is ConversationId {
   const words = value.split("-");
   return words.length === 2 && adjectives.has(words[0]) && nouns.has(words[1]);
 }
+
+export const isSubagentId = isConversationId;
 
 declare const runIdBrand: unique symbol;
 export type RunId = string & { readonly [runIdBrand]: true };
@@ -72,6 +75,8 @@ export class ConversationIdAllocator extends IdAllocatorBase<ConversationId> {
     super(CONVERSATION_ID_ADJECTIVES, CONVERSATION_ID_NOUNS, randomIndex);
   }
 }
+
+export class SubagentIdAllocator extends ConversationIdAllocator {}
 
 /** Allocates unique run IDs for one owning runtime lifetime. */
 export class RunIdAllocator extends IdAllocatorBase<RunId> {

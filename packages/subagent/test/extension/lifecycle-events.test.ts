@@ -16,7 +16,7 @@ test("spawn publishes queued after manager conversation and run indexes exist", 
   const started = manager.startRun({ cwd: "/tmp" } as any, [{ kind: "spawn", agent: "worker", prompt: "work" }] as any);
   const identity = started.starts[0] as any;
   const queued = emitted.find(value => value.event === "subagent:queued")!;
-  expect(queued.data).toMatchObject({ conversationId: identity.conversationId, runId: identity.runId });
+  expect(queued.data).toMatchObject({ subagentId: identity.conversationId, snapshot: { subagentId: identity.conversationId } });
   expect(manager.conversation(identity.conversationId).runs.some(run => run.runId === identity.runId)).toBe(true);
   expect(() => manager.bindJoin([identity.runId])).not.toThrow();
   release(); await started.completion; unsubscribe();
@@ -43,10 +43,7 @@ test("nested join changes publish owner updates without extra lifecycle mileston
 
   expect(emitted.map(value => value.event)).toEqual(["subagent:updated", "subagent:updated"]);
   expect(emitted.map(value => value.data.kind)).toEqual(["nestedJoin", "nestedJoin"]);
-  expect(emitted.every(value => value.data.runId === ownerRunId)).toBe(true);
-  expect(emitted[1].data.snapshot.runs[0].nestedJoins[0]).toMatchObject({
-    toolCallId: "nested-call",
-    state: "interrupted",
-    error: "cancelled",
-  });
+  expect(emitted.every(value => value.data.subagentId === conversationId)).toBe(true);
+  expect(emitted[1].data.snapshot).toMatchObject({ subagentId: conversationId, agent: "worker" });
+  expect(emitted[1].data).not.toHaveProperty("runId");
 });

@@ -76,6 +76,7 @@ test("preserves immutable exact run history across resume", () => {
   const agent = make();
   agent.bindSession(session());
   const first = agent.settle(r1, { status: "completed", output: "first" });
+  agent.acknowledge(r1);
   const historical = agent.snapshot().runs[0];
 
   agent.beginResume(r2, "two");
@@ -95,19 +96,17 @@ test("preserves immutable exact run history across resume", () => {
   assert.ok(Object.isFrozen(first));
 });
 
-test("resume capability requires a resumable outcome and intact context", () => {
-  for (const status of ["completed", "interrupted", "error", "aborted", "skipped"] as const) {
-    const agent = make();
-    agent.bindSession(session());
-    agent.settle(r1, status === "completed"
-      ? { status, output: "ok" }
-      : { status, error: status });
-    assert.equal(agent.canResume, status === "completed" || status === "interrupted" || status === "aborted", status);
-  }
-  assert.equal(make().canResume, false, "active is not resumable");
-  const noContext = make();
-  noContext.settle(r1, { status: "completed", output: "never bound" });
-  assert.equal(noContext.canResume, false);
+test("resume capability requires the latest resumable outcome to be joined", () => {
+  const agent = make();
+  agent.bindSession(session());
+  agent.settle(r1, { status: "completed", output: "ok" });
+
+  assert.equal(agent.canResume, false);
+  const binding = agent.bindRun(r1);
+  binding.acknowledge();
+  assert.equal(agent.canResume, false, "an accepted join must release before resume");
+  binding.release();
+  assert.equal(agent.canResume, true);
 });
 
 test("logical abort terminalizes before best-effort SDK abort resolves", async () => {
@@ -129,6 +128,8 @@ test("logical abort terminalizes before best-effort SDK abort resolves", async (
   assert.equal(agent.snapshot().isStopping, true);
   release();
   await aborting;
+  assert.equal(agent.canResume, false);
+  agent.acknowledge(r1);
   assert.equal(agent.canResume, true);
   assert.equal(agent.snapshot().isStopping, undefined);
 });

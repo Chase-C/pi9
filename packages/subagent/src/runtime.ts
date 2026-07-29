@@ -334,16 +334,20 @@ export class SubagentRuntime {
           }
         }
       } else if (!error && task.kind === "resume") {
-        agent = this.conversations.get(task.conversationId);
-        if (!agent) error = `Unknown conversation: ${task.conversationId}.`;
-        else if (options.caller && !this.isConversationDescendant(agent.conversationId, options.caller.conversationId)) {
-          error = `Conversation ${agent.conversationId} is not a descendant of caller conversation ${options.caller.conversationId}.`;
+        const subagentId = task.subagentId;
+        agent = subagentId ? this.conversations.get(subagentId) : undefined;
+        if (!agent) error = `Unknown subagent: ${subagentId}.`;
+        else if (options.caller && agent.parentConversationId !== options.caller.conversationId) {
+          error = `Subagent ${agent.conversationId} is not directly owned by caller subagent ${options.caller.conversationId}.`;
+        }
+        else if (!options.caller && agent.parentConversationId) {
+          error = `Subagent ${agent.conversationId} is not directly owned by the root agent.`;
         }
         else if (agent.hasCurrentRun) {
           const status = agent.status.kind;
-          if (status === "running") error = `Conversation ${task.conversationId} has running run ${agent.latestRunId}. Join it before resuming, or steer it while it runs.`;
-          else if (status === "queued") error = `Conversation ${task.conversationId} has queued run ${agent.latestRunId}. Wait for or join it before resuming.`;
-          else error = `Conversation ${task.conversationId} cannot be resumed.`;
+          if (status === "running") error = `Subagent ${subagentId} is running. Join it before resuming, or steer it while it runs.`;
+          else if (status === "queued") error = `Subagent ${subagentId} is queued. Wait for or join it before resuming.`;
+          else error = `Subagent ${subagentId} cannot be resumed.`;
         }
         else if (!agent.canResume) error = this.resumeError(agent);
         else { runId = this.runIds.allocate(); if (!runId) error = "Run ID space exhausted."; else agent.beginResume(runId, task.prompt); }
@@ -359,6 +363,36 @@ export class SubagentRuntime {
       starts.push({ ok: true, inputIndex, conversationId: agent.conversationId, runId });
     }
     return { starts, completion: Promise.allSettled(executions).then(() => starts) };
+  }
+
+  async steerSubagent(subagentId: ConversationId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
+    const agent = this.requireConversation(subagentId);
+    return this.steerRun(agent.requireCurrentRun().runId, prompt, caller);
+  }
+
+  async cancelSubagent(subagentId: ConversationId, caller?: SubagentCaller): Promise<CancelResult> {
+    const agent = this.requireConversation(subagentId);
+    return this.cancelRun(agent.requireCurrentRun().runId, caller);
+  }
+
+  inspectSubagents(subagentIds: readonly ConversationId[], caller?: SubagentCaller): InspectedRun[] {
+    return subagentIds.map(subagentId => {
+      const agent = this.requireConversation(subagentId);
+      const run = agent.runHistory.at(-1)!;
+      this.assertCallerAccess(subagentId, caller, "inspect");
+      return { conversationId: subagentId, snapshot: run };
+    });
+  }
+
+  validateSubagentJoin(subagentId: ConversationId, caller?: SubagentCaller): void {
+    this.assertDirectOwner(this.requireConversation(subagentId), caller, "join");
+  }
+
+  bindSubagentJoin(subagentIds: readonly ConversationId[], caller?: SubagentCaller, toolCallId?: string): JoinBinding | NestedJoinBinding {
+    const agents = subagentIds.map(subagentId => this.requireConversation(subagentId));
+    for (const agent of agents) this.assertDirectOwner(agent, caller, "join");
+    const runIds = agents.map(agent => agent.latestRunId);
+    return caller ? this.bindNestedJoin(caller, runIds, toolCallId) : this.bindJoin(runIds);
   }
 
   async steerRun(runId: RunId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
@@ -483,6 +517,22 @@ export class SubagentRuntime {
     const record = this.runs.get(runId);
     if (!record) return;
     record.agent.updateNestedJoin(runId, index, update);
+  }
+
+  private assertDirectOwner(target: Conversation, caller: SubagentCaller | undefined, action: string): void {
+    if (caller) {
+      const ownerRecord = this.runs.get(caller.runId);
+      if (!ownerRecord || ownerRecord.conversationId !== caller.conversationId) {
+        throw new Error(`Unknown ${action} caller run: ${caller.runId}.`);
+      }
+      if (target.parentConversationId !== caller.conversationId) {
+        throw new Error(`Subagent ${target.conversationId} is not directly owned by caller subagent ${caller.conversationId}.`);
+      }
+      return;
+    }
+    if (target.parentConversationId) {
+      throw new Error(`Subagent ${target.conversationId} is not directly owned by the root agent.`);
+    }
   }
 
   private assertCallerAccess(targetConversationId: ConversationId, caller: SubagentCaller | undefined, action: string): void {

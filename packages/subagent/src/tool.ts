@@ -53,12 +53,11 @@ type OrderedDispatchOutcome =
   | { readonly ok: false; readonly inputIndex: number; readonly error: string };
 type RunReceipt = ItemResult<{
   readonly label?: string;
-  readonly conversationId: ConversationId;
-  readonly runId: RunId;
+  readonly subagentId: ConversationId;
 }, {
   readonly agent?: string;
   readonly label?: string;
-  readonly conversationId?: string;
+  readonly subagentId?: string;
 }>;
 
 function jsonResult(json: unknown, details: SubagentToolDetails): ActionResult {
@@ -113,13 +112,14 @@ export function listAction(
 ): ActionResult {
   const callerConversationId = deps.parent?.conversationId;
   const conversations = deps.runtime.queryConversations(callerConversationId, invocation.scope).map(conversation => {
+    const latest = conversation.runs.at(-1);
     const state: ConversationState = conversation.currentRun || conversation.isStopping
       ? "active"
+      : latest && !latest.acknowledged ? "awaiting_join"
       : conversation.canResume ? "resumable" : "terminal";
     return {
-      conversationId: conversation.conversationId,
-      ...(conversation.parentConversationId ? { parentConversationId: conversation.parentConversationId } : {}),
-      ...(conversation.spawnedByRunId ? { spawnedByRunId: conversation.spawnedByRunId } : {}),
+      subagentId: conversation.conversationId,
+      ...(conversation.parentConversationId ? { parentSubagentId: conversation.parentConversationId } : {}),
       depth: deps.runtime.conversationDepth(conversation.conversationId, callerConversationId),
       agent: conversation.config.name,
       ...(conversation.label ? { label: conversation.label } : {}),
@@ -127,7 +127,6 @@ export function listAction(
       state,
       canResume: conversation.canResume,
       runs: conversation.runs.map(run => ({
-        runId: run.runId,
         kind: run.kind,
         status: (run.status.kind === "done" ? run.status.outcome : run.status.kind) as RunStatus,
         createdAt: run.createdAt,
@@ -198,7 +197,7 @@ export async function steerAction(
       continue;
     }
     try {
-      const result = await deps.runtime.steerRun(steer.runId, steer.message, owner);
+      const result = await deps.runtime.steerSubagent(steer.subagentId, steer.message, owner);
       outcomes.push({ ok: true, inputIndex, ...result });
     } catch (error) {
       outcomes.push({ ok: false, inputIndex, error: error instanceof Error ? error.message : String(error) });
@@ -206,10 +205,10 @@ export async function steerAction(
   }
 
   const results = outcomes.map((outcome, index) => outcome.ok
-    ? { ok: true as const, data: { conversationId: outcome.conversationId, runId: outcome.runId, ...(outcome.steer ? { steer: outcome.steer } : {}) } }
+    ? { ok: true as const, data: { subagentId: outcome.conversationId, ...(outcome.steer ? { steer: outcome.steer } : {}) } }
     : {
         ok: false as const,
-        ...(invocation.messages[index]?.runId ? { runId: invocation.messages[index].runId } : {}),
+        ...(invocation.messages[index]?.subagentId ? { subagentId: invocation.messages[index].subagentId } : {}),
         error: outcome.error,
       });
   return resultsResult("steer", results, {
@@ -225,17 +224,18 @@ export async function cancelAction(
   const owner = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
-  const runs = await Promise.all(invocation.runIds.map(async target => {
-    if (typeof target !== "string") return { runId: target.runId, error: target.error };
+  const runs = await Promise.all(invocation.subagentIds.map(async target => {
+    if (typeof target !== "string") return { subagentId: target.subagentId, error: target.error };
     try {
-      return await deps.runtime.cancelRun(target, owner);
+      const result = await deps.runtime.cancelSubagent(target as ConversationId, owner);
+      return { subagentId: result.conversationId, status: result.status };
     } catch (error) {
-      return { runId: target, error: error instanceof Error ? error.message : String(error) };
+      return { subagentId: target, error: error instanceof Error ? error.message : String(error) };
     }
   }));
 
   const results = runs.map(run => "error" in run
-    ? { ok: false as const, runId: run.runId, error: run.error }
+    ? { ok: false as const, subagentId: run.subagentId, error: run.error }
     : { ok: true as const, data: run });
   return resultsResult("cancel", results, { action: "cancel", runs });
 }
@@ -247,17 +247,17 @@ export function inspectAction(
   const owner = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
-  const runs = invocation.runIds.map((target, inputIndex) => {
-    if (typeof target !== "string") return { inputIndex, runId: target.runId, error: target.error };
+  const runs = invocation.subagentIds.map((target, inputIndex) => {
+    if (typeof target !== "string") return { inputIndex, subagentId: target.subagentId, error: target.error };
     try {
-      const inspected = deps.runtime.inspectRuns([target], owner)[0];
+      const inspected = deps.runtime.inspectSubagents([target as ConversationId], owner)[0];
       return projectInspection(deps.runtime, inspected.conversationId, inspected.snapshot, owner?.conversationId);
     } catch (error) {
-      return { inputIndex, runId: target, error: error instanceof Error ? error.message : String(error) };
+      return { inputIndex, subagentId: target, error: error instanceof Error ? error.message : String(error) };
     }
   });
   const results = runs.map(run => "error" in run
-    ? { ok: false as const, runId: run.runId, error: run.error }
+    ? { ok: false as const, subagentId: run.subagentId, error: run.error }
     : { ok: true as const, data: run });
   return resultsResult("inspect", results, { action: "inspect", runs });
 }
@@ -272,27 +272,25 @@ export async function joinAction(
   const owner = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
-  const targets = invocation.runIds.map(target => {
+  const targets = invocation.subagentIds.map(target => {
     if (typeof target !== "string") return target;
     try {
-      deps.runtime.inspectRuns([target], owner);
+      deps.runtime.validateSubagentJoin(target as ConversationId, owner);
       return target;
     } catch (error) {
-      return { runId: target, error: error instanceof Error ? error.message : String(error) };
+      return { subagentId: target, error: error instanceof Error ? error.message : String(error) };
     }
   });
-  const validRunIds = targets.filter((target): target is RunId => typeof target === "string");
+  const validSubagentIds = targets.filter((target): target is ConversationId => typeof target === "string");
 
-  if (validRunIds.length === 0) {
+  if (validSubagentIds.length === 0) {
     const result = targets as JoinOutput[];
     return resultsResult("join", projectJoinResults(result), { action: "join", runs: renderJoinedRuns(result, deps.runtime, true) });
   }
 
   let binding: JoinBinding | NestedJoinBinding;
   try {
-    binding = owner
-      ? deps.runtime.bindNestedJoin(owner, validRunIds, toolCallId)
-      : deps.runtime.bindJoin(validRunIds);
+    binding = deps.runtime.bindSubagentJoin(validSubagentIds, owner, toolCallId);
   } catch (error) {
     return errorResult(error instanceof Error ? error.message : String(error), "join");
   }
@@ -348,14 +346,14 @@ export async function joinAction(
 function projectJoinedEntry(entry: ReturnType<JoinBinding["project"]>[number]): JoinedOutput {
   return entry.status.kind === "done"
     ? {
-        conversationId: entry.conversationId,
+        subagentId: entry.conversationId,
         runId: entry.runId,
         status: entry.status.outcome,
         ...(entry.status.output !== undefined ? { output: entry.status.output } : {}),
         ...(entry.status.error !== undefined ? { error: entry.status.error } : {}),
       }
     : {
-        conversationId: entry.conversationId,
+        subagentId: entry.conversationId,
         runId: entry.runId,
         status: entry.status.kind,
       };
@@ -365,22 +363,22 @@ export async function removeAction(
   deps: ActionDeps,
   invocation: InvocationFor<"remove">,
 ): Promise<ActionResult> {
-  const validIds = invocation.conversationIds.filter((target): target is ConversationId => typeof target === "string");
+  const validIds = invocation.subagentIds.filter((target): target is ConversationId => typeof target === "string");
   const caller = deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
   const removed = await deps.runtime.removeConversations(validIds, caller);
-  const results = invocation.conversationIds.map(target => {
-    if (typeof target !== "string") return { ok: false as const, conversationId: target.conversationId, error: target.error };
-    if (removed.conversationIds.includes(target)) {
-      return { ok: true as const, data: { conversationId: target, removed: true as const } };
+  const results = invocation.subagentIds.map(target => {
+    if (typeof target !== "string") return { ok: false as const, subagentId: target.subagentId, error: target.error };
+    if (removed.conversationIds.includes(target as ConversationId)) {
+      return { ok: true as const, data: { subagentId: target, removed: true as const } };
     }
     const failure = removed.errors.find(item => item.conversationId === target);
-    return { ok: false as const, conversationId: target, error: failure?.error ?? `Conversation ${target} was not removed.` };
+    return { ok: false as const, subagentId: target, error: failure?.error ?? `Subagent ${target} was not removed.` };
   });
-  const parseErrors = invocation.conversationIds.flatMap(target => typeof target === "string"
+  const parseErrors = invocation.subagentIds.flatMap(target => typeof target === "string"
     ? []
-    : [{ conversationId: target.conversationId, error: target.error }]);
+    : [{ conversationId: target.subagentId, error: target.error }]);
   return resultsResult("remove", results, {
     action: "remove",
     removed: removed.removed,
@@ -390,7 +388,7 @@ export async function removeAction(
 }
 
 function projectRunReceipt(
-  task: RunRequest | { error: string; agent?: string; label?: string; conversationId?: string } | undefined,
+  task: RunRequest | { error: string; agent?: string; label?: string; subagentId?: string } | undefined,
   outcome: OrderedDispatchOutcome,
   conversations: readonly ConversationSnapshot[],
 ): RunReceipt {
@@ -399,10 +397,10 @@ function projectRunReceipt(
     : task?.kind === "spawn"
       ? task.label
       : task?.kind === "resume"
-        ? conversations.find(conversation => conversation.conversationId === task.conversationId)?.label
+        ? conversations.find(conversation => conversation.conversationId === task.subagentId)?.label
         : undefined;
   if (outcome.ok) {
-    return { ok: true, data: { ...(label ? { label } : {}), conversationId: outcome.conversationId, runId: outcome.runId } };
+    return { ok: true, data: { ...(label ? { label } : {}), subagentId: outcome.conversationId } };
   }
   const identity = !task
     ? {}
@@ -410,11 +408,11 @@ function projectRunReceipt(
       ? {
           ...(task.agent ? { agent: task.agent } : {}),
           ...(task.label ? { label: task.label } : {}),
-          ...(task.conversationId ? { conversationId: task.conversationId } : {}),
+          ...(task.subagentId ? { subagentId: task.subagentId } : {}),
         }
       : task.kind === "spawn"
         ? { agent: task.agent, ...(task.label ? { label: task.label } : {}) }
-        : { conversationId: task.conversationId };
+        : { subagentId: task.subagentId };
   return { ok: false, ...identity, error: outcome.error };
 }
 
@@ -430,7 +428,7 @@ function renderDispatchItems(
     if ("error" in task) return { inputIndex: start.inputIndex, error: task.error };
     const conversationId = start.ok
       ? start.conversationId
-      : task.kind === "resume" ? task.conversationId : undefined;
+      : task.kind === "resume" ? task.subagentId : undefined;
     const conversation = conversationId ? byConversation.get(conversationId) : undefined;
     return {
       inputIndex: start.inputIndex,
@@ -439,7 +437,7 @@ function renderDispatchItems(
       label: task.kind === "spawn" ? task.label : conversation?.label,
       prompt: task.kind === "steer" ? task.message : task.prompt,
       ...(start.ok
-        ? { conversationId: start.conversationId, runId: start.runId, ...(start.steer ? { steer: start.steer } : {}) }
+        ? { subagentId: start.conversationId, ...(start.steer ? { steer: start.steer } : {}) }
         : { error: start.error }),
     };
   });
@@ -458,24 +456,21 @@ function projectInspection(
     : run.status.startedAt ?? run.createdAt;
   let display: { agentName?: string; label?: string } = {};
   let config: Pick<ConversationSnapshot, "requestedOverrides" | "effectiveConfig"> & {
-    parentConversationId?: ConversationId;
-    spawnedByRunId?: RunId;
+    parentSubagentId?: ConversationId;
     depth?: number;
   } = {};
   try { display = runtime.conversationDisplay(conversationId); } catch {}
   try {
     const conversation = runtime.conversation(conversationId);
     config = {
-      ...(conversation.parentConversationId ? { parentConversationId: conversation.parentConversationId } : {}),
-      ...(conversation.spawnedByRunId ? { spawnedByRunId: conversation.spawnedByRunId } : {}),
+      ...(conversation.parentConversationId ? { parentSubagentId: conversation.parentConversationId } : {}),
       ...(conversation.requestedOverrides ? { requestedOverrides: conversation.requestedOverrides } : {}),
       ...(conversation.effectiveConfig ? { effectiveConfig: conversation.effectiveConfig } : {}),
     };
     try { config.depth = runtime.conversationDepth(conversationId, callerConversationId); } catch {}
   } catch {}
   return {
-    conversationId,
-    runId: run.runId,
+    subagentId: conversationId,
     ...config,
     ...(display.agentName ? { agent: display.agentName } : {}),
     ...(display.label ? { label: display.label } : {}),
@@ -513,19 +508,19 @@ function conversationSnapshots(runtime: SubagentRuntime): ConversationSnapshot[]
 }
 
 type JoinedOutput = {
-  conversationId: ConversationId;
+  subagentId: ConversationId;
   runId: RunId;
   status: RunStatus;
   output?: string;
   error?: string;
 };
-type JoinOutputError = { runId: string; error: string };
+type JoinOutputError = { subagentId: string; error: string };
 type JoinOutput = JoinedOutput | JoinOutputError;
 
-function projectJoinResults(output: readonly JoinOutput[]): ItemResult<JoinedOutput, { runId: string }>[] {
+function projectJoinResults(output: readonly JoinOutput[]): ItemResult<Omit<JoinedOutput, "runId">, { subagentId: string }>[] {
   return output.map(value => "status" in value
-    ? { ok: true, data: value }
-    : { ok: false, runId: value.runId, error: value.error });
+    ? { ok: true, data: { subagentId: value.subagentId, status: value.status, ...(value.output !== undefined ? { output: value.output } : {}), ...(value.error !== undefined ? { error: value.error } : {}) } }
+    : { ok: false, subagentId: value.subagentId, error: value.error });
 }
 
 function renderJoinedRuns(
@@ -585,11 +580,11 @@ function renderJoinedRuns(
     if (!("status" in value)) return { ...value, status: "error" };
     const run = snapshot(value.runId);
     if (!run) return { ...value };
-    const info = display(value.conversationId);
+    const info = display(value.subagentId);
     const represented = (run.nestedJoins ?? []).flatMap(attempt => attempt.toolCallId ? [attempt.toolCallId] : []);
     return { ...value, ...info, kind: run.kind, prompt: run.prompt, ...runStats(run), activity: activity(run), joins: joins(run),
       background: background(run.runId, info.label ?? info.agent), joinToolCallIds: represented };
-  });
+  }) as JoinedRunRenderItem[];
 }
 
 function runStats(run: RunSnapshot): Pick<JoinedRunRenderItem, "elapsedMs" | "turns" | "tokens"> {
@@ -622,17 +617,17 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     name: "subagent",
     label: "Subagent",
     description: [
-      "Delegate work asynchronously through context-isolated subagent conversations and runs. Subagents share the working filesystem.",
+      "Delegate work asynchronously through persistent, context-isolated subagents. Subagents share the working filesystem.",
       "Actions:",
       "  agents(): List available agent definitions.",
-      "  list(scope?, state?): List conversations by lifecycle; scope defaults to children.",
-      "  spawn(spawns): Start subagent conversations.",
-      "  resume(resumes): Continue existing subagent conversations.",
+      "  list(scope?, state?): List subagents by lifecycle; scope defaults to children.",
+      "  spawn(spawns): Start subagents.",
+      "  resume(resumes): Continue existing subagents after joining their latest outcomes.",
       "  steer(messages): Send messages to running subagents.",
-      "  inspect(runIds): Check run status and progress without waiting.",
-      "  join(runIds): Wait for the outcomes of the given runs.",
-      "  cancel(runIds): Abort active runs; conversations and outcomes are retained.",
-      "  remove(conversationIds): Discard terminal conversation subtrees.",
+      "  inspect(subagentIds): Check status and progress without waiting.",
+      "  join(subagentIds): Wait for and acknowledge the latest outcomes.",
+      "  cancel(subagentIds): Abort active subagents; context and outcomes are retained.",
+      "  remove(subagentIds): Discard terminal subagent subtrees.",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",
     promptGuidelines: [
@@ -640,7 +635,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Write each subagent prompt as if to a stranger who shares only your filesystem: every input, path, and constraint, plus what to report or produce.",
       "Run subagents in parallel only when they're independent and touch disjoint files; join once you depend on a result or have nothing else to do.",
       "Inspect or steer a subagent only with cause: inspect when progress could change your next step, steer to add constraints or correct divergence.",
-      "Resume a subagent conversation when its accumulated context helps the follow-up; spawn fresh when it would be irrelevant or misleading.",
+      "Resume a subagent after joining its latest outcome when its accumulated context helps the follow-up; spawn fresh when it would be irrelevant or misleading.",
       //"Call subagent action=agents before choosing an agent unless the user named one explicitly or definitions were already listed.",
     ],
     parameters: SubagentParams,

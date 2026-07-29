@@ -11,9 +11,9 @@ test("spawn and resume are separate ordered batch actions", () => {
     action: "spawn",
     spawns: [{ kind: "spawn", agent: "helper", prompt: "work" }],
   });
-  assert.deepEqual(parseSubagentInvocation({ action: "resume", resumes: [{ conversationId, prompt: "continue" }] }), {
+  assert.deepEqual(parseSubagentInvocation({ action: "resume", resumes: [{ subagentId: conversationId, prompt: "continue" }] }), {
     action: "resume",
-    resumes: [{ kind: "resume", conversationId, prompt: "continue" }],
+    resumes: [{ kind: "resume", subagentId: conversationId, prompt: "continue" }],
   });
   assert.ok("error" in parseSubagentInvocation({ action: "run", spawns: [{ agent: "helper", prompt: "work" }] }));
 });
@@ -26,14 +26,14 @@ test("command errors omit the ambiguous top-level ok property", () => {
 test("malformed removal targets remain ordered item failures", () => {
   assert.deepEqual(parseSubagentInvocation({
     action: "remove",
-    conversationIds: [conversationId, "not-a-real-conversation"],
+    subagentIds: [conversationId, "not-a-real-conversation"],
   }), {
     action: "remove",
-    conversationIds: [
+    subagentIds: [
       conversationId,
       {
-        conversationId: "not-a-real-conversation",
-        error: "Unknown or invalid conversation ID.",
+        subagentId: "not-a-real-conversation",
+        error: "Unknown or invalid subagent ID.",
       },
     ],
   });

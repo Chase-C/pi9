@@ -81,19 +81,27 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 export interface SubagentEventBus { emit(event: string, data: unknown): void }
 export interface SubagentLifecycleEventSource { onConversationUpdate?(listener: (agent: Conversation, kind: ConversationUpdateKind) => void): () => void }
 
-/** Emits lifecycle events keyed by exact conversation and run identities. */
+/** Emits lifecycle events keyed by stable subagent identity. */
 export function registerSubagentLifecycleEvents(events: SubagentEventBus | undefined, source: SubagentLifecycleEventSource): () => void {
   if (!events?.emit || !source.onConversationUpdate) return () => {};
   const seen = new Set<string>();
   return source.onConversationUpdate((agent, kind) => {
     const snapshot = agent.snapshot(); const run = snapshot.runs.at(-1);
-    events.emit("subagent:updated", { conversationId: snapshot.conversationId, runId: run?.runId, kind, snapshot });
+    const publicSnapshot = {
+      subagentId: snapshot.conversationId,
+      ...(snapshot.parentConversationId ? { parentSubagentId: snapshot.parentConversationId } : {}),
+      ...(snapshot.label ? { label: snapshot.label } : {}),
+      agent: snapshot.config.name,
+      canResume: snapshot.canResume,
+      status: run?.status,
+    };
+    events.emit("subagent:updated", { subagentId: snapshot.conversationId, kind, snapshot: publicSnapshot });
     if (kind !== "status" || !run) return;
     const status = run.status;
     const key = `${run.runId}:${status.kind}:${status.kind === "queued" ? status.queuedAt : status.kind === "running" ? status.startedAt : status.completedAt}`;
     if (seen.has(key)) return; seen.add(key);
     const event = status.kind === "queued" ? "subagent:queued" : status.kind === "running" ? "subagent:started" : "subagent:completed";
-    events.emit(event, { conversationId: snapshot.conversationId, runId: run.runId, ...(status.kind === "done" ? { outcome: status.outcome } : {}), snapshot });
+    events.emit(event, { subagentId: snapshot.conversationId, ...(status.kind === "done" ? { outcome: status.outcome } : {}), snapshot: publicSnapshot });
   });
 }
 
@@ -123,5 +131,5 @@ export function registerSubagentMetadataPersistence(pi: MetadataPi, source: Meta
 }
 export function projectSubagentRunIndex(snapshot: ReturnType<Conversation["snapshot"]>) {
   const run = snapshot.runs.at(-1); if (!run || run.status.kind !== "done") throw new Error("Cannot persist a non-terminal run.");
-  return { version: 2, conversationId: snapshot.conversationId, runId: run.runId, agent: snapshot.config.name, ...(snapshot.label ? { label: snapshot.label } : {}), kind: run.kind, status: run.status.outcome, completedAt: run.status.completedAt, ...(run.status.startedAt !== undefined ? { startedAt: run.status.startedAt, elapsedMs: Math.max(0, run.status.completedAt - run.status.startedAt) } : {}) };
+  return { version: 3, subagentId: snapshot.conversationId, agent: snapshot.config.name, ...(snapshot.label ? { label: snapshot.label } : {}), kind: run.kind, status: run.status.outcome, completedAt: run.status.completedAt, ...(run.status.startedAt !== undefined ? { startedAt: run.status.startedAt, elapsedMs: Math.max(0, run.status.completedAt - run.status.startedAt) } : {}) };
 }

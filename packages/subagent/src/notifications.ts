@@ -7,12 +7,17 @@ import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisp
 
 /** The current serializable completion summary shared by notification production and rendering. */
 export interface CompletionNotification {
-  runId: string;
-  conversationId: string;
+  subagentId: string;
   agent: string;
   label?: string;
   status: RunOutcomeStatus;
+  generation: number;
+  completedAt: number;
   elapsedMs: number;
+}
+
+interface TrackedCompletionNotification extends CompletionNotification {
+  runId: string;
 }
 
 export interface CompletionNotificationMessageDetails {
@@ -73,7 +78,7 @@ export function formatCompletionNotificationMessage(
 function formatNotificationContent(entries: readonly CompletionNotification[]): string {
   const lines = entries.map(entry => {
     const attributes = [
-      `id="${escapeXml(entry.runId)}"`,
+      `subagentId="${escapeXml(entry.subagentId)}"`,
       `status="${escapeXml(entry.status)}"`,
       `agent="${escapeXml(entry.agent)}"`,
       ...(entry.label !== undefined ? [`label="${escapeXml(entry.label)}"`] : []),
@@ -93,11 +98,12 @@ function escapeXml(value: string): string {
 
 function copyCompletionNotification(entry: CompletionNotification): CompletionNotification {
   return {
-    runId: entry.runId,
-    conversationId: entry.conversationId,
+    subagentId: entry.subagentId,
     agent: entry.agent,
     ...(entry.label !== undefined ? { label: entry.label } : {}),
     status: entry.status,
+    generation: entry.generation,
+    completedAt: entry.completedAt,
     elapsedMs: entry.elapsedMs,
   };
 }
@@ -118,7 +124,7 @@ function formatCompletionEntry(entry: CompletionNotification, options: Completio
     : "";
   const status = colorCompletionStatus(entry.status, options.theme);
   const identityPart = options.expanded
-    ? ` · runId ${entry.runId} · conversationId ${entry.conversationId}`
+    ? ` · subagentId ${entry.subagentId}`
     : "";
   return `- ${entry.agent}${labelPart} · ${status} · ${formatElapsed(entry.elapsedMs)}${identityPart}`;
 }
@@ -200,7 +206,7 @@ export class CompletionNotifier {
       const completions = completionDetails(message);
       if (!completions) return [message];
       const visible = completions.flatMap(entry => {
-        const current = this.currentNotificationEntry(entry.runId);
+        const current = this.currentNotificationEntry(entry.subagentId, entry.generation);
         return current ? [current] : [];
       });
       if (!visible.length) return [];
@@ -208,37 +214,44 @@ export class CompletionNotifier {
     });
   }
 
-  private currentNotificationEntry(runId: string): CompletionNotification | undefined {
-    if (this.observed.has(runId) || this.claimCountByRun.has(runId)) return;
-    const value = this.catalog().find(candidate => candidate.run.runId === runId);
-    if (!value || value.run.acknowledged || value.run.observerCount > 0) return;
+  private currentNotificationEntry(subagentId: string, generation: number): CompletionNotification | undefined {
+    const value = this.catalog().find(candidate =>
+      candidate.conversation.conversationId === subagentId && candidate.generation === generation);
+    if (!value || this.observed.has(value.run.runId) || this.claimCountByRun.has(value.run.runId)) return;
+    if (value.run.acknowledged || value.run.observerCount > 0) return;
     const started = value.run.status.kind === "done" ? value.run.status.startedAt ?? value.run.createdAt : value.run.createdAt;
     if (value.run.status.kind !== "done") return;
     return {
-      runId: value.run.runId,
-      conversationId: value.conversation.conversationId,
+      subagentId: value.conversation.conversationId,
       agent: value.conversation.config.name,
       ...(value.conversation.label ? { label: value.conversation.label } : {}),
       status: value.run.status.outcome,
+      generation: value.generation,
+      completedAt: value.run.status.completedAt,
       elapsedMs: Math.max(0, value.run.status.completedAt - started),
     };
   }
 
   beginTool(scope: string, toolCallId: string, params: unknown): void {
     const target = claimTarget(params);
-    if (!target.runIds.size) return;
+    const runIds = new Set([...target.subagentIds].flatMap(subagentId => {
+      const runId = this.latestRunId(subagentId);
+      return runId ? [runId] : [];
+    }));
+    if (!runIds.size) return;
     const key = `${scope}:${toolCallId}`;
     this.releaseToolClaim(key);
-    for (const runId of target.runIds) this.claimCountByRun.set(runId, (this.claimCountByRun.get(runId) ?? 0) + 1);
-    this.claimsByToolCall.set(key, { action: target.action, runIds: target.runIds });
+    for (const runId of runIds) this.claimCountByRun.set(runId, (this.claimCountByRun.get(runId) ?? 0) + 1);
+    this.claimsByToolCall.set(key, { action: target.action, runIds });
   }
 
   completeTool(scope: string, toolCallId: string, result?: unknown): void {
     const key = `${scope}:${toolCallId}`;
     const claim = this.claimsByToolCall.get(key);
     if (!claim) return;
-    for (const id of observedTerminalRunIds(claim.action, result)) {
-      if (claim.runIds.has(id)) this.observed.add(id);
+    for (const subagentId of observedTerminalSubagentIds(claim.action, result)) {
+      const runId = this.latestRunId(subagentId);
+      if (runId && claim.runIds.has(runId)) this.observed.add(runId);
     }
     for (const id of claim.runIds) {
       try {
@@ -276,7 +289,7 @@ export class CompletionNotifier {
     if (ctx) this.ctx = ctx;
     const call = toolEvent(event);
     if (call?.toolName === "subagent") this.beginTool("root", call.toolCallId, call.args);
-    const claimed = call?.toolName === "subagent" && claimTarget(call.args).runIds.size > 0;
+    const claimed = call?.toolName === "subagent" && claimTarget(call.args).subagentIds.size > 0;
     // Defer delivery until synchronous tool preflight finishes so later joins can claim runs.
     // list is deliberately not a delivery opportunity; a join starts by claiming.
     if (!claimed && toolAction(event) !== "list") this.arm(0, true);
@@ -332,13 +345,13 @@ export class CompletionNotifier {
 
     // Catalog, observer and acknowledgement state are intentionally projected again immediately before send.
     const live = new Map(this.catalog().map(value => [value.run.runId, value]));
-    const entries: CompletionNotification[] = [];
+    const entries: TrackedCompletionNotification[] = [];
     for (const candidate of eligible) {
       const value = live.get(candidate.run.runId);
       if (!value || value.run.acknowledged || value.run.observerCount || this.claimCountByRun.has(value.run.runId)) continue;
       const started = value.run.status.kind === "done" ? value.run.status.startedAt ?? value.run.createdAt : value.run.createdAt;
       if (value.run.status.kind !== "done") continue;
-      entries.push({ runId: value.run.runId, conversationId: value.conversation.conversationId, agent: value.conversation.config.name, ...(value.conversation.label ? { label: value.conversation.label } : {}), status: value.run.status.outcome, elapsedMs: Math.max(0, value.run.status.completedAt - started) });
+      entries.push({ runId: value.run.runId, subagentId: value.conversation.conversationId, agent: value.conversation.config.name, ...(value.conversation.label ? { label: value.conversation.label } : {}), status: value.run.status.outcome, generation: value.generation, completedAt: value.run.status.completedAt, elapsedMs: Math.max(0, value.run.status.completedAt - started) });
     }
     if (!entries.length || !this.deps.pi.sendMessage) return;
     const message = createCompletionNotificationMessage(entries);
@@ -356,7 +369,7 @@ export class CompletionNotifier {
       this.arm(500, mode === "steer" && active);
     }
   }
-  private notifyUi(entries: readonly CompletionNotification[]): void {
+  private notifyUi(entries: readonly TrackedCompletionNotification[]): void {
     if (!this.ctx?.hasUI || !this.ctx.ui?.notify) return;
     const pending = entries.filter(entry => !this.uiNotified.has(entry.runId));
     if (!pending.length) return;
@@ -366,10 +379,14 @@ export class CompletionNotifier {
     } catch {}
   }
 
+  private latestRunId(subagentId: string): string | undefined {
+    try { return this.deps.manager.conversation(subagentId).runs.at(-1)?.runId; } catch { return; }
+  }
+
   private catalog() {
     return this.deps.manager.listConversations().flatMap(conversation => conversation.runs
-      .filter(run => run.status.kind === "done")
-      .map(run => ({ conversation, run })));
+      .map((run, index) => ({ conversation, run, generation: index + 1 }))
+      .filter(value => value.run.status.kind === "done"));
   }
 }
 function formatUiNotification(entries: readonly CompletionNotification[]): string {
@@ -390,10 +407,11 @@ function completionDetails(message: CustomMessage): CompletionNotification[] | u
   if (!Array.isArray(completions)) return;
   return completions.filter((entry): entry is CompletionNotification => Boolean(
     entry && typeof entry === "object" &&
-    typeof (entry as CompletionNotification).runId === "string" &&
-    typeof (entry as CompletionNotification).conversationId === "string" &&
+    typeof (entry as CompletionNotification).subagentId === "string" &&
     typeof (entry as CompletionNotification).agent === "string" &&
     typeof (entry as CompletionNotification).status === "string" &&
+    typeof (entry as CompletionNotification).generation === "number" &&
+    typeof (entry as CompletionNotification).completedAt === "number" &&
     typeof (entry as CompletionNotification).elapsedMs === "number",
   ));
 }
@@ -403,12 +421,12 @@ function toolAction(event: unknown): unknown {
   const value = event as { toolName?: unknown; args?: { action?: unknown } };
   return value.toolName === "subagent" ? value.args?.action : undefined;
 }
-function claimTarget(params: unknown): { action: unknown; runIds: Set<string> } {
-  if (!params || typeof params !== "object") return { action: undefined, runIds: new Set() };
-  const value = params as { action?: unknown; runIds?: unknown };
+function claimTarget(params: unknown): { action: unknown; subagentIds: Set<string> } {
+  if (!params || typeof params !== "object") return { action: undefined, subagentIds: new Set() };
+  const value = params as { action?: unknown; subagentIds?: unknown };
   const action = value.action;
-  if ((action !== "inspect" && action !== "cancel" && action !== "join") || !Array.isArray(value.runIds)) return { action, runIds: new Set() };
-  return { action, runIds: new Set(value.runIds.filter((id): id is string => typeof id === "string")) };
+  if ((action !== "inspect" && action !== "cancel" && action !== "join") || !Array.isArray(value.subagentIds)) return { action, subagentIds: new Set() };
+  return { action, subagentIds: new Set(value.subagentIds.filter((id): id is string => typeof id === "string")) };
 }
 function toolEvent(event: unknown): { toolCallId: string; toolName: unknown; args: unknown } | undefined {
   if (!event || typeof event !== "object") return;
@@ -422,7 +440,7 @@ function toolEndEvent(event: unknown): { toolCallId: string; toolName: unknown; 
   if (typeof value.toolCallId !== "string") return;
   return { toolCallId: value.toolCallId, toolName: value.toolName, result: value.result };
 }
-function observedTerminalRunIds(action: unknown, result: unknown): string[] {
+function observedTerminalSubagentIds(action: unknown, result: unknown): string[] {
   if ((action !== "inspect" && action !== "cancel") || !result || typeof result !== "object") return [];
   const details = (result as { details?: unknown }).details;
   if (!details || typeof details !== "object") return [];
@@ -430,8 +448,8 @@ function observedTerminalRunIds(action: unknown, result: unknown): string[] {
   if (!Array.isArray(runs)) return [];
   return runs.flatMap(value => {
     if (!value || typeof value !== "object" || "error" in value) return [];
-    const run = value as { runId?: unknown; status?: unknown };
-    if (typeof run.runId !== "string" || !TERMINAL_RUN_STATUSES.has(run.status)) return [];
-    return [run.runId];
+    const run = value as { subagentId?: unknown; status?: unknown };
+    if (typeof run.subagentId !== "string" || !TERMINAL_RUN_STATUSES.has(run.status)) return [];
+    return [run.subagentId];
   });
 }

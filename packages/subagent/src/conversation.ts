@@ -270,6 +270,7 @@ export class Conversation {
   get canResume(): boolean {
     const latest = this.runs.at(-1);
     return !this.currentRun && !this.stopping && !!this.session && latest?.state.kind === "done" &&
+      latest.acknowledged && latest.observerCount === 0 &&
       (latest.state.result.status === "completed"
         || latest.state.result.status === "interrupted"
         || latest.state.result.status === "aborted");

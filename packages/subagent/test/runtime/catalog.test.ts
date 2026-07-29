@@ -38,6 +38,11 @@ const parent = (conversationId: any, runId: any) => ({ caller: { conversationId,
 const caller = (conversationId: any, runId: any) => ({ caller: { conversationId, runId } });
 const output = (entry: any) =>
   entry.status.kind === "done" ? entry.status.output : undefined;
+const joinLatest = (manager: SubagentRuntime, subagentId: any, owner?: any) => {
+  const binding = manager.bindSubagentJoin([subagentId], owner);
+  binding.acknowledge();
+  binding.release();
+};
 
 test("spawn records stable conversation ownership and exact run provenance", async () => {
   const manager = new SubagentRuntime(registry, 2, runner);
@@ -66,7 +71,9 @@ test("resume preserves conversation ownership and spawn provenance", async () =>
   await childStart.completion;
   const child = childStart.starts[0] as any;
 
-  const resumed = manager.startRun(ctx, [{ kind: "resume", conversationId: child.conversationId, prompt: "again" }] as any);
+  const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
+  joinLatest(manager, child.conversationId, ownerCaller);
+  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: child.conversationId, prompt: "again" }] as any, { caller: ownerCaller });
   await resumed.completion;
 
   expect(manager.conversation(child.conversationId)).toMatchObject({
@@ -114,7 +121,8 @@ test("conversation authorization survives resume and rejects unrelated conversat
   const unrelatedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated" }] as any);
   await unrelatedStart.completion;
   const unrelated = unrelatedStart.starts[0] as any;
-  const resumed = manager.startRun(ctx, [{ kind: "resume", conversationId: owner.conversationId, prompt: "again" }] as any);
+  joinLatest(manager, owner.conversationId);
+  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: owner.conversationId, prompt: "again" }] as any);
   await resumed.completion;
   const resumedOwner = { conversationId: owner.conversationId, runId: (resumed.starts[0] as any).runId };
 
@@ -238,10 +246,10 @@ test("child callers cannot resume or remove conversations outside their subtree"
   const unrelated = unrelatedStart.starts[0] as any;
   const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
 
-  expect(manager.startRun(ctx, [{ kind: "resume", conversationId: unrelated.conversationId, prompt: "again" }] as any,
+  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: unrelated.conversationId, prompt: "again" }] as any,
     { caller: ownerCaller }).starts[0]).toMatchObject({
       ok: false,
-      error: `Conversation ${unrelated.conversationId} is not a descendant of caller conversation ${owner.conversationId}.`,
+      error: `Subagent ${unrelated.conversationId} is not directly owned by caller subagent ${owner.conversationId}.`,
     });
   await expect(manager.removeConversation(unrelated.conversationId, ownerCaller)).resolves.toMatchObject({
     removed: 0,
@@ -273,9 +281,10 @@ test("ordered starts reserve capacity and resumes work at capacity", async () =>
 
   await batch.completion;
   const first = batch.starts[0] as any;
+  joinLatest(manager, first.conversationId);
   const resumed = manager.startRun(ctx, [{
     kind: "resume",
-    conversationId: first.conversationId,
+    subagentId: first.conversationId,
     prompt: "again",
   }] as any);
   await resumed.completion;
@@ -304,14 +313,14 @@ test("resume identifies the queued run blocking a conversation", async () => {
 
   const resumed = manager.startRun(ctx, [{
     kind: "resume",
-    conversationId: active.conversationId,
+    subagentId: active.conversationId,
     prompt: "continue",
   }] as any);
 
   expect(resumed.starts[0]).toEqual({
     ok: false,
     inputIndex: 0,
-    error: `Conversation ${active.conversationId} has queued run ${active.runId}. Wait for or join it before resuming.`,
+    error: `Subagent ${active.conversationId} is queued. Wait for or join it before resuming.`,
   });
 
   release();
@@ -330,19 +339,20 @@ test("active resume failures remain isolated from resumable siblings", async () 
   const completed = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "completed" }] as any);
   await completed.completion;
   const resumable = completed.starts[0] as any;
+  joinLatest(manager, resumable.conversationId);
   const busyStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "busy" }] as any);
   const busy = busyStart.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
   const batch = manager.startRun(ctx, [
-    { kind: "resume", conversationId: busy.conversationId, prompt: "blocked" },
-    { kind: "resume", conversationId: resumable.conversationId, prompt: "continue" },
+    { kind: "resume", subagentId: busy.conversationId, prompt: "blocked" },
+    { kind: "resume", subagentId: resumable.conversationId, prompt: "continue" },
   ] as any);
 
   expect(batch.starts[0]).toMatchObject({
     ok: false,
     inputIndex: 0,
-    error: `Conversation ${busy.conversationId} has running run ${busy.runId}. Join it before resuming, or steer it while it runs.`,
+    error: `Subagent ${busy.conversationId} is running. Join it before resuming, or steer it while it runs.`,
   });
   expect(batch.starts[1]).toMatchObject({ ok: true, inputIndex: 1, conversationId: resumable.conversationId });
 
@@ -362,7 +372,7 @@ test("terminal non-resumable conversations retain the generic resume error", asy
 
   const resumed = manager.startRun(ctx, [{
     kind: "resume",
-    conversationId: terminal.conversationId,
+    subagentId: terminal.conversationId,
     prompt: "continue",
   }] as any);
 
@@ -410,21 +420,23 @@ test("aborted conversations resume only after abort and execution settle", async
 
   expect(manager.runSnapshot(aborted.runId).status).toMatchObject({ kind: "done", outcome: "aborted" });
   expect(manager.conversation(aborted.conversationId).canResume).toBe(false);
-  expect(manager.startRun(ctx, [{ kind: "resume", conversationId: aborted.conversationId, prompt: "too-early" }] as any).starts[0])
+  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "too-early" }] as any).starts[0])
     .toMatchObject({ ok: false, error: settlingError });
 
   releaseAbort();
   await cancelling;
   expect(manager.conversation(aborted.conversationId).canResume).toBe(false);
-  expect(manager.startRun(ctx, [{ kind: "resume", conversationId: aborted.conversationId, prompt: "still-early" }] as any).starts[0])
+  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "still-early" }] as any).starts[0])
     .toMatchObject({ ok: false, error: settlingError });
   expect(executions).toBe(1);
 
   releaseExecution();
   await start.completion;
+  expect(manager.conversation(aborted.conversationId).canResume).toBe(false);
+  joinLatest(manager, aborted.conversationId);
   expect(manager.conversation(aborted.conversationId).canResume).toBe(true);
 
-  const resumed = manager.startRun(ctx, [{ kind: "resume", conversationId: aborted.conversationId, prompt: "continue" }] as any);
+  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "continue" }] as any);
   const resumedRun = resumed.starts[0] as any;
   await new Promise(done => setImmediate(done));
   await manager.steerRun(resumedRun.runId, "redirect");
@@ -472,34 +484,24 @@ test("spawn validation is ordered, isolated, and does not allocate or consume ca
   expect(manager.listConversations()).toHaveLength(2);
 });
 
-test("joins exact historical runs and remains stable across resume", async () => {
+test("joining acknowledges the latest outcome and unlocks resume", async () => {
   const manager = new SubagentRuntime(registry, 1, runner);
-  const initial = manager.startRun(ctx, [{
-    kind: "spawn",
-    agent: "worker",
-    prompt: "old",
-  }] as any);
+  const initial = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "old" }] as any);
   await initial.completion;
   const first = initial.starts[0] as any;
 
   expect(() => manager.bindJoin([first.runId, "missing-run" as any])).toThrow();
-  expect(manager.conversation(first.conversationId).runs[0].observerCount).toBe(0);
-  const join = manager.bindJoin([first.runId]);
-  expect(manager.conversation(first.conversationId).runs[0].observerCount).toBe(1);
-
-  const resumed = manager.startRun(ctx, [{
-    kind: "resume",
-    conversationId: first.conversationId,
-    prompt: "new",
-  }] as any);
-  await resumed.completion;
+  const join = manager.bindSubagentJoin([first.conversationId]);
   await join.completion;
-  expect(join.project()[0].status).toMatchObject({
-    kind: "done",
-    outcome: "completed",
-    output: "old",
-  });
+  expect(join.project()[0].status).toMatchObject({ kind: "done", outcome: "completed", output: "old" });
+  join.acknowledge();
+  expect(manager.conversation(first.conversationId).canResume).toBe(false);
   join.release();
+  expect(manager.conversation(first.conversationId).canResume).toBe(true);
+
+  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any);
+  expect(resumed.starts[0]).toMatchObject({ ok: true, conversationId: first.conversationId });
+  await resumed.completion;
 });
 
 test("completed removal deletes exact runs, prevents resume, and reclaims capacity", async () => {
@@ -511,9 +513,10 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
   }] as any);
   await initial.completion;
   const first = initial.starts[0] as any;
+  joinLatest(manager, first.conversationId);
   const resumed = manager.startRun(ctx, [{
     kind: "resume",
-    conversationId: first.conversationId,
+    subagentId: first.conversationId,
     prompt: "new",
   }] as any);
   await resumed.completion;
@@ -528,9 +531,9 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
   expect(() => manager.conversation(first.conversationId)).toThrow("Unknown conversation");
   expect((manager.startRun(ctx, [{
     kind: "resume",
-    conversationId: first.conversationId,
+    subagentId: first.conversationId,
     prompt: "again",
-  }] as any).starts[0] as any).error).toContain("Unknown conversation");
+  }] as any).starts[0] as any).error).toContain("Unknown subagent");
 
   expect(() => manager.inspectRuns([first.runId])).toThrow(`Unknown run: ${first.runId}.`);
   expect(() => manager.bindJoin([second.runId])).toThrow(`Unknown run: ${second.runId}.`);
@@ -783,33 +786,20 @@ test("exact join does not bind an unrequested descendant", async () => {
   join.release();
 });
 
-test("an exact join stays bound to the older run after resume and child spawn", async () => {
-  const manager = new SubagentRuntime(registry, 4, runner);
-  const firstStart = manager.startRun(ctx, [{
-    kind: "spawn",
-    agent: "worker",
-    prompt: "old",
-  }] as any);
+test("resume remains blocked until every accepted join releases", async () => {
+  const manager = new SubagentRuntime(registry, 1, runner);
+  const firstStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "old" }] as any);
   await firstStart.completion;
   const first = firstStart.starts[0] as any;
-  const oldJoin = manager.bindJoin([first.runId]);
+  const join = manager.bindSubagentJoin([first.conversationId]);
+  await join.completion;
+  join.acknowledge();
 
-  const resumedStart = manager.startRun(ctx, [{
-    kind: "resume",
-    conversationId: first.conversationId,
-    prompt: "new",
-  }] as any);
-  await resumedStart.completion;
-  const resumed = resumedStart.starts[0] as any;
-  const child = manager.startRun(ctx, [{
-    kind: "spawn",
-    agent: "worker",
-    prompt: "new-child",
-  }] as any, parent(first.conversationId, resumed.runId));
-  await child.completion;
-
-  expect(oldJoin.project().map(entry => entry.runId)).toEqual([first.runId]);
-  oldJoin.release();
+  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
+    .toMatchObject({ ok: false });
+  join.release();
+  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
+    .toMatchObject({ ok: true });
 });
 
 test("spawn execution is independent of caller cancellation", async () => {
@@ -926,7 +916,7 @@ test("queued cancellation settles immediately without dispatching the executor",
   join.acknowledge();
   join.release();
   expect(executed).toEqual(["blocker"]);
-  const resumed = manager.startRun(ctx, [{ kind: "resume", conversationId: target.conversationId, prompt: "continue" }]);
+  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: target.conversationId, prompt: "continue" }]);
   expect(resumed.starts[0]).toMatchObject({
     ok: false,
     error: `Conversation ${target.conversationId} cannot be resumed.`,
@@ -1010,6 +1000,33 @@ test("nested callers may inspect, steer, and cancel descendants only", async () 
 
   releases.get("child")!(); releases.get("owner")!();
   await Promise.all([childBatch.completion, ownerBatch.completion]);
+});
+
+test("only a subagent's direct owner may join it by stable ID", async () => {
+  const manager = new SubagentRuntime(registry, 4, runner);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    parent(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const leafStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "leaf" }] as any,
+    parent(child.conversationId, child.runId));
+  await leafStart.completion;
+  const leaf = leafStart.starts[0] as any;
+
+  const childJoin = manager.bindSubagentJoin([child.conversationId], { conversationId: root.conversationId, runId: root.runId });
+  childJoin.release();
+  expect(() => manager.bindSubagentJoin([leaf.conversationId], { conversationId: root.conversationId, runId: root.runId })).toThrow("not directly owned");
+  expect(() => manager.bindSubagentJoin([child.conversationId])).toThrow("not directly owned");
+
+  const leafJoin = manager.bindSubagentJoin([leaf.conversationId], { conversationId: child.conversationId, runId: child.runId });
+  leafJoin.acknowledge();
+  leafJoin.release();
+  const unauthorizedResume = manager.startRun(ctx, [{ kind: "resume", subagentId: leaf.conversationId, prompt: "again" }],
+    parent(root.conversationId, root.runId));
+  expect(unauthorizedResume.starts[0]).toMatchObject({ ok: false, error: expect.stringContaining("not directly owned") });
 });
 
 test("nested joins validate descendants and preserve ordered attempts without target output", async () => {

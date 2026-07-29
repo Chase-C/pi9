@@ -13,19 +13,19 @@ test("description names typed action inputs without restating task unions", () =
     prepareInvocation: async () => settings,
   });
   const description = tool.description;
-  assert.match(description, /list\(scope\?, state\?\): List conversations by lifecycle; scope defaults to children/);
+  assert.match(description, /list\(scope\?, state\?\): List subagents by lifecycle; scope defaults to children/);
   assert.match(description, /spawn\(spawns\)/);
   assert.match(description, /resume\(resumes\)/);
   assert.match(description, /steer\(messages\)/);
-  assert.match(description, /cancel\(runIds\)/);
-  assert.match(description, /inspect\(runIds\)/);
-  assert.match(description, /join\(runIds\)/);
-  assert.match(description, /remove\(conversationIds\).*terminal conversation subtrees/);
+  assert.match(description, /cancel\(subagentIds\)/);
+  assert.match(description, /inspect\(subagentIds\)/);
+  assert.match(description, /join\(subagentIds\)/);
+  assert.match(description, /remove\(subagentIds\).*terminal subagent subtrees/);
   assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union/);
   const properties = (tool.parameters as any).properties;
   assert.deepEqual(Object.keys(properties.spawns.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
-  assert.deepEqual(Object.keys(properties.resumes.items.properties), ["conversationId", "prompt"]);
-  assert.deepEqual(Object.keys(properties.messages.items.properties), ["runId", "message"]);
+  assert.deepEqual(Object.keys(properties.resumes.items.properties), ["subagentId", "prompt"]);
+  assert.deepEqual(Object.keys(properties.messages.items.properties), ["subagentId", "message"]);
 });
 
 const toolCall = (arguments_: Record<string, any>) => ({
@@ -96,14 +96,14 @@ test("unknown actions return a structured global error envelope", async () => {
 
 test("mixed join target errors remain ordered item failures", async () => {
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings });
-  const result = await tool.execute("call", { action: "join", runIds: ["valid-run", "ghost-silently", 42] }, undefined, undefined, {});
+  const result = await tool.execute("call", { action: "join", subagentIds: ["valid-run", "ghost-silently", 42] }, undefined, undefined, {});
   assert.equal(result.isError, false);
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
   assert.deepEqual(response.results, [
-    { ok: false, runId: "valid-run", error: "Unknown or invalid run ID." },
-    { ok: false, runId: "ghost-silently", error: "Unknown or invalid run ID." },
-    { ok: false, runId: "42", error: "Unknown or invalid run ID." },
+    { ok: false, subagentId: "valid-run", error: "Unknown or invalid subagent ID." },
+    { ok: false, subagentId: "ghost-silently", error: "Unknown or invalid subagent ID." },
+    { ok: false, subagentId: "42", error: "Unknown or invalid subagent ID." },
   ]);
 });
 

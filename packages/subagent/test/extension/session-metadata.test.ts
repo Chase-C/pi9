@@ -27,9 +27,8 @@ function snapshot(outcome: "completed" | "error") {
 test.each(["completed", "error"] as const)("durable metadata excludes full content for %s runs", outcome => {
   const metadata = projectSubagentRunIndex(snapshot(outcome));
   expect(metadata).toEqual({
-    version: 2,
-    conversationId: "amber-acorn",
-    runId: "adapt-ably",
+    version: 3,
+    subagentId: "amber-acorn",
     agent: "helper",
     label: "safe label",
     kind: "spawn",

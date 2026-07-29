@@ -68,21 +68,21 @@ export function registerSubagentsCommand(
                 return undefined;
               }
               updateSubagentWidget(ctx, runtime.listConversations(), settings);
-              notify(ctx, `Started ${agent} (${start.conversationId}, ${start.runId}).`, "info");
+              notify(ctx, `Started ${agent} (${start.conversationId}).`, "info");
               return start.conversationId;
             },
             onResume: (conversationId, prompt) => {
-              const start = runtime.startRun(ctx, [{ kind: "resume", conversationId: conversationId as any, prompt }]).starts[0];
+              const start = runtime.startRun(ctx, [{ kind: "resume", subagentId: conversationId as any, prompt }]).starts[0];
               if (!start?.ok) notify(ctx, start?.error ?? `Could not resume conversation ${conversationId}.`, "warning");
               else {
                 updateSubagentWidget(ctx, runtime.listConversations(), settings);
-                notify(ctx, `Started run ${start.runId} in conversation ${conversationId}.`, "info");
+                notify(ctx, `Resumed subagent ${conversationId}.`, "info");
               }
             },
             onCancel: async runId => {
               try {
                 await runtime.cancelRun(runId as any);
-                notify(ctx, `Cancelled subagent run ${runId}.`, "info");
+                notify(ctx, "Cancelled subagent.", "info");
               } catch (error) {
                 notify(ctx, errorMessage(error), "warning");
               }
@@ -90,8 +90,8 @@ export function registerSubagentsCommand(
             },
             onRemove: async conversationId => {
               const result = await runtime.removeConversation(conversationId);
-              if (result.removed) notify(ctx, `Removed ${result.removed} subagent conversation${result.removed === 1 ? "" : "s"} rooted at ${conversationId}.`, "info");
-              else notify(ctx, result.errors[0]?.error ?? `Could not remove conversation ${conversationId}.`, "warning");
+              if (result.removed) notify(ctx, `Removed ${result.removed} subagent${result.removed === 1 ? "" : "s"} rooted at ${conversationId}.`, "info");
+              else notify(ctx, result.errors[0]?.error ?? `Could not remove subagent ${conversationId}.`, "warning");
               updateSubagentWidget(ctx, runtime.listConversations(), settings);
             },
           },

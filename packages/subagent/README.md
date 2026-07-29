@@ -6,8 +6,8 @@ Delegate focused work from Pi to context-isolated child conversations. The singl
 
 ## Feature overview
 
-- **Retained conversations** preserve child context for follow-up runs until the parent explicitly removes the conversation.
-- **Asynchronous runs and exact joins** let the parent continue working after spawning or resuming work, then wait for and retrieve specific runs by ID.
+- **Retained subagents** preserve child context for follow-up work until the parent explicitly removes the subagent.
+- **Stable subagent IDs** address spawn, resume, steering, inspection, cancellation, joining, and cleanup without separate execution IDs.
 - **Bounded inspection, steering, and cancellation** let the parent check progress, redirect an active run, or stop it while retaining its outcome.
 - **Recursive delegation** lets subagents run, inspect, steer, cancel, and join their own descendants under tree-wide ownership and concurrency rules.
 - **Live progress** shows queued and running work, recent tool activity, recursive children, and completed answers in tool and widget views.
@@ -47,21 +47,21 @@ Inspect the repository and return concise, evidence-backed findings.
 | `tools` | no | Comma-separated allowlist; include `subagent` for recursive delegation. |
 | `skills` | no | Comma-separated default skills. A spawn-task value replaces this list. |
 
-The body becomes the child system prompt. `spawn` accepts a `spawns` array whose entries require `agent` and `prompt`; `label` is optional, and entries may override supported execution options such as model, thinking, working directory, and skills. A model requested by either the task or agent definition must resolve; an unknown or malformed value fails that task instead of falling back. When neither specifies a model, the child inherits the parent's model. An explicit task `cwd` is resolved relative to the parent's working directory and must identify an existing directory. `resume` accepts a `resumes` array whose entries identify a conversation and create another run with the supplied prompt; the conversation's agent and execution context remain fixed. `messages` entries identify an active run and queue the supplied `message` through Pi's steering boundary without creating another run. `cancel` targets exact queued or running runs by `runId`.
+The body becomes the child system prompt. `spawn` accepts a `spawns` array whose entries require `agent` and `prompt`; `label` is optional, and entries may override supported execution options such as model, thinking, working directory, and skills. A model requested by either the task or agent definition must resolve; an unknown or malformed value fails that task instead of falling back. When neither specifies a model, the child inherits the parent's model. An explicit task `cwd` is resolved relative to the parent's working directory and must identify an existing directory. Every accepted spawn returns a stable `subagentId`. `resume`, `steer`, `cancel`, `inspect`, `join`, and `remove` all target that same ID.
 
 ## Tool actions
 
 | Action | Behavior |
 | --- | --- |
 | `agents` | Discover agent definitions and their resolved defaults. |
-| `list` | Return immediate child conversations by default, or the caller's full owned subtree with `scope: "descendants"`, optionally filtered by conversation `state`. Every included conversation retains its complete output-free run history. It is pure: it acknowledges nothing and changes no lifecycle state. |
-| `spawn` | Start the ordered `spawns` batch asynchronously. Each accepted task creates a conversation and its first run. |
-| `resume` | Start the ordered `resumes` batch asynchronously. Each accepted task creates another run in an existing conversation. |
-| `steer` | Send `messages` to existing running runs and return ordered lifecycle receipts after Pi accepts each message. |
-| `cancel` | Abort exact queued or running runs while retaining their conversations and aborted outcomes for `inspect` and `join`. Malformed, unknown, terminal, or unauthorized targets become ordered per-target errors. |
-| `inspect` | Return bounded status, conversation ownership and spawn provenance, requested overrides, effective execution configuration, running phase, current message, recent tool activity, steer receipts, and terminal error diagnostics for exact runs without waiting or acknowledging them. Invalid targets become ordered per-target errors. Terminal output is omitted. |
-| `join` | Block until every valid explicitly requested exact run settles, then return and acknowledge those runs. Malformed, unknown, or unauthorized targets become ordered per-target errors without hiding valid sibling outcomes. There is no timeout. Cancelling `join` stops only the wait; it does not stop the underlying runs. |
-| `remove` | Permanently delete terminal conversation subtrees and all their run records. Any active descendant rejects deletion of the entire subtree. |
+| `list` | Return direct child subagents by default, or the caller's full subtree with `scope: "descendants"`; optionally filter by `active`, `awaiting_join`, `resumable`, or `terminal`. |
+| `spawn` | Start an ordered batch asynchronously. Each accepted task returns a stable `subagentId`. |
+| `resume` | Continue a joined, resumable subagent with the same context and ID. Only its direct owner may resume it. |
+| `steer` | Send messages to running subagents and return ordered delivery receipts. |
+| `cancel` | Abort active subagents while retaining their context and outcomes. |
+| `inspect` | Return bounded current/latest status and progress without waiting or acknowledging the outcome. |
+| `join` | Wait for and acknowledge each subagent's latest outcome. Only its direct owner may join it. Cancelling the join stops only the wait. |
+| `remove` | Permanently delete terminal subagent subtrees. Any active descendant rejects deletion of the entire subtree. |
 
 Parallel runs stream their current status and recent tool activity independently:
 
@@ -83,20 +83,20 @@ For example, a `spawn` call returns one result for each entry in `spawns`:
   "results": [
     {
       "ok": true,
-      "data": { "label": "auth map", "conversationId": "quiet-otter", "runId": "search-boldly" }
+      "data": { "label": "auth map", "subagentId": "quiet-otter" }
     },
     { "ok": false, "error": "Unknown agent: missing." }
   ]
 }
 ```
 
-Rejected spawn tasks receive no allocated `conversationId` or `runId`; failed resume and steer items may echo the requested target identity. Accepted spawn and resume tasks enter the run lifecycle; accepted steer messages return the existing target identities and do not create lifecycle records.
+Rejected spawn tasks receive no allocated `subagentId`; failed resume and steer items may echo the requested target identity. Accepted resume and steer operations retain the existing `subagentId`.
 
 A run belongs to one conversation. Spawning creates both; a follow-up creates another run in an existing conversation. Every conversation remains available in the runtime inventory until explicitly removed, including after successful, failed, or interrupted work.
 
-`canResume` becomes true after a completed, interrupted, or cancelled run when the conversation session remains available and all execution cleanup has settled. It remains false while work is queued, active, or still stopping, and after failures that did not preserve context.
+A settled subagent first enters `awaiting_join`. `canResume` becomes true only after its direct owner successfully joins a completed, interrupted, or cancelled outcome, all accepted joins release, and the SDK context remains available. Failed outcomes become `terminal` after joining.
 
-Conversations form the stable ownership tree. A spawned conversation records its immutable `parentConversationId` and the exact `spawnedByRunId` that created it. Resuming adds another run to that same conversation without moving it or changing which descendants it owns. Runs remain exact execution records, so `inspect`, steer messages, `cancel`, and `join` continue to target `runId`; authorization is determined by the target run's conversation. A child may list and operate only on descendant conversations, while the root Pi session owns the complete forest. Agent definitions remain globally discoverable.
+Subagents form a stable ownership tree. A spawned subagent records its immutable `parentSubagentId`; resuming preserves that ownership and the same `subagentId`. The root agent directly owns top-level subagents, and each subagent directly owns the children it spawned. Only the direct owner may join or resume a child; ancestors may still inspect, steer, cancel, and remove descendants for supervision.
 
 `list` defaults to immediate children. Pass `scope: "descendants"` for the complete owned subtree; at the root this is the global runtime inventory. Its optional `state` array filters conversations with OR semantics: `active` means queued, running, or still stopping; `resumable` means settled with preserved context; and `terminal` means settled without resumable context. Listed conversations expose their state, parent, spawn provenance, depth, and complete run histories, while runs remain parentless episodes. Inspection is pure and bounded; malformed, duplicate, unknown, or unauthorized targets return ordered per-target errors without hiding valid siblings. A running snapshot includes `phase`, requested overrides, effective configuration, recent activity, and steer receipts. Terminal output remains exclusive to `join`.
 
@@ -104,7 +104,7 @@ Only explicitly joined descendants block the caller. Unjoined descendants contin
 
 ![A technical-lead subagent joining two nested investigations with live tool activity](media/recursive-delegation.png)
 
-Cancellation settles a queued or running run as `aborted` and preserves its conversation and exact run record, so the caller can inspect or join the outcome. Queued runs are removed before execution. Once SDK abortion and execution cleanup have both settled, a preserved conversation becomes resumable. Removal collects the requested conversation and all descendants as one subtree. If any member is queued, running, or still stopping, the whole subtree is retained and the active run IDs are reported. Otherwise every conversation and run in the subtree is permanently deleted in child-first order; no reparenting or orphan state exists.
+Cancellation settles queued or running work as `aborted` and preserves the subagent so its owner can inspect or join the outcome. The subagent remains `awaiting_join` until that join succeeds. Removal collects the requested subagent and all descendants as one subtree. If any member is active or still stopping, the whole subtree is retained; otherwise it is permanently deleted child-first.
 
 ## Capacity and concurrency
 
@@ -130,8 +130,8 @@ There is no compatibility layer for the previous lifecycle API.
 | --- | --- |
 | `dispatch` or `run` action | Use `spawn`, `resume`, or `steer`; there is no compatibility alias. |
 | `foreground` / `background` dispatch | Spawn and resume tasks always start asynchronously; use `join` when blocking retrieval is needed. |
-| `results` action | `join` waits for and retrieves an exact run. |
-| `sessionId` | Use `conversationId` for conversation lifecycle and `runId` for exact-run retrieval. |
+| `results` action | Use `join(subagentIds)`. |
+| `sessionId`, `conversationId`, or `runId` | Use the stable `subagentId` for every lifecycle action. |
 | `retainConversation` | Every conversation remains in the runtime until explicit `remove`. |
 | `widgetLayout` | Use `widgetMode`: legacy `columns`/`stacked` becomes `progress`; `auto` becomes the default `summary`. |
 

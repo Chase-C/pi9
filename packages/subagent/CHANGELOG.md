@@ -4,6 +4,16 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Replace public `conversationId` and `runId` targeting with one stable `subagentId` across resume, steer, cancel, inspect, join, and remove.
+- Require the latest outcome to be joined before a subagent can resume; settled unjoined work now reports `awaiting_join`.
+- Restrict join and resume to the root or direct parent that owns the target subagent.
+
+### Changed
+
+- Remove execution IDs from tool responses, notifications, lifecycle events, metadata, and list histories while retaining private execution bookkeeping and the existing identifier vocabularies.
+
 ## [0.9.2] - 2026-07-29
 
 ### Changed

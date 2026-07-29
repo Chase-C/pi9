@@ -523,7 +523,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
 
   private renderPrompt(width: number): string[] { return this.prompt.render(Math.max(8, width)); }
   private canResumeConversation(conversation: ConversationSnapshot): boolean {
-    return conversation.canResume && conversation.runs.at(-1)?.status.kind === "done";
+    return !conversation.parentConversationId && conversation.canResume && conversation.runs.at(-1)?.status.kind === "done";
   }
   private setFocus(region: FocusRegion): void { this.focusRegion = region; this.syncFocus(); this.requestRender(); }
   private syncFocus(): void {
