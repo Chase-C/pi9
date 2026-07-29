@@ -5,8 +5,6 @@ import {
   createCompletionNotificationMessage,
   formatCompletionNotificationMessage,
 } from "../../src/notifications.js";
-import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/settings.js";
-
 const entry = {
   runId: "run-1", conversationId: "conversation-1",
   agent: "helper",
@@ -15,51 +13,48 @@ const entry = {
   elapsedMs: 1_250,
 };
 
-test("background completion factory keeps content and structured details on the same projection", () => {
+test("background completion factory creates compact tagged model content", () => {
   const message = createCompletionNotificationMessage([entry]);
 
   assert.deepEqual(message.details, { completions: [entry] });
-  assert.equal(message.content, formatCompletionNotificationMessage(message.details, true, undefined));
+  assert.equal(message.content, [
+    "<subagent-notification>",
+    '  <run id="run-1" status="completed" agent="helper" label="short task"/>',
+    "</subagent-notification>",
+  ].join("\n"));
+  assert.doesNotMatch(message.content, /conversation-1|1\.3s|subagent join/);
 });
 
-test("terminal notification copy is concise and outcome-oriented", () => {
-  const aborted = { ...entry, status: "aborted" as const };
-  const errored = { ...entry, runId: "run-2", status: "error" as const };
+test("tagged completion content escapes attribute values", () => {
+  const message = createCompletionNotificationMessage([{
+    ...entry,
+    runId: 'run<&"',
+    agent: 'help&"er',
+    label: '<short "task">',
+  }]);
 
-  const single = createCompletionNotificationMessage([aborted]).content;
-  const mixed = createCompletionNotificationMessage([entry, aborted, errored]).content;
-  assert.match(single, /^1 subagent finished:/);
-  assert.match(mixed, /^3 subagents finished:/);
-  assert.doesNotMatch(mixed, /since the last notification|retrieve output/);
-  assert.match(mixed, /Use `subagent join` when you need these terminal outcomes\./);
+  assert.match(message.content, /id="run&lt;&amp;&quot;"/);
+  assert.match(message.content, /agent="help&amp;&quot;er"/);
+  assert.match(message.content, /label="&lt;short &quot;task&quot;&gt;"/);
 });
 
-test("background completion content lists 20 of 21 entries with exact overflow and boundary truncation", () => {
-  const display = {
-    ...DEFAULT_SUBAGENT_SETTINGS.display,
-    toolCallLabelMaxLength: 10,
-  };
+test("model content retains every candidate while the human renderer stays compact", () => {
   const completions = Array.from({ length: 21 }, (_, index) => ({
     runId: `run-${index + 1}`,
     conversationId: `conversation-${index + 1}`,
     agent: "helper",
-    ...(index === 0 ? { label: "abcdefghijk" } : {}),
     status: "completed" as const,
     elapsedMs: 1_250,
   }));
 
-  const message = createCompletionNotificationMessage(completions, display);
-  const lines = message.content.split("\n");
+  const message = createCompletionNotificationMessage(completions);
 
-  assert.equal(message.details.completions.length, 21, "details retain every completion");
-  const entries = lines.filter(line => line.includes("runId "));
-  assert.equal(entries.length, 20, "content lists only 20 entries");
-  assert.match(entries[0], /helper \(abcdefg\.\.\.\).*run-1.*conversation-1$/);
-  assert.match(entries.at(-1)!, /run-20.*conversation-20$/);
-  assert.match(message.content, /1 more/);
-  assert.doesNotMatch(message.content, /run-21/);
+  assert.equal(message.details.completions.length, 21);
+  assert.equal(message.content.match(/<run /g)?.length, 21);
+  assert.match(message.content, /id="run-21"/);
+  assert.doesNotMatch(message.content, /conversation-1|subagent join|finished:/);
 
   const collapsed = formatCompletionNotificationMessage(message.details, false, undefined);
   assert.match(collapsed, /^21 subagents finished/);
-  assert.doesNotMatch(collapsed, /run-1|run-21|Call subagent results/);
+  assert.doesNotMatch(collapsed, /run-1|run-21/);
 });
