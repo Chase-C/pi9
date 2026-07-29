@@ -38,7 +38,8 @@ type StatusInput =
 export interface FakeAgentOptions {
   conversationId?: string;
   runId?: string;
-  parent?: { conversationId: string; runId: string };
+  parentConversationId?: string;
+  spawnedByRunId?: string;
   label?: string;
   prompt?: string;
   createdAt?: number;
@@ -117,13 +118,11 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
   const runs = options.runs ?? [...(options.previousRuns ?? []), run];
   return {
     conversationId: (options.conversationId ?? "c1") as ConversationSnapshot["conversationId"],
-    ...(options.parent
-      ? {
-          parent: {
-            conversationId: options.parent.conversationId as ConversationSnapshot["conversationId"],
-            runId: options.parent.runId as RunSnapshot["runId"],
-          },
-        }
+    ...(options.parentConversationId
+      ? { parentConversationId: options.parentConversationId as ConversationSnapshot["conversationId"] }
+      : {}),
+    ...(options.spawnedByRunId
+      ? { spawnedByRunId: options.spawnedByRunId as RunSnapshot["runId"] }
       : {}),
     label: options.label,
     createdAt: options.createdAt ?? 1,

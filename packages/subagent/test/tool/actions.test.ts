@@ -25,7 +25,6 @@ const snapshot = (status: any = { kind: "running", startedAt: 1 }) => ({
 const deps = (manager: any) => ({
   runtime: {
     inspectRuns: (ids: any[]) => ids.map(target => ({ conversationId, snapshot: { ...snapshot().runs[0], runId: target } })),
-    runLineage: (target: any) => ({ rootRunId: target, depth: 0 }),
     ...manager,
   },
   agentRegistry: { agents: new Map(), summarizeAgent: () => "" },
@@ -311,10 +310,12 @@ test("inspect returns bounded progress without terminal output", () => {
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
     conversation: () => ({
       ...snapshot(),
+      parentConversationId: "quiet-otter",
+      spawnedByRunId: "start-safely",
       requestedOverrides: { model: "requested/model", thinking: "high" },
       effectiveConfig: { model: "effective/model", thinking: "medium", cwd: "/work", skills: ["review"], tools: ["read"] },
     }),
-    runLineage: () => ({ parentRunId: "branch-boldly", rootRunId: "start-safely", depth: 2 }),
+    conversationDepth: () => 2,
   };
   const result = inspectAction(deps(manager), { action: "inspect", runIds: [runId] });
   const response = json(result);
@@ -323,8 +324,8 @@ test("inspect returns bounded progress without terminal output", () => {
 
   assert.equal(entry.status, "running");
   assert.deepEqual(
-    { parentRunId: entry.parentRunId, rootRunId: entry.rootRunId, depth: entry.depth },
-    { parentRunId: "branch-boldly", rootRunId: "start-safely", depth: 2 },
+    { parentConversationId: entry.parentConversationId, spawnedByRunId: entry.spawnedByRunId, depth: entry.depth },
+    { parentConversationId: "quiet-otter", spawnedByRunId: "start-safely", depth: 2 },
   );
   assert.equal(entry.phase, "thinking");
   assert.deepEqual(entry.requestedOverrides, { model: "requested/model", thinking: "high" });
@@ -345,7 +346,6 @@ test("inspect shows requested overrides before effective configuration is availa
     inspectRuns: () => [{ conversationId, snapshot: snapshot().runs[0] }],
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
     conversation: () => ({ ...snapshot(), requestedOverrides: { model: "requested/model", thinking: "high" } }),
-    runLineage: () => ({ rootRunId: runId, depth: 0 }),
   };
 
   const [{ data: entry }] = json(inspectAction(deps(manager), { action: "inspect", runIds: [runId] })).results;
@@ -434,37 +434,39 @@ test("inspect bounds diagnostics for every terminal outcome with an error", () =
 test("list groups by conversation and retains only matching runs", () => {
   let calls = 0;
   const running = snapshot();
-  const completed = snapshot({ kind: "done", outcome: "completed", completedAt: 2 });
+  const completed: any = snapshot({ kind: "done", outcome: "completed", completedAt: 2 });
+  completed.parentConversationId = "quiet-otter" as any;
+  completed.spawnedByRunId = "start-safely" as any;
   completed.runs = [running.runs[0], { ...completed.runs[0], runId: "assemble-abruptly" as any, kind: "resume" }];
   const manager = {
-    listConversations: () => {
+    queryConversations: () => {
       calls++;
       return [completed];
     },
-    runLineage: (target: any) => ({ parentRunId: "branch-boldly", rootRunId: "start-safely", depth: target === runId ? 1 : 2 }),
+    conversationDepth: () => 1,
   };
-  const result = listAction(deps(manager), { action: "list", status: ["completed"] });
+  const result = listAction(deps(manager), { action: "list", scope: "children", status: ["completed"] });
   assert.equal(calls, 1);
   const response = json(result);
   assert.equal(response.action, "list");
   assert.deepEqual(response.results, [{
     conversationId,
+    parentConversationId: "quiet-otter",
+    spawnedByRunId: "start-safely",
     agent: "helper",
     createdAt: 1,
     canResume: false,
+    depth: 1,
     runs: [{
       runId: "assemble-abruptly",
       kind: "resume",
       status: "completed",
       createdAt: 1,
-      parentRunId: "branch-boldly",
-      rootRunId: "start-safely",
-      depth: 2,
     }],
   }]);
   assert.doesNotMatch(result.content[0].text, /output/);
 
-  const empty = listAction(deps(manager), { action: "list", status: ["error"] });
+  const empty = listAction(deps(manager), { action: "list", scope: "children", status: ["error"] });
   assert.deepEqual(json(empty), { action: "list", results: [] });
   assert.equal(calls, 2);
 });

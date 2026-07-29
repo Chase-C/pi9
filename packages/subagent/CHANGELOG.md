@@ -4,6 +4,15 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Make conversations the stable recursive ownership tree, with immutable `parentConversationId` and `spawnedByRunId`; runs are now parentless execution episodes.
+- Default `list` to immediate child conversations and add `scope: "descendants"` for the caller's complete owned subtree.
+- Apply conversation-descendant authorization uniformly to resume, inspect, steer, cancel, join, and remove.
+- Remove terminal conversations as complete child-first subtrees, rejecting the entire removal when any descendant remains active.
+- Remove run-lineage fields and all descendant reparenting behavior.
+- Tighten the tool prompt and remove redundant schema string-length constraints while retaining parser-level validation.
+
 ## [0.9.0] - 2026-07-29
 
 ### Added

@@ -3,14 +3,9 @@ import { filterAgents, projectConversations } from "../../src/command/overlay-mo
 import { fakeAgent } from "../helpers/fake-agent.js";
 
 describe("conversation projection", () => {
-  it("keeps descendants whose parent was removed", () => {
-    const child = fakeAgent({ conversationId: "child", parent: { conversationId: "removed", runId: "removed-run" } });
-    expect(projectConversations([child])).toEqual([{ conversation: child, depth: 0 }]);
-  });
-
   it("includes ancestors as context when a descendant matches", () => {
     const parent = fakeAgent({ conversationId: "parent", prompt: "parent task" });
-    const child = fakeAgent({ conversationId: "child", parent: { conversationId: "parent", runId: "parent-run" }, prompt: "needle task" });
+    const child = fakeAgent({ conversationId: "child", parentConversationId: "parent", spawnedByRunId: "parent-run", prompt: "needle task" });
 
     const rows = projectConversations([parent, child], { mode: "tree", query: "needle" });
 
@@ -22,9 +17,9 @@ describe("conversation projection", () => {
 
   it("projects classic connectors and continuous ancestor rails", () => {
     const root = fakeAgent({ conversationId: "root", createdAt: 1 });
-    const branchA = fakeAgent({ conversationId: "branch-a", createdAt: 3, parent: { conversationId: "root", runId: "root-run" } });
-    const leafA = fakeAgent({ conversationId: "leaf-a", createdAt: 4, parent: { conversationId: "branch-a", runId: "branch-run" } });
-    const branchB = fakeAgent({ conversationId: "branch-b", createdAt: 2, parent: { conversationId: "root", runId: "root-run" } });
+    const branchA = fakeAgent({ conversationId: "branch-a", createdAt: 3, parentConversationId: "root", spawnedByRunId: "root-run" });
+    const leafA = fakeAgent({ conversationId: "leaf-a", createdAt: 4, parentConversationId: "branch-a", spawnedByRunId: "branch-run" });
+    const branchB = fakeAgent({ conversationId: "branch-b", createdAt: 2, parentConversationId: "root", spawnedByRunId: "root-run" });
 
     const rows = projectConversations([root, branchA, leafA, branchB]);
 
@@ -38,8 +33,8 @@ describe("conversation projection", () => {
 
   it("sorts roots and siblings newest first while preserving tree shape", () => {
     const olderRoot = fakeAgent({ conversationId: "older-root", createdAt: 1 });
-    const olderChild = fakeAgent({ conversationId: "older-child", createdAt: 2, parent: { conversationId: "older-root", runId: "root-run" } });
-    const newerChild = fakeAgent({ conversationId: "newer-child", createdAt: 3, parent: { conversationId: "older-root", runId: "root-run" } });
+    const olderChild = fakeAgent({ conversationId: "older-child", createdAt: 2, parentConversationId: "older-root", spawnedByRunId: "root-run" });
+    const newerChild = fakeAgent({ conversationId: "newer-child", createdAt: 3, parentConversationId: "older-root", spawnedByRunId: "root-run" });
     const newerRoot = fakeAgent({ conversationId: "newer-root", createdAt: 4 });
 
     expect(projectConversations([olderRoot, olderChild, newerChild, newerRoot]).map(row => row.conversation.conversationId)).toEqual([

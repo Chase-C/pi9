@@ -34,13 +34,8 @@ export type ConversationUpdateKind =
   | "observer"
   | "nestedJoin"
   | "steer"
-  | "phase";
-
-/** The exact parent run that spawned a child conversation. */
-export interface ParentRun {
-  readonly conversationId: ConversationId;
-  readonly runId: RunId;
-}
+  | "phase"
+  | "removed";
 
 export type SteerState = "queued" | "delivered" | "processed" | "discarded";
 export interface SteerReceipt {
@@ -100,7 +95,8 @@ export interface RunSnapshot {
 }
 export interface ConversationSnapshot {
   readonly conversationId: ConversationId;
-  readonly parent?: ParentRun;
+  readonly parentConversationId?: ConversationId;
+  readonly spawnedByRunId?: RunId;
   readonly label?: string;
   readonly createdAt: number;
   readonly config: AgentViewConfig;
@@ -230,7 +226,8 @@ export interface RunBinding { readonly runId: RunId; snapshot(): RunSnapshot; ac
 export class Conversation {
   readonly createdAt = Date.now();
   readonly agentName: string;
-  parent?: ParentRun;
+  readonly parentConversationId?: ConversationId;
+  readonly spawnedByRunId?: RunId;
   readonly requestedConfig: AgentRequestedConfig;
   readonly requestedOverrides?: ConversationRequestedOverrides;
   readonly label?: string;
@@ -248,11 +245,12 @@ export class Conversation {
     readonly config: AgentConfig,
     spawn: SpawnRequest,
     readonly listener: ConversationUpdateListener,
-    options: { parent?: ParentRun } = {},
+    options: { parentConversationId?: ConversationId; spawnedByRunId?: RunId } = {},
   ) {
     this.agentName = spawn.agent;
     this.label = spawn.label;
-    this.parent = options.parent;
+    this.parentConversationId = options.parentConversationId;
+    this.spawnedByRunId = options.spawnedByRunId;
     this.requestedConfig = resolveRequestedConfig(config, spawn);
     if (spawn.model !== undefined || spawn.thinking !== undefined) {
       this.requestedOverrides = Object.freeze({
@@ -303,7 +301,6 @@ export class Conversation {
   }
   sessionForResume(): AgentSession | undefined { return this.session; }
   get isStopping(): boolean { return this.stopping !== undefined; }
-  reparent(parent?: ParentRun): void { this.parent = parent; }
   executionSettled(runId: RunId): void {
     if (this.stopping?.runId !== runId) return;
     this.stopping.executionSettled = true;
@@ -402,7 +399,8 @@ export class Conversation {
     const runs = this.runHistory;
     return Object.freeze({
       conversationId: this.conversationId,
-      ...(this.parent ? { parent: this.parent } : {}),
+      ...(this.parentConversationId ? { parentConversationId: this.parentConversationId } : {}),
+      ...(this.spawnedByRunId ? { spawnedByRunId: this.spawnedByRunId } : {}),
       ...(this.label ? { label: this.label } : {}),
       createdAt: this.createdAt,
       config: { name: this.agentName, description: this.config.description, source: this.config.source, sourcePath: this.config.sourcePath, model: this.requestedConfig.model, thinking: this.requestedConfig.thinking, tools: this.requestedConfig.tools, ...(this.requestedConfig.skills !== undefined ? { skills: this.requestedConfig.skills } : {}) },

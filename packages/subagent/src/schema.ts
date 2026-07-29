@@ -6,36 +6,34 @@ import { isRunId, type RunId } from "./identifiers.js";
 
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 
-const NonBlankString = () => Type.String({ minLength: 1 });
-
 export const SpawnTaskSchema = Type.Object({
-  agent: NonBlankString(),
-  prompt: NonBlankString(),
-  label: Type.Optional(NonBlankString()),
-  skills: Type.Optional(Type.Array(NonBlankString())),
-  model: Type.Optional(NonBlankString()),
+  agent: Type.String(),
+  prompt: Type.String(),
+  label: Type.Optional(Type.String()),
+  skills: Type.Optional(Type.Array(Type.String())),
+  model: Type.Optional(Type.String()),
   thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
-  cwd: Type.Optional(NonBlankString()),
+  cwd: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 export const ResumeTaskSchema = Type.Object({
-  conversationId: NonBlankString(),
-  prompt: NonBlankString(),
+  conversationId: Type.String(),
+  prompt: Type.String(),
 }, { additionalProperties: false });
 
 export const SteerMessageSchema = Type.Object({
-  runId: NonBlankString(),
-  message: NonBlankString(),
+  runId: Type.String(),
+  message: Type.String(),
 }, { additionalProperties: false });
 
 export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
-export const RUN_STATUSES = [
-  "queued", "running", "completed", "error", "aborted", "interrupted", "skipped",
-] as const;
+export const RUN_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
+export const LIST_SCOPES = ["children", "descendants"] as const;
 
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
   status: Type.Optional(Type.Array(StringEnum(RUN_STATUSES), { minItems: 1 })),
+  scope: Type.Optional(StringEnum(LIST_SCOPES)),
   spawns: Type.Optional(Type.Array(SpawnTaskSchema, { minItems: 1 })),
   resumes: Type.Optional(Type.Array(ResumeTaskSchema, { minItems: 1 })),
   messages: Type.Optional(Type.Array(SteerMessageSchema, { minItems: 1 })),
@@ -46,6 +44,7 @@ export const SubagentParams = Type.Object({
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 export type RunStatus = (typeof RUN_STATUSES)[number];
+export type ListScope = (typeof LIST_SCOPES)[number];
 
 export const isRunStatus = (value: unknown): value is RunStatus =>
   typeof value === "string" && (RUN_STATUSES as readonly string[]).includes(value);
@@ -87,7 +86,7 @@ export type ParsedSteerRequest = SteerRequest | { error: string; runId?: string 
 
 export type SubagentInvocation =
   | { action: "agents" }
-  | { action: "list"; status?: RunStatus[] }
+  | { action: "list"; scope: ListScope; status?: RunStatus[] }
   | { action: "spawn"; spawns: ParsedSpawnRequest[] }
   | { action: "resume"; resumes: ParsedResumeRequest[] }
   | { action: "steer"; messages: ParsedSteerRequest[] }
@@ -113,7 +112,7 @@ export interface ParseSubagentInvocationOptions {
 
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
-  list: ["action", "status"],
+  list: ["action", "scope", "status"],
   spawn: ["action", "spawns"],
   resume: ["action", "resumes"],
   steer: ["action", "messages"],
@@ -160,6 +159,9 @@ export function parseSubagentInvocation(
   switch (parsedAction) {
     case "agents": return { action: parsedAction };
     case "list": {
+      if (params.scope !== undefined && !LIST_SCOPES.includes(params.scope as ListScope)) {
+        return { error: "list scope must be children or descendants.", action: parsedAction };
+      }
       const invalidStatus = params.status !== undefined && (
         !Array.isArray(params.status)
         || params.status.length === 0
@@ -174,6 +176,7 @@ export function parseSubagentInvocation(
 
       return {
         action: parsedAction,
+        scope: (params.scope as ListScope | undefined) ?? "children",
         ...(params.status ? { status: params.status as RunStatus[] } : {}),
       };
     }

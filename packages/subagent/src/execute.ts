@@ -95,7 +95,7 @@ export async function executeRun(
 
   if (signal?.aborted) return skippedRun(agent, run.runId);
 
-  const runData = { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId };
+  const runData = { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId, spawnedByRunId: agent.spawnedByRunId };
   const requestedConfig = agent.requestedConfig;
   const cwdResolution = resolveTaskCwd(ctx.cwd, requestedConfig.cwd);
   if (!cwdResolution.ok) return errorRun(agent, run.runId, cwdResolution.error);

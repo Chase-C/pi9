@@ -34,9 +34,233 @@ const runner = async (_ctx: any, agent: any, attempt: any) => {
   agent.bindSession(session());
   return completedRun(agent, attempt.runId, attempt.prompt);
 };
-const parent = (conversationId: any, runId: any) => ({ parent: { conversationId, runId } });
+const parent = (conversationId: any, runId: any) => ({ caller: { conversationId, runId } });
+const caller = (conversationId: any, runId: any) => ({ caller: { conversationId, runId } });
 const output = (entry: any) =>
   entry.status.kind === "done" ? entry.status.output : undefined;
+
+test("spawn records stable conversation ownership and exact run provenance", async () => {
+  const manager = new SubagentRuntime(registry, 2, runner);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(owner.conversationId, owner.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+
+  expect(manager.conversation(child.conversationId)).toMatchObject({
+    parentConversationId: owner.conversationId,
+    spawnedByRunId: owner.runId,
+  });
+});
+
+test("resume preserves conversation ownership and spawn provenance", async () => {
+  const manager = new SubagentRuntime(registry, 2, runner);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(owner.conversationId, owner.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+
+  const resumed = manager.startRun(ctx, [{ kind: "resume", conversationId: child.conversationId, prompt: "again" }] as any);
+  await resumed.completion;
+
+  expect(manager.conversation(child.conversationId)).toMatchObject({
+    parentConversationId: owner.conversationId,
+    spawnedByRunId: owner.runId,
+  });
+});
+
+test("conversation listing defaults to children and expands to descendants", async () => {
+  const manager = new SubagentRuntime(registry, 3, runner);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand" }] as any,
+    caller(child.conversationId, child.runId));
+  await grandStart.completion;
+
+  const grand = grandStart.starts[0] as any;
+  expect(manager.queryConversations().map(item => item.conversationId)).toEqual([root.conversationId]);
+  expect(manager.queryConversations(undefined, "descendants").map(item => item.conversationId)).toEqual([
+    root.conversationId,
+    child.conversationId,
+    grand.conversationId,
+  ]);
+  expect(manager.queryConversations(root.conversationId).map(item => item.conversationId)).toEqual([child.conversationId]);
+  expect(manager.queryConversations(root.conversationId, "descendants").map(item => item.conversationId)).toEqual([
+    child.conversationId,
+    grand.conversationId,
+  ]);
+});
+
+test("conversation authorization survives resume and rejects unrelated conversations", async () => {
+  const manager = new SubagentRuntime(registry, 4, runner);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(owner.conversationId, owner.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const unrelatedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated" }] as any);
+  await unrelatedStart.completion;
+  const unrelated = unrelatedStart.starts[0] as any;
+  const resumed = manager.startRun(ctx, [{ kind: "resume", conversationId: owner.conversationId, prompt: "again" }] as any);
+  await resumed.completion;
+  const resumedOwner = { conversationId: owner.conversationId, runId: (resumed.starts[0] as any).runId };
+
+  expect(manager.inspectRuns([child.runId], resumedOwner)[0].snapshot.runId).toBe(child.runId);
+  expect(() => manager.inspectRuns([unrelated.runId], resumedOwner)).toThrow(
+    `Conversation ${unrelated.conversationId} is not a descendant of caller conversation ${owner.conversationId}.`,
+  );
+});
+
+test("removing a conversation deletes its complete terminal subtree", async () => {
+  const manager = new SubagentRuntime(registry, 3, runner);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand" }] as any,
+    caller(child.conversationId, child.runId));
+  await grandStart.completion;
+  const grand = grandStart.starts[0] as any;
+
+  await expect(manager.removeConversation(child.conversationId)).resolves.toEqual({
+    removed: 2,
+    conversationIds: [grand.conversationId, child.conversationId],
+    errors: [],
+  });
+  expect(() => manager.conversation(child.conversationId)).toThrow(`Unknown conversation: ${child.conversationId}.`);
+  expect(() => manager.conversation(grand.conversationId)).toThrow(`Unknown conversation: ${grand.conversationId}.`);
+  expect(manager.conversation(root.conversationId).conversationId).toBe(root.conversationId);
+});
+
+test("removal completes before notifying listeners and isolates listener failures", async () => {
+  const manager = new SubagentRuntime(registry, 3, runner);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand" }] as any,
+    caller(child.conversationId, child.runId));
+  await grandStart.completion;
+  const grand = grandStart.starts[0] as any;
+  const updates: string[] = [];
+
+  manager.onConversationUpdate(() => { throw new Error("listener failed"); });
+  manager.onConversationUpdate((conversation, kind) => {
+    expect(manager.listConversations()).toEqual([]);
+    updates.push(`${conversation.conversationId}:${kind}`);
+  });
+
+  await expect(manager.removeConversation(root.conversationId)).resolves.toEqual({
+    removed: 3,
+    conversationIds: [grand.conversationId, child.conversationId, root.conversationId],
+    errors: [],
+  });
+  expect(updates).toEqual([
+    `${grand.conversationId}:removed`,
+    `${child.conversationId}:removed`,
+    `${root.conversationId}:removed`,
+  ]);
+  for (const identity of [root, child, grand]) {
+    expect(() => manager.conversation(identity.conversationId)).toThrow(`Unknown conversation: ${identity.conversationId}.`);
+    expect(() => manager.runSnapshot(identity.runId)).toThrow(`Unknown run: ${identity.runId}.`);
+  }
+});
+
+test("removal rejects an entire subtree when a descendant is active", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(session());
+    if (attempt.prompt === "child") await gate;
+    return completedRun(agent, attempt.runId, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 2, controlled);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(root.conversationId, root.runId));
+  const child = childStart.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  const result = await manager.removeConversation(root.conversationId);
+  expect(result).toMatchObject({ removed: 0, conversationIds: [] });
+  expect(result.errors[0].error).toContain(child.runId);
+  expect(manager.conversation(root.conversationId).conversationId).toBe(root.conversationId);
+  expect(manager.conversation(child.conversationId).conversationId).toBe(child.conversationId);
+
+  release();
+  await childStart.completion;
+});
+
+test("overlapping removal targets collapse into one subtree operation", async () => {
+  const manager = new SubagentRuntime(registry, 2, runner);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
+    caller(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+
+  await expect(manager.removeConversations([root.conversationId, child.conversationId])).resolves.toEqual({
+    removed: 2,
+    conversationIds: [child.conversationId, root.conversationId],
+    errors: [],
+  });
+});
+
+test("child callers cannot resume or remove conversations outside their subtree", async () => {
+  const manager = new SubagentRuntime(registry, 3, runner);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  const unrelatedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated" }] as any);
+  await Promise.all([ownerStart.completion, unrelatedStart.completion]);
+  const owner = ownerStart.starts[0] as any;
+  const unrelated = unrelatedStart.starts[0] as any;
+  const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
+
+  expect(manager.startRun(ctx, [{ kind: "resume", conversationId: unrelated.conversationId, prompt: "again" }] as any,
+    { caller: ownerCaller }).starts[0]).toMatchObject({
+      ok: false,
+      error: `Conversation ${unrelated.conversationId} is not a descendant of caller conversation ${owner.conversationId}.`,
+    });
+  await expect(manager.removeConversation(unrelated.conversationId, ownerCaller)).resolves.toMatchObject({
+    removed: 0,
+    errors: [{ conversationId: unrelated.conversationId }],
+  });
+});
+
+test("spawning rejects a caller whose run does not belong to its conversation", () => {
+  const manager = new SubagentRuntime(registry, 1, runner);
+  const result = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work" }] as any, {
+    caller: { conversationId: "amber-acorn" as any, runId: "adapt-ably" as any },
+  });
+
+  expect(result.starts[0]).toEqual({
+    ok: false,
+    inputIndex: 0,
+    error: "Unknown start caller run: adapt-ably.",
+  });
+});
 
 test("ordered starts reserve capacity and resumes work at capacity", async () => {
   const manager = new SubagentRuntime(registry, 2, runner, 1);
@@ -320,7 +544,7 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
   await replacement.completion;
 });
 
-test("bound joins cannot publish conversation updates after removal", async () => {
+test("removal publishes once while stale join bindings remain silent", async () => {
   const manager = new SubagentRuntime(registry, 1, runner);
   const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "done" }] as any);
   await start.completion;
@@ -334,7 +558,7 @@ test("bound joins cannot publish conversation updates after removal", async () =
   binding.acknowledge();
   binding.release();
 
-  expect(updates).toEqual([]);
+  expect(updates).toEqual([`${identity.conversationId}:removed`]);
   unsubscribe();
 });
 
@@ -356,7 +580,7 @@ test("removal rejects active conversations without changing their runs", async (
     conversationIds: [],
     errors: [{
       conversationId: active.conversationId,
-      error: `Conversation ${active.conversationId} has active run ${active.runId}. Cancel and join it before removal.`,
+      error: `Conversation subtree ${active.conversationId} has active runs: ${active.runId}. Cancel and join them before removal.`,
     }],
   });
   expect(manager.conversation(active.conversationId).runs[0].status.kind).toBe("running");
@@ -364,115 +588,6 @@ test("removal rejects active conversations without changing their runs", async (
 
   release();
   await start.completion;
-});
-
-test("removing an intermediate conversation reparents descendant ownership", async () => {
-  const releases = new Map<string, () => void>();
-  const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
-    if (attempt.prompt !== "child") await new Promise<void>(done => releases.set(attempt.prompt, done));
-    return completedRun(agent, attempt.runId, attempt.prompt);
-  };
-  const manager = new SubagentRuntime(registry, 3, controlled);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
-  const owner = ownerStart.starts[0] as any;
-  await new Promise(done => setImmediate(done));
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
-    parent(owner.conversationId, owner.runId));
-  await childStart.completion;
-  const child = childStart.starts[0] as any;
-  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand" }] as any,
-    parent(child.conversationId, child.runId));
-  const grand = grandStart.starts[0] as any;
-  await new Promise(done => setImmediate(done));
-
-  await manager.removeConversation(child.conversationId);
-  const caller = { conversationId: owner.conversationId, runId: owner.runId };
-  let inspected: any;
-  let nested: any;
-  let accessError: unknown;
-  try {
-    inspected = manager.inspectRuns([grand.runId], caller)[0];
-    await manager.steerRun(grand.runId, "redirect", caller);
-    nested = manager.bindNestedJoin(caller, [grand.runId]);
-    await manager.cancelRun(grand.runId, caller);
-    await nested.completion;
-  } catch (error) {
-    accessError = error;
-  } finally {
-    nested?.release();
-    releases.get("grand")!();
-    releases.get("owner")!();
-    await Promise.all([grandStart.completion, ownerStart.completion]);
-  }
-
-  if (accessError) throw accessError;
-  expect(inspected.snapshot.runId).toBe(grand.runId);
-  expect(manager.runLineage(grand.runId)).toEqual({ parentRunId: owner.runId, rootRunId: owner.runId, depth: 1 });
-  expect(manager.conversation(grand.conversationId).parent).toEqual({ conversationId: owner.conversationId, runId: owner.runId });
-  expect(() => manager.runSnapshot(child.runId)).toThrow(`Unknown run: ${child.runId}.`);
-});
-
-test("ownership contraction crosses multiple removed levels in either order", async () => {
-  for (const order of [["first", "second"], ["second", "first"]] as const) {
-    const releases = new Map<string, () => void>();
-    const controlled = async (_ctx: any, agent: any, attempt: any) => {
-      agent.bindSession(session());
-      if (attempt.prompt === "owner" || attempt.prompt === "leaf") await new Promise<void>(done => releases.set(attempt.prompt, done));
-      return completedRun(agent, attempt.runId, attempt.prompt);
-    };
-    const manager = new SubagentRuntime(registry, 4, controlled);
-    const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
-    const owner = ownerStart.starts[0] as any;
-    await new Promise(done => setImmediate(done));
-    const firstStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "first" }] as any,
-      parent(owner.conversationId, owner.runId));
-    await firstStart.completion;
-    const first = firstStart.starts[0] as any;
-    const secondStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "second" }] as any,
-      parent(first.conversationId, first.runId));
-    await secondStart.completion;
-    const second = secondStart.starts[0] as any;
-    const leafStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "leaf" }] as any,
-      parent(second.conversationId, second.runId));
-    const leaf = leafStart.starts[0] as any;
-    await new Promise(done => setImmediate(done));
-
-    const identities = { first, second };
-    for (const name of order) await manager.removeConversation(identities[name].conversationId);
-    const inspected = manager.inspectRuns([leaf.runId], { conversationId: owner.conversationId, runId: owner.runId });
-    expect(inspected[0].snapshot.runId).toBe(leaf.runId);
-    expect(manager.conversation(leaf.conversationId).parent).toEqual({ conversationId: owner.conversationId, runId: owner.runId });
-
-    releases.get("leaf")!();
-    releases.get("owner")!();
-    await Promise.all([leafStart.completion, ownerStart.completion]);
-  }
-});
-
-test("removing a root makes surviving children operational roots", async () => {
-  let releaseChild!: () => void;
-  const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
-    if (attempt.prompt === "child") await new Promise<void>(done => { releaseChild = done; });
-    return completedRun(agent, attempt.runId, attempt.prompt);
-  };
-  const manager = new SubagentRuntime(registry, 2, controlled);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
-  await rootStart.completion;
-  const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
-    parent(root.conversationId, root.runId));
-  const child = childStart.starts[0] as any;
-  await new Promise(done => setImmediate(done));
-
-  await manager.removeConversation(root.conversationId);
-  expect(manager.directSpawnedChildren(root.runId)).toEqual([]);
-  expect(manager.conversation(child.conversationId).parent).toBeUndefined();
-  expect(manager.inspectRuns([child.runId])[0].snapshot.runId).toBe(child.runId);
-
-  releaseChild();
-  await childStart.completion;
 });
 
 test("batch removal isolates terminal, active, and unknown conversations", async () => {
@@ -497,7 +612,7 @@ test("batch removal isolates terminal, active, and unknown conversations", async
     errors: [
       {
         conversationId: active.conversationId,
-        error: `Conversation ${active.conversationId} has active run ${active.runId}. Cancel and join it before removal.`,
+        error: `Conversation subtree ${active.conversationId} has active runs: ${active.runId}. Cancel and join them before removal.`,
       },
       { conversationId: "amber-acorn", error: "Unknown conversation: amber-acorn." },
     ],
@@ -633,58 +748,6 @@ test("removed conversation runs cannot be joined", async () => {
   expect(() => manager.runSnapshot(grand.runId)).toThrow(`Unknown run: ${grand.runId}.`);
 });
 
-test("run lineage identifies recursive parents, roots, and depth", async () => {
-  const manager = new SubagentRuntime(registry, 3, runner);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root" }] as any);
-  await rootStart.completion;
-  const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child" }] as any,
-    parent(root.conversationId, root.runId));
-  await childStart.completion;
-  const child = childStart.starts[0] as any;
-  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand" }] as any,
-    parent(child.conversationId, child.runId));
-  await grandStart.completion;
-  const grand = grandStart.starts[0] as any;
-
-  const resumeStart = manager.startRun(ctx, [{ kind: "resume", conversationId: root.conversationId, prompt: "resume" }] as any);
-  await resumeStart.completion;
-  const resumed = resumeStart.starts[0] as any;
-
-  expect(manager.runLineage(root.runId)).toEqual({ rootRunId: root.runId, depth: 0 });
-  expect(manager.runLineage(child.runId)).toEqual({ parentRunId: root.runId, rootRunId: root.runId, depth: 1 });
-  expect(manager.runLineage(grand.runId)).toEqual({ parentRunId: child.runId, rootRunId: root.runId, depth: 2 });
-  expect(manager.runLineage(resumed.runId)).toEqual({ rootRunId: resumed.runId, depth: 0 });
-});
-
-test("removing a conversation reparents children from each parent run independently", async () => {
-  const manager = new SubagentRuntime(registry, 4, runner);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
-  await ownerStart.completion;
-  const owner = ownerStart.starts[0] as any;
-  const nestedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "nested" }] as any,
-    parent(owner.conversationId, owner.runId));
-  await nestedStart.completion;
-  const nested = nestedStart.starts[0] as any;
-  const resumedStart = manager.startRun(ctx, [{ kind: "resume", conversationId: nested.conversationId, prompt: "resume" }] as any);
-  await resumedStart.completion;
-  const resumed = resumedStart.starts[0] as any;
-  const initialChildStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "initial-child" }] as any,
-    parent(nested.conversationId, nested.runId));
-  const resumedChildStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "resumed-child" }] as any,
-    parent(nested.conversationId, resumed.runId));
-  await Promise.all([initialChildStart.completion, resumedChildStart.completion]);
-  const initialChild = initialChildStart.starts[0] as any;
-  const resumedChild = resumedChildStart.starts[0] as any;
-
-  await manager.removeConversation(nested.conversationId);
-
-  expect(manager.runLineage(initialChild.runId)).toEqual({ parentRunId: owner.runId, rootRunId: owner.runId, depth: 1 });
-  expect(manager.conversation(initialChild.conversationId).parent).toEqual({ conversationId: owner.conversationId, runId: owner.runId });
-  expect(manager.runLineage(resumedChild.runId)).toEqual({ rootRunId: resumedChild.runId, depth: 0 });
-  expect(manager.conversation(resumedChild.conversationId).parent).toBeUndefined();
-});
-
 test("exact join does not bind an unrequested descendant", async () => {
   let releaseRoot!: () => void;
   const rootGate = new Promise<void>(done => { releaseRoot = done; });
@@ -720,7 +783,7 @@ test("exact join does not bind an unrequested descendant", async () => {
   join.release();
 });
 
-test("children of a resumed run do not attach to an older run join", async () => {
+test("an exact join stays bound to the older run after resume and child spawn", async () => {
   const manager = new SubagentRuntime(registry, 4, runner);
   const firstStart = manager.startRun(ctx, [{
     kind: "spawn",
@@ -976,58 +1039,4 @@ test("nested joins validate descendants and preserve ordered attempts without ta
     .toThrow("not a descendant");
   expect(manager.runSnapshot(owner.runId).nestedJoins?.[1]).toMatchObject({ state: "failed" });
   expect(manager.runSnapshot(owner.runId).observerCount).toBe(0);
-});
-
-test("nested completion tolerates a deleted owner", async () => {
-  let finishTarget!: () => void;
-  const targetGate = new Promise<void>(resolve => { finishTarget = resolve; });
-  const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
-    if (attempt.prompt === "target") await targetGate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
-  };
-  const manager = new SubagentRuntime(registry, 2, controlled);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
-  await ownerStart.completion;
-  const owner = ownerStart.starts[0] as any;
-  const targetStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "target" }] as any,
-    parent(owner.conversationId, owner.runId));
-  const target = targetStart.starts[0] as any;
-  await new Promise(resolve => setImmediate(resolve));
-  const binding = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [target.runId]);
-
-  await manager.removeConversation(owner.conversationId);
-  expect(() => manager.runSnapshot(owner.runId)).toThrow(`Unknown run: ${owner.runId}.`);
-  finishTarget();
-  await Promise.all([targetStart.completion, binding.completion]);
-  expect(binding.project()[0].status).toMatchObject({ kind: "done", outcome: "completed" });
-  expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(1);
-  binding.release();
-  expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(0);
-});
-
-test("nested interruption tolerates a deleted owner", async () => {
-  let finishTarget!: () => void;
-  const targetGate = new Promise<void>(resolve => { finishTarget = resolve; });
-  const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
-    if (attempt.prompt === "target") await targetGate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
-  };
-  const manager = new SubagentRuntime(registry, 2, controlled);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
-  await ownerStart.completion;
-  const owner = ownerStart.starts[0] as any;
-  const targetStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "target" }] as any,
-    parent(owner.conversationId, owner.runId));
-  const target = targetStart.starts[0] as any;
-  await new Promise(resolve => setImmediate(resolve));
-  const binding = manager.bindNestedJoin({ conversationId: owner.conversationId, runId: owner.runId }, [target.runId]);
-
-  await manager.removeConversation(owner.conversationId);
-  expect(() => binding.interrupt("caller cancelled")).not.toThrow();
-  expect(manager.conversation(target.conversationId).runs[0].observerCount).toBe(0);
-  finishTarget();
-  await targetStart.completion;
-  expect(() => manager.runSnapshot(owner.runId)).toThrow(`Unknown run: ${owner.runId}.`);
 });

@@ -25,12 +25,12 @@ export function projectConversations(
   const allById = new Map(conversations.map(conversation => [conversation.conversationId, conversation]));
   const includedIds = new Set(directMatches.map(conversation => conversation.conversationId));
   for (const match of directMatches) {
-    let parentId = match.parent?.conversationId;
+    let parentId = match.parentConversationId;
     while (parentId) {
       const parent = allById.get(parentId);
       if (!parent || includedIds.has(parent.conversationId)) break;
       includedIds.add(parent.conversationId);
-      parentId = parent.parent?.conversationId;
+      parentId = parent.parentConversationId;
     }
   }
 
@@ -39,7 +39,7 @@ export function projectConversations(
   const byId = new Map(included.map(conversation => [conversation.conversationId, conversation]));
   const children = new Map<string, ConversationSnapshot[]>();
   for (const conversation of included) {
-    const parentId = conversation.parent?.conversationId;
+    const parentId = conversation.parentConversationId;
     if (!parentId || !byId.has(parentId)) continue;
     const siblings = children.get(parentId) ?? [];
     siblings.push(conversation);
@@ -48,7 +48,6 @@ export function projectConversations(
 
   for (const siblings of children.values()) siblings.sort(newestFirst);
 
-  const nested = new Set([...children.values()].flat().map(conversation => conversation.conversationId));
   const rows: ConversationRow[] = [];
   const seen = new Set<string>();
   const visit = (conversation: ConversationSnapshot, depth: number, ancestorLast: readonly boolean[] = [], isLast = true) => {
@@ -68,8 +67,7 @@ export function projectConversations(
     const childAncestors = depth ? [...ancestorLast, isLast] : [];
     descendants.forEach((child, index) => visit(child, depth + 1, childAncestors, index === descendants.length - 1));
   };
-  for (const conversation of included.filter(conversation => !nested.has(conversation.conversationId)).sort(newestFirst)) visit(conversation, 0);
-  for (const conversation of included.filter(conversation => !seen.has(conversation.conversationId)).sort(newestFirst)) visit(conversation, 0);
+  for (const conversation of included.filter(conversation => !conversation.parentConversationId).sort(newestFirst)) visit(conversation, 0);
   return rows;
 }
 
@@ -99,8 +97,8 @@ function conversationMatches(conversation: ConversationSnapshot, query: string):
     conversation.config.source,
     conversation.config.model,
     conversation.config.thinking,
-    conversation.parent?.conversationId,
-    conversation.parent?.runId,
+    conversation.parentConversationId,
+    conversation.spawnedByRunId,
     conversation.effectiveConfig?.model,
     conversation.effectiveConfig?.thinking,
     conversation.effectiveConfig?.cwd,

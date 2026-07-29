@@ -171,7 +171,7 @@ export function registerSubagentWidgetLifecycle(
   const refresh = () => { if (activeContext) updateSubagentWidget(activeContext, source.listConversations(), getSettings()); };
   const onConversationUpdate = (_conversation: unknown, kind?: ConversationUpdateKind) => {
     if (!activeContext) return;
-    if (kind === "status" || kind === undefined) {
+    if (kind === "status" || kind === "removed" || kind === undefined) {
       clearPendingRefresh();
       refresh();
       return;

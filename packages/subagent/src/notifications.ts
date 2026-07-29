@@ -245,7 +245,7 @@ export class CompletionNotifier {
       }
     }
     // A short grace window lets inspect, cancel, or join claim a run before completion delivery.
-    if (kind === "status" || kind === "observer" || kind === "acknowledgement") this.arm(0);
+    if (kind === "status" || kind === "observer" || kind === "acknowledgement" || kind === "removed") this.arm(0);
   };
   private opportunity(ctx?: NotifierContext): void { if (ctx) this.ctx = ctx; this.flush(); }
   private onToolStart(event: unknown, ctx?: NotifierContext): void {

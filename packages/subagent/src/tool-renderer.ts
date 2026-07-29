@@ -32,9 +32,6 @@ export interface DispatchTaskRenderItem {
 
 export interface ListedRunRenderItem {
   runId: RunId;
-  parentRunId?: RunId;
-  rootRunId: RunId;
-  depth: number;
   kind: RunKind;
   status: RunStatus;
   createdAt: number;
@@ -42,6 +39,9 @@ export interface ListedRunRenderItem {
 
 export interface ListedConversationRenderItem {
   conversationId: ConversationId;
+  parentConversationId?: ConversationId;
+  spawnedByRunId?: RunId;
+  depth: number;
   agent: string;
   label?: string;
   createdAt: number;
@@ -71,9 +71,9 @@ export interface InspectedRunErrorRenderItem {
 export interface InspectedRunRenderItem {
   conversationId: ConversationId;
   runId: RunId;
-  parentRunId?: RunId;
-  rootRunId: RunId;
-  depth: number;
+  parentConversationId?: ConversationId;
+  spawnedByRunId?: RunId;
+  depth?: number;
   requestedOverrides?: ConversationRequestedOverrides;
   effectiveConfig?: ConversationEffectiveConfig;
   agent?: string;
@@ -280,11 +280,11 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
       if (details.conversations.length === 0) return [success(theme, "No conversations found")];
       return blocks(details.conversations, conversation => {
         const lines = [
-          `${arrow(theme)} ${paint(theme, "text", conversationLabel(conversation))} ${paint(theme, "muted", `· ${conversation.agent} · ${count(conversation.runs.length, "run")}${conversation.canResume ? " · resumable" : ""}`)}`,
+          `${arrow(theme)} ${paint(theme, "text", conversationLabel(conversation))} ${paint(theme, "muted", `· ${conversation.agent} · depth ${conversation.depth} · ${count(conversation.runs.length, "run")}${conversation.canResume ? " · resumable" : ""}`)}`,
           `  ${tag(theme, "conversation", conversation.conversationId)}`,
         ];
         for (const run of conversation.runs) {
-          lines.push(`  ${statusMarker(theme, run.status)} ${paint(theme, "text", run.runId)} ${paint(theme, "muted", `· ${run.kind} · depth ${run.depth} ·`)} ${statusText(theme, run.status)}`);
+          lines.push(`  ${statusMarker(theme, run.status)} ${paint(theme, "text", run.runId)} ${paint(theme, "muted", `· ${run.kind} ·`)} ${statusText(theme, run.status)}`);
         }
         return lines;
       });

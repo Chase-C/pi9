@@ -59,8 +59,6 @@ test("steer renders receipts and inspect renders bounded activity", () => {
     runs: [{
       conversationId: "quiet-otter" as any,
       runId: "search-boldly" as any,
-      rootRunId: "search-boldly" as any,
-      depth: 0,
       agent: "scout",
       status: "running",
       phase: "thinking",
@@ -82,8 +80,6 @@ test("inspect renders terminal error diagnostics in expanded mode", () => {
     runs: [{
       conversationId: "quiet-otter" as any,
       runId: "search-boldly" as any,
-      rootRunId: "search-boldly" as any,
-      depth: 0,
       agent: "scout",
       status: "error",
       elapsedMs: 25,
@@ -141,24 +137,24 @@ test("list renders grouped conversations and nested run status", () => {
     action: "list",
     conversations: [
       {
-        conversationId: "quiet-otter" as any, agent: "scout", label: "auth map", createdAt: 1, canResume: false,
-        runs: [{ runId: "search-boldly" as any, rootRunId: "search-boldly" as any, depth: 0, kind: "spawn", status: "running", createdAt: 1 }],
+        conversationId: "quiet-otter" as any, depth: 1, agent: "scout", label: "auth map", createdAt: 1, canResume: false,
+        runs: [{ runId: "search-boldly" as any, kind: "spawn", status: "running", createdAt: 1 }],
       },
       {
-        conversationId: "amber-fox" as any, agent: "reviewer", label: "risk review", createdAt: 2, canResume: true,
-        runs: [{ runId: "inspect-carefully" as any, rootRunId: "inspect-carefully" as any, depth: 0, kind: "spawn", status: "completed", createdAt: 2 }],
+        conversationId: "amber-fox" as any, depth: 1, agent: "reviewer", label: "risk review", createdAt: 2, canResume: true,
+        runs: [{ runId: "inspect-carefully" as any, kind: "spawn", status: "completed", createdAt: 2 }],
       },
     ],
   };
   assert.equal(renderResult(details), "✓ Found 2 conversations · 2 runs · 1 running · 1 completed\n  auth map · risk review");
   assert.equal(renderResult(details, true), [
-    "→ auth map · scout · 1 run",
+    "→ auth map · scout · depth 1 · 1 run",
     "  conversation quiet-otter",
-    "  ● search-boldly · spawn · depth 0 · running",
+    "  ● search-boldly · spawn · running",
     "",
-    "→ risk review · reviewer · 1 run · resumable",
+    "→ risk review · reviewer · depth 1 · 1 run · resumable",
     "  conversation amber-fox",
-    "  ✓ inspect-carefully · spawn · depth 0 · completed",
+    "  ✓ inspect-carefully · spawn · completed",
   ].join("\n"));
 });
 

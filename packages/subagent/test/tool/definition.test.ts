@@ -13,15 +13,14 @@ test("description names typed action inputs without restating task unions", () =
     prepareInvocation: async () => settings,
   });
   const description = tool.description;
-  assert.match(description, /Conversation IDs use adjective-noun form; run IDs use verb-adverb form\./);
-  assert.match(description, /list\(status\?\).*matching a status/);
+  assert.match(description, /list\(scope\?, status\?\).*scope defaults to children/);
   assert.match(description, /spawn\(spawns\)/);
   assert.match(description, /resume\(resumes\)/);
   assert.match(description, /steer\(messages\)/);
   assert.match(description, /cancel\(runIds\)/);
   assert.match(description, /inspect\(runIds\)/);
   assert.match(description, /join\(runIds\)/);
-  assert.match(description, /remove\(conversationIds\).*Surviving children are reparented/);
+  assert.match(description, /remove\(conversationIds\).*terminal conversation subtrees/);
   assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union/);
   const properties = (tool.parameters as any).properties;
   assert.deepEqual(Object.keys(properties.spawns.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
