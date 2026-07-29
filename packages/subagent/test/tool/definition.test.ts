@@ -98,8 +98,8 @@ test("unknown actions return a structured global error envelope", async () => {
   });
 });
 
-test("terminal inspect releases its claim as an observed outcome", async () => {
-  const released: Array<{ requested: readonly string[]; observed: readonly string[] }> = [];
+test("child terminal inspect reports its full lifecycle to shared notification hooks", async () => {
+  const events: Array<{ kind: string; scope: string; toolCallId: string; value: unknown }> = [];
   const runtime = {
     inspectRuns: ([runId]: string[]) => [{
       conversationId: "amber-acorn",
@@ -122,67 +122,24 @@ test("terminal inspect releases its claim as an observed outcome", async () => {
     runtime,
     agentRegistry: registry,
     prepareInvocation: async () => settings,
-    releaseRunClaims: (requested, observed) => { released.push({ requested, observed }); },
+    parent: { conversationId: "amber-acorn" as any, runId: () => "build-boldly" as any },
+    notificationHooks: {
+      beginTool: (scope, toolCallId, params) => events.push({ kind: "begin", scope, toolCallId, value: params }),
+      completeTool: (scope, toolCallId, result) => events.push({ kind: "complete", scope, toolCallId, value: result }),
+    },
   });
 
-  await tool.execute("call", { action: "inspect", runIds: ["adapt-ably"] }, undefined, undefined, {});
+  const params = { action: "inspect", runIds: ["adapt-ably"] };
+  const result = await tool.execute("call", params, undefined, undefined, {});
 
-  assert.deepEqual(released, [{ requested: ["adapt-ably"], observed: ["adapt-ably"] }]);
+  assert.deepEqual(events, [
+    { kind: "begin", scope: "child:build-boldly", toolCallId: "call", value: params },
+    { kind: "complete", scope: "child:build-boldly", toolCallId: "call", value: result },
+  ]);
 });
 
-test("active inspect releases its claim without marking the run observed", async () => {
-  const released: Array<{ requested: readonly string[]; observed: readonly string[] }> = [];
-  const runtime = {
-    inspectRuns: ([runId]: string[]) => [{
-      conversationId: "amber-acorn",
-      snapshot: {
-        runId,
-        kind: "spawn",
-        prompt: "running",
-        createdAt: 1,
-        status: { kind: "running", startedAt: 1 },
-        activity: { phase: "thinking", turns: 0, compactions: 0, toolHistory: [] },
-        observerCount: 0,
-        acknowledged: false,
-      },
-    }],
-    runLineage: (runId: string) => ({ rootRunId: runId, depth: 0 }),
-    conversationDisplay: () => ({ agentName: "worker" }),
-    conversation: () => ({}),
-  } as any;
-  const tool: any = defineSubagentTool({
-    runtime,
-    agentRegistry: registry,
-    prepareInvocation: async () => settings,
-    releaseRunClaims: (requested, observed) => { released.push({ requested, observed }); },
-  });
-
-  await tool.execute("call", { action: "inspect", runIds: ["adapt-ably"] }, undefined, undefined, {});
-
-  assert.deepEqual(released, [{ requested: ["adapt-ably"], observed: [] }]);
-});
-
-test("successful cancel releases its claim as an observed terminal outcome", async () => {
-  const released: Array<{ requested: readonly string[]; observed: readonly string[] }> = [];
-  const runtime = {
-    cancelRun: async (runId: string) => ({ conversationId: "amber-acorn", runId, status: "aborted" }),
-    listConversations: () => [],
-  } as any;
-  const tool: any = defineSubagentTool({
-    runtime,
-    agentRegistry: registry,
-    prepareInvocation: async () => settings,
-    releaseRunClaims: (requested, observed) => { released.push({ requested, observed }); },
-  });
-
-  await tool.execute("call", { action: "cancel", runIds: ["adapt-ably"] }, undefined, undefined, {});
-
-  assert.deepEqual(released, [{ requested: ["adapt-ably"], observed: ["adapt-ably"] }]);
-});
-
-test("mixed join target errors still release every valid requested claim", async () => {
-  let released: readonly string[] = [];
-  const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings, releaseRunClaims: ids => { released = ids; } });
+test("mixed join target errors remain ordered item failures", async () => {
+  const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings });
   const result = await tool.execute("call", { action: "join", runIds: ["valid-run", 42] }, undefined, undefined, {});
   assert.equal(result.isError, false);
   const response = JSON.parse(result.content[0].text);
@@ -191,7 +148,23 @@ test("mixed join target errors still release every valid requested claim", async
     { ok: false, runId: "valid-run", error: "join received invalid runId format 'valid-run'." },
     { ok: false, runId: "42", error: "join received invalid runId format '42'." },
   ]);
-  assert.deepEqual(released, ["valid-run"]);
+});
+
+test("child failures still complete shared notification hooks", async () => {
+  const events: Array<{ kind: string; result?: unknown }> = [];
+  const tool: any = defineSubagentTool({
+    runtime: {} as any,
+    agentRegistry: registry,
+    prepareInvocation: async () => { throw new Error("settings unavailable"); },
+    parent: { conversationId: "amber-acorn" as any, runId: () => "build-boldly" as any },
+    notificationHooks: {
+      beginTool: () => events.push({ kind: "begin" }),
+      completeTool: (_scope, _toolCallId, result) => events.push({ kind: "complete", result }),
+    },
+  });
+
+  await assert.rejects(() => tool.execute("call", { action: "inspect", runIds: ["adapt-ably"] }, undefined, undefined, {}), /settings unavailable/);
+  assert.deepEqual(events, [{ kind: "begin" }, { kind: "complete", result: undefined }]);
 });
 
 test("settings preparation failures propagate without starting manager work", async () => {

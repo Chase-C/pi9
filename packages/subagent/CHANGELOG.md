@@ -13,7 +13,7 @@ This changelog starts with version `v0.2.1`.
 ### Changed
 
 - Notify only for unseen terminal outcomes: terminal inspection and successful cancellation now suppress redundant completion messages without acknowledging run output.
-- Coalesce newly settled runs behind a short grace window while active inspect, cancel, and join calls claim their exact targets.
+- Coalesce newly settled runs behind a fixed grace window while tool-call-scoped inspect, cancel, and join claims protect exact targets across root and recursive agents.
 - Shorten completion copy and describe `join` as retrieving terminal outcomes rather than always retrieving output.
 - Defer completion delivery until synchronous tool preflight settles so same-batch joins can claim their runs without redundant notifications.
 - Report the exact queued or running run that prevents a conversation from being resumed, with status-appropriate next steps.

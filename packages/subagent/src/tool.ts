@@ -592,8 +592,8 @@ export interface SubagentToolDeps {
    * a no-op here because the parent's invocation already performed all of those steps.
    */
   prepareInvocation: (ctx: ExtensionContext) => Promise<SubagentSettings>;
-  /** Releases notifier claims and records terminal outcomes returned by inspect or cancel. */
-  releaseRunClaims?: (runIds: readonly string[], observedRunIds: readonly string[]) => void;
+  /** Child-only hooks share notification coordination with the root extension runtime. */
+  notificationHooks?: SubagentNotificationHooks;
   /** Set on child factories; links spawned conversations and suspends its queue slot while joining. */
   parent?: { conversationId: ConversationId; runId: () => RunId };
 }
@@ -640,11 +640,8 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     },
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const claimedRunIds = requestedClaimRunIds(params);
-      let observedRunIds: readonly string[] = [];
-      try {
+      const executeAction = async (): Promise<ActionResult> => {
         const settings = await prepareInvocation(ctx);
-
         const invocation = parseSubagentInvocation(params, { maxTasks: settings.runtime.maxTasksPerRun });
         if ("error" in invocation) return invocationErrorResult(actionDeps, invocation);
 
@@ -654,42 +651,30 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
           case "spawn": return spawnAction(actionDeps, invocation, ctx);
           case "resume": return resumeAction(actionDeps, invocation, ctx);
           case "steer": return steerAction(actionDeps, invocation);
-          case "cancel": {
-            const result = await cancelAction(actionDeps, invocation);
-            observedRunIds = terminalRunIdsFromResult(result);
-            return result;
-          }
-          case "inspect": {
-            const result = inspectAction(actionDeps, invocation);
-            observedRunIds = terminalRunIdsFromResult(result);
-            return result;
-          }
+          case "cancel": return cancelAction(actionDeps, invocation);
+          case "inspect": return inspectAction(actionDeps, invocation);
           case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
           case "remove": return removeAction(actionDeps, invocation);
         }
+      };
+
+      if (!parent || !deps.notificationHooks) return executeAction();
+      const scope = `child:${parent.runId()}`;
+      deps.notificationHooks.beginTool(scope, toolCallId, params);
+      let result: ActionResult | undefined;
+      try {
+        result = await executeAction();
+        return result;
       } finally {
-        if (claimedRunIds.length) deps.releaseRunClaims?.(claimedRunIds, observedRunIds);
+        deps.notificationHooks.completeTool(scope, toolCallId, result);
       }
     },
   });
 }
 
-function requestedClaimRunIds(params: unknown): string[] {
-  if (!params || typeof params !== "object") return [];
-  const value = params as { action?: unknown; runIds?: unknown };
-  if ((value.action !== "inspect" && value.action !== "cancel" && value.action !== "join") || !Array.isArray(value.runIds)) return [];
-  return value.runIds.filter((id): id is string => typeof id === "string");
-}
-
-function terminalRunIdsFromResult(result: ActionResult): string[] {
-  const details = result.details as { action?: unknown; runs?: unknown };
-  if ((details.action !== "inspect" && details.action !== "cancel") || !Array.isArray(details.runs)) return [];
-  return details.runs.flatMap(value => {
-    if (!value || typeof value !== "object" || "error" in value) return [];
-    const run = value as { runId?: unknown; status?: unknown };
-    if (typeof run.runId !== "string" || run.status === "queued" || run.status === "running") return [];
-    return [run.runId];
-  });
+export interface SubagentNotificationHooks {
+  beginTool(scope: string, toolCallId: string, params: unknown): void;
+  completeTool(scope: string, toolCallId: string, result?: ActionResult): void;
 }
 
 export interface ChildToolDeps {
@@ -697,6 +682,7 @@ export interface ChildToolDeps {
   registry: AgentRegistry;
   parent: Conversation;
   getCurrentSettings: () => SubagentSettings;
+  notificationHooks?: SubagentNotificationHooks;
 }
 
 export function makeChildSubagentTool(deps: ChildToolDeps): ToolDefinition {
@@ -705,6 +691,7 @@ export function makeChildSubagentTool(deps: ChildToolDeps): ToolDefinition {
     runtime: manager,
     agentRegistry: registry,
     prepareInvocation: async () => getCurrentSettings(),
+    ...(deps.notificationHooks ? { notificationHooks: deps.notificationHooks } : {}),
     parent: {
       conversationId: parent.conversationId,
       runId: () => parent.requireCurrentRun().runId,

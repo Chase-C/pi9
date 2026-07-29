@@ -35,9 +35,6 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   let currentSettings: SubagentSettings = DEFAULT_SUBAGENT_SETTINGS;
   const getCurrentSettings = () => currentSettings;
   registerSubagentWidgetLifecycle(pi, runtime, getCurrentSettings);
-  runtime.scheduler?.setChildTool?.(parent =>
-    makeChildSubagentTool({ manager: runtime, registry: agentRegistry, parent, getCurrentSettings })
-  );
 
   const completionNotifier = new CompletionNotifier({
     pi: pi as any,
@@ -45,6 +42,13 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
     getMode: () => currentSettings.runtime.completionNotify,
     getDisplay: () => currentSettings.display,
   });
+  const notificationHooks = {
+    beginTool: (scope: string, toolCallId: string, params: unknown) => completionNotifier.beginTool(scope, toolCallId, params),
+    completeTool: (scope: string, toolCallId: string, result?: unknown) => completionNotifier.completeTool(scope, toolCallId, result),
+  };
+  runtime.scheduler?.setChildTool?.(parent =>
+    makeChildSubagentTool({ manager: runtime, registry: agentRegistry, parent, getCurrentSettings, notificationHooks })
+  );
 
   registerSubagentLifecycleEvents(pi.events, runtime);
   registerSubagentMetadataPersistence(pi, runtime);
@@ -62,7 +66,6 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   pi.registerTool(defineSubagentTool({
     runtime,
     agentRegistry,
-    releaseRunClaims: (runIds, observedRunIds) => completionNotifier.releaseRunClaims(runIds, observedRunIds),
     prepareInvocation: async (ctx: ExtensionContext) => {
       const settings = await timingAsync(
         "tool.prepareRuntime",
