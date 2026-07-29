@@ -98,6 +98,17 @@ test("recursive cancel holds its descendant claim through grace and marks the ou
   f.notifier.unsubscribe();
 });
 
+test("finalized results cannot mark unclaimed runs observed", () => {
+  const f = fixture();
+  const unrelated: any = { runId: "wander-widely", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "completed", completedAt: 2 } };
+  f.conversations.push({ conversationId: "young-maple", config: { name: "worker" }, runs: [unrelated] });
+  f.notifier.beginTool("child:delegate-boldly", "inspect-target", { action: "inspect", runIds: [f.run.runId] });
+  f.notifier.completeTool("child:delegate-boldly", "inspect-target", { content: [], details: { action: "inspect", runs: [{ runId: unrelated.runId, status: "completed" }] } });
+  f.fire("session_start"); f.flush();
+  assert.deepEqual(f.sent[0].message.details.completions.map((entry: any) => entry.runId), [f.run.runId, unrelated.runId]);
+  f.notifier.unsubscribe();
+});
+
 test("malformed finalized statuses do not suppress unseen outcomes", () => {
   const f = fixture();
   f.fire("tool_execution_start", { toolCallId: "malformed-inspect", toolName: "subagent", args: { action: "inspect", runIds: [f.run.runId] } });
@@ -105,6 +116,17 @@ test("malformed finalized statuses do not suppress unseen outcomes", () => {
   f.fire("tool_execution_end", { toolCallId: "malformed-inspect", toolName: "subagent", result: { content: [], details: { action: "inspect", runs: [{ runId: f.run.runId }] } } });
   f.flush();
   assert.equal(f.sent.length, 1);
+  f.notifier.unsubscribe();
+});
+
+test("inspected skipped outcomes are terminal and stay silent", () => {
+  const f = fixture();
+  f.run.status = { kind: "done", outcome: "skipped", completedAt: 2, error: "Agent skipped." };
+  f.notifier.beginTool("child:delegate-boldly", "inspect-skipped", { action: "inspect", runIds: [f.run.runId] });
+  f.fire("session_start"); f.flush();
+  f.notifier.completeTool("child:delegate-boldly", "inspect-skipped", { content: [], details: { action: "inspect", runs: [{ runId: f.run.runId, status: "skipped" }] } });
+  f.flush();
+  assert.equal(f.sent.length, 0);
   f.notifier.unsubscribe();
 });
 

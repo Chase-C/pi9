@@ -28,7 +28,7 @@ export type CompletionNotificationMessagePayload = CompletionNotificationMessage
 
 const MAX_LISTED_COMPLETIONS = 20;
 const COMPLETION_GRACE_MS = 500;
-const TERMINAL_RUN_STATUSES = new Set<unknown>(["completed", "error", "aborted", "interrupted"]);
+const TERMINAL_RUN_STATUSES = new Set<unknown>(["completed", "error", "aborted", "interrupted", "skipped"]);
 const RESULTS_INSTRUCTION = "Use `subagent join` when you need these terminal outcomes.";
 
 type EntrySurface = "notification" | "renderer";
@@ -213,7 +213,9 @@ export class CompletionNotifier {
     const key = `${scope}:${toolCallId}`;
     const claim = this.claimsByToolCall.get(key);
     if (!claim) return;
-    for (const id of observedTerminalRunIds(claim.action, result)) this.observed.add(id);
+    for (const id of observedTerminalRunIds(claim.action, result)) {
+      if (claim.runIds.has(id)) this.observed.add(id);
+    }
     for (const id of claim.runIds) {
       try {
         if (this.deps.manager.runSnapshot(id as RunId).acknowledged) this.delivered.add(id);
