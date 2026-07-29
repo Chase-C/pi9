@@ -18,7 +18,7 @@ This changelog starts with version `v0.2.1`.
 - Defer completion delivery until synchronous tool preflight settles so same-batch joins can claim their runs without redundant notifications.
 - Report the exact queued or running run that prevents a conversation from being resumed, with status-appropriate next steps.
 - Describe terminal subagents as “finished” in notification headers so aborted and failed runs are not collectively called completed.
-- Explain that aborted conversations cannot be resumed and direct callers to spawn a new conversation.
+- Allow cancelled conversations to resume after SDK abortion and execution cleanup have both settled.
 
 ### Breaking
 
