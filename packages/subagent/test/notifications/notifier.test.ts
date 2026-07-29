@@ -132,6 +132,17 @@ test("reconciliation resolves the latest execution for a resumed subagent", () =
   f.notifier.unsubscribe();
 });
 
+test("completion messages do not rebound after runtime-local IDs are reused", () => {
+  const previous = fixture();
+  previous.fire("session_start"); previous.flush();
+  const stored = { role: "custom", customType: "subagent-completion", ...previous.sent[0].message };
+  previous.notifier.unsubscribe();
+
+  const replacement = fixture();
+  assert.deepEqual(replacement.notifier.reconcileMessages([stored] as never), []);
+  replacement.notifier.unsubscribe();
+});
+
 test("old completion messages do not rebound to a later execution", () => {
   const f = fixture();
   f.fire("session_start"); f.flush();

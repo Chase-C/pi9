@@ -251,6 +251,8 @@ export class SubagentRuntime {
   private readonly conversations = new Map<ConversationId, Conversation>();
   private readonly runs = new Map<RunId, RunRecord>();
   private readonly listeners = new Set<ConversationUpdateListener>();
+  private readonly deferredUpdates = new Map<Conversation, Set<ConversationUpdateKind>>();
+  private updateDeferralDepth = 0;
   private readonly conversationIds = new ConversationIdAllocator();
   private readonly runIds = new RunIdAllocator();
   private readonly _scheduler: RunScheduler;
@@ -305,7 +307,7 @@ export class SubagentRuntime {
     const executions: Promise<unknown>[] = [];
     const callerRecord = options.caller ? this.runs.get(options.caller.runId) : undefined;
     const callerError = options.caller && (!callerRecord || callerRecord.conversationId !== options.caller.conversationId)
-      ? `Unknown start caller run: ${options.caller.runId}.`
+      ? "Start caller is no longer active."
       : undefined;
     let reserved = this.conversations.size;
     for (let inputIndex = 0; inputIndex < tasks.length; inputIndex++) {
@@ -367,12 +369,22 @@ export class SubagentRuntime {
 
   async steerSubagent(subagentId: ConversationId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
     const agent = this.requireConversation(subagentId);
-    return this.steerRun(agent.requireCurrentRun().runId, prompt, caller);
+    const runId = agent.latestRunId;
+    try {
+      return await this.steerRun(runId, prompt, caller);
+    } catch (error) {
+      throw new Error(this.subagentExecutionError(error, subagentId, runId));
+    }
   }
 
   async cancelSubagent(subagentId: ConversationId, caller?: SubagentCaller): Promise<CancelResult> {
     const agent = this.requireConversation(subagentId);
-    return this.cancelRun(agent.requireCurrentRun().runId, caller);
+    const runId = agent.latestRunId;
+    try {
+      return await this.cancelRun(runId, caller);
+    } catch (error) {
+      throw new Error(this.subagentExecutionError(error, subagentId, runId));
+    }
   }
 
   inspectSubagents(subagentIds: readonly ConversationId[], caller?: SubagentCaller): InspectedRun[] {
@@ -430,14 +442,18 @@ export class SubagentRuntime {
   /** Binds only the requested runs. Resolution and observer attachment are all-or-nothing. */
   bindJoin(runIds: readonly RunId[]): JoinBinding {
     const records = runIds.map(id => { const record = this.runs.get(id); if (!record) throw new Error(`Unknown run: ${id}.`); return record; });
-    return this.bindRecords(records);
+    return this.withDeferredUpdates(() => this.bindRecords(records));
   }
 
   /** Records and binds one nested join attempt on the exact caller run. */
   bindNestedJoin(caller: SubagentCaller, runIds: readonly RunId[], toolCallId?: string): NestedJoinBinding {
+    return this.withDeferredUpdates(() => this.bindNestedJoinNow(caller, runIds, toolCallId));
+  }
+
+  private bindNestedJoinNow(caller: SubagentCaller, runIds: readonly RunId[], toolCallId?: string): NestedJoinBinding {
     const ownerRecord = this.runs.get(caller.runId);
     if (!ownerRecord || ownerRecord.conversationId !== caller.conversationId)
-      throw new Error(`Unknown join owner run: ${caller.runId}.`);
+      throw new Error("Join caller is no longer active.");
     const attemptIndex = ownerRecord.agent.beginNestedJoin(caller.runId, runIds, toolCallId);
     let records: RunRecord[];
     try {
@@ -523,7 +539,7 @@ export class SubagentRuntime {
     if (caller) {
       const ownerRecord = this.runs.get(caller.runId);
       if (!ownerRecord || ownerRecord.conversationId !== caller.conversationId) {
-        throw new Error(`Unknown ${action} caller run: ${caller.runId}.`);
+        throw new Error(`${action[0].toUpperCase()}${action.slice(1)} caller is no longer active.`);
       }
       if (target.parentConversationId !== caller.conversationId) {
         throw new Error(`Subagent ${target.conversationId} is not directly owned by caller subagent ${caller.conversationId}.`);
@@ -539,7 +555,7 @@ export class SubagentRuntime {
     if (!caller) return;
     const ownerRecord = this.runs.get(caller.runId);
     if (!ownerRecord || ownerRecord.conversationId !== caller.conversationId) {
-      throw new Error(`Unknown ${action} caller run: ${caller.runId}.`);
+      throw new Error(`${action[0].toUpperCase()}${action.slice(1)} caller is no longer active.`);
     }
     if (!this.isConversationDescendant(targetConversationId, caller.conversationId)) {
       throw new Error(`Conversation ${targetConversationId} is not a descendant of caller conversation ${caller.conversationId}.`);
@@ -569,7 +585,7 @@ export class SubagentRuntime {
     const candidates: Conversation[] = [];
     for (const id of unique) {
       const conversation = this.conversations.get(id as ConversationId);
-      if (!conversation) { errors.push({ conversationId: id, error: `Unknown conversation: ${id}.` }); continue; }
+      if (!conversation) { errors.push({ conversationId: id, error: `Unknown subagent: ${id}.` }); continue; }
       try {
         this.assertCallerAccess(conversation.conversationId, caller, "remove");
         candidates.push(conversation);
@@ -590,7 +606,7 @@ export class SubagentRuntime {
       const subtree = this.conversationSubtree(root.conversationId);
       const active = subtree.filter(conversation => conversation.hasCurrentRun || conversation.isStopping);
       if (active.length) {
-        const error = `Conversation subtree ${root.conversationId} has active runs: ${active.map(conversation => conversation.latestRunId).join(", ")}. Cancel them before removal.`;
+        const error = `Subagent subtree ${root.conversationId} has active subagents: ${active.map(conversation => conversation.conversationId).join(", ")}. Cancel them before removal.`;
         for (const target of candidates) {
           if (subtree.includes(target)) errors.push({ conversationId: target.conversationId, error });
         }
@@ -626,13 +642,37 @@ export class SubagentRuntime {
   private requireConversation(id: string): Conversation { const found = this.conversations.get(id as ConversationId); if (!found) throw new Error(`Unknown conversation: ${id}.`); return found; }
   private resumeError(agent: Conversation): string {
     if (agent.isStopping) {
-      return `Conversation ${agent.conversationId} is still settling cancelled run ${agent.latestRunId}. Wait for it to finish before resuming.`;
+      return `Subagent ${agent.conversationId} is still settling a cancelled execution. Wait for it to finish before resuming.`;
     }
-    return `Conversation ${agent.conversationId} cannot be resumed.`;
+    return `Subagent ${agent.conversationId} cannot be resumed.`;
   }
-  private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Conversation capacity (${this.maxConversations}) reached. Remove terminal conversations${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
+  private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Subagent capacity (${this.maxConversations}) reached. Remove terminal subagents${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
+  private subagentExecutionError(error: unknown, subagentId: ConversationId, runId: RunId): string {
+    return (error instanceof Error ? error.message : String(error))
+      .replaceAll(`Run ${runId}`, `Subagent ${subagentId}`)
+      .replaceAll(`run ${runId}`, "execution");
+  }
+  private withDeferredUpdates<T>(operation: () => T): T {
+    this.updateDeferralDepth++;
+    try {
+      return operation();
+    } finally {
+      this.updateDeferralDepth--;
+      if (this.updateDeferralDepth === 0) {
+        const pending = [...this.deferredUpdates].flatMap(([agent, kinds]) => [...kinds].map(kind => ({ agent, kind })));
+        this.deferredUpdates.clear();
+        for (const { agent, kind } of pending) this.updated(agent, kind);
+      }
+    }
+  }
   private updated(agent: Conversation, kind: ConversationUpdateKind): void {
     if (this.conversations.get(agent.conversationId) !== agent) return;
+    if (this.updateDeferralDepth > 0) {
+      const kinds = this.deferredUpdates.get(agent) ?? new Set<ConversationUpdateKind>();
+      kinds.add(kind);
+      this.deferredUpdates.set(agent, kinds);
+      return;
+    }
     for (const listener of this.listeners) listener(agent, kind);
   }
 }

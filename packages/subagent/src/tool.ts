@@ -378,12 +378,12 @@ export async function removeAction(
   });
   const parseErrors = invocation.subagentIds.flatMap(target => typeof target === "string"
     ? []
-    : [{ conversationId: target.subagentId, error: target.error }]);
+    : [{ subagentId: target.subagentId, error: target.error }]);
   return resultsResult("remove", results, {
     action: "remove",
     removed: removed.removed,
-    conversationIds: removed.conversationIds,
-    errors: [...parseErrors, ...removed.errors],
+    subagentIds: removed.conversationIds,
+    errors: [...parseErrors, ...removed.errors.map(error => ({ subagentId: error.conversationId, error: error.error }))],
   });
 }
 
@@ -551,17 +551,17 @@ function renderJoinedRuns(
     let children: readonly { runId: RunId; conversationId: ConversationId }[] = [];
     try { children = runtime.unjoinedDirectChildren(ownerRunId); } catch { return []; }
     if (!children.length) return [];
-    return [{ ownerRunId, ...(ownerLabel ? { ownerLabel } : {}), entries: children.map(child => {
+    return [{ ...(ownerLabel ? { ownerLabel } : {}), entries: children.map(child => {
       const childRun = snapshot(child.runId);
       const childStatus = childRun ? status(childRun) : "running";
-      return { conversationId: child.conversationId, runId: child.runId, ...display(child.conversationId), status: childStatus,
+      return { subagentId: child.conversationId, ...display(child.conversationId), status: childStatus,
         ...(final && (childStatus === "queued" || childStatus === "running") ? { detachedAtFinal: true } : {}) };
     }) }];
   };
   const target = (value: NestedJoinAttemptSnapshot["targets"][number]): JoinTargetRenderItem => {
     const run = snapshot(value.runId);
     const targetStatus = (run ? status(run) : value.status ?? "error") as RunStatus;
-    const base: JoinTargetRenderItem = { runId: value.runId, ...(value.conversationId ? { conversationId: value.conversationId, ...display(value.conversationId) } : {}), status: targetStatus };
+    const base: JoinTargetRenderItem = { ...(value.conversationId ? { subagentId: value.conversationId, ...display(value.conversationId) } : {}), status: targetStatus };
     if (!run) return base;
     return {
       ...base,
@@ -579,10 +579,11 @@ function renderJoinedRuns(
   return output.map(value => {
     if (!("status" in value)) return { ...value, status: "error" };
     const run = snapshot(value.runId);
-    if (!run) return { ...value };
+    const projected = { subagentId: value.subagentId, status: value.status, ...(value.output !== undefined ? { output: value.output } : {}), ...(value.error !== undefined ? { error: value.error } : {}) };
+    if (!run) return projected;
     const info = display(value.subagentId);
     const represented = (run.nestedJoins ?? []).flatMap(attempt => attempt.toolCallId ? [attempt.toolCallId] : []);
-    return { ...value, ...info, kind: run.kind, prompt: run.prompt, ...runStats(run), activity: activity(run), joins: joins(run),
+    return { ...projected, ...info, kind: run.kind, prompt: run.prompt, ...runStats(run), activity: activity(run), joins: joins(run),
       background: background(run.runId, info.label ?? info.agent), joinToolCallIds: represented };
   }) as JoinedRunRenderItem[];
 }

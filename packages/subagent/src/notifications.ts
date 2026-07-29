@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ContextEvent, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Conversation } from "./conversation.js";
 import type { RunOutcomeStatus, ConversationUpdateKind } from "./conversation.js";
@@ -21,6 +22,8 @@ interface TrackedCompletionNotification extends CompletionNotification {
 }
 
 export interface CompletionNotificationMessageDetails {
+  /** Runtime-local correlation only; never rendered or accepted by lifecycle actions. */
+  notificationEpoch?: string;
   completions: CompletionNotification[];
 }
 
@@ -47,11 +50,12 @@ type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
  */
 export function createCompletionNotificationMessage(
   entries: readonly CompletionNotification[],
+  notificationEpoch?: string,
 ): CompletionNotificationMessagePayload {
   const completions = entries.map(copyCompletionNotification);
   return {
     content: formatNotificationContent(completions),
-    details: { completions },
+    details: { ...(notificationEpoch ? { notificationEpoch } : {}), completions },
   };
 }
 
@@ -187,6 +191,7 @@ export class CompletionNotifier {
   private readonly gracePending = new Set<string>();
   private readonly claimsByToolCall = new Map<string, { action: unknown; runIds: Set<string> }>();
   private readonly claimCountByRun = new Map<string, number>();
+  private readonly notificationEpoch = randomUUID();
   private readonly unsubscribeAgent: () => void;
 
   constructor(private readonly deps: CompletionNotifierDeps) {
@@ -203,14 +208,15 @@ export class CompletionNotifier {
   reconcileMessages(messages: readonly AgentMessage[]): AgentMessage[] {
     return messages.flatMap(message => {
       if (message.role !== "custom" || message.customType !== "subagent-completion") return [message];
-      const completions = completionDetails(message);
-      if (!completions) return [message];
-      const visible = completions.flatMap(entry => {
+      const details = completionDetails(message);
+      if (!details) return [message];
+      if (details.notificationEpoch !== this.notificationEpoch) return [];
+      const visible = details.completions.flatMap(entry => {
         const current = this.currentNotificationEntry(entry.subagentId, entry.generation);
         return current ? [current] : [];
       });
       if (!visible.length) return [];
-      return [{ ...message, content: formatNotificationContent(visible), details: { completions: visible } }];
+      return [{ ...message, content: formatNotificationContent(visible), details: { notificationEpoch: this.notificationEpoch, completions: visible } }];
     });
   }
 
@@ -354,7 +360,7 @@ export class CompletionNotifier {
       entries.push({ runId: value.run.runId, subagentId: value.conversation.conversationId, agent: value.conversation.config.name, ...(value.conversation.label ? { label: value.conversation.label } : {}), status: value.run.status.outcome, generation: value.generation, completedAt: value.run.status.completedAt, elapsedMs: Math.max(0, value.run.status.completedAt - started) });
     }
     if (!entries.length || !this.deps.pi.sendMessage) return;
-    const message = createCompletionNotificationMessage(entries);
+    const message = createCompletionNotificationMessage(entries, this.notificationEpoch);
     const active = !this.ctx.isIdle();
     try {
       const sent = this.deps.pi.sendMessage({ customType: "subagent-completion", display: false, ...message }, mode === "steer" && active ? { deliverAs: "steer" } : { triggerTurn: true });
@@ -400,12 +406,14 @@ function completionNotificationLevel(entries: readonly CompletionNotification[])
   return "info";
 }
 
-function completionDetails(message: CustomMessage): CompletionNotification[] | undefined {
+function completionDetails(message: CustomMessage): CompletionNotificationMessageDetails | undefined {
   const details = message.details;
   if (!details || typeof details !== "object") return;
+  const notificationEpoch = (details as { notificationEpoch?: unknown }).notificationEpoch;
   const completions = (details as { completions?: unknown }).completions;
+  if (notificationEpoch !== undefined && typeof notificationEpoch !== "string") return;
   if (!Array.isArray(completions)) return;
-  return completions.filter((entry): entry is CompletionNotification => Boolean(
+  const valid = completions.filter((entry): entry is CompletionNotification => Boolean(
     entry && typeof entry === "object" &&
     typeof (entry as CompletionNotification).subagentId === "string" &&
     typeof (entry as CompletionNotification).agent === "string" &&
@@ -414,6 +422,7 @@ function completionDetails(message: CustomMessage): CompletionNotification[] | u
     typeof (entry as CompletionNotification).completedAt === "number" &&
     typeof (entry as CompletionNotification).elapsedMs === "number",
   ));
+  return { ...(notificationEpoch ? { notificationEpoch } : {}), completions: valid };
 }
 
 function toolAction(event: unknown): unknown {

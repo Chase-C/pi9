@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import type { AgentSource } from "./agents.js";
 import type { ConversationEffectiveConfig, ConversationRequestedOverrides, RunKind, RunPhase, SteerReceipt } from "./conversation.js";
-import type { ConversationId, RunId } from "./identifiers.js";
+import type { ConversationId } from "./identifiers.js";
 import { formatElapsed, formatTokens } from "./run-format.js";
 import type { ConversationState, DispatchTaskKind, RunStatus, SubagentAction } from "./schema.js";
 
@@ -94,9 +94,7 @@ export interface JoinInvocationRenderItem {
 
 /** A joined descendant. Deliberately has no output field: descendant answers are not UI data. */
 export interface JoinTargetRenderItem {
-  /** Missing when a failed join named a well-formed run ID unknown to the runtime. */
-  conversationId?: ConversationId;
-  runId: RunId;
+  subagentId?: ConversationId;
   agent?: string;
   label?: string;
   status: RunStatus;
@@ -110,8 +108,7 @@ export interface JoinTargetRenderItem {
 }
 
 export interface JoinBackgroundRenderItem {
-  conversationId: ConversationId;
-  runId: RunId;
+  subagentId: ConversationId;
   agent?: string;
   label?: string;
   status: RunStatus;
@@ -119,15 +116,12 @@ export interface JoinBackgroundRenderItem {
 }
 
 export interface JoinBackgroundOwnerRenderItem {
-  ownerRunId: RunId;
   ownerLabel?: string;
   entries: JoinBackgroundRenderItem[];
 }
 
 export interface JoinedRunRenderItem {
   subagentId?: ConversationId;
-  conversationId?: ConversationId;
-  runId?: string;
   agent?: string;
   label?: string;
   kind?: RunKind;
@@ -157,8 +151,8 @@ export type SubagentToolDetails =
   | {
       action: "remove";
       removed: number;
-      conversationIds: ConversationId[];
-      errors: Array<{ conversationId: string; error: string }>;
+      subagentIds: ConversationId[];
+      errors: Array<{ subagentId: string; error: string }>;
     }
   | { action: "error"; requestedAction?: SubagentAction; message: string };
 
@@ -256,7 +250,7 @@ function collapsedLines(details: Exclude<SubagentToolDetails, { action: "error" 
       const summary = [`Removed ${count(details.removed, "subagent")}`];
       if (details.errors.length) summary.push(count(details.errors.length, "error"));
       const lines = [success(theme, summary.join(paint(theme, "muted", " · ")))];
-      if (details.conversationIds.length) lines.push(secondary(details.conversationIds, theme));
+      if (details.subagentIds.length) lines.push(secondary(details.subagentIds, theme));
       return lines;
     }
   }
@@ -326,18 +320,18 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
     case "join":
       return joinLines(details.runs, true, false, theme);
     case "remove": {
-      const items = details.conversationIds.map(conversationId => [
-        `${arrow(theme)} ${paint(theme, "text", conversationId)} ${paint(theme, "muted", "· removed")}`,
-        `  ${tag(theme, "subagent", conversationId)}`,
+      const items = details.subagentIds.map(subagentId => [
+        `${arrow(theme)} ${paint(theme, "text", subagentId)} ${paint(theme, "muted", "· removed")}`,
+        `  ${tag(theme, "subagent", subagentId)}`,
       ]);
       for (const error of details.errors) {
         items.push([
-          `${errorMarker(theme)} ${paint(theme, "text", error.conversationId)} ${paint(theme, "muted", "· not removed")}`,
+          `${errorMarker(theme)} ${paint(theme, "text", error.subagentId)} ${paint(theme, "muted", "· not removed")}`,
           `  ${paint(theme, "error", error.error)}`,
         ]);
       }
       const lines = joinBlocks(items);
-      return lines.length ? lines : [success(theme, "No conversations removed")];
+      return lines.length ? lines : [success(theme, "No subagents removed")];
     }
   }
 }
@@ -363,7 +357,7 @@ function renderJoinRoot(run: JoinedRunRenderItem, index: number, expanded: boole
   }
 
   if (expanded) {
-    lines.push(`  ${tag(theme, "subagent", run.subagentId ?? run.conversationId ?? "unknown")}`);
+    lines.push(`  ${tag(theme, "subagent", run.subagentId ?? "unknown")}`);
     if (run.prompt) appendSection(lines, [`  ${paint(theme, "dim", run.prompt)}`]);
   } else if (partial && !run.activity?.length && !run.joins?.length) {
     lines.push(`  ${paint(theme, "dim", "waiting for result")}`);
@@ -427,7 +421,7 @@ function renderActiveJoin(group: JoinInvocationRenderItem, totalTools: number, i
 
 function renderTerminalJoin(group: JoinInvocationRenderItem, indent: string, expanded: boolean, theme?: ThemeLike): string[] {
   const failed = group.status !== "completed";
-  const labels = group.targets.map(target => target.label || target.agent || target.runId);
+  const labels = group.targets.map(target => target.label || target.agent || target.subagentId || "unknown subagent");
   const summary = failed
     ? `${group.status === "interrupted" ? "join interrupted" : "join failed"}${group.error ? ` · ${group.error}` : ""}`
     : `joined ${group.targets.length}${labels.length ? ` · ${labels.join(", ")}` : ""}`;
@@ -440,7 +434,7 @@ function renderJoinTargets(targets: readonly JoinTargetRenderItem[], indent: str
   return targets.flatMap((target, index) => {
     const last = index === targets.length - 1;
     const connector = last ? "╰─" : "├─";
-    const label = target.label || target.agent || target.runId;
+    const label = target.label || target.agent || target.subagentId || "unknown subagent";
     const agent = target.agent && target.agent !== label ? ` · ${target.agent}` : "";
     const lines = [
       `${indent}${paint(theme, "muted", connector)} ${statusMarker(theme, target.status)} ${paint(theme, "text", label)}${paint(theme, "muted", agent)} ${paint(theme, "muted", "·")} ${statusText(theme, target.status)}${runStats(target, theme)}`,
@@ -460,9 +454,9 @@ function renderBackground(owner: JoinBackgroundOwnerRenderItem, expanded: boolea
   const counts = [active ? `${active} active` : "", completed ? `${completed} completed` : ""].filter(Boolean).join(" · ");
   const lines = [`${indent}${paint(theme, "muted", `background${counts ? ` · ${counts}` : ""}`)}`];
   if (expanded) for (const entry of owner.entries) {
-    const label = entry.label || entry.agent || entry.runId;
+    const label = entry.label || entry.agent || entry.subagentId;
     const detached = entry.detachedAtFinal ? paint(theme, "warning", " · detached at final") : "";
-    lines.push(`${indent}  ${paint(theme, "muted", label)} · ${statusText(theme, entry.status)} · ${identity(theme, entry.conversationId, entry.runId)}${detached}`);
+    lines.push(`${indent}  ${paint(theme, "muted", label)} · ${statusText(theme, entry.status)} · ${tag(theme, "subagent", entry.subagentId)}${detached}`);
   }
   return lines;
 }
@@ -535,10 +529,6 @@ function taskLabel(task: DispatchTaskRenderItem, index: number): string {
 
 function conversationLabel(conversation: { label?: string; agent: string }): string {
   return conversation.label || conversation.agent;
-}
-
-function identity(theme: ThemeLike | undefined, conversationId: string, runId: string): string {
-  return `${tag(theme, "conversation", conversationId)} ${paint(theme, "muted", "·")} ${tag(theme, "run", runId)}`;
 }
 
 function tag(theme: ThemeLike | undefined, name: string, value: string): string {

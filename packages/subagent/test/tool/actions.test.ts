@@ -587,7 +587,6 @@ test("join projects elapsed time, turns, and tokens for rendering", async () => 
 
   assert.deepEqual((result.details as any).runs[0], {
     subagentId: conversationId,
-    runId,
     status: "completed",
     agent: "helper",
     kind: "spawn",
@@ -785,8 +784,9 @@ test("join projection retains terminal descendant joins and final detached backg
 
   const result = await joinAction(deps(manager), { action: "join", subagentIds: [runId] }, undefined, undefined);
   const child = (result.details as any).runs[0].joins[0].targets[0];
-  assert.equal(child.joins[0].targets[0].runId, leafRunId);
+  assert.equal(child.joins[0].targets[0].subagentId, "leaf-c");
   assert.equal(child.background[0].entries[0].detachedAtFinal, true);
+  assert.doesNotMatch(JSON.stringify(result.details), new RegExp([childRunId, leafRunId, backgroundRunId].join("|")));
   assert.equal("output" in child, false);
 });
 

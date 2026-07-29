@@ -12,7 +12,9 @@ This changelog starts with version `v0.2.1`.
 
 ### Changed
 
-- Remove execution IDs from tool responses, notifications, lifecycle events, metadata, and list histories while retaining private execution bookkeeping and the existing identifier vocabularies.
+- Remove execution IDs from tool responses, notifications, lifecycle events, metadata, list histories, errors, and recursive join rendering while retaining private execution bookkeeping and the existing identifier vocabularies.
+- Bind every latest execution in a join batch before publishing observer or nested-join updates, preventing re-entrant resume from moving a stable target during binding.
+- Correlate completion messages with their runtime instance so reused runtime-local identifiers cannot revive stale notifications.
 
 ## [0.9.2] - 2026-07-29
 

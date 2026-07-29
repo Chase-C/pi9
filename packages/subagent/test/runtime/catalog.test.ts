@@ -212,7 +212,8 @@ test("removal rejects an entire subtree when a descendant is active", async () =
 
   const result = await manager.removeConversation(root.conversationId);
   expect(result).toMatchObject({ removed: 0, conversationIds: [] });
-  expect(result.errors[0].error).toContain(child.runId);
+  expect(result.errors[0].error).toContain(child.conversationId);
+  expect(result.errors[0].error).not.toContain(child.runId);
   expect(manager.conversation(root.conversationId).conversationId).toBe(root.conversationId);
   expect(manager.conversation(child.conversationId).conversationId).toBe(child.conversationId);
 
@@ -266,7 +267,7 @@ test("spawning rejects a caller whose run does not belong to its conversation", 
   expect(result.starts[0]).toEqual({
     ok: false,
     inputIndex: 0,
-    error: "Unknown start caller run: adapt-ably.",
+    error: "Start caller is no longer active.",
   });
 });
 
@@ -277,7 +278,7 @@ test("ordered starts reserve capacity and resumes work at capacity", async () =>
     { kind: "spawn", agent: "worker", prompt: "two" },
   ] as any);
   expect(batch.starts.map(start => start.ok)).toEqual([true, false]);
-  expect((batch.starts[1] as any).error).toContain("Remove terminal conversations");
+  expect((batch.starts[1] as any).error).toContain("Remove terminal subagents");
 
   await batch.completion;
   const first = batch.starts[0] as any;
@@ -379,7 +380,7 @@ test("terminal non-resumable conversations retain the generic resume error", asy
   expect(resumed.starts[0]).toEqual({
     ok: false,
     inputIndex: 0,
-    error: `Conversation ${terminal.conversationId} cannot be resumed.`,
+    error: `Subagent ${terminal.conversationId} cannot be resumed.`,
   });
 });
 
@@ -416,7 +417,7 @@ test("aborted conversations resume only after abort and execution settle", async
   const aborted = start.starts[0] as any;
   await new Promise(done => setImmediate(done));
   const cancelling = manager.cancelRun(aborted.runId);
-  const settlingError = `Conversation ${aborted.conversationId} is still settling cancelled run ${aborted.runId}. Wait for it to finish before resuming.`;
+  const settlingError = `Subagent ${aborted.conversationId} is still settling a cancelled execution. Wait for it to finish before resuming.`;
 
   expect(manager.runSnapshot(aborted.runId).status).toMatchObject({ kind: "done", outcome: "aborted" });
   expect(manager.conversation(aborted.conversationId).canResume).toBe(false);
@@ -583,7 +584,7 @@ test("removal rejects active conversations without changing their runs", async (
     conversationIds: [],
     errors: [{
       conversationId: active.conversationId,
-      error: `Conversation subtree ${active.conversationId} has active runs: ${active.runId}. Cancel them before removal.`,
+      error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
     }],
   });
   expect(manager.conversation(active.conversationId).runs[0].status.kind).toBe("running");
@@ -615,9 +616,9 @@ test("batch removal isolates terminal, active, and unknown conversations", async
     errors: [
       {
         conversationId: active.conversationId,
-        error: `Conversation subtree ${active.conversationId} has active runs: ${active.runId}. Cancel them before removal.`,
+        error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
       },
-      { conversationId: "amber-acorn", error: "Unknown conversation: amber-acorn." },
+      { conversationId: "amber-acorn", error: "Unknown subagent: amber-acorn." },
     ],
   });
   expect(() => manager.runSnapshot(terminal.runId)).toThrow(`Unknown run: ${terminal.runId}.`);
@@ -786,6 +787,60 @@ test("exact join does not bind an unrequested descendant", async () => {
   join.release();
 });
 
+test("multi-target join reserves every latest execution before publishing observer updates", async () => {
+  const manager = new SubagentRuntime(registry, 2, runner);
+  const starts = manager.startRun(ctx, [
+    { kind: "spawn", agent: "worker", prompt: "first" },
+    { kind: "spawn", agent: "worker", prompt: "second" },
+  ] as any);
+  await starts.completion;
+  const [first, second] = starts.starts as any[];
+  joinLatest(manager, first.conversationId);
+  joinLatest(manager, second.conversationId);
+
+  let resume: any;
+  const unsubscribe = manager.onConversationUpdate((conversation, kind) => {
+    if (!resume && kind === "observer" && conversation.conversationId === first.conversationId) {
+      resume = manager.startRun(ctx, [{ kind: "resume", subagentId: second.conversationId, prompt: "raced" }] as any).starts[0];
+    }
+  });
+  const binding = manager.bindSubagentJoin([first.conversationId, second.conversationId]);
+  unsubscribe();
+
+  expect(resume).toMatchObject({ ok: false });
+  expect(binding.runIds).toEqual([first.runId, second.runId]);
+  binding.release();
+});
+
+test("nested join reserves targets before publishing its attempt", async () => {
+  const manager = new SubagentRuntime(registry, 3, runner);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
+  const children = manager.startRun(ctx, [
+    { kind: "spawn", agent: "worker", prompt: "first" },
+    { kind: "spawn", agent: "worker", prompt: "second" },
+  ] as any, { caller: ownerCaller });
+  await children.completion;
+  const [first, second] = children.starts as any[];
+  joinLatest(manager, first.conversationId, ownerCaller);
+  joinLatest(manager, second.conversationId, ownerCaller);
+
+  let resume: any;
+  const unsubscribe = manager.onConversationUpdate((conversation, kind) => {
+    if (!resume && kind === "nestedJoin" && conversation.conversationId === owner.conversationId) {
+      resume = manager.startRun(ctx, [{ kind: "resume", subagentId: second.conversationId, prompt: "raced" }] as any, { caller: ownerCaller }).starts[0];
+    }
+  });
+  const binding = manager.bindSubagentJoin([first.conversationId, second.conversationId], ownerCaller);
+  unsubscribe();
+
+  expect(resume).toMatchObject({ ok: false });
+  expect(binding.runIds).toEqual([first.runId, second.runId]);
+  binding.release();
+});
+
 test("resume remains blocked until every accepted join releases", async () => {
   const manager = new SubagentRuntime(registry, 1, runner);
   const firstStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "old" }] as any);
@@ -874,6 +929,7 @@ test("cancelling an active run retains its conversation and exact outcome", asyn
   });
   expect(manager.listConversations().map(value => value.conversationId)).toContain(started.conversationId);
   await expect(manager.cancelRun(started.runId)).rejects.toThrow(`Run ${started.runId} is aborted and cannot be cancelled.`);
+  await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(`Subagent ${started.conversationId} is aborted and cannot be cancelled.`);
 
   const join = manager.bindJoin([started.runId]);
   await join.completion;
@@ -919,7 +975,7 @@ test("queued cancellation settles immediately without dispatching the executor",
   const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: target.conversationId, prompt: "continue" }]);
   expect(resumed.starts[0]).toMatchObject({
     ok: false,
-    error: `Conversation ${target.conversationId} cannot be resumed.`,
+    error: `Subagent ${target.conversationId} cannot be resumed.`,
   });
   await expect(manager.removeConversation(target.conversationId)).resolves.toMatchObject({
     removed: 1,
