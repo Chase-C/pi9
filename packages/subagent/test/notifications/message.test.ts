@@ -22,6 +22,18 @@ test("background completion factory keeps content and structured details on the 
   assert.equal(message.content, formatCompletionNotificationMessage(message.details, true, undefined));
 });
 
+test("terminal notification copy is concise and outcome-oriented", () => {
+  const aborted = { ...entry, status: "aborted" as const };
+  const errored = { ...entry, runId: "run-2", status: "error" as const };
+
+  const single = createCompletionNotificationMessage([aborted]).content;
+  const mixed = createCompletionNotificationMessage([entry, aborted, errored]).content;
+  assert.match(single, /^1 subagent finished:/);
+  assert.match(mixed, /^3 subagents finished:/);
+  assert.doesNotMatch(mixed, /since the last notification|retrieve output/);
+  assert.match(mixed, /Use `subagent join` when you need these terminal outcomes\./);
+});
+
 test("background completion content lists 20 of 21 entries with exact overflow and boundary truncation", () => {
   const display = {
     ...DEFAULT_SUBAGENT_SETTINGS.display,
@@ -48,6 +60,6 @@ test("background completion content lists 20 of 21 entries with exact overflow a
   assert.doesNotMatch(message.content, /run-21/);
 
   const collapsed = formatCompletionNotificationMessage(message.details, false, undefined);
-  assert.match(collapsed, /^21 subagents completed/);
+  assert.match(collapsed, /^21 subagents finished/);
   assert.doesNotMatch(collapsed, /run-1|run-21|Call subagent results/);
 });

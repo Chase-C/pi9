@@ -2,6 +2,7 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Conversation } from "./conversation.js";
 import type { RunOutcomeStatus, ConversationUpdateKind } from "./conversation.js";
 import type { SubagentRuntime } from "./runtime.js";
+import type { RunId } from "./identifiers.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisplaySettings } from "./settings.js";
 
 /** The current serializable completion summary shared by notification production and rendering. */
@@ -26,7 +27,9 @@ export interface CompletionNotificationMessage {
 export type CompletionNotificationMessagePayload = CompletionNotificationMessage;
 
 const MAX_LISTED_COMPLETIONS = 20;
-const RESULTS_INSTRUCTION = "Call subagent join with these runIds to retrieve output.";
+const COMPLETION_GRACE_MS = 500;
+const TERMINAL_RUN_STATUSES = new Set<unknown>(["completed", "error", "aborted", "interrupted", "skipped"]);
+const RESULTS_INSTRUCTION = "Use `subagent join` when you need these terminal outcomes.";
 
 type EntrySurface = "notification" | "renderer";
 
@@ -55,7 +58,7 @@ export function formatCompletionNotificationMessage(
   display: SubagentDisplaySettings = DEFAULT_SUBAGENT_SETTINGS.display,
 ): string {
   const completions = details.completions;
-  const header = formatCompletionHeader(completions.length, expanded);
+  const header = formatCompletionHeader(completions.length);
   const lines = completions.map(entry => formatCompletionEntry(entry, {
     display,
     surface: "renderer",
@@ -72,7 +75,7 @@ export function formatCompletionNotificationMessage(
 function formatNotificationContent(entries: readonly CompletionNotification[], display: SubagentDisplaySettings): string {
   const visible = entries.slice(0, MAX_LISTED_COMPLETIONS);
   const overflow = entries.length - visible.length;
-  const header = formatCompletionHeader(entries.length, true);
+  const header = formatCompletionHeader(entries.length);
   const lines = visible.map(entry => formatCompletionEntry(entry, {
     display,
     surface: "notification",
@@ -95,8 +98,8 @@ function copyCompletionNotification(entry: CompletionNotification): CompletionNo
   };
 }
 
-function formatCompletionHeader(count: number, includeSinceLastNotification: boolean): string {
-  return `${count} subagent${count === 1 ? "" : "s"} completed${includeSinceLastNotification ? " since the last notification:" : ""}`;
+function formatCompletionHeader(count: number): string {
+  return `${count} subagent${count === 1 ? "" : "s"} finished:`;
 }
 
 interface CompletionEntryFormatOptions {
@@ -161,7 +164,7 @@ function formatElapsed(ms: number): string {
 export interface NotifierContext { isIdle(): boolean }
 type Handler = (event: unknown, ctx?: NotifierContext) => void;
 export interface CompletionNotifierPi {
-  on?(event: "agent_end" | "turn_end" | "tool_execution_start" | "session_start" | "session_shutdown", handler: Handler): void;
+  on?(event: "agent_end" | "turn_end" | "tool_execution_start" | "tool_execution_end" | "session_start" | "session_shutdown", handler: Handler): void;
   sendMessage?(message: { customType: string; content: string; details?: unknown }, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }): void | Promise<void>;
 }
 export interface CompletionNotifierDeps {
@@ -173,46 +176,90 @@ export interface CompletionNotifierDeps {
 }
 const schedule = (fn: () => void, ms: number) => { const handle = setTimeout(fn, ms); return () => clearTimeout(handle); };
 
-/** Delivers one notification for each unacknowledged terminal run, not each conversation. */
+/** Delivers batched notifications for terminal runs the parent has not observed or acknowledged. */
 export class CompletionNotifier {
   private ctx?: NotifierContext;
   private cancelTimer?: () => void;
+  private cancelGraceTimer?: () => void;
   private retryToolOpportunity = false;
   private readonly delivered = new Set<string>();
-  private readonly claimed = new Map<string, () => void>();
+  private readonly observed = new Set<string>();
+  private readonly gracePending = new Set<string>();
+  private readonly claimsByToolCall = new Map<string, { action: unknown; runIds: Set<string> }>();
+  private readonly claimCountByRun = new Map<string, number>();
   private readonly unsubscribeAgent: () => void;
 
   constructor(private readonly deps: CompletionNotifierDeps) {
     this.unsubscribeAgent = deps.manager.onConversationUpdate?.(this.onUpdate) ?? (() => {});
     deps.pi.on?.("session_start", (_e, ctx) => { this.ctx = ctx; this.arm(0); });
-    deps.pi.on?.("session_shutdown", () => { this.ctx = undefined; this.cancel(); this.clearClaims(); });
+    deps.pi.on?.("session_shutdown", () => { this.ctx = undefined; this.cancel(); this.cancelGrace(); this.clearClaims(); });
     deps.pi.on?.("agent_end", (_e, ctx) => this.opportunity(ctx));
     deps.pi.on?.("turn_end", (_e, ctx) => this.opportunity(ctx));
     deps.pi.on?.("tool_execution_start", (event, ctx) => this.onToolStart(event, ctx));
+    deps.pi.on?.("tool_execution_end", event => this.onToolEnd(event));
   }
-  unsubscribe(): void { this.unsubscribeAgent(); this.cancel(); this.clearClaims(); }
+  unsubscribe(): void { this.unsubscribeAgent(); this.cancel(); this.cancelGrace(); this.clearClaims(); }
 
-  /** Completes the claim begun by tool_execution_start, including rejected or cancelled joins. */
-  releaseJoinClaims(runIds: readonly string[]): void {
-    for (const id of runIds) this.releaseClaim(id);
+  beginTool(scope: string, toolCallId: string, params: unknown): void {
+    const target = claimTarget(params);
+    if (!target.runIds.size) return;
+    const key = `${scope}:${toolCallId}`;
+    this.releaseToolClaim(key);
+    for (const runId of target.runIds) this.claimCountByRun.set(runId, (this.claimCountByRun.get(runId) ?? 0) + 1);
+    this.claimsByToolCall.set(key, { action: target.action, runIds: target.runIds });
+  }
+
+  completeTool(scope: string, toolCallId: string, result?: unknown): void {
+    const key = `${scope}:${toolCallId}`;
+    const claim = this.claimsByToolCall.get(key);
+    if (!claim) return;
+    for (const id of observedTerminalRunIds(claim.action, result)) {
+      if (claim.runIds.has(id)) this.observed.add(id);
+    }
+    for (const id of claim.runIds) {
+      try {
+        if (this.deps.manager.runSnapshot(id as RunId).acknowledged) this.delivered.add(id);
+      } catch {}
+    }
+    this.releaseToolClaim(key);
     this.arm(0);
   }
 
-  private onUpdate = (_agent: Conversation, kind: ConversationUpdateKind): void => {
-    if (kind === "observer") {
-      const active = new Map<string, number>(this.catalog().map(value => [value.run.runId, value.run.observerCount]));
-      for (const [id] of this.claimed) if (active.get(id) === 0) this.releaseClaim(id);
+  handleToolEvent(scope: string, event: unknown): void {
+    const type = event && typeof event === "object" ? (event as { type?: unknown }).type : undefined;
+    if (type === "tool_execution_start") {
+      const call = toolEvent(event);
+      if (call?.toolName === "subagent") this.beginTool(scope, call.toolCallId, call.args);
+    } else if (type === "tool_execution_end") {
+      const call = toolEndEvent(event);
+      if (call?.toolName === "subagent") this.completeTool(scope, call.toolCallId, call.result);
     }
-    // A grace turn lets a join tool start claim a run before completion delivery.
+  }
+
+  private onUpdate = (agent: Conversation, kind: ConversationUpdateKind): void => {
+    if (kind === "status") {
+      const run = agent.snapshot().runs.at(-1);
+      if (run?.status.kind === "done" && !this.delivered.has(run.runId) && !this.observed.has(run.runId)) {
+        this.gracePending.add(run.runId);
+        this.armGrace();
+      }
+    }
+    // A short grace window lets inspect, cancel, or join claim a run before completion delivery.
     if (kind === "status" || kind === "observer" || kind === "acknowledgement") this.arm(0);
   };
   private opportunity(ctx?: NotifierContext): void { if (ctx) this.ctx = ctx; this.flush(); }
   private onToolStart(event: unknown, ctx?: NotifierContext): void {
     if (ctx) this.ctx = ctx;
-    const ids = joinRunIds(event);
-    for (const id of ids) this.claim(id);
+    const call = toolEvent(event);
+    if (call?.toolName === "subagent") this.beginTool("root", call.toolCallId, call.args);
+    const claimed = call?.toolName === "subagent" && claimTarget(call.args).runIds.size > 0;
+    // Defer delivery until synchronous tool preflight finishes so later joins can claim runs.
     // list is deliberately not a delivery opportunity; a join starts by claiming.
-    if (ids.size === 0 && toolAction(event) !== "list") this.flush(true);
+    if (!claimed && toolAction(event) !== "list") this.arm(0, true);
+  }
+  private onToolEnd(event: unknown): void {
+    const call = toolEndEvent(event);
+    if (call?.toolName === "subagent") this.completeTool("root", call.toolCallId, call.result);
   }
   private arm(delay: number, toolOpportunity = false): void {
     this.retryToolOpportunity ||= toolOpportunity;
@@ -226,21 +273,34 @@ export class CompletionNotifier {
     }, delay);
   }
   private cancel(): void { this.cancelTimer?.(); this.cancelTimer = undefined; this.retryToolOpportunity = false; }
-  private claim(id: string): void {
-    this.releaseClaim(id);
+  private armGrace(): void {
+    if (this.cancelGraceTimer) return;
     const scheduler = this.deps.scheduleRetry ?? schedule;
-    // Tool preparation can involve async settings and registry I/O. The tool completion hook is
-    // the normal release path; this is only protection against a missing host completion.
-    const cancel = scheduler(() => { if (this.claimed.get(id) !== cancel) return; this.claimed.delete(id); this.arm(0); }, 300_000);
-    this.claimed.set(id, cancel);
+    this.cancelGraceTimer = scheduler(() => {
+      this.cancelGraceTimer = undefined;
+      this.gracePending.clear();
+      this.arm(0);
+    }, COMPLETION_GRACE_MS);
   }
-  private releaseClaim(id: string): void { this.claimed.get(id)?.(); this.claimed.delete(id); }
-  private clearClaims(): void { for (const cancel of this.claimed.values()) cancel(); this.claimed.clear(); }
+  private cancelGrace(): void { this.cancelGraceTimer?.(); this.cancelGraceTimer = undefined; }
+  private releaseToolClaim(key: string): void {
+    const claim = this.claimsByToolCall.get(key);
+    if (!claim) return;
+    this.claimsByToolCall.delete(key);
+    for (const runId of claim.runIds) {
+      const remaining = (this.claimCountByRun.get(runId) ?? 1) - 1;
+      if (remaining > 0) this.claimCountByRun.set(runId, remaining);
+      else this.claimCountByRun.delete(runId);
+    }
+  }
+  private clearClaims(): void {
+    for (const key of [...this.claimsByToolCall.keys()]) this.releaseToolClaim(key);
+  }
 
   private flush(toolOpportunity = false): void {
     const mode = this.deps.getMode();
     if (mode === "none") { this.cancel(); return; }
-    const eligible = this.catalog().filter(({ run }) => !this.delivered.has(run.runId) && !this.claimed.has(run.runId) && !run.acknowledged && run.observerCount === 0);
+    const eligible = this.catalog().filter(({ run }) => !this.delivered.has(run.runId) && !this.observed.has(run.runId) && !this.gracePending.has(run.runId) && !this.claimCountByRun.has(run.runId) && !run.acknowledged && run.observerCount === 0);
     if (!eligible.length) return;
     if (!this.ctx) return;
     if (mode === "auto" && !this.ctx.isIdle()) { this.arm(500); return; }
@@ -251,7 +311,7 @@ export class CompletionNotifier {
     const entries: CompletionNotification[] = [];
     for (const candidate of eligible) {
       const value = live.get(candidate.run.runId);
-      if (!value || value.run.acknowledged || value.run.observerCount || this.claimed.has(value.run.runId)) continue;
+      if (!value || value.run.acknowledged || value.run.observerCount || this.claimCountByRun.has(value.run.runId)) continue;
       const started = value.run.status.kind === "done" ? value.run.status.startedAt ?? value.run.createdAt : value.run.createdAt;
       if (value.run.status.kind !== "done") continue;
       entries.push({ runId: value.run.runId, conversationId: value.conversation.conversationId, agent: value.conversation.config.name, ...(value.conversation.label ? { label: value.conversation.label } : {}), status: value.run.status.outcome, elapsedMs: Math.max(0, value.run.status.completedAt - started) });
@@ -282,9 +342,35 @@ function toolAction(event: unknown): unknown {
   const value = event as { toolName?: unknown; args?: { action?: unknown } };
   return value.toolName === "subagent" ? value.args?.action : undefined;
 }
-function joinRunIds(event: unknown): Set<string> {
-  if (!event || typeof event !== "object") return new Set();
-  const value = event as { toolName?: unknown; args?: { action?: unknown; runIds?: unknown } };
-  if (value.toolName !== "subagent" || value.args?.action !== "join" || !Array.isArray(value.args.runIds)) return new Set();
-  return new Set(value.args.runIds.filter((id): id is string => typeof id === "string"));
+function claimTarget(params: unknown): { action: unknown; runIds: Set<string> } {
+  if (!params || typeof params !== "object") return { action: undefined, runIds: new Set() };
+  const value = params as { action?: unknown; runIds?: unknown };
+  const action = value.action;
+  if ((action !== "inspect" && action !== "cancel" && action !== "join") || !Array.isArray(value.runIds)) return { action, runIds: new Set() };
+  return { action, runIds: new Set(value.runIds.filter((id): id is string => typeof id === "string")) };
+}
+function toolEvent(event: unknown): { toolCallId: string; toolName: unknown; args: unknown } | undefined {
+  if (!event || typeof event !== "object") return;
+  const value = event as { toolCallId?: unknown; toolName?: unknown; args?: unknown };
+  if (typeof value.toolCallId !== "string") return;
+  return { toolCallId: value.toolCallId, toolName: value.toolName, args: value.args };
+}
+function toolEndEvent(event: unknown): { toolCallId: string; toolName: unknown; result: unknown } | undefined {
+  if (!event || typeof event !== "object") return;
+  const value = event as { toolCallId?: unknown; toolName?: unknown; result?: unknown };
+  if (typeof value.toolCallId !== "string") return;
+  return { toolCallId: value.toolCallId, toolName: value.toolName, result: value.result };
+}
+function observedTerminalRunIds(action: unknown, result: unknown): string[] {
+  if ((action !== "inspect" && action !== "cancel") || !result || typeof result !== "object") return [];
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object") return [];
+  const runs = (details as { runs?: unknown }).runs;
+  if (!Array.isArray(runs)) return [];
+  return runs.flatMap(value => {
+    if (!value || typeof value !== "object" || "error" in value) return [];
+    const run = value as { runId?: unknown; status?: unknown };
+    if (typeof run.runId !== "string" || !TERMINAL_RUN_STATUSES.has(run.status)) return [];
+    return [run.runId];
+  });
 }

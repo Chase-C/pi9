@@ -8,30 +8,32 @@ const renderResult = (details: SubagentToolDetails, expanded = false, isPartial 
   renderSubagentResult({ details }, { expanded, isPartial }).render(width).map(line => line.trimEnd()).join("\n");
 
 test("call titles summarize action-specific input counts", () => {
-  assert.equal(renderCall({ action: "dispatch", tasks: [{}, {}, {}] }), "subagent dispatch  3 tasks");
+  assert.equal(renderCall({ action: "spawn", spawns: [{}, {}] }), "subagent spawn  2 tasks");
+  assert.equal(renderCall({ action: "resume", resumes: [{}] }), "subagent resume  1 task");
+  assert.equal(renderCall({ action: "steer", messages: [{}, {}] }), "subagent steer  2 messages");
+  assert.equal(renderCall({ action: "cancel", runIds: ["one", "two"] }), "subagent cancel  2 runs");
   assert.equal(renderCall({ action: "inspect", runIds: ["one"] }), "subagent inspect  1 run");
   assert.equal(renderCall({ action: "join", runIds: ["one", "two"] }), "subagent join  2 runs");
   assert.equal(renderCall({ action: "remove", conversationIds: ["one"] }), "subagent remove  1 conversation");
   assert.equal(renderCall({ action: "agents" }), "subagent agents");
   assert.equal(
-    lines(renderSubagentCall({ action: "dispatch" }, { bold: text => `<b>${text}</b>` })),
-    "<b>subagent</b> dispatch",
+    lines(renderSubagentCall({ action: "spawn" }, { bold: text => `<b>${text}</b>` })),
+    "<b>subagent</b> spawn",
   );
 });
 
-test("dispatch uses outcome-first collapsed output and tagged delegation blocks when expanded", () => {
+test("spawn uses outcome-first collapsed output and tagged delegation blocks when expanded", () => {
   const details: SubagentToolDetails = {
-    action: "dispatch",
+    action: "spawn",
     tasks: [
       { inputIndex: 0, kind: "spawn", agent: "scout", label: "auth map", prompt: "Map auth.", conversationId: "quiet-otter" as any, runId: "search-boldly" as any },
       { inputIndex: 1, kind: "spawn", agent: "reviewer", label: "risk review", prompt: "Review risks.", conversationId: "amber-fox" as any, runId: "inspect-carefully" as any },
-      { inputIndex: 2, kind: "resume", agent: "scout", label: "follow-up", prompt: "Check tests.", conversationId: "bright-heron" as any, runId: "verify-quietly" as any },
     ],
   };
 
   assert.equal(renderResult(details), [
-    "✓ Started 2 new conversations and resumed 1 conversation",
-    "  auth map · risk review · follow-up",
+    "✓ Started 2 new conversations",
+    "  auth map · risk review",
   ].join("\n"));
   assert.equal(renderResult(details, true), [
     "→ auth map · scout · spawn",
@@ -41,26 +43,24 @@ test("dispatch uses outcome-first collapsed output and tagged delegation blocks 
     "→ risk review · reviewer · spawn",
     "  Review risks.",
     "  started · conversation amber-fox · run inspect-carefully",
-    "",
-    "→ follow-up · scout · resume",
-    "  Check tests.",
-    "  started · conversation bright-heron · run verify-quietly",
   ].join("\n"));
 });
 
-test("dispatch renders steering and inspect renders bounded activity", () => {
-  const dispatch: SubagentToolDetails = {
-    action: "dispatch",
+test("steer renders receipts and inspect renders bounded activity", () => {
+  const steer: SubagentToolDetails = {
+    action: "steer",
     tasks: [{ inputIndex: 0, kind: "steer", agent: "scout", prompt: "Focus tests.", conversationId: "quiet-otter" as any, runId: "search-boldly" as any, steer: { id: 1, state: "queued", acceptedAt: 1 } }],
   };
-  assert.equal(renderResult(dispatch), "✓ Steered 1 run\n  scout");
-  assert.match(renderResult(dispatch, true), /scout · steer[\s\S]*Focus tests\.[\s\S]*steered[\s\S]*steer #1 queued/);
+  assert.equal(renderResult(steer), "✓ Steered 1 run\n  scout");
+  assert.match(renderResult(steer, true), /scout · steer[\s\S]*Focus tests\.[\s\S]*steered[\s\S]*steer #1 queued/);
 
   const inspect: SubagentToolDetails = {
     action: "inspect",
     runs: [{
       conversationId: "quiet-otter" as any,
       runId: "search-boldly" as any,
+      rootRunId: "search-boldly" as any,
+      depth: 0,
       agent: "scout",
       status: "running",
       phase: "thinking",
@@ -74,6 +74,42 @@ test("dispatch renders steering and inspect renders bounded activity", () => {
   };
   assert.equal(renderResult(inspect), "✓ Inspected 1 run · 1 running\n  scout");
   assert.match(renderResult(inspect, true), /running · thinking[\s\S]*\[partial\] Checking tests\.[\s\S]*read\(test.ts\) · completed[\s\S]*steer #1 · processed/);
+});
+
+test("inspect renders terminal error diagnostics in expanded mode", () => {
+  const inspect: SubagentToolDetails = {
+    action: "inspect",
+    runs: [{
+      conversationId: "quiet-otter" as any,
+      runId: "search-boldly" as any,
+      rootRunId: "search-boldly" as any,
+      depth: 0,
+      agent: "scout",
+      status: "error",
+      elapsedMs: 25,
+      turns: 2,
+      compactions: 1,
+      errorSnippet: "Model request failed.",
+      recentTools: [],
+      steers: [],
+    }],
+  };
+
+  assert.doesNotMatch(renderResult(inspect), /Model request failed/);
+  assert.match(renderResult(inspect, true), /Model request failed\./);
+});
+
+test("cancel renders successful and failed targets", () => {
+  const cancel: SubagentToolDetails = {
+    action: "cancel",
+    runs: [
+      { conversationId: "quiet-otter" as any, runId: "search-boldly", status: "aborted" },
+      { runId: "not-an-id", error: "invalid runId format" },
+    ],
+  };
+
+  assert.equal(renderResult(cancel), "✓ Cancelled 1 run · 1 error\n  search-boldly · not-an-id");
+  assert.match(renderResult(cancel, true), /search-boldly · cancelled[\s\S]*not-an-id · not cancelled[\s\S]*invalid runId format/);
 });
 
 test("inspect renders per-target errors without hiding the result", () => {
@@ -100,21 +136,46 @@ test("agents render configuration tags in expanded mode", () => {
   ].join("\n"));
 });
 
-test("list renders status summary and tagged run inventory", () => {
+test("list renders grouped conversations and nested run status", () => {
   const details: SubagentToolDetails = {
     action: "list",
-    runs: [
-      { conversationId: "quiet-otter" as any, runId: "search-boldly" as any, agent: "scout", label: "auth map", kind: "spawn", status: "running" },
-      { conversationId: "amber-fox" as any, runId: "inspect-carefully" as any, agent: "reviewer", label: "risk review", kind: "spawn", status: "completed" },
+    conversations: [
+      {
+        conversationId: "quiet-otter" as any, agent: "scout", label: "auth map", createdAt: 1, canResume: false,
+        runs: [{ runId: "search-boldly" as any, rootRunId: "search-boldly" as any, depth: 0, kind: "spawn", status: "running", createdAt: 1 }],
+      },
+      {
+        conversationId: "amber-fox" as any, agent: "reviewer", label: "risk review", createdAt: 2, canResume: true,
+        runs: [{ runId: "inspect-carefully" as any, rootRunId: "inspect-carefully" as any, depth: 0, kind: "spawn", status: "completed", createdAt: 2 }],
+      },
     ],
   };
-  assert.equal(renderResult(details), "✓ Found 2 runs · 1 running · 1 completed\n  auth map · risk review");
+  assert.equal(renderResult(details), "✓ Found 2 conversations · 2 runs · 1 running · 1 completed\n  auth map · risk review");
   assert.equal(renderResult(details, true), [
-    "→ auth map · scout · spawn",
-    "  running · conversation quiet-otter · run search-boldly",
+    "→ auth map · scout · 1 run",
+    "  conversation quiet-otter",
+    "  ● search-boldly · spawn · depth 0 · running",
     "",
-    "→ risk review · reviewer · spawn",
-    "  completed · conversation amber-fox · run inspect-carefully",
+    "→ risk review · reviewer · 1 run · resumable",
+    "  conversation amber-fox",
+    "  ✓ inspect-carefully · spawn · depth 0 · completed",
+  ].join("\n"));
+});
+
+test("list renders an empty grouped result", () => {
+  assert.equal(renderResult({ action: "list", conversations: [] }), "✓ No conversations found");
+});
+
+test("join renders target errors without conversation identities", () => {
+  const details: SubagentToolDetails = {
+    action: "join",
+    runs: [{ runId: "not-an-id", status: "error", error: "invalid runId format" }],
+  };
+  assert.equal(renderResult(details, true), [
+    "× not-an-id · error",
+    "  not-an-id",
+    "",
+    "  invalid runId format",
   ].join("\n"));
 });
 
@@ -352,24 +413,15 @@ test("expanded joins order and separate sections while preserving indentation ac
   ].join("\n"));
 });
 
-test("remove renders aggregate aborts without assigning them to a conversation", () => {
+test("remove renders deleted conversations and item-local errors", () => {
   const details: SubagentToolDetails = {
     action: "remove",
     removed: 2,
-    aborted: 1,
     conversationIds: ["quiet-otter", "amber-fox"] as any,
-    errors: [],
+    errors: [{ conversationId: "busy-newt", error: "Conversation busy-newt has active run work-slowly. Cancel and join it before removal." }],
   };
-  assert.equal(renderResult(details), "✓ Removed 2 conversations · 1 active run aborted\n  quiet-otter · amber-fox");
-  assert.equal(renderResult(details, true), [
-    "→ quiet-otter · removed",
-    "  conversation quiet-otter",
-    "",
-    "→ amber-fox · removed",
-    "  conversation amber-fox",
-    "",
-    "  1 active run aborted",
-  ].join("\n"));
+  assert.equal(renderResult(details), "✓ Removed 2 conversations · 1 error\n  quiet-otter · amber-fox");
+  assert.match(renderResult(details, true), /quiet-otter · removed[\s\S]*amber-fox · removed[\s\S]*busy-newt · not removed[\s\S]*Cancel and join/);
 });
 
 test("errors render their message instead of structured output", () => {

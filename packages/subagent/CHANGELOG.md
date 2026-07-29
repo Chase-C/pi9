@@ -4,6 +4,32 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Added
+
+- Include compact, bounded terminal error diagnostics in `inspect` without exposing output or acknowledging outcomes.
+- Expose `parentRunId`, `rootRunId`, and `depth` through `list` and `inspect` so recursive run trees are machine-readable.
+- Include explicit requested overrides and resolved effective execution configuration in `inspect` when available.
+
+### Changed
+
+- Notify only for unseen terminal outcomes: terminal inspection and successful cancellation now suppress redundant completion messages without acknowledging run output.
+- Coalesce newly settled runs behind a fixed grace window while tool-call-scoped inspect, cancel, and join claims protect exact targets across root and recursive agents.
+- Shorten completion copy and describe `join` as retrieving terminal outcomes rather than always retrieving output.
+- Defer completion delivery until synchronous tool preflight settles so same-batch joins can claim their runs without redundant notifications.
+- Report the exact queued or running run that prevents a conversation from being resumed, with status-appropriate next steps.
+- Describe terminal subagents as “finished” in notification headers so aborted and failed runs are not collectively called completed.
+- Allow cancelled conversations to resume after SDK abortion and execution cleanup have both settled.
+
+### Breaking
+
+- Return `{ action, results }` for processed commands and `{ action, error }` for command-level failures. Ordered batch entries use `{ ok: true, data }` or `{ ok: false, error }`.
+- Replace `dispatch(tasks)` and `run(spawns?, resumes?)` with separate `spawn(spawns)`, `resume(resumes)`, and `steer(messages)` actions; there are no compatibility aliases.
+- Split the shared task schema into distinct spawn, resume, and steer item schemas and remove redundant field descriptions.
+- Return malformed, unknown, and unauthorized batch targets as ordered per-item errors instead of rejecting valid siblings.
+- Add `cancel(runIds)` for stopping exact queued or running runs while retaining their conversations and aborted outcomes.
+- Make `remove(conversationIds)` reject active conversations and permanently delete terminal conversations with all associated run records; removed runs are no longer inspectable or joinable.
+- Preserve recursive access by reparenting surviving descendant ownership when an intermediate conversation is removed, and suppress stale updates from join bindings to deleted conversations.
+
 ## [0.8.2] - 2026-07-28
 
 ### Changed

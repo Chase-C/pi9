@@ -1,4 +1,4 @@
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
 import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type ParentRun, type Run, type RunSnapshot, type SteerReceipt } from "./conversation.js";
 import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun, resolveModel, resolveTaskCwd } from "./execute.js";
@@ -15,6 +15,11 @@ export interface RunQueueLease {
   suspendDuring<T>(fn: () => Promise<T>): Promise<T>;
 }
 
+export interface RunQueueTask<T> {
+  readonly completion: Promise<T>;
+  cancel(result: T): boolean;
+}
+
 export class RunQueue {
 
   private _pending = new Array<() => void>();
@@ -23,39 +28,59 @@ export class RunQueue {
   constructor(public maxRunning: number) { }
 
   enqueue<T>(task: (lease: RunQueueLease) => Promise<T>, timingData: Record<string, unknown> = {}): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const queuedAt = Date.now();
-      this._pending.push(() => {
-        this._running++;
-        let active = true;
-        const lease: RunQueueLease = {
-          suspendDuring: async <R>(fn: () => Promise<R>): Promise<R> => {
-            if (!active) return fn();
-            active = false;
-            this._running--;
+    return this.enqueueCancellable(task, timingData).completion;
+  }
+
+  enqueueCancellable<T>(task: (lease: RunQueueLease) => Promise<T>, timingData: Record<string, unknown> = {}): RunQueueTask<T> {
+    let resolveTask!: (value: T) => void;
+    let rejectTask!: (reason?: unknown) => void;
+    let pending = true;
+    const completion = new Promise<T>((resolve, reject) => { resolveTask = resolve; rejectTask = reject; });
+    const queuedAt = Date.now();
+    const start = () => {
+      pending = false;
+      this._running++;
+      let active = true;
+      const lease: RunQueueLease = {
+        suspendDuring: async <R>(fn: () => Promise<R>): Promise<R> => {
+          if (!active) return fn();
+          active = false;
+          this._running--;
+          this._flush();
+          try {
+            return await fn();
+          } finally {
+            await this._acquire();
+            active = true;
+          }
+        },
+      };
+      const waitMs = Date.now() - queuedAt;
+      setImmediate(() => {
+        const end = timingStart("queue.task", { ...timingData, waitMs });
+        task(lease)
+          .then(resolveTask, rejectTask)
+          .finally(() => {
+            if (active) this._running--;
+            end({ running: this._running, pending: this._pending.length });
             this._flush();
-            try {
-              return await fn();
-            } finally {
-              await this._acquire();
-              active = true;
-            }
-          },
-        };
-        const waitMs = Date.now() - queuedAt;
-        setImmediate(() => {
-          const end = timingStart("queue.task", { ...timingData, waitMs });
-          task(lease)
-            .then(resolve, reject)
-            .finally(() => {
-              if (active) this._running--;
-              end({ running: this._running, pending: this._pending.length });
-              this._flush();
-            });
-        });
+          });
       });
-      this._flush();
-    });
+    };
+    this._pending.push(start);
+    this._flush();
+    return {
+      completion,
+      cancel: result => {
+        if (!pending) return false;
+        const index = this._pending.indexOf(start);
+        if (index < 0) return false;
+        this._pending.splice(index, 1);
+        pending = false;
+        resolveTask(result);
+        return true;
+      },
+    };
   }
 
   private _acquire(): Promise<void> {
@@ -96,8 +121,10 @@ export class RunScheduler {
   private readonly _queue: RunQueue;
   private readonly _leases = new Map<string, RunQueueLease>();
   private readonly _executor: RunExecutor;
+  private readonly _queued = new Map<RunId, RunQueueTask<RunSnapshot>>();
   private _isTracked: (conversationId: string) => boolean;
   private _childTool?: (agent: Conversation) => ToolDefinition;
+  private _childSessionEvent?: (agent: Conversation, run: Run, event: AgentSessionEvent) => void;
 
   constructor(opts: RunSchedulerOptions) {
     this._queue = new RunQueue(opts.maxRunning);
@@ -106,11 +133,16 @@ export class RunScheduler {
       executeRun(ctx, agent, run, signal, {
         ...DEFAULT_EXECUTE_RUN_DEPENDENCIES,
         ...(this._childTool ? { childToolFor: this._childTool } : {}),
+        ...(this._childSessionEvent ? { childSessionEvent: this._childSessionEvent } : {}),
       }));
   }
 
   setChildTool(fn: (agent: Conversation) => ToolDefinition): void {
     this._childTool = fn;
+  }
+
+  setChildSessionEvent(fn: (agent: Conversation, run: Run, event: AgentSessionEvent) => void): void {
+    this._childSessionEvent = fn;
   }
 
   configure(opts: { maxRunning?: number }): void {
@@ -141,12 +173,14 @@ export class RunScheduler {
     run: Run,
   ): Promise<RunSnapshot> {
     const kind = run.kind;
-    return this._queue.enqueue(async lease => {
+    const scheduled = this._queue.enqueueCancellable(async lease => {
       const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId });
       let result: RunSnapshot;
       let error: string | undefined;
 
-      if (signal?.aborted || !this._isTracked(agent.conversationId)) {
+      if (run.state.kind === "done") {
+        result = agent.runHistory.find(item => item.runId === run.runId)!;
+      } else if (signal?.aborted || !this._isTracked(agent.conversationId)) {
         result = skippedRun(agent, run.runId);
       } else if (agent.status.kind === "done" && !agent.hasCurrentRun) {
         result = agent.runHistory.find(run => run.runId === run.runId)!;
@@ -175,6 +209,14 @@ export class RunScheduler {
       end({ status: status.kind === "done" ? status.outcome : status.kind, error });
       return result;
     }, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parent?.conversationId, kind });
+    this._queued.set(run.runId, scheduled);
+    const cleanup = () => { if (this._queued.get(run.runId) === scheduled) this._queued.delete(run.runId); };
+    void scheduled.completion.then(cleanup, cleanup);
+    return scheduled.completion;
+  }
+
+  cancelQueued(runId: RunId, result: RunSnapshot): boolean {
+    return this._queued.get(runId)?.cancel(result) ?? false;
   }
 }
 
@@ -188,19 +230,25 @@ export interface JoinProjection { readonly conversationId: ConversationId; reado
 export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; acknowledge(): void; release(): void }
 export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: RunId; readonly attemptIndex: number; interrupt(error?: string): void }
 export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId }
+export interface RunLineage { readonly parentRunId?: RunId; readonly rootRunId: RunId; readonly depth: number }
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
-export interface RemoveResult { removed: number; aborted: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
+export interface RemoveResult { removed: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
+export interface CancelResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: "aborted" }
 export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly steer: SteerReceipt }
 export interface InspectedRun { readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }
 
 type JoinStatus = ConversationSnapshot["runs"][number]["status"];
-type RunRecord =
-  | { readonly kind: "live"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly agent: Conversation }
-  | { readonly kind: "detached"; readonly runId: RunId; readonly conversationId: ConversationId; readonly parentRunId?: RunId; snapshot: RunSnapshot; readonly display: ConversationDisplayIdentity };
+type RunRecord = {
+  readonly runId: RunId;
+  readonly conversationId: ConversationId;
+  /** Current ownership parent; contracted across removed conversations. */
+  readonly parentRunId?: RunId;
+  readonly agent: Conversation;
+};
 interface BoundRun { readonly runId: RunId; snapshot(): { readonly status: JoinStatus }; acknowledge(): void; release(): void }
 interface BoundRecord { readonly conversationId: ConversationId; readonly parentRunId?: RunId; readonly binding: BoundRun }
 
-/** Owns resumable conversations and compact exact-run records that outlive them. */
+/** Owns retained conversations and their exact-run records. */
 export class SubagentRuntime {
   private readonly conversations = new Map<ConversationId, Conversation>();
   private readonly runs = new Map<RunId, RunRecord>();
@@ -251,18 +299,27 @@ export class SubagentRuntime {
       } else {
         agent = this.conversations.get(task.conversationId);
         if (!agent) error = `Unknown conversation: ${task.conversationId}.`;
-        else if (!agent.canResume) error = `Conversation ${task.conversationId} cannot be resumed.`;
+        else if (agent.hasCurrentRun) {
+          const status = agent.status.kind;
+          if (status === "running") error = `Conversation ${task.conversationId} has running run ${agent.latestRunId}. Join it before resuming, or steer it while it runs.`;
+          else if (status === "queued") error = `Conversation ${task.conversationId} has queued run ${agent.latestRunId}. Wait for or join it before resuming.`;
+          else error = `Conversation ${task.conversationId} cannot be resumed.`;
+        }
+        else if (!agent.canResume) error = this.resumeError(agent);
         else { runId = this.runIds.allocate(); if (!runId) error = "Run ID space exhausted."; else agent.beginResume(runId, task.prompt); }
       }
       if (!agent || !runId || error) { starts.push({ ok: false, inputIndex, error: error ?? "Could not start run." }); continue; }
       this.runs.set(runId, {
-        kind: "live", runId, conversationId: agent.conversationId, agent,
+        runId, conversationId: agent.conversationId, agent,
         ...(task.kind === "spawn" && options.parent ? { parentRunId: options.parent.runId } : {}),
       });
-      // Publish queued only after both indexes can resolve the event identities.
+      const run = agent.requireCurrentRun();
+      const execution = this._scheduler.run(ctx, undefined, agent, run)
+        .finally(() => agent.executionSettled(run.runId));
+      executions.push(execution);
+      // Publish queued only after the catalog indexes and scheduler can resolve the run.
       this.updated(agent, "status");
       starts.push({ ok: true, inputIndex, conversationId: agent.conversationId, runId });
-      executions.push(this._scheduler.run(ctx, undefined, agent, agent.requireCurrentRun()));
     }
     return { starts, completion: Promise.allSettled(executions).then(() => starts) };
   }
@@ -270,9 +327,25 @@ export class SubagentRuntime {
   async steerRun(runId: RunId, prompt: string, owner?: ParentRun): Promise<SteerResult> {
     const record = this.requireRunRecord(runId);
     this.assertOwnerAccess(record, owner, "steer");
-    if (record.kind !== "live") throw new Error(`Run ${runId} is no longer active and cannot be steered.`);
     const steer = await record.agent.steer(runId, prompt);
     return { conversationId: record.conversationId, runId, steer };
+  }
+
+  async cancelRun(runId: RunId, owner?: ParentRun): Promise<CancelResult> {
+    const record = this.requireRunRecord(runId);
+    this.assertOwnerAccess(record, owner, "cancel");
+    const run = this.runSnapshot(runId);
+    if (run.status.kind === "done") {
+      throw new Error(`Run ${runId} is ${run.status.outcome} and cannot be cancelled.`);
+    }
+    const wasQueued = run.status.kind === "queued";
+    const aborting = record.agent.abort("Run cancelled.");
+    if (wasQueued) {
+      const aborted = record.agent.runHistory.find(item => item.runId === runId)!;
+      this._scheduler.cancelQueued(runId, aborted);
+    }
+    await aborting;
+    return { conversationId: record.conversationId, runId, status: "aborted" };
   }
 
   inspectRuns(runIds: readonly RunId[], owner?: ParentRun): InspectedRun[] {
@@ -292,7 +365,7 @@ export class SubagentRuntime {
   /** Records and binds one nested join attempt on its exact owner run. */
   bindNestedJoin(owner: ParentRun, runIds: readonly RunId[], toolCallId?: string): NestedJoinBinding {
     const ownerRecord = this.runs.get(owner.runId);
-    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId || ownerRecord.kind !== "live")
+    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId)
       throw new Error(`Unknown join owner run: ${owner.runId}.`);
     const attemptIndex = ownerRecord.agent.beginNestedJoin(owner.runId, runIds, toolCallId);
     let records: RunRecord[];
@@ -332,14 +405,30 @@ export class SubagentRuntime {
 
   runSnapshot(runId: RunId): RunSnapshot {
     const record = this.requireRunRecord(runId);
-    return record.kind === "live" ? record.agent.runHistory.find(run => run.runId === runId)! : record.snapshot;
+    return record.agent.runHistory.find(run => run.runId === runId)!;
+  }
+  runLineage(runId: RunId): RunLineage {
+    const record = this.requireRunRecord(runId);
+    let current = record;
+    let depth = 0;
+    const seen = new Set<RunId>([runId]);
+    while (current.parentRunId) {
+      const parent = this.requireRunRecord(current.parentRunId);
+      if (seen.has(parent.runId)) break;
+      seen.add(parent.runId);
+      current = parent;
+      depth++;
+    }
+    return {
+      ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
+      rootRunId: current.runId,
+      depth,
+    };
   }
   conversationDisplay(conversationId: ConversationId): ConversationDisplayIdentity {
     const live = this.conversations.get(conversationId);
     if (live) return { conversationId, ...(live.label ? { label: live.label } : {}), agentName: live.agentName };
-    const record = [...this.runs.values()].find(value => value.conversationId === conversationId && value.kind === "detached");
-    if (!record || record.kind !== "detached") throw new Error(`Unknown conversation: ${conversationId}.`);
-    return record.display;
+    throw new Error(`Unknown conversation: ${conversationId}.`);
   }
   directSpawnedChildren(runId: RunId): readonly RunIdentity[] {
     return [...this.runs.values()].filter(value => value.parentRunId === runId).map(value => ({ runId: value.runId, conversationId: value.conversationId, parentRunId: runId }));
@@ -353,10 +442,7 @@ export class SubagentRuntime {
     const attached: BoundRecord[] = [];
     try {
       for (const record of records) {
-        const binding: BoundRun = record.kind === "live" ? record.agent.bindRun(record.runId) : {
-          runId: record.runId, snapshot: () => ({ status: record.snapshot.status }),
-          acknowledge: () => { record.snapshot = Object.freeze({ ...record.snapshot, acknowledged: true }); }, release: () => {},
-        };
+        const binding: BoundRun = record.agent.bindRun(record.runId);
         attached.push({ conversationId: record.conversationId, binding, ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}) });
       }
     } catch (error) { for (const item of attached) item.binding.release(); throw error; }
@@ -373,29 +459,15 @@ export class SubagentRuntime {
     };
   }
   private updateNestedJoin(runId: RunId, index: number, update: { targets?: readonly NestedJoinTargetSnapshot[]; state?: "running" | "completed" | "failed" | "interrupted"; error?: string }): void {
-    const record = this.requireRunRecord(runId);
-    if (record.kind === "live") {
-      record.agent.updateNestedJoin(runId, index, update);
-      return;
-    }
-    const attempts = [...(record.snapshot.nestedJoins ?? [])];
-    const current = attempts[index];
-    if (!current || current.state !== "running") return;
-    const terminal = update.state !== undefined && update.state !== "running";
-    attempts[index] = Object.freeze({
-      ...current,
-      ...(update.targets ? { targets: Object.freeze(update.targets.map(target => Object.freeze({ ...target }))) } : {}),
-      ...(update.state ? { state: update.state } : {}),
-      ...(update.error !== undefined ? { error: update.error } : {}),
-      ...(terminal ? { completedAt: Date.now() } : {}),
-    });
-    record.snapshot = Object.freeze({ ...record.snapshot, nestedJoins: Object.freeze(attempts) });
+    const record = this.runs.get(runId);
+    if (!record) return;
+    record.agent.updateNestedJoin(runId, index, update);
   }
 
   private assertOwnerAccess(record: RunRecord, owner: ParentRun | undefined, action: string): void {
     if (!owner) return;
     const ownerRecord = this.runs.get(owner.runId);
-    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId || ownerRecord.kind !== "live") {
+    if (!ownerRecord || ownerRecord.conversationId !== owner.conversationId) {
       throw new Error(`Unknown ${action} owner run: ${owner.runId}.`);
     }
     if (!this.isDescendant(record.runId, owner.runId)) {
@@ -416,26 +488,49 @@ export class SubagentRuntime {
 
   removeConversation(conversationId: string): Promise<RemoveResult> { return this.removeConversations([conversationId]); }
   async removeConversations(ids: readonly string[]): Promise<RemoveResult> {
-    const unique = [...new Set(ids)]; const removed: ConversationId[] = []; const errors: Array<{ conversationId: string; error: string }> = []; let aborted = 0;
+    const unique = [...new Set(ids)]; const removed: ConversationId[] = []; const errors: Array<{ conversationId: string; error: string }> = [];
     for (const id of unique) {
       const agent = this.conversations.get(id as ConversationId);
       if (!agent) { errors.push({ conversationId: id, error: `Unknown conversation: ${id}.` }); continue; }
-      if (agent.hasCurrentRun) aborted++;
-      this.conversations.delete(agent.conversationId);
-      await agent.abort("Conversation removed.");
-      const runs = agent.runHistory;
-      for (const run of runs) {
-        const indexed = this.runs.get(run.runId);
-        this.runs.set(run.runId, {
-          kind: "detached", runId: run.runId, conversationId: agent.conversationId, snapshot: run, display: { conversationId: agent.conversationId, ...(agent.label ? { label: agent.label } : {}), agentName: agent.agentName },
-          ...(indexed?.parentRunId ? { parentRunId: indexed.parentRunId } : {}),
+      if (agent.hasCurrentRun) {
+        errors.push({
+          conversationId: id,
+          error: `Conversation ${id} has active run ${agent.latestRunId}. Cancel and join it before removal.`,
         });
+        continue;
       }
+      this.contractOwnership(agent);
+      this.conversations.delete(agent.conversationId);
+      for (const run of agent.runHistory) this.runs.delete(run.runId);
       removed.push(agent.conversationId);
     }
-    return { removed: removed.length, aborted, conversationIds: removed, errors };
+    return { removed: removed.length, conversationIds: removed, errors };
+  }
+  private contractOwnership(agent: Conversation): void {
+    const removedRunIds = new Set(agent.runHistory.map(run => run.runId));
+    for (const [runId, record] of this.runs) {
+      if (!record.parentRunId || !removedRunIds.has(record.parentRunId) || removedRunIds.has(runId)) continue;
+      const replacementParentRunId = this.runs.get(record.parentRunId)?.parentRunId;
+      const replacementParent = replacementParentRunId
+        ? this.runs.get(replacementParentRunId)
+        : undefined;
+      const { parentRunId: _, ...child } = record;
+      this.runs.set(runId, replacementParentRunId ? { ...child, parentRunId: replacementParentRunId } : child);
+      record.agent.reparent(replacementParent
+        ? { conversationId: replacementParent.conversationId, runId: replacementParent.runId }
+        : undefined);
+    }
   }
   private requireConversation(id: string): Conversation { const found = this.conversations.get(id as ConversationId); if (!found) throw new Error(`Unknown conversation: ${id}.`); return found; }
+  private resumeError(agent: Conversation): string {
+    if (agent.isStopping) {
+      return `Conversation ${agent.conversationId} is still settling cancelled run ${agent.latestRunId}. Wait for it to finish before resuming.`;
+    }
+    return `Conversation ${agent.conversationId} cannot be resumed.`;
+  }
   private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Conversation capacity (${this.maxConversations}) reached. Remove terminal conversations${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
-  private updated(agent: Conversation, kind: ConversationUpdateKind): void { for (const listener of this.listeners) listener(agent, kind); }
+  private updated(agent: Conversation, kind: ConversationUpdateKind): void {
+    if (this.conversations.get(agent.conversationId) !== agent) return;
+    for (const listener of this.listeners) listener(agent, kind);
+  }
 }

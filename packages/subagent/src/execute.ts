@@ -14,6 +14,7 @@ import {
   SettingsManager,
   stripFrontmatter,
   type AgentSession,
+  type AgentSessionEvent,
   type ModelRegistry,
   type Skill,
   type ToolDefinition,
@@ -62,6 +63,7 @@ export interface ExecuteRunDependencies {
   readSkillFile: typeof readFileSync;
   loadExtensionPaths: (cwd: string, agentDir: string) => Promise<string[]>;
   childToolFor?: (agent: Conversation) => ToolDefinition;
+  childSessionEvent?: (agent: Conversation, run: Run, event: AgentSessionEvent) => void;
 }
 
 export const DEFAULT_EXECUTE_RUN_DEPENDENCIES: ExecuteRunDependencies = {
@@ -88,7 +90,7 @@ export async function executeRun(
       throw new Error(`Cannot resume an agent without a conversation session.`);
     }
     agent.bindSession(session);
-    return PromptAgent(session, agent, run, signal);
+    return PromptAgent(session, agent, run, signal, dependencies.childSessionEvent);
   }
 
   if (signal?.aborted) return skippedRun(agent, run.runId);
@@ -183,7 +185,7 @@ export async function executeRun(
   }
 
   agent.bindSession(session);
-  return PromptAgent(session, agent, run, signal);
+  return PromptAgent(session, agent, run, signal, dependencies.childSessionEvent);
 }
 
 async function PromptAgent(
@@ -191,6 +193,7 @@ async function PromptAgent(
   agent: Conversation,
   run: Run,
   signal?: AbortSignal,
+  onSessionEvent?: (agent: Conversation, run: Run, event: AgentSessionEvent) => void,
 ): Promise<RunSnapshot> {
   const prompt = run.prompt;
   const onAbort = () => { void AbortSession(session); }
@@ -201,6 +204,7 @@ async function PromptAgent(
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
+  const unsubscribe = onSessionEvent ? session.subscribe(event => onSessionEvent(agent, run, event)) : undefined;
 
   try {
     await timingAsync("runAgent.session.prompt", { agent: agent.agentName, conversationId: agent.conversationId, promptLength: prompt.length }, () => session.prompt(prompt));
@@ -219,6 +223,7 @@ async function PromptAgent(
       ? interruptedRun(agent, run.runId, message)
       : errorRun(agent, run.runId, message);
   } finally {
+    unsubscribe?.();
     signal?.removeEventListener("abort", onAbort);
   }
 }

@@ -6,26 +6,27 @@ import { defineSubagentTool } from "../../src/tool.js";
 const settings = { runtime: { maxTasksPerRun: 1 }, display: {} } as any;
 const registry = { agents: new Map(), summarizeAgent: () => "helper" } as any;
 
-test("description associates flat-schema properties with actions and task kinds", () => {
+test("description names typed action inputs without restating task unions", () => {
   const tool = defineSubagentTool({
     runtime: {} as any,
     agentRegistry: registry,
     prepareInvocation: async () => settings,
   });
   const description = tool.description;
-  assert.match(description, /list\(status\?\)/);
-  assert.match(description, /dispatch\(tasks\)/);
+  assert.match(description, /Conversation IDs use adjective-noun form; run IDs use verb-adverb form\./);
+  assert.match(description, /list\(status\?\).*matching a status/);
+  assert.match(description, /spawn\(spawns\)/);
+  assert.match(description, /resume\(resumes\)/);
+  assert.match(description, /steer\(messages\)/);
+  assert.match(description, /cancel\(runIds\)/);
   assert.match(description, /inspect\(runIds\)/);
   assert.match(description, /join\(runIds\)/);
-  assert.match(description, /remove\(conversationIds\)/);
-  assert.match(description, /Spawn: \{ agent, prompt/);
-  assert.match(description, /Resume: \{ conversationId, prompt \}/);
-  assert.match(description, /Steer: \{ runId, prompt \}/);
-  const taskProperties = (tool.parameters as any).properties.tasks.items.properties;
-  assert.ok(taskProperties.agent);
-  assert.ok(taskProperties.conversationId);
-  assert.ok(taskProperties.runId);
-  assert.ok(taskProperties.prompt);
+  assert.match(description, /remove\(conversationIds\).*Surviving children are reparented/);
+  assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union/);
+  const properties = (tool.parameters as any).properties;
+  assert.deepEqual(Object.keys(properties.spawns.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
+  assert.deepEqual(Object.keys(properties.resumes.items.properties), ["conversationId", "prompt"]);
+  assert.deepEqual(Object.keys(properties.messages.items.properties), ["runId", "message"]);
 });
 
 const toolCall = (arguments_: Record<string, any>) => ({
@@ -42,8 +43,8 @@ test("SDK validation rejects a whole batch containing a malformed task", () => {
     prepareInvocation: async () => ({ runtime: { maxTasksPerRun: 2 }, display: {} }) as any,
   });
   const raw = {
-    action: "dispatch",
-    tasks: [
+    action: "spawn",
+    spawns: [
       { agent: "helper", prompt: "malformed", extra: true },
       { agent: "helper", prompt: "valid" },
     ],
@@ -59,7 +60,7 @@ test("SDK validation enforces the task-array minimum", () => {
     prepareInvocation: async () => settings,
   });
   assert.throws(
-    () => validateToolArguments(tool, toolCall({ action: "dispatch", tasks: [] })),
+    () => validateToolArguments(tool, toolCall({ action: "spawn", spawns: [] })),
     /Validation failed/,
   );
 });
@@ -67,18 +68,43 @@ test("SDK validation enforces the task-array minimum", () => {
 test("tool prepares settings, applies task limits, and renders simple typed content", async () => {
   let prepared = 0;
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => { prepared++; return settings; } });
-  const result = await tool.execute("call", { action: "dispatch", tasks: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
-  assert.equal(prepared, 1); assert.equal(result.isError, true); assert.match(result.content[0].text, /Too many tasks/);
+  const result = await tool.execute("call", { action: "spawn", spawns: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
+  assert.equal(prepared, 1);
+  assert.equal(result.isError, true);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    action: "spawn",
+    error: "Too many tasks (2). Max is 1.\n\nAvailable agents:\nhelper",
+  });
   assert.match(tool.renderResult(result, {}, {}).render(120).join("\n"), /Too many tasks/);
-  assert.match(tool.renderCall({ action: "dispatch", tasks: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
+  assert.match(tool.renderCall({ action: "spawn", spawns: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
 });
 
-test("rejected mixed join releases every valid requested claim", async () => {
-  let released: readonly string[] = [];
-  const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings, releaseJoinClaims: ids => { released = ids; } });
-  const result = await tool.execute("call", { action: "join", runIds: ["valid-run", 42] }, undefined, undefined, {});
+test("unknown actions return a structured global error envelope", async () => {
+  const tool: any = defineSubagentTool({
+    runtime: {} as any,
+    agentRegistry: registry,
+    prepareInvocation: async () => settings,
+  });
+
+  const result = await tool.execute("call", { action: "bogus" }, undefined, undefined, {});
+
   assert.equal(result.isError, true);
-  assert.deepEqual(released, ["valid-run"]);
+  assert.deepEqual(JSON.parse(result.content[0].text), {
+    action: "unknown",
+    error: 'Unknown action: bogus. Use "agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", or "remove".',
+  });
+});
+
+test("mixed join target errors remain ordered item failures", async () => {
+  const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings });
+  const result = await tool.execute("call", { action: "join", runIds: ["valid-run", 42] }, undefined, undefined, {});
+  assert.equal(result.isError, false);
+  const response = JSON.parse(result.content[0].text);
+  assert.equal(response.action, "join");
+  assert.deepEqual(response.results, [
+    { ok: false, runId: "valid-run", error: "join received invalid runId format 'valid-run'." },
+    { ok: false, runId: "42", error: "join received invalid runId format '42'." },
+  ]);
 });
 
 test("settings preparation failures propagate without starting manager work", async () => {

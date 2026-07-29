@@ -230,14 +230,14 @@ export interface RunBinding { readonly runId: RunId; snapshot(): RunSnapshot; ac
 export class Conversation {
   readonly createdAt = Date.now();
   readonly agentName: string;
-  readonly parent?: ParentRun;
+  parent?: ParentRun;
   readonly requestedConfig: AgentRequestedConfig;
   readonly requestedOverrides?: ConversationRequestedOverrides;
   readonly label?: string;
   private readonly runs: Run[] = [];
   private currentRun?: Run;
   private session?: AgentSession;
-  private stopping = false;
+  private stopping?: { runId: RunId; abortSettled: boolean; executionSettled: boolean };
   private steerTail: Promise<void> = Promise.resolve();
   private unsubscribe?: () => void;
   private effectiveConfig?: ConversationEffectiveConfig;
@@ -270,8 +270,10 @@ export class Conversation {
   get status(): RunViewStatus { return this.project(this.runs[this.runs.length - 1]).status; }
   get canResume(): boolean {
     const latest = this.runs.at(-1);
-    return !this.currentRun && !!this.session && latest?.state.kind === "done" &&
-      (latest.state.result.status === "completed" || latest.state.result.status === "interrupted");
+    return !this.currentRun && !this.stopping && !!this.session && latest?.state.kind === "done" &&
+      (latest.state.result.status === "completed"
+        || latest.state.result.status === "interrupted"
+        || latest.state.result.status === "aborted");
   }
 
   private newRun(runId: RunId, kind: "spawn" | "resume", prompt: string): Run {
@@ -300,6 +302,13 @@ export class Conversation {
     this.listener(this, "status");
   }
   sessionForResume(): AgentSession | undefined { return this.session; }
+  get isStopping(): boolean { return this.stopping !== undefined; }
+  reparent(parent?: ParentRun): void { this.parent = parent; }
+  executionSettled(runId: RunId): void {
+    if (this.stopping?.runId !== runId) return;
+    this.stopping.executionSettled = true;
+    this.finishStopping(runId);
+  }
 
   steer(runId: RunId, prompt: string): Promise<SteerReceipt> {
     const pending = this.steerTail.then(async () => {
@@ -352,7 +361,7 @@ export class Conversation {
   async abort(reason = "Agent aborted."): Promise<void> {
     const run = this.currentRun;
     if (!run) return;
-    this.stopping = true;
+    this.stopping = { runId: run.runId, abortSettled: false, executionSettled: false };
     const runningSession = run.state.kind === "running" ? run.state.session : undefined;
     clearSessionQueue(runningSession);
     this.settle(run.runId, { status: "aborted", error: reason });
@@ -360,6 +369,16 @@ export class Conversation {
     await this.steerTail;
     clearSessionQueue(runningSession);
     await aborting;
+    if (this.stopping?.runId === run.runId) {
+      this.stopping.abortSettled = true;
+      this.finishStopping(run.runId);
+    }
+  }
+
+  private finishStopping(runId: RunId): void {
+    if (this.stopping?.runId !== runId || !this.stopping.abortSettled || !this.stopping.executionSettled) return;
+    this.stopping = undefined;
+    this.listener(this, "status");
   }
 
   beginNestedJoin(runId: RunId, targets: readonly RunId[], toolCallId?: string): number {

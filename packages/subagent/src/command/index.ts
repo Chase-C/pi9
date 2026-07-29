@@ -79,6 +79,15 @@ export function registerSubagentsCommand(
                 notify(ctx, `Started run ${start.runId} in conversation ${conversationId}.`, "info");
               }
             },
+            onCancel: async runId => {
+              try {
+                await runtime.cancelRun(runId as any);
+                notify(ctx, `Cancelled subagent run ${runId}.`, "info");
+              } catch (error) {
+                notify(ctx, errorMessage(error), "warning");
+              }
+              updateSubagentWidget(ctx, runtime.listConversations(), settings);
+            },
             onRemove: async conversationId => {
               const result = await runtime.removeConversation(conversationId);
               if (result.removed) notify(ctx, `Removed subagent conversation ${conversationId}.`, "info");

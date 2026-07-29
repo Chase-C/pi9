@@ -170,15 +170,15 @@ test("progress previews represent both small and large row limits", () => {
   assert.match(largeOutput, /\+2 more/);
 });
 
-test("max tasks setting describes dispatch terminology", () => {
+test("max batch setting describes spawn, resume, and steer terminology", () => {
   const { component } = settingsComponent();
   down(component, 5);
   const rendered = output(component);
 
-  assert.match(rendered, /Max tasks per dispatch/);
-  assert.match(rendered, /dispatch\(tasks:/);
-  assert.match(rendered, /subagent dispatch call/);
-  assert.doesNotMatch(rendered, /run\(tasks:|subagent run call/);
+  assert.match(rendered, /Max batch size/);
+  assert.match(rendered, /spawn\/resume\/steer \(up to/);
+  assert.match(rendered, /Larger batches/);
+  assert.doesNotMatch(rendered, /dispatch/);
 });
 
 test("completion notification preview uses behavior diagrams rather than fake UI", () => {
