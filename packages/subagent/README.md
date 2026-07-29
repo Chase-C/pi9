@@ -100,7 +100,7 @@ Subagents form a stable ownership tree. A spawned subagent records its immutable
 
 `list` defaults to immediate children. Pass `scope: "descendants"` for the complete owned subtree; at the root this is the global runtime inventory. Its optional `state` array filters subagents with OR semantics: `active` means queued, running, or still stopping; `awaiting_join` means the latest outcome has not been acknowledged by its direct owner; `resumable` means joined with preserved context; and `terminal` means joined without resumable context. Listed subagents expose their stable identity, state, parent, spawn provenance, depth, and execution history without private execution IDs. Inspection is pure and bounded; malformed, duplicate, unknown, or unauthorized targets return ordered per-target errors without hiding valid siblings. A running snapshot includes `phase`, requested overrides, effective configuration, recent activity, and steer receipts. Terminal output remains exclusive to `join`.
 
-Only explicitly joined descendants block the caller. Unjoined descendants continue independently when their spawning run finishes, but remain owned by their stable parent conversation. Nested answers are returned directly to the child that joined them, while ancestor rendering retains lifecycle and identity context without copying target answers. Nested join-attempt history is runtime-local and is not restored after restart or extension reload.
+Only explicitly joined descendants block the caller. Unjoined descendants continue independently when their spawning run finishes, but remain owned by their stable parent subagent. Nested answers are returned directly to the child that joined them, while ancestor rendering retains lifecycle and identity context without copying target answers. Nested join-attempt history is runtime-local and is not restored after restart or extension reload.
 
 ![A technical-lead subagent joining two nested investigations with live tool activity](media/recursive-delegation.png)
 
@@ -120,7 +120,7 @@ Completion notifications alert the direct owner to terminal subagent outcomes it
 
 The package emits projected lifecycle updates for queued, started, and completed work using stable subagent identities. Nested join changes emit `subagent:updated` with `kind: "nestedJoin"` and the owner subagent snapshot; they do not create additional queued, started, or completed milestones. Private execution identifiers, execution records, child session context, and nested join-attempt history are runtime-local only. They are not restored after a process restart or extension reload.
 
-Spawn and resume tasks remain asynchronous regardless of recursive delegation. Steer messages return after Pi accepts the message; they do not wait for the target to act on it. Cancel waits for in-flight steering and SDK abortion to finish after terminalizing the run. These semantics do not change the scope or behavior of `/subagents` or its widget.
+Spawn and resume tasks remain asynchronous regardless of recursive delegation. Steer messages return after Pi accepts the message; they do not wait for the target to act on it. Cancel waits for in-flight steering and SDK abortion to finish after terminalizing the execution. These semantics do not change the scope or behavior of `/subagents` or its widget.
 
 ## Major-version migration
 
