@@ -15,7 +15,7 @@ describe("widget lifecycle", () => {
     expect(setWidget).toHaveBeenCalled();
   });
 
-  it("coalesces activity refreshes but applies status updates promptly", () => {
+  it("coalesces activity refreshes but applies status and removal updates promptly", () => {
     vi.useFakeTimers();
     try {
       const handlers: Record<string, any> = {}; let update: any;
@@ -38,6 +38,10 @@ describe("widget lifecycle", () => {
       setWidget.mockClear();
 
       update(undefined, "status");
+      expect(setWidget).toHaveBeenCalledTimes(1);
+      setWidget.mockClear();
+
+      update(undefined, "removed");
       expect(setWidget).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

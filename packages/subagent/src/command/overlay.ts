@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents.js";
 import { effectiveStatus, type ConversationSnapshot, type RunSnapshot } from "../conversation.js";
+import type { RunId } from "../identifiers.js";
 import { formatElapsed, formatTokens, runElapsedMs } from "../run-format.js";
 import type { SubagentRuntime } from "../runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../settings.js";
@@ -337,7 +338,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     if (run.status.kind !== "done" && run.activity.messageSnippet) {
       lines.push(`  ${this.dim(truncateToWidth(compact(run.activity.messageSnippet), Math.max(1, width - 2), "…"))}`);
     }
-    const nested = this.renderNestedConversationTree(conversation, run, Math.max(1, width - 2));
+    const nested = this.renderNestedConversationTree(run, Math.max(1, width - 2));
     if (nested.length) lines.push(`  ${this.muted("subagents")}`, ...nested.map(line => `  ${line}`));
 
     if (run.status.kind === "done") {
@@ -357,15 +358,13 @@ export class SubagentOverlayComponent implements Component, Focusable {
     return lines;
   }
 
-  private renderNestedConversationTree(conversation: ConversationSnapshot, run: RunSnapshot, width: number): string[] {
-    const ownerKey = (conversationId: string, runId: string) => `${conversationId}\0${runId}`;
-    const children = new Map<string, ConversationSnapshot[]>();
+  private renderNestedConversationTree(run: RunSnapshot, width: number): string[] {
+    const children = new Map<RunId, ConversationSnapshot[]>();
     for (const candidate of this.manager.listConversations()) {
-      if (!candidate.parent) continue;
-      const key = ownerKey(candidate.parent.conversationId, candidate.parent.runId);
-      const siblings = children.get(key) ?? [];
+      if (!candidate.spawnedByRunId) continue;
+      const siblings = children.get(candidate.spawnedByRunId) ?? [];
       siblings.push(candidate);
-      children.set(key, siblings);
+      children.set(candidate.spawnedByRunId, siblings);
     }
 
     const lines: string[] = [];
@@ -381,9 +380,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const connector = `${prefix}${last ? "╰─" : "├─"}`;
       const content = `${this.muted(connector)} ${this.text(label)}${this.muted(agent)} ${this.muted("·")} ${childRun ? this.statusText(childRun, status) : this.muted(status)}`;
       lines.push(truncateToWidth(content, width, "…"));
-      if (childRun) visit(children.get(ownerKey(child.conversationId, childRun.runId)) ?? [], `${prefix}${last ? "   " : `${this.muted("│")}  `}`);
+      if (childRun) visit(children.get(childRun.runId) ?? [], `${prefix}${last ? "   " : `${this.muted("│")}  `}`);
     });
-    visit(children.get(ownerKey(conversation.conversationId, run.runId)) ?? [], "");
+    visit(children.get(run.runId) ?? [], "");
     return lines;
   }
 

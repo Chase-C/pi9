@@ -111,8 +111,12 @@ export function listAction(
   deps: ActionDeps,
   invocation: InvocationFor<"list">,
 ): ActionResult {
-  const conversations = deps.runtime.listConversations().map(conversation => ({
+  const callerConversationId = deps.parent?.conversationId;
+  const conversations = deps.runtime.queryConversations(callerConversationId, invocation.scope).map(conversation => ({
     conversationId: conversation.conversationId,
+    ...(conversation.parentConversationId ? { parentConversationId: conversation.parentConversationId } : {}),
+    ...(conversation.spawnedByRunId ? { spawnedByRunId: conversation.spawnedByRunId } : {}),
+    depth: deps.runtime.conversationDepth(conversation.conversationId, callerConversationId),
     agent: conversation.config.name,
     ...(conversation.label ? { label: conversation.label } : {}),
     createdAt: conversation.createdAt,
@@ -123,7 +127,6 @@ export function listAction(
         kind: run.kind,
         status: (run.status.kind === "done" ? run.status.outcome : run.status.kind) as RunStatus,
         createdAt: run.createdAt,
-        ...deps.runtime.runLineage(run.runId),
       }))
       .filter(run => !invocation.status || invocation.status.includes(run.status)),
   })).filter(conversation => conversation.runs.length > 0);
@@ -163,7 +166,7 @@ async function startTasks(
       outcomes.push({ ok: false, inputIndex, error: task.error });
       continue;
     }
-    const handle = deps.runtime.startRun(ctx, [task], owner ? { parent: owner } : {});
+    const handle = deps.runtime.startRun(ctx, [task], owner ? { caller: owner } : {});
     outcomes.push({ ...handle.starts[0], inputIndex });
   }
 
@@ -244,7 +247,7 @@ export function inspectAction(
     if (typeof target !== "string") return { inputIndex, runId: target.runId, error: target.error };
     try {
       const inspected = deps.runtime.inspectRuns([target], owner)[0];
-      return projectInspection(deps.runtime, inspected.conversationId, inspected.snapshot);
+      return projectInspection(deps.runtime, inspected.conversationId, inspected.snapshot, owner?.conversationId);
     } catch (error) {
       return { inputIndex, runId: target, error: error instanceof Error ? error.message : String(error) };
     }
@@ -359,7 +362,10 @@ export async function removeAction(
   invocation: InvocationFor<"remove">,
 ): Promise<ActionResult> {
   const validIds = invocation.conversationIds.filter((target): target is ConversationId => typeof target === "string");
-  const removed = await deps.runtime.removeConversations(validIds);
+  const caller = deps.parent
+    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
+    : undefined;
+  const removed = await deps.runtime.removeConversations(validIds, caller);
   const results = invocation.conversationIds.map(target => {
     if (typeof target !== "string") return { ok: false as const, conversationId: target.conversationId, error: target.error };
     if (removed.conversationIds.includes(target)) {
@@ -439,6 +445,7 @@ function projectInspection(
   runtime: SubagentRuntime,
   conversationId: ConversationId,
   run: RunSnapshot,
+  callerConversationId?: ConversationId,
 ): InspectedRunRenderItem {
   const status = run.status.kind === "done" ? run.status.outcome : run.status.kind;
   const end = run.status.kind === "done" ? run.status.completedAt : Date.now();
@@ -446,19 +453,25 @@ function projectInspection(
     : run.status.kind === "running" ? run.status.startedAt
     : run.status.startedAt ?? run.createdAt;
   let display: { agentName?: string; label?: string } = {};
-  let config: Pick<ConversationSnapshot, "requestedOverrides" | "effectiveConfig"> = {};
+  let config: Pick<ConversationSnapshot, "requestedOverrides" | "effectiveConfig"> & {
+    parentConversationId?: ConversationId;
+    spawnedByRunId?: RunId;
+    depth?: number;
+  } = {};
   try { display = runtime.conversationDisplay(conversationId); } catch {}
   try {
     const conversation = runtime.conversation(conversationId);
     config = {
+      ...(conversation.parentConversationId ? { parentConversationId: conversation.parentConversationId } : {}),
+      ...(conversation.spawnedByRunId ? { spawnedByRunId: conversation.spawnedByRunId } : {}),
       ...(conversation.requestedOverrides ? { requestedOverrides: conversation.requestedOverrides } : {}),
       ...(conversation.effectiveConfig ? { effectiveConfig: conversation.effectiveConfig } : {}),
     };
+    try { config.depth = runtime.conversationDepth(conversationId, callerConversationId); } catch {}
   } catch {}
   return {
     conversationId,
     runId: run.runId,
-    ...runtime.runLineage(run.runId),
     ...config,
     ...(display.agentName ? { agent: display.agentName } : {}),
     ...(display.label ? { label: display.label } : {}),
@@ -609,14 +622,14 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Conversation IDs use adjective-noun form; run IDs use verb-adverb form.",
       "Actions:",
       "  agents(): List available agent definitions.",
-      "  list(status?): List conversations/runs, optionally including only runs matching a status.",
+      "  list(scope?, status?): List immediate child conversations by default; use scope=descendants for the owned subtree.",
       "  spawn(spawns): Start asynchronous subagent conversations.",
       "  resume(resumes): Continue existing subagent conversations asynchronously.",
       "  steer(messages): Send messages to running subagents.",
       "  inspect(runIds): Check run status and progress without waiting.",
       "  join(runIds): Wait for the given runs and return their outcomes.",
       "  cancel(runIds): Abort active runs while retaining their conversations and outcomes.",
-      "  remove(conversationIds): Delete terminal conversations and their runs. Surviving children are reparented.",
+      "  remove(conversationIds): Delete terminal conversation subtrees; active descendants reject removal.",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",
     promptGuidelines: [

@@ -19,6 +19,8 @@ const runId = "adapt-ably";
 test("public schema exposes separate typed actions without unions", () => {
   assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"]);
   assert.doesNotMatch(JSON.stringify(SubagentParams), /"anyOf"/);
+  assert.equal(Check(SubagentParams, { action: "list", scope: "descendants" }), true);
+  assert.equal(Check(SubagentParams, { action: "list", scope: "global" }), false);
   assert.equal(Check(SubagentParams, { action: "spawn", spawns: [{ agent: "helper", prompt: "work" }] }), true);
   assert.equal(Check(SubagentParams, { action: "resume", resumes: [{ conversationId, prompt: "continue" }] }), true);
   assert.equal(Check(SubagentParams, { action: "steer", messages: [{ runId, message: "redirect" }] }), true);
@@ -28,6 +30,15 @@ test("public schema exposes separate typed actions without unions", () => {
   assert.equal(Check(SpawnTaskSchema, { conversationId, prompt: "wrong kind" }), false);
   assert.equal(Check(ResumeTaskSchema, { conversationId, prompt: "continue" }), true);
   assert.equal(Check(SteerMessageSchema, { runId, message: "redirect" }), true);
+});
+
+test("list defaults to children and accepts descendants scope", () => {
+  assert.deepEqual(parseSubagentInvocation({ action: "list" }), { action: "list", scope: "children" });
+  assert.deepEqual(parseSubagentInvocation({ action: "list", scope: "descendants" }), { action: "list", scope: "descendants" });
+  assert.deepEqual(parseSubagentInvocation({ action: "list", scope: "global" }), {
+    action: "list",
+    error: "list scope must be children or descendants.",
+  });
 });
 
 test("spawn fields are validated and preserved", () => {
@@ -62,7 +73,7 @@ test("steer message accepts runId and message only", () => {
 
 test("invocations parse every action", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "agents" }), { action: "agents" });
-  assert.deepEqual(parseSubagentInvocation({ action: "list", status: ["running"] }), { action: "list", status: ["running"] });
+  assert.deepEqual(parseSubagentInvocation({ action: "list", status: ["running"] }), { action: "list", scope: "children", status: ["running"] });
   assert.deepEqual(parseSubagentInvocation({ action: "spawn", spawns: [{ agent: "helper", prompt: "x" }] }), {
     action: "spawn", spawns: [{ kind: "spawn", agent: "helper", prompt: "x" }],
   });

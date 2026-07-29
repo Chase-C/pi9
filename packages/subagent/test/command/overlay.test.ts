@@ -231,7 +231,8 @@ describe("subagent overlay behavior", () => {
       label: "recursive branch A",
       createdAt: 3,
       options: { agent: "recursive-test" },
-      parent: { conversationId: "root-conversation", runId: "root-run" },
+      parentConversationId: "root-conversation",
+      spawnedByRunId: "root-run",
       runs: [branchSpawn, branchResume],
     });
     const leafA = fakeAgent({
@@ -240,7 +241,8 @@ describe("subagent overlay behavior", () => {
       label: "leaf branch A1",
       createdAt: 5,
       options: { agent: "recursive-test" },
-      parent: { conversationId: "branch-a", runId: "branch-a-run" },
+      parentConversationId: "branch-a",
+      spawnedByRunId: "branch-a-run",
     });
     const resumedLeaf = fakeAgent({
       conversationId: "resumed-leaf",
@@ -248,7 +250,8 @@ describe("subagent overlay behavior", () => {
       label: "leaf from branch resume",
       createdAt: 8,
       options: { agent: "recursive-test" },
-      parent: { conversationId: "branch-a", runId: "branch-a-resume" },
+      parentConversationId: "branch-a",
+      spawnedByRunId: "branch-a-resume",
     });
     const branchB = fakeAgent({
       conversationId: "branch-b",
@@ -256,7 +259,8 @@ describe("subagent overlay behavior", () => {
       label: "recursive branch B",
       createdAt: 2,
       options: { agent: "recursive-test" },
-      parent: { conversationId: "root-conversation", runId: "root-run" },
+      parentConversationId: "root-conversation",
+      spawnedByRunId: "root-run",
     });
     const { component } = overlay([root, branchA, leafA, resumedLeaf, branchB]);
     const output = component.render(180).join("\n");
@@ -345,9 +349,9 @@ describe("subagent overlay behavior", () => {
   it("renders muted tree rails continuously through separator rows", () => {
     const fg = vi.fn((_color: string, text: string) => text);
     const root = fakeAgent({ conversationId: "root", runId: "root-run" });
-    const branchA = fakeAgent({ conversationId: "branch-a", parent: { conversationId: "root", runId: "root-run" } });
-    const leafA = fakeAgent({ conversationId: "leaf-a", parent: { conversationId: "branch-a", runId: "r1" } });
-    const branchB = fakeAgent({ conversationId: "branch-b", parent: { conversationId: "root", runId: "root-run" } });
+    const branchA = fakeAgent({ conversationId: "branch-a", parentConversationId: "root", spawnedByRunId: "root-run" });
+    const leafA = fakeAgent({ conversationId: "leaf-a", parentConversationId: "branch-a", spawnedByRunId: "r1" });
+    const branchB = fakeAgent({ conversationId: "branch-b", parentConversationId: "root", spawnedByRunId: "root-run" });
     const { component } = overlay([root, branchA, leafA, branchB], {}, { fg });
     const output = component.render(180);
     const branchLine = output.findIndex(line => line.includes("├─ helper"));
