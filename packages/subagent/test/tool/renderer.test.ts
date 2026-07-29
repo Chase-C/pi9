@@ -414,10 +414,10 @@ test("remove renders deleted conversations and item-local errors", () => {
     action: "remove",
     removed: 2,
     conversationIds: ["quiet-otter", "amber-fox"] as any,
-    errors: [{ conversationId: "busy-newt", error: "Conversation busy-newt has active run work-slowly. Cancel and join it before removal." }],
+    errors: [{ conversationId: "busy-newt", error: "Conversation busy-newt has active run work-slowly. Cancel it before removal." }],
   };
   assert.equal(renderResult(details), "✓ Removed 2 conversations · 1 error\n  quiet-otter · amber-fox");
-  assert.match(renderResult(details, true), /quiet-otter · removed[\s\S]*amber-fox · removed[\s\S]*busy-newt · not removed[\s\S]*Cancel and join/);
+  assert.match(renderResult(details, true), /quiet-otter · removed[\s\S]*amber-fox · removed[\s\S]*busy-newt · not removed[\s\S]*Cancel it/);
 });
 
 test("errors render their message instead of structured output", () => {

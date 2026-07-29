@@ -580,7 +580,7 @@ test("removal rejects active conversations without changing their runs", async (
     conversationIds: [],
     errors: [{
       conversationId: active.conversationId,
-      error: `Conversation subtree ${active.conversationId} has active runs: ${active.runId}. Cancel and join them before removal.`,
+      error: `Conversation subtree ${active.conversationId} has active runs: ${active.runId}. Cancel them before removal.`,
     }],
   });
   expect(manager.conversation(active.conversationId).runs[0].status.kind).toBe("running");
@@ -612,7 +612,7 @@ test("batch removal isolates terminal, active, and unknown conversations", async
     errors: [
       {
         conversationId: active.conversationId,
-        error: `Conversation subtree ${active.conversationId} has active runs: ${active.runId}. Cancel and join them before removal.`,
+        error: `Conversation subtree ${active.conversationId} has active runs: ${active.runId}. Cancel them before removal.`,
       },
       { conversationId: "amber-acorn", error: "Unknown conversation: amber-acorn." },
     ],

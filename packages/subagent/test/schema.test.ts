@@ -53,9 +53,14 @@ test("spawn fields are validated and preserved", () => {
 
 test("resume task accepts conversationId and prompt only", () => {
   assert.deepEqual(parseResumeTask({ conversationId, prompt: "next" }), { kind: "resume", conversationId, prompt: "next" });
-  const wrongKind = parseResumeTask({ conversationId: runId, prompt: "next" });
-  assert.ok("error" in wrongKind);
-  assert.match(wrongKind.error, /run ID is not accepted/);
+  assert.deepEqual(parseResumeTask({ conversationId: runId, prompt: "next" }), {
+    conversationId: runId,
+    error: "Expected a conversation ID; received a run ID.",
+  });
+  assert.deepEqual(parseResumeTask({ conversationId: "unknown-identifier", prompt: "next" }), {
+    conversationId: "unknown-identifier",
+    error: "Unknown or invalid conversation ID.",
+  });
   const extra = parseResumeTask({ conversationId, prompt: "next", model: "x" });
   assert.ok("error" in extra);
   assert.match(extra.error, /model is not allowed/);
@@ -63,9 +68,14 @@ test("resume task accepts conversationId and prompt only", () => {
 
 test("steer message accepts runId and message only", () => {
   assert.deepEqual(parseSteerMessage({ runId, message: "change direction" }), { kind: "steer", runId, message: "change direction" });
-  const wrongKind = parseSteerMessage({ runId: conversationId, message: "change direction" });
-  assert.ok("error" in wrongKind);
-  assert.match(wrongKind.error, /conversation ID is not accepted/);
+  assert.deepEqual(parseSteerMessage({ runId: conversationId, message: "change direction" }), {
+    runId: conversationId,
+    error: "Expected a run ID; received a conversation ID.",
+  });
+  assert.deepEqual(parseSteerMessage({ runId: "unknown-identifier", message: "change direction" }), {
+    runId: "unknown-identifier",
+    error: "Unknown or invalid run ID.",
+  });
   const oldField = parseSteerMessage({ runId, prompt: "change direction" });
   assert.ok("error" in oldField);
   assert.match(oldField.error, /prompt is not allowed/);
@@ -121,14 +131,15 @@ test("item parse failures remain ordered within each typed array", () => {
   });
 });
 
-test("run-target actions retain malformed targets as ordered item errors", () => {
+test("run-target actions distinguish wrong-kind from unknown or invalid targets", () => {
   for (const action of ["cancel", "inspect", "join"] as const) {
-    assert.deepEqual(parseSubagentInvocation({ action, runIds: [runId, conversationId, "not-an-id"] }), {
+    assert.deepEqual(parseSubagentInvocation({ action, runIds: [runId, conversationId, "unknown-identifier", "not-an-id"] }), {
       action,
       runIds: [
         runId,
-        { runId: conversationId, error: `${action} received invalid runId '${conversationId}' (a conversation ID is not accepted).` },
-        { runId: "not-an-id", error: `${action} received invalid runId format 'not-an-id'.` },
+        { runId: conversationId, error: "Expected a run ID; received a conversation ID." },
+        { runId: "unknown-identifier", error: "Unknown or invalid run ID." },
+        { runId: "not-an-id", error: "Unknown or invalid run ID." },
       ],
     });
   }
@@ -203,13 +214,14 @@ test("remove rejects every conversation ID occurrence after the first", () => {
   });
 });
 
-test("remove retains wrong-kind and malformed IDs as ordered item errors", () => {
-  assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId, runId, "not-an-id"] }), {
+test("remove distinguishes wrong-kind from unknown or invalid targets", () => {
+  assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId, runId, "unknown-identifier", "not-an-id"] }), {
     action: "remove",
     conversationIds: [
       conversationId,
-      { conversationId: runId, error: `remove received invalid conversationId '${runId}' (a run ID is not accepted).` },
-      { conversationId: "not-an-id", error: "remove received invalid conversationId format 'not-an-id'." },
+      { conversationId: runId, error: "Expected a conversation ID; received a run ID." },
+      { conversationId: "unknown-identifier", error: "Unknown or invalid conversation ID." },
+      { conversationId: "not-an-id", error: "Unknown or invalid conversation ID." },
     ],
   });
 });

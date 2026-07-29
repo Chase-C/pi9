@@ -96,13 +96,14 @@ test("unknown actions return a structured global error envelope", async () => {
 
 test("mixed join target errors remain ordered item failures", async () => {
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings });
-  const result = await tool.execute("call", { action: "join", runIds: ["valid-run", 42] }, undefined, undefined, {});
+  const result = await tool.execute("call", { action: "join", runIds: ["valid-run", "ghost-silently", 42] }, undefined, undefined, {});
   assert.equal(result.isError, false);
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
   assert.deepEqual(response.results, [
-    { ok: false, runId: "valid-run", error: "join received invalid runId format 'valid-run'." },
-    { ok: false, runId: "42", error: "join received invalid runId format '42'." },
+    { ok: false, runId: "valid-run", error: "Unknown or invalid run ID." },
+    { ok: false, runId: "ghost-silently", error: "Unknown or invalid run ID." },
+    { ok: false, runId: "42", error: "Unknown or invalid run ID." },
   ]);
 });
 

@@ -250,8 +250,8 @@ function parseRunTargets(value: unknown, action: "cancel" | "inspect" | "join"):
     return {
       runId,
       error: isConversationId(item)
-        ? `${action} received invalid runId '${runId}' (a conversation ID is not accepted).`
-        : `${action} received invalid runId format '${runId}'.`,
+        ? "Expected a run ID; received a conversation ID."
+        : "Unknown or invalid run ID.",
     };
   });
 }
@@ -291,8 +291,8 @@ function parseConversationTargets(value: unknown): ConversationTarget[] | { erro
     return {
       conversationId,
       error: isRunId(item)
-        ? `remove received invalid conversationId '${conversationId}' (a run ID is not accepted).`
-        : `remove received invalid conversationId format '${conversationId}'.`,
+        ? "Expected a conversation ID; received a run ID."
+        : "Unknown or invalid conversation ID.",
     };
   });
 }
@@ -338,8 +338,8 @@ export function parseResumeTask(raw: unknown): ParsedResumeRequest {
   if (extra) return error(`Resume task property ${extra} is not allowed.`);
   if (!isConversationId(task.conversationId)) {
     return error(isRunId(task.conversationId)
-      ? `Resume task conversationId '${task.conversationId}' is invalid (a run ID is not accepted).`
-      : `Resume task received invalid conversationId format '${String(task.conversationId)}'.`);
+      ? "Expected a conversation ID; received a run ID."
+      : "Unknown or invalid conversation ID.");
   }
   const promptError = validateNonBlank(task.prompt, "Resume task prompt");
   return promptError ? error(promptError.error) : { kind: "resume", conversationId: task.conversationId, prompt: task.prompt as string };
@@ -354,8 +354,8 @@ export function parseSteerMessage(raw: unknown): ParsedSteerRequest {
   if (extra) return error(`Steer message property ${extra} is not allowed.`);
   if (!isRunId(steer.runId)) {
     return error(isConversationId(steer.runId)
-      ? `Steer message runId '${steer.runId}' is invalid (a conversation ID is not accepted).`
-      : `Steer message received invalid runId format '${String(steer.runId)}'.`);
+      ? "Expected a run ID; received a conversation ID."
+      : "Unknown or invalid run ID.");
   }
   const messageError = validateNonBlank(steer.message, "Steer message");
   return messageError ? error(messageError.error) : { kind: "steer", runId: steer.runId, message: steer.message as string };
