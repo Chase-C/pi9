@@ -625,7 +625,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Delegate work asynchronously through context-isolated subagent conversations and runs. Subagents share the working filesystem.",
       "Actions:",
       "  agents(): List available agent definitions.",
-      "  list(scope?, state?): List conversations by lifecycle state with complete run histories; scope defaults to children.",
+      "  list(scope?, state?): List conversations by lifecycle; scope defaults to children.",
       "  spawn(spawns): Start subagent conversations.",
       "  resume(resumes): Continue existing subagent conversations.",
       "  steer(messages): Send messages to running subagents.",
