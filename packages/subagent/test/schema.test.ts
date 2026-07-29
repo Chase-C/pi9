@@ -19,8 +19,9 @@ const runId = "adapt-ably";
 test("public schema exposes separate typed actions without unions", () => {
   assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"]);
   assert.doesNotMatch(JSON.stringify(SubagentParams), /"anyOf"/);
-  assert.equal(Check(SubagentParams, { action: "list", scope: "descendants" }), true);
+  assert.equal(Check(SubagentParams, { action: "list", scope: "descendants", state: ["active"] }), true);
   assert.equal(Check(SubagentParams, { action: "list", scope: "global" }), false);
+  assert.equal(Check(SubagentParams, { action: "list", status: ["running"] }), false);
   assert.equal(Check(SubagentParams, { action: "spawn", spawns: [{ agent: "helper", prompt: "work" }] }), true);
   assert.equal(Check(SubagentParams, { action: "resume", resumes: [{ conversationId, prompt: "continue" }] }), true);
   assert.equal(Check(SubagentParams, { action: "steer", messages: [{ runId, message: "redirect" }] }), true);
@@ -53,9 +54,14 @@ test("spawn fields are validated and preserved", () => {
 
 test("resume task accepts conversationId and prompt only", () => {
   assert.deepEqual(parseResumeTask({ conversationId, prompt: "next" }), { kind: "resume", conversationId, prompt: "next" });
-  const wrongKind = parseResumeTask({ conversationId: runId, prompt: "next" });
-  assert.ok("error" in wrongKind);
-  assert.match(wrongKind.error, /run ID is not accepted/);
+  assert.deepEqual(parseResumeTask({ conversationId: runId, prompt: "next" }), {
+    conversationId: runId,
+    error: "Expected a conversation ID; received a run ID.",
+  });
+  assert.deepEqual(parseResumeTask({ conversationId: "unknown-identifier", prompt: "next" }), {
+    conversationId: "unknown-identifier",
+    error: "Unknown or invalid conversation ID.",
+  });
   const extra = parseResumeTask({ conversationId, prompt: "next", model: "x" });
   assert.ok("error" in extra);
   assert.match(extra.error, /model is not allowed/);
@@ -63,9 +69,14 @@ test("resume task accepts conversationId and prompt only", () => {
 
 test("steer message accepts runId and message only", () => {
   assert.deepEqual(parseSteerMessage({ runId, message: "change direction" }), { kind: "steer", runId, message: "change direction" });
-  const wrongKind = parseSteerMessage({ runId: conversationId, message: "change direction" });
-  assert.ok("error" in wrongKind);
-  assert.match(wrongKind.error, /conversation ID is not accepted/);
+  assert.deepEqual(parseSteerMessage({ runId: conversationId, message: "change direction" }), {
+    runId: conversationId,
+    error: "Expected a run ID; received a conversation ID.",
+  });
+  assert.deepEqual(parseSteerMessage({ runId: "unknown-identifier", message: "change direction" }), {
+    runId: "unknown-identifier",
+    error: "Unknown or invalid run ID.",
+  });
   const oldField = parseSteerMessage({ runId, prompt: "change direction" });
   assert.ok("error" in oldField);
   assert.match(oldField.error, /prompt is not allowed/);
@@ -73,7 +84,7 @@ test("steer message accepts runId and message only", () => {
 
 test("invocations parse every action", () => {
   assert.deepEqual(parseSubagentInvocation({ action: "agents" }), { action: "agents" });
-  assert.deepEqual(parseSubagentInvocation({ action: "list", status: ["running"] }), { action: "list", scope: "children", status: ["running"] });
+  assert.deepEqual(parseSubagentInvocation({ action: "list", state: ["active", "resumable"] }), { action: "list", scope: "children", state: ["active", "resumable"] });
   assert.deepEqual(parseSubagentInvocation({ action: "spawn", spawns: [{ agent: "helper", prompt: "x" }] }), {
     action: "spawn", spawns: [{ kind: "spawn", agent: "helper", prompt: "x" }],
   });
@@ -121,14 +132,15 @@ test("item parse failures remain ordered within each typed array", () => {
   });
 });
 
-test("run-target actions retain malformed targets as ordered item errors", () => {
+test("run-target actions distinguish wrong-kind from unknown or invalid targets", () => {
   for (const action of ["cancel", "inspect", "join"] as const) {
-    assert.deepEqual(parseSubagentInvocation({ action, runIds: [runId, conversationId, "not-an-id"] }), {
+    assert.deepEqual(parseSubagentInvocation({ action, runIds: [runId, conversationId, "unknown-identifier", "not-an-id"] }), {
       action,
       runIds: [
         runId,
-        { runId: conversationId, error: `${action} received invalid runId '${conversationId}' (a conversation ID is not accepted).` },
-        { runId: "not-an-id", error: `${action} received invalid runId format 'not-an-id'.` },
+        { runId: conversationId, error: "Expected a run ID; received a conversation ID." },
+        { runId: "unknown-identifier", error: "Unknown or invalid run ID." },
+        { runId: "not-an-id", error: "Unknown or invalid run ID." },
       ],
     });
   }
@@ -150,7 +162,9 @@ test("run-target actions reject every occurrence after the first", () => {
 test("whole invocation validation covers every action", () => {
   assert.ok("error" in parseSubagentInvocation({}));
   assert.ok("error" in parseSubagentInvocation({ action: "unknown" }));
-  assert.ok("error" in parseSubagentInvocation({ action: "list", status: ["stale"] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "list", state: ["stale"] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "list", state: [] }));
+  assert.ok("error" in parseSubagentInvocation({ action: "list", status: ["running"] }));
   assert.ok("error" in parseSubagentInvocation({ action: "cancel", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "inspect", runIds: [] }));
   assert.ok("error" in parseSubagentInvocation({ action: "join", runIds: [] }));
@@ -175,7 +189,7 @@ test("unsupported invocation fields receive ordinary validation errors", () => {
 
 test("flat schema admits action fields while parser enforces associations", () => {
   for (const raw of [
-    { action: "agents", status: ["running"] },
+    { action: "agents", state: ["active"] },
     { action: "list", spawns: [{ agent: "a", prompt: "x" }] },
     { action: "resume", spawns: [{ agent: "a", prompt: "x" }] },
     { action: "join", runIds: [runId], conversationIds: [conversationId] },
@@ -203,13 +217,14 @@ test("remove rejects every conversation ID occurrence after the first", () => {
   });
 });
 
-test("remove retains wrong-kind and malformed IDs as ordered item errors", () => {
-  assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId, runId, "not-an-id"] }), {
+test("remove distinguishes wrong-kind from unknown or invalid targets", () => {
+  assert.deepEqual(parseSubagentInvocation({ action: "remove", conversationIds: [conversationId, runId, "unknown-identifier", "not-an-id"] }), {
     action: "remove",
     conversationIds: [
       conversationId,
-      { conversationId: runId, error: `remove received invalid conversationId '${runId}' (a run ID is not accepted).` },
-      { conversationId: "not-an-id", error: "remove received invalid conversationId format 'not-an-id'." },
+      { conversationId: runId, error: "Expected a conversation ID; received a run ID." },
+      { conversationId: "unknown-identifier", error: "Unknown or invalid conversation ID." },
+      { conversationId: "not-an-id", error: "Unknown or invalid conversation ID." },
     ],
   });
 });

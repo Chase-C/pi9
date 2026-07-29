@@ -6,6 +6,7 @@ function fixture(mode: "auto" | "steer" | "none" = "auto", idle = true, send?: (
   let listener: any;
   const handlers = new Map<string, any>();
   const sent: any[] = [];
+  const notified: any[] = [];
   const scheduled: Array<{ fn: () => void; delay: number; cancelled: boolean }> = [];
   const run: any = { runId: "bright-otter", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "completed", completedAt: 2, output: "SECRET" } };
   const conversations: any[] = [{ conversationId: "calm-river", config: { name: "worker" }, runs: [run] }];
@@ -19,16 +20,92 @@ function fixture(mode: "auto" | "steer" | "none" = "auto", idle = true, send?: (
     sendMessage(message: any, options: any) { sent.push({ message, options }); return send?.(message, options); },
   };
   const notifier = new CompletionNotifier({ pi, manager, getMode: () => mode, scheduleRetry: (fn, delay) => { const item = { fn, delay, cancelled: false }; scheduled.push(item); return () => { item.cancelled = true; }; } });
-  return { run, conversations, sent, scheduled, notifier, flush(maxDelay = 0) { for (;;) { const index = scheduled.findIndex(item => item.delay <= maxDelay); if (index < 0) break; const item = scheduled.splice(index, 1)[0]; if (!item.cancelled) item.fn(); } }, fire(event: string, value: unknown = {}) { handlers.get(event)?.(value, { isIdle: () => idle }); }, update(kind: string, updatedRun: any = run) { listener?.({ snapshot: () => ({ runs: [updatedRun] }) }, kind); } };
+  return { run, conversations, sent, notified, scheduled, notifier, flush(maxDelay = 0) { for (;;) { const index = scheduled.findIndex(item => item.delay <= maxDelay); if (index < 0) break; const item = scheduled.splice(index, 1)[0]; if (!item.cancelled) item.fn(); } }, fire(event: string, value: unknown = {}) { handlers.get(event)?.(value, { isIdle: () => idle, hasUI: true, ui: { notify: (message: string, level: string) => notified.push({ message, level }) } }); }, update(kind: string, updatedRun: any = run) { listener?.({ snapshot: () => ({ runs: [updatedRun] }) }, kind); } };
 }
 
 test("notifies a terminal run once without leaking output", () => {
   const f = fixture();
   f.fire("session_start"); f.flush();
   assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].message.display, false);
+  assert.deepEqual(f.notified, [{ message: "1 subagent finished: worker · completed", level: "info" }]);
   assert.doesNotMatch(JSON.stringify(f.sent[0]), /SECRET/);
   f.fire("turn_end");
   assert.equal(f.sent.length, 1);
+  f.notifier.unsubscribe();
+});
+
+test("context reconciliation removes a queued completion observed before model delivery", () => {
+  const f = fixture();
+  f.fire("session_start"); f.flush();
+  const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
+
+  f.notifier.beginTool("root", "inspect-after-enqueue", { action: "inspect", runIds: [f.run.runId] });
+  f.notifier.completeTool("root", "inspect-after-enqueue", {
+    content: [],
+    details: { action: "inspect", runs: [{ runId: f.run.runId, status: "completed" }] },
+  });
+
+  assert.deepEqual(f.notifier.reconcileMessages([queued] as never), []);
+  f.notifier.unsubscribe();
+});
+
+test("context reconciliation rebuilds a completion batch from still-unobserved runs", () => {
+  const f = fixture();
+  const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "error", completedAt: 3 } };
+  f.conversations.push({ conversationId: "still-forest", config: { name: "explorer" }, label: "second <task>", runs: [second] });
+  f.fire("session_start"); f.flush();
+  const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
+
+  f.notifier.beginTool("root", "inspect-first", { action: "inspect", runIds: [f.run.runId] });
+  f.notifier.completeTool("root", "inspect-first", {
+    content: [],
+    details: { action: "inspect", runs: [{ runId: f.run.runId, status: "completed" }] },
+  });
+
+  const reconciled: any[] = f.notifier.reconcileMessages([queued] as never);
+  assert.equal(reconciled.length, 1);
+  assert.equal(reconciled[0].content, [
+    "<subagent-notification>",
+    '  <run id="gather-gently" status="error" agent="explorer" label="second &lt;task&gt;"/>',
+    "</subagent-notification>",
+  ].join("\n"));
+  assert.deepEqual(reconciled[0].details.completions.map((entry: any) => entry.runId), [second.runId]);
+  assert.deepEqual(queued.details.completions.map((entry: any) => entry.runId), [f.run.runId, second.runId]);
+  assert.match(queued.content, new RegExp(f.run.runId));
+  f.notifier.unsubscribe();
+});
+
+test("context reconciliation omits queued completions acknowledged before delivery", () => {
+  const f = fixture();
+  f.fire("session_start"); f.flush();
+  const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
+  f.run.acknowledged = true;
+
+  assert.deepEqual(f.notifier.reconcileMessages([queued] as never), []);
+  f.notifier.unsubscribe();
+});
+
+test("context reconciliation temporarily hides a completion with an active join observer", () => {
+  const f = fixture();
+  f.fire("session_start"); f.flush();
+  const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
+
+  f.run.observerCount = 1;
+  assert.deepEqual(f.notifier.reconcileMessages([queued] as never), []);
+
+  f.run.observerCount = 0;
+  assert.equal(f.notifier.reconcileMessages([queued] as never).length, 1);
+  f.notifier.unsubscribe();
+});
+
+test("context reconciliation hides a completion while a lifecycle tool claims it", () => {
+  const f = fixture();
+  f.fire("session_start"); f.flush();
+  const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
+
+  f.notifier.beginTool("root", "inspect-in-flight", { action: "inspect", runIds: [f.run.runId] });
+  assert.deepEqual(f.notifier.reconcileMessages([queued] as never), []);
   f.notifier.unsubscribe();
 });
 
@@ -293,7 +370,7 @@ test("same-preflight join claims completion before a steer notification is deliv
   f.notifier.unsubscribe();
 });
 
-test("active steer send rejection retries with steer opportunity", async () => {
+test("active steer send rejection retries without duplicating the UI notification", async () => {
   let attempts = 0;
   const f = fixture("steer", false, () => ++attempts === 1 ? Promise.reject(new Error("closed")) : Promise.resolve());
   f.fire("session_start");
@@ -303,5 +380,6 @@ test("active steer send rejection retries with steer opportunity", async () => {
   f.flush(500);
   assert.equal(f.sent.length, 2);
   assert.deepEqual(f.sent.map(value => value.options), [{ deliverAs: "steer" }, { deliverAs: "steer" }]);
+  assert.equal(f.notified.length, 1);
   f.notifier.unsubscribe();
 });

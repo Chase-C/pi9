@@ -33,7 +33,7 @@ test("malformed removal targets remain ordered item failures", () => {
       conversationId,
       {
         conversationId: "not-a-real-conversation",
-        error: "remove received invalid conversationId format 'not-a-real-conversation'.",
+        error: "Unknown or invalid conversation ID.",
       },
     ],
   });

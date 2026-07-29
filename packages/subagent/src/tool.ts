@@ -4,7 +4,7 @@ import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId } from "./identifiers.js";
 import { runElapsedMs } from "./run-format.js";
 import type { JoinBinding, NestedJoinBinding, SubagentRuntime } from "./runtime.js";
-import { parseSubagentInvocation, SubagentParams, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
+import { parseSubagentInvocation, SubagentParams, type ConversationState, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
   renderSubagentCall,
@@ -112,24 +112,28 @@ export function listAction(
   invocation: InvocationFor<"list">,
 ): ActionResult {
   const callerConversationId = deps.parent?.conversationId;
-  const conversations = deps.runtime.queryConversations(callerConversationId, invocation.scope).map(conversation => ({
-    conversationId: conversation.conversationId,
-    ...(conversation.parentConversationId ? { parentConversationId: conversation.parentConversationId } : {}),
-    ...(conversation.spawnedByRunId ? { spawnedByRunId: conversation.spawnedByRunId } : {}),
-    depth: deps.runtime.conversationDepth(conversation.conversationId, callerConversationId),
-    agent: conversation.config.name,
-    ...(conversation.label ? { label: conversation.label } : {}),
-    createdAt: conversation.createdAt,
-    canResume: conversation.canResume,
-    runs: conversation.runs
-      .map(run => ({
+  const conversations = deps.runtime.queryConversations(callerConversationId, invocation.scope).map(conversation => {
+    const state: ConversationState = conversation.currentRun || conversation.isStopping
+      ? "active"
+      : conversation.canResume ? "resumable" : "terminal";
+    return {
+      conversationId: conversation.conversationId,
+      ...(conversation.parentConversationId ? { parentConversationId: conversation.parentConversationId } : {}),
+      ...(conversation.spawnedByRunId ? { spawnedByRunId: conversation.spawnedByRunId } : {}),
+      depth: deps.runtime.conversationDepth(conversation.conversationId, callerConversationId),
+      agent: conversation.config.name,
+      ...(conversation.label ? { label: conversation.label } : {}),
+      createdAt: conversation.createdAt,
+      state,
+      canResume: conversation.canResume,
+      runs: conversation.runs.map(run => ({
         runId: run.runId,
         kind: run.kind,
         status: (run.status.kind === "done" ? run.status.outcome : run.status.kind) as RunStatus,
         createdAt: run.createdAt,
-      }))
-      .filter(run => !invocation.status || invocation.status.includes(run.status)),
-  })).filter(conversation => conversation.runs.length > 0);
+      })),
+    };
+  }).filter(conversation => !invocation.state || invocation.state.includes(conversation.state));
   return resultsResult("list", conversations, { action: "list", conversations });
 }
 
@@ -621,23 +625,22 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Delegate work asynchronously through context-isolated subagent conversations and runs. Subagents share the working filesystem.",
       "Actions:",
       "  agents(): List available agent definitions.",
-      "  list(scope?, status?): List conversations/runs by scope and status; scope defaults to children.",
+      "  list(scope?, state?): List conversations by lifecycle; scope defaults to children.",
       "  spawn(spawns): Start subagent conversations.",
       "  resume(resumes): Continue existing subagent conversations.",
       "  steer(messages): Send messages to running subagents.",
       "  inspect(runIds): Check run status and progress without waiting.",
       "  join(runIds): Wait for the outcomes of the given runs.",
       "  cancel(runIds): Abort active runs; conversations and outcomes are retained.",
-      "  remove(conversationIds): Delete terminal conversation subtrees.",
+      "  remove(conversationIds): Discard terminal conversation subtrees.",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",
     promptGuidelines: [
-      "Delegate bounded, self-contained units of work to subagent — work that parallelizes cleanly, deserves a specialist, or benefits from a fresh context.",
-      "Skip subagent when delegating costs more than doing, or when you couldn't verify or use the result without repeating the work.",
-      "Write each subagent prompt as if to a stranger sharing only your filesystem: every input, path, and constraint, plus what to report back or produce.",
-      "Run subagent tasks in parallel only when they're independent and won't interact with the same files; join once you depend on their results or have nothing else to do.",
-      "Use subagent inspect only when progress could affect your next step; steer only to communicate newly discovered constraints or correct clear divergence.",
-      "Resume a retained subagent when its context helps the follow-up, spawn fresh when it wouldn't help or would mislead, and permanently remove terminal conversations you no longer need.",
+      "Delegate bounded, self-contained work to subagent; skip it when delegating costs more than doing, or when verifying the result means redoing the work.",
+      "Write each subagent prompt as if to a stranger who shares only your filesystem: every input, path, and constraint, plus what to report or produce.",
+      "Run subagents in parallel only when they're independent and touch disjoint files; join once you depend on a result or have nothing else to do.",
+      "Inspect or steer a subagent only with cause: inspect when progress could change your next step, steer to add constraints or correct divergence.",
+      "Resume a subagent conversation when its accumulated context helps the follow-up; spawn fresh when it would be irrelevant or misleading.",
       //"Call subagent action=agents before choosing an agent unless the user named one explicitly or definitions were already listed.",
     ],
     parameters: SubagentParams,

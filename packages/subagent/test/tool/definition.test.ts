@@ -13,7 +13,7 @@ test("description names typed action inputs without restating task unions", () =
     prepareInvocation: async () => settings,
   });
   const description = tool.description;
-  assert.match(description, /list\(scope\?, status\?\).*scope defaults to children/);
+  assert.match(description, /list\(scope\?, state\?\).*complete run histories.*scope defaults to children/);
   assert.match(description, /spawn\(spawns\)/);
   assert.match(description, /resume\(resumes\)/);
   assert.match(description, /steer\(messages\)/);
@@ -96,13 +96,14 @@ test("unknown actions return a structured global error envelope", async () => {
 
 test("mixed join target errors remain ordered item failures", async () => {
   const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings });
-  const result = await tool.execute("call", { action: "join", runIds: ["valid-run", 42] }, undefined, undefined, {});
+  const result = await tool.execute("call", { action: "join", runIds: ["valid-run", "ghost-silently", 42] }, undefined, undefined, {});
   assert.equal(result.isError, false);
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
   assert.deepEqual(response.results, [
-    { ok: false, runId: "valid-run", error: "join received invalid runId format 'valid-run'." },
-    { ok: false, runId: "42", error: "join received invalid runId format '42'." },
+    { ok: false, runId: "valid-run", error: "Unknown or invalid run ID." },
+    { ok: false, runId: "ghost-silently", error: "Unknown or invalid run ID." },
+    { ok: false, runId: "42", error: "Unknown or invalid run ID." },
   ]);
 });
 

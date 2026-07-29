@@ -4,6 +4,17 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Deliver compact hidden `<subagent-notification>` messages and reconcile their runs against live observation state immediately before model requests, without mutating stored session history.
+- Show human-facing completion status through Pi notifications instead of model-visible custom-message rendering, without duplicating UI alerts when model-message delivery retries.
+- Distinguish wrong-kind identifiers from unknown or invalid identifiers with concise, actionable errors across resume, steer, cancel, inspect, join, and remove.
+- Tighten model-facing delegation guidance and accurately describe cancellation as the only prerequisite for removing active conversation subtrees.
+
+### Breaking
+
+- Replace `list` run-status filtering with mutually exclusive `active`, `resumable`, and `terminal` conversation-state filtering, always returning complete run histories for matching conversations.
+
 ## [0.9.1] - 2026-07-29
 
 ### Changed

@@ -431,44 +431,47 @@ test("inspect bounds diagnostics for every terminal outcome with an error", () =
   }
 });
 
-test("list groups by conversation and retains only matching runs", () => {
-  let calls = 0;
-  const running = snapshot();
-  const completed: any = snapshot({ kind: "done", outcome: "completed", completedAt: 2 });
-  completed.parentConversationId = "quiet-otter" as any;
-  completed.spawnedByRunId = "start-safely" as any;
-  completed.runs = [running.runs[0], { ...completed.runs[0], runId: "assemble-abruptly" as any, kind: "resume" }];
+test("list filters conversation lifecycle states and retains complete run histories", () => {
+  const active: any = snapshot();
+  active.currentRun = active.runs[0];
+
+  const resumable: any = snapshot({ kind: "done", outcome: "completed", completedAt: 2 });
+  resumable.conversationId = "quiet-otter";
+  resumable.parentConversationId = "gentle-fox";
+  resumable.spawnedByRunId = "start-safely";
+  resumable.canResume = true;
+  resumable.runs = [
+    { ...resumable.runs[0], runId: "abort-quietly", status: { kind: "done", outcome: "aborted", completedAt: 2 } },
+    { ...resumable.runs[0], runId: "assemble-abruptly", kind: "resume" },
+  ];
+
+  const terminal: any = snapshot({ kind: "done", outcome: "error", completedAt: 2 });
+  terminal.conversationId = "closed-canyon";
+
+  const stopping: any = snapshot({ kind: "done", outcome: "aborted", completedAt: 2 });
+  stopping.conversationId = "busy-newt";
+  stopping.isStopping = true;
+
   const manager = {
-    queryConversations: () => {
-      calls++;
-      return [completed];
-    },
+    queryConversations: () => [active, resumable, terminal, stopping],
     conversationDepth: () => 1,
   };
-  const result = listAction(deps(manager), { action: "list", scope: "children", status: ["completed"] });
-  assert.equal(calls, 1);
+
+  const result = listAction(deps(manager), { action: "list", scope: "children", state: ["resumable"] });
   const response = json(result);
   assert.equal(response.action, "list");
-  assert.deepEqual(response.results, [{
-    conversationId,
-    parentConversationId: "quiet-otter",
-    spawnedByRunId: "start-safely",
-    agent: "helper",
-    createdAt: 1,
-    canResume: false,
-    depth: 1,
-    runs: [{
-      runId: "assemble-abruptly",
-      kind: "resume",
-      status: "completed",
-      createdAt: 1,
-    }],
-  }]);
+  assert.equal(response.results.length, 1);
+  assert.equal(response.results[0].conversationId, "quiet-otter");
+  assert.equal(response.results[0].state, "resumable");
+  assert.deepEqual(response.results[0].runs.map((run: any) => run.status), ["aborted", "completed"]);
   assert.doesNotMatch(result.content[0].text, /output/);
 
-  const empty = listAction(deps(manager), { action: "list", scope: "children", status: ["error"] });
-  assert.deepEqual(json(empty), { action: "list", results: [] });
-  assert.equal(calls, 2);
+  const activeResponse = json(listAction(deps(manager), { action: "list", scope: "children", state: ["active"] }));
+  assert.deepEqual(activeResponse.results.map((conversation: any) => conversation.conversationId), [conversationId, "busy-newt"]);
+  assert.ok(activeResponse.results.every((conversation: any) => conversation.state === "active"));
+
+  const terminalResponse = json(listAction(deps(manager), { action: "list", scope: "children", state: ["terminal"] }));
+  assert.deepEqual(terminalResponse.results.map((conversation: any) => conversation.conversationId), ["closed-canyon"]);
 });
 
 test("remove forwards only the explicit conversation batch", async () => {

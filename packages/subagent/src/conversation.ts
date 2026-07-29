@@ -102,6 +102,7 @@ export interface ConversationSnapshot {
   readonly config: AgentViewConfig;
   readonly runs: readonly RunSnapshot[];
   readonly currentRun?: RunSnapshot;
+  readonly isStopping?: true;
   readonly effectiveConfig?: ConversationEffectiveConfig;
   readonly requestedOverrides?: ConversationRequestedOverrides;
   readonly canResume: boolean;
@@ -406,6 +407,7 @@ export class Conversation {
       config: { name: this.agentName, description: this.config.description, source: this.config.source, sourcePath: this.config.sourcePath, model: this.requestedConfig.model, thinking: this.requestedConfig.thinking, tools: this.requestedConfig.tools, ...(this.requestedConfig.skills !== undefined ? { skills: this.requestedConfig.skills } : {}) },
       runs,
       ...(this.currentRun ? { currentRun: runs[runs.length - 1] } : {}),
+      ...(this.stopping ? { isStopping: true as const } : {}),
       ...(this.effectiveConfig ? { effectiveConfig: this.effectiveConfig } : {}),
       ...(this.requestedOverrides ? { requestedOverrides: this.requestedOverrides } : {}),
       canResume: this.canResume,

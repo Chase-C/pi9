@@ -40,8 +40,8 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
     pi: pi as any,
     manager: runtime,
     getMode: () => currentSettings.runtime.completionNotify,
-    getDisplay: () => currentSettings.display,
   });
+  pi.on("context", event => ({ messages: completionNotifier.reconcileMessages(event.messages) }));
   runtime.scheduler?.setChildTool?.(parent =>
     makeChildSubagentTool({ manager: runtime, registry: agentRegistry, parent, getCurrentSettings })
   );

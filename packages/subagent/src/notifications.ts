@@ -1,4 +1,4 @@
-import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { ContextEvent, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Conversation } from "./conversation.js";
 import type { RunOutcomeStatus, ConversationUpdateKind } from "./conversation.js";
 import type { SubagentRuntime } from "./runtime.js";
@@ -26,12 +26,12 @@ export interface CompletionNotificationMessage {
 
 export type CompletionNotificationMessagePayload = CompletionNotificationMessage;
 
-const MAX_LISTED_COMPLETIONS = 20;
 const COMPLETION_GRACE_MS = 500;
 const TERMINAL_RUN_STATUSES = new Set<unknown>(["completed", "error", "aborted", "interrupted", "skipped"]);
 const RESULTS_INSTRUCTION = "Use `subagent join` when you need these terminal outcomes.";
 
-type EntrySurface = "notification" | "renderer";
+type AgentMessage = ContextEvent["messages"][number];
+type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
 
 /**
  * Creates the complete custom message sent for a batch of run completions.
@@ -42,11 +42,10 @@ type EntrySurface = "notification" | "renderer";
  */
 export function createCompletionNotificationMessage(
   entries: readonly CompletionNotification[],
-  display: SubagentDisplaySettings = DEFAULT_SUBAGENT_SETTINGS.display,
 ): CompletionNotificationMessagePayload {
   const completions = entries.map(copyCompletionNotification);
   return {
-    content: formatNotificationContent(completions, display),
+    content: formatNotificationContent(completions),
     details: { completions },
   };
 }
@@ -61,7 +60,6 @@ export function formatCompletionNotificationMessage(
   const header = formatCompletionHeader(completions.length);
   const lines = completions.map(entry => formatCompletionEntry(entry, {
     display,
-    surface: "renderer",
     expanded,
     theme,
   }));
@@ -72,19 +70,25 @@ export function formatCompletionNotificationMessage(
   return [header, ...lines].join("\n");
 }
 
-function formatNotificationContent(entries: readonly CompletionNotification[], display: SubagentDisplaySettings): string {
-  const visible = entries.slice(0, MAX_LISTED_COMPLETIONS);
-  const overflow = entries.length - visible.length;
-  const header = formatCompletionHeader(entries.length);
-  const lines = visible.map(entry => formatCompletionEntry(entry, {
-    display,
-    surface: "notification",
-    expanded: true,
-  }));
-  if (overflow > 0) lines.push(`- ... and ${overflow} more`);
-  lines.push("");
-  lines.push(RESULTS_INSTRUCTION);
-  return [header, ...lines].join("\n");
+function formatNotificationContent(entries: readonly CompletionNotification[]): string {
+  const lines = entries.map(entry => {
+    const attributes = [
+      `id="${escapeXml(entry.runId)}"`,
+      `status="${escapeXml(entry.status)}"`,
+      `agent="${escapeXml(entry.agent)}"`,
+      ...(entry.label !== undefined ? [`label="${escapeXml(entry.label)}"`] : []),
+    ];
+    return `  <run ${attributes.join(" ")}/>`;
+  });
+  return ["<subagent-notification>", ...lines, "</subagent-notification>"].join("\n");
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function copyCompletionNotification(entry: CompletionNotification): CompletionNotification {
@@ -104,33 +108,19 @@ function formatCompletionHeader(count: number): string {
 
 interface CompletionEntryFormatOptions {
   display: SubagentDisplaySettings;
-  surface: EntrySurface;
   expanded: boolean;
   theme?: Pick<Theme, "fg">;
 }
 
 function formatCompletionEntry(entry: CompletionNotification, options: CompletionEntryFormatOptions): string {
   const labelPart = entry.label !== undefined
-    ? ` (${formatCompletionLabel(entry.label, options.display.toolCallLabelMaxLength, options.surface)})`
+    ? ` (${compactRendererLabel(entry.label, options.display.toolCallLabelMaxLength)})`
     : "";
-  const status = options.surface === "renderer"
-    ? colorCompletionStatus(entry.status, options.theme)
-    : entry.status;
+  const status = colorCompletionStatus(entry.status, options.theme);
   const identityPart = options.expanded
     ? ` · runId ${entry.runId} · conversationId ${entry.conversationId}`
     : "";
   return `- ${entry.agent}${labelPart} · ${status} · ${formatElapsed(entry.elapsedMs)}${identityPart}`;
-}
-
-/** Keeps producer and renderer truncation rules distinct while giving them one semantic owner. */
-function formatCompletionLabel(value: string, limit: number, surface: EntrySurface): string {
-  if (surface === "notification") return truncateNotificationLabel(value, limit);
-  return compactRendererLabel(value, limit);
-}
-
-function truncateNotificationLabel(value: string, limit: number): string {
-  if (value.length <= limit) return value;
-  return `${value.slice(0, Math.max(0, limit - 3))}...`;
 }
 
 function compactRendererLabel(value: string, limit: number): string {
@@ -161,17 +151,20 @@ function formatElapsed(ms: number): string {
   return `${minutes}m${remSeconds.toString().padStart(2, "0")}s`;
 }
 
-export interface NotifierContext { isIdle(): boolean }
+export interface NotifierContext {
+  isIdle(): boolean;
+  hasUI?: boolean;
+  ui?: { notify?(message: string, level?: "info" | "warning" | "error"): void };
+}
 type Handler = (event: unknown, ctx?: NotifierContext) => void;
 export interface CompletionNotifierPi {
   on?(event: "agent_end" | "turn_end" | "tool_execution_start" | "tool_execution_end" | "session_start" | "session_shutdown", handler: Handler): void;
-  sendMessage?(message: { customType: string; content: string; details?: unknown }, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }): void | Promise<void>;
+  sendMessage?(message: { customType: string; content: string; display?: boolean; details?: unknown }, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }): void | Promise<void>;
 }
 export interface CompletionNotifierDeps {
   pi: CompletionNotifierPi;
   manager: SubagentRuntime;
   getMode: () => CompletionNotifyMode;
-  getDisplay?: () => SubagentDisplaySettings;
   scheduleRetry?: (fn: () => void, delayMs: number) => () => void;
 }
 const schedule = (fn: () => void, ms: number) => { const handle = setTimeout(fn, ms); return () => clearTimeout(handle); };
@@ -183,6 +176,7 @@ export class CompletionNotifier {
   private cancelGraceTimer?: () => void;
   private retryToolOpportunity = false;
   private readonly delivered = new Set<string>();
+  private readonly uiNotified = new Set<string>();
   private readonly observed = new Set<string>();
   private readonly gracePending = new Set<string>();
   private readonly claimsByToolCall = new Map<string, { action: unknown; runIds: Set<string> }>();
@@ -199,6 +193,36 @@ export class CompletionNotifier {
     deps.pi.on?.("tool_execution_end", event => this.onToolEnd(event));
   }
   unsubscribe(): void { this.unsubscribeAgent(); this.cancel(); this.cancelGrace(); this.clearClaims(); }
+
+  reconcileMessages(messages: readonly AgentMessage[]): AgentMessage[] {
+    return messages.flatMap(message => {
+      if (message.role !== "custom" || message.customType !== "subagent-completion") return [message];
+      const completions = completionDetails(message);
+      if (!completions) return [message];
+      const visible = completions.flatMap(entry => {
+        const current = this.currentNotificationEntry(entry.runId);
+        return current ? [current] : [];
+      });
+      if (!visible.length) return [];
+      return [{ ...message, content: formatNotificationContent(visible), details: { completions: visible } }];
+    });
+  }
+
+  private currentNotificationEntry(runId: string): CompletionNotification | undefined {
+    if (this.observed.has(runId) || this.claimCountByRun.has(runId)) return;
+    const value = this.catalog().find(candidate => candidate.run.runId === runId);
+    if (!value || value.run.acknowledged || value.run.observerCount > 0) return;
+    const started = value.run.status.kind === "done" ? value.run.status.startedAt ?? value.run.createdAt : value.run.createdAt;
+    if (value.run.status.kind !== "done") return;
+    return {
+      runId: value.run.runId,
+      conversationId: value.conversation.conversationId,
+      agent: value.conversation.config.name,
+      ...(value.conversation.label ? { label: value.conversation.label } : {}),
+      status: value.run.status.outcome,
+      elapsedMs: Math.max(0, value.run.status.completedAt - started),
+    };
+  }
 
   beginTool(scope: string, toolCallId: string, params: unknown): void {
     const target = claimTarget(params);
@@ -317,10 +341,11 @@ export class CompletionNotifier {
       entries.push({ runId: value.run.runId, conversationId: value.conversation.conversationId, agent: value.conversation.config.name, ...(value.conversation.label ? { label: value.conversation.label } : {}), status: value.run.status.outcome, elapsedMs: Math.max(0, value.run.status.completedAt - started) });
     }
     if (!entries.length || !this.deps.pi.sendMessage) return;
-    const message = createCompletionNotificationMessage(entries, this.deps.getDisplay?.() ?? DEFAULT_SUBAGENT_SETTINGS.display);
+    const message = createCompletionNotificationMessage(entries);
     const active = !this.ctx.isIdle();
     try {
-      const sent = this.deps.pi.sendMessage({ customType: "subagent-completion", ...message }, mode === "steer" && active ? { deliverAs: "steer" } : { triggerTurn: true });
+      const sent = this.deps.pi.sendMessage({ customType: "subagent-completion", display: false, ...message }, mode === "steer" && active ? { deliverAs: "steer" } : { triggerTurn: true });
+      this.notifyUi(entries);
       for (const entry of entries) this.delivered.add(entry.runId);
       void Promise.resolve(sent).catch(() => {
         for (const entry of entries) this.delivered.delete(entry.runId);
@@ -331,12 +356,48 @@ export class CompletionNotifier {
       this.arm(500, mode === "steer" && active);
     }
   }
+  private notifyUi(entries: readonly CompletionNotification[]): void {
+    if (!this.ctx?.hasUI || !this.ctx.ui?.notify) return;
+    const pending = entries.filter(entry => !this.uiNotified.has(entry.runId));
+    if (!pending.length) return;
+    try {
+      this.ctx.ui.notify(formatUiNotification(pending), completionNotificationLevel(pending));
+      for (const entry of pending) this.uiNotified.add(entry.runId);
+    } catch {}
+  }
+
   private catalog() {
     return this.deps.manager.listConversations().flatMap(conversation => conversation.runs
       .filter(run => run.status.kind === "done")
       .map(run => ({ conversation, run })));
   }
 }
+function formatUiNotification(entries: readonly CompletionNotification[]): string {
+  const summary = entries.map(entry => `${entry.agent}${entry.label ? ` (${entry.label})` : ""} · ${entry.status}`).join(", ");
+  return `${formatCompletionHeader(entries.length)} ${summary}`;
+}
+
+function completionNotificationLevel(entries: readonly CompletionNotification[]): "info" | "warning" | "error" {
+  if (entries.some(entry => entry.status === "error")) return "error";
+  if (entries.some(entry => entry.status !== "completed")) return "warning";
+  return "info";
+}
+
+function completionDetails(message: CustomMessage): CompletionNotification[] | undefined {
+  const details = message.details;
+  if (!details || typeof details !== "object") return;
+  const completions = (details as { completions?: unknown }).completions;
+  if (!Array.isArray(completions)) return;
+  return completions.filter((entry): entry is CompletionNotification => Boolean(
+    entry && typeof entry === "object" &&
+    typeof (entry as CompletionNotification).runId === "string" &&
+    typeof (entry as CompletionNotification).conversationId === "string" &&
+    typeof (entry as CompletionNotification).agent === "string" &&
+    typeof (entry as CompletionNotification).status === "string" &&
+    typeof (entry as CompletionNotification).elapsedMs === "number",
+  ));
+}
+
 function toolAction(event: unknown): unknown {
   if (!event || typeof event !== "object") return undefined;
   const value = event as { toolName?: unknown; args?: { action?: unknown } };

@@ -540,7 +540,7 @@ export class SubagentRuntime {
       const subtree = this.conversationSubtree(root.conversationId);
       const active = subtree.filter(conversation => conversation.hasCurrentRun || conversation.isStopping);
       if (active.length) {
-        const error = `Conversation subtree ${root.conversationId} has active runs: ${active.map(conversation => conversation.latestRunId).join(", ")}. Cancel and join them before removal.`;
+        const error = `Conversation subtree ${root.conversationId} has active runs: ${active.map(conversation => conversation.latestRunId).join(", ")}. Cancel them before removal.`;
         for (const target of candidates) {
           if (subtree.includes(target)) errors.push({ conversationId: target.conversationId, error });
         }
