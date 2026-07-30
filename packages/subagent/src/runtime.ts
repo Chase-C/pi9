@@ -183,7 +183,7 @@ export class RunScheduler {
       } else if (signal?.aborted || !this._isTracked(agent.conversationId)) {
         result = skippedRun(agent, run.runId);
       } else if (agent.status.kind === "done" && !agent.hasCurrentRun) {
-        result = agent.runHistory.find(run => run.runId === run.runId)!;
+        result = agent.runHistory.find(item => item.runId === run.runId)!;
       } else {
         this._leases.set(agent.conversationId, lease);
         try {
@@ -191,14 +191,14 @@ export class RunScheduler {
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           if (agent.status.kind === "done" && !agent.hasCurrentRun) {
-            result = agent.runHistory.find(run => run.runId === run.runId)!;
+            result = agent.runHistory.find(item => item.runId === run.runId)!;
           } else {
             error = message;
             if (signal?.aborted) {
               if (run.state.kind === "queued") skippedRun(agent, run.runId);
               else interruptedRun(agent, run.runId, message);
             } else errorRun(agent, run.runId, message);
-            result = agent.runHistory.find(run => run.runId === run.runId)!;
+            result = agent.runHistory.find(item => item.runId === run.runId)!;
           }
         } finally {
           this._leases.delete(agent.conversationId);

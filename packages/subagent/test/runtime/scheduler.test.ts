@@ -26,6 +26,25 @@ test("queue leases enforce concurrency and dispatch the next run after completio
   releases.shift()!(); await expect(p2).resolves.toMatchObject({ status: { kind: "done", outcome: "completed" } });
 });
 
+test("an executor failure resolves the resumed run snapshot", async () => {
+  const scheduler = new RunScheduler({ maxRunning: 1, executor: async (_ctx, agent, run) => {
+    if (run.kind === "resume") throw new Error("resume failed");
+    agent.bindSession(session());
+    return completedRun(agent, run.runId, "spawned");
+  }});
+  const agent = makeAgent("amber-acorn", "adapt-ably");
+  const spawn = agent.requireCurrentRun();
+  await scheduler.run({} as any, undefined, agent, spawn);
+  agent.acknowledge(spawn.runId);
+  const resume = agent.beginResume("balance-boldly" as any, "continue");
+
+  await expect(scheduler.run({} as any, undefined, agent, resume)).resolves.toMatchObject({
+    runId: "balance-boldly",
+    kind: "resume",
+    status: { kind: "done", outcome: "error" },
+  });
+});
+
 test("suspending an active lease lets queued descendant work run before reacquisition", async () => {
   let releaseParent!: () => void;
   const parentMayFinish = new Promise<void>(resolve => { releaseParent = resolve; });
