@@ -634,7 +634,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     label: "Subagent",
     description: [
       "Delegate work asynchronously through persistent, context-isolated subagents. Subagents share the working filesystem.",
-      "Batch entries are independent; one failure does not stop valid siblings. Repeated subagentIds are rejected after the first occurrence. A completed status means execution finished; joined means its latest result was collected.",
+      "A completed status means execution finished; joined means its latest result was collected.",
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(statuses?, joined?): List direct child subagents with descendant context.",
