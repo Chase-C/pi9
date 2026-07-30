@@ -18,7 +18,7 @@ import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "./widget.
 
 export type { CanonicalFinishedSubagent, CanonicalLiveSubagent, SubagentIdentity } from "./contract.js";
 export type { SubagentAction, SubagentStatus } from "./schema.js";
-export type { SubagentErrorEnvelope, SubagentResponseEnvelope, SubagentResultsEnvelope } from "./tool-contract.js";
+export type { SubagentBatchSummary, SubagentErrorEnvelope, SubagentResponseEnvelope, SubagentResultsEnvelope } from "./tool-contract.js";
 
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;

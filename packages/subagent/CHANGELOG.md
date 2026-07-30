@@ -20,6 +20,11 @@ This changelog starts with version `v0.2.1`.
 - Return failed execution explanations in `failure`, reserving `error` for action and invocation failures.
 - Remove ordinary provider-facing execution-history summaries while preserving the overlay's **Previous runs** history.
 - Bind every target in a join batch before publishing observer or nested-join updates, preventing resume races during binding.
+- Release completed join observers before projecting the final result so resumable subagents immediately advertise `resume`.
+- Validate requested skills before allocating or dispatching spawn runs.
+- Communicate action failures through prose and remove machine-readable error codes from responses.
+- Distinguish malformed subagent IDs from well-formed IDs that are not found, and clarify batch, completion, collection, and removal semantics in the tool prompt.
+- Reject repeated subagent IDs after the first batch occurrence and summarize batch item successes and failures.
 
 ## [0.9.2] - 2026-07-29
 

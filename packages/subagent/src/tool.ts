@@ -4,7 +4,7 @@ import { projectSubagentRunStatus, projectSubagentStatus, type CanonicalLiveSuba
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId, SubagentId } from "./identifiers.js";
 import { runElapsedMs, truncateText } from "./run-format.js";
-import { SubagentNotFoundError, type JoinBinding, type NestedJoinBinding, type OrderedStartOutcome, type SubagentCaller, type SubagentRuntime } from "./runtime.js";
+import type { JoinBinding, NestedJoinBinding, OrderedStartOutcome, SubagentCaller, SubagentRuntime } from "./runtime.js";
 import type { RunScheduler } from "./scheduler.js";
 import { parseSubagentInvocation, SubagentParams, type RunRequest, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type SubagentStatus } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
@@ -71,7 +71,6 @@ type DescendantSummary = {
 interface ActionFailure {
   readonly ok: false;
   readonly error: string;
-  readonly code?: string;
 }
 
 type UnresolvedTargetFailure = ActionFailure & { readonly subagentId: string };
@@ -80,9 +79,7 @@ type LiveTargetFailure<T extends CanonicalLiveSubagent = CanonicalLiveSubagent> 
 type TargetFailure = UnresolvedTargetFailure | LiveTargetFailure;
 
 function actionFailure(error: unknown): Omit<ActionFailure, "ok"> {
-  return error instanceof SubagentNotFoundError
-    ? { error: error.message, code: error.code }
-    : { error: error instanceof Error ? error.message : String(error) };
+  return { error: error instanceof Error ? error.message : String(error) };
 }
 
 function canonicalSubagent(
@@ -101,14 +98,24 @@ function targetFailure(
   const failure = actionFailure(error);
   try {
     const live = deps.runtime.projectSubagent(subagentId, callerOf(deps), { maxLength: 500 });
-    return { ...live, ok: false, error: failure.error, ...(failure.code ? { code: failure.code } : {}) };
+    return { ...live, ok: false, error: failure.error };
   } catch {
-    return { ok: false, subagentId, error: failure.error, ...(failure.code ? { code: failure.code } : {}) };
+    return { ok: false, subagentId, error: failure.error };
   }
 }
 
+const BATCH_ACTIONS = new Set<SubagentAction>(["spawn", "resume", "steer", "cancel", "inspect", "join", "remove"]);
+
 function resultsEnvelope<A extends SubagentAction, T>(action: A, results: readonly T[]): SubagentResultsEnvelope<A, T> {
-  return { action, results };
+  if (!BATCH_ACTIONS.has(action)) return { action, results };
+  const succeeded = results.filter(result => (
+    typeof result === "object" && result !== null && (result as { ok?: unknown }).ok === true
+  )).length;
+  return {
+    action,
+    summary: { requested: results.length, succeeded, failed: results.length - succeeded },
+    results,
+  };
 }
 
 function resultsResult<A extends SubagentAction, T>(
@@ -251,8 +258,8 @@ export async function steerAction(
     return outcome.ok
       ? { ...canonicalSubagent(deps, outcome.conversationId), ...(outcome.steer ? { steer: outcome.steer } : {}) }
       : target
-        ? { ...targetFailure(deps, target, outcome.error), ...(outcome.code ? { code: outcome.code } : {}) }
-        : { ok: false as const, error: outcome.error, ...(outcome.code ? { code: outcome.code } : {}) };
+        ? targetFailure(deps, target, outcome.error)
+        : { ok: false as const, error: outcome.error };
   });
   return resultsResult("steer", results, {
     tasks: renderDispatchItems(invocation.messages, outcomes, deps.runtime.listConversations()),
@@ -329,6 +336,12 @@ export async function joinAction(
     return resultsResult("join", failures, { runs: renderJoinedRuns(failures, deps.runtime, true) });
   }
 
+  let bindingReleased = false;
+  const releaseBinding = () => {
+    if (bindingReleased) return;
+    bindingReleased = true;
+    binding.release();
+  };
   const output = (): JoinOutput[] => {
     const entries = binding.project();
     let entryIndex = 0;
@@ -363,6 +376,7 @@ export async function joinAction(
       ? deps.runtime.scheduler.suspendAgentSlotDuring(deps.parent.conversationId, wait)
       : wait());
     binding.markJoined();
+    releaseBinding();
     return currentResult(true);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -370,7 +384,7 @@ export async function joinAction(
     return errorResult(message, "join");
   } finally {
     unsubscribe();
-    binding.release();
+    releaseBinding();
     if (abort) signal?.removeEventListener("abort", abort);
   }
 }
@@ -398,7 +412,7 @@ export async function removeAction(
     const outcome = removed[outcomeIndex++];
     return outcome.ok
       ? { ok: true as const, subagentId: target, label: outcome.label, removedIds: outcome.removedIds }
-      : { ok: false as const, subagentId: target, error: outcome.error, ...(outcome.code ? { code: outcome.code } : {}) };
+      : { ok: false as const, subagentId: target, error: outcome.error };
   });
   return resultsResult("remove", results);
 }
@@ -411,7 +425,7 @@ function projectRunReceipt(
   if (outcome.ok) return canonicalSubagent(deps, outcome.conversationId);
 
   if (task && !("error" in task) && task.kind === "resume") {
-    return { ...targetFailure(deps, task.subagentId, outcome.error), ...(outcome.code ? { code: outcome.code } : {}) };
+    return targetFailure(deps, task.subagentId, outcome.error);
   }
   const identity = !task
     ? {}
@@ -422,7 +436,7 @@ function projectRunReceipt(
           ...(task.subagentId ? { subagentId: task.subagentId } : {}),
         }
       : { agent: task.agent, label: task.label };
-  return { ok: false, ...identity, error: outcome.error, ...(outcome.code ? { code: outcome.code } : {}) };
+  return { ok: false, ...identity, error: outcome.error };
 }
 
 function renderDispatchItems(
@@ -517,7 +531,7 @@ function projectJoinResults(
         ...(value.output !== undefined ? { output: value.output } : {}),
       };
     }
-    return { ...targetFailure(deps, value.subagentId, value.error), ...(value.code ? { code: value.code } : {}) };
+    return targetFailure(deps, value.subagentId, value.error);
   });
 }
 
@@ -620,6 +634,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     label: "Subagent",
     description: [
       "Delegate work asynchronously through persistent, context-isolated subagents. Subagents share the working filesystem.",
+      "Batch entries are independent; one failure does not stop valid siblings. Repeated subagentIds are rejected after the first occurrence. A completed status means execution finished; joined means its latest result was collected.",
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(statuses?, joined?): List direct child subagents with descendant context.",
@@ -629,7 +644,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "  inspect(subagentIds): Check status and progress without waiting.",
       "  join(subagentIds): Wait for and collect a subagent's result; blocks while running, idempotent after.",
       "  cancel(subagentIds): Cancel active subagents; context and results are retained.",
-      "  remove(subagentIds): Discard inactive subagent subtrees.",
+      "  remove(subagentIds): Permanently discard inactive subagent subtrees, including unjoined results.",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",
     promptGuidelines: [

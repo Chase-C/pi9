@@ -169,7 +169,8 @@ export function parseSubagentInvocation(
     case "resume": {
       const error = validateTaskArray(params.resumes, "resume", "resumes", options.maxTasks);
       if (error) return { ...error, action: parsedAction };
-      return { action: parsedAction, resumes: (params.resumes as unknown[]).map(parseResumeTask) };
+      const resumes = (params.resumes as unknown[]).map(parseResumeTask);
+      return { action: parsedAction, resumes: rejectDuplicateRequests(resumes) };
     }
     case "steer": {
       if (!Array.isArray(params.messages) || params.messages.length === 0) {
@@ -188,7 +189,8 @@ export function parseSubagentInvocation(
         };
       }
 
-      return { action: parsedAction, messages: params.messages.map(parseSteerMessage) };
+      const messages = params.messages.map(parseSteerMessage);
+      return { action: parsedAction, messages: rejectDuplicateRequests(messages) };
     }
     case "cancel":
     case "inspect":
@@ -202,6 +204,30 @@ export function parseSubagentInvocation(
   }
 }
 
+function invalidSubagentId(value: unknown): string {
+  return `Invalid subagentId format: ${String(value)}.`;
+}
+
+function duplicateSubagentId(value: SubagentId): string {
+  return `Duplicate subagentId ${value} in this request; the first occurrence was processed.`;
+}
+
+function rejectDuplicateRequests(requests: ParsedResumeRequest[]): ParsedResumeRequest[];
+function rejectDuplicateRequests(requests: ParsedSteerRequest[]): ParsedSteerRequest[];
+function rejectDuplicateRequests(
+  requests: Array<ParsedResumeRequest | ParsedSteerRequest>,
+): Array<ParsedResumeRequest | ParsedSteerRequest> {
+  const seen = new Set<SubagentId>();
+  return requests.map(request => {
+    if ("error" in request) return request;
+    if (seen.has(request.subagentId)) {
+      return { subagentId: request.subagentId, error: duplicateSubagentId(request.subagentId) };
+    }
+    seen.add(request.subagentId);
+    return request;
+  });
+}
+
 function parseSubagentTargets(
   value: unknown,
   action: "cancel" | "inspect" | "join" | "remove",
@@ -212,16 +238,11 @@ function parseSubagentTargets(
   const seen = new Set<SubagentId>();
   return value.map(item => {
     if (isSubagentId(item)) {
-      if (action !== "join" && seen.has(item)) {
-        return {
-          subagentId: item,
-          error: `Duplicate subagentId ${item} in this request; the first occurrence was processed.`,
-        };
-      }
+      if (seen.has(item)) return { subagentId: item, error: duplicateSubagentId(item) };
       seen.add(item);
       return item;
     }
-    return { subagentId: String(item), error: "Unknown or invalid subagent ID." };
+    return { subagentId: String(item), error: invalidSubagentId(item) };
   });
 }
 
@@ -279,7 +300,7 @@ export function parseResumeTask(raw: unknown): ParsedResumeRequest {
   const error = (message: string): ParsedResumeRequest => ({ ...identity, error: message });
   const extra = Object.keys(task).find(key => !RESUME_TASK_KEYS.has(key));
   if (extra) return error(`Resume task property ${extra} is not allowed.`);
-  if (!isSubagentId(task.subagentId)) return error("Unknown or invalid subagent ID.");
+  if (!isSubagentId(task.subagentId)) return error(invalidSubagentId(task.subagentId));
   const promptError = validateNonBlank(task.prompt, "Resume task prompt");
   return promptError ? error(promptError.error) : { kind: "resume", subagentId: task.subagentId, prompt: task.prompt as string };
 }
@@ -291,7 +312,7 @@ export function parseSteerMessage(raw: unknown): ParsedSteerRequest {
   const error = (message: string): ParsedSteerRequest => ({ ...identity, error: message });
   const extra = Object.keys(steer).find(key => !STEER_MESSAGE_KEYS.has(key));
   if (extra) return error(`Steer message property ${extra} is not allowed.`);
-  if (!isSubagentId(steer.subagentId)) return error("Unknown or invalid subagent ID.");
+  if (!isSubagentId(steer.subagentId)) return error(invalidSubagentId(steer.subagentId));
   const messageError = validateNonBlank(steer.message, "Steer message");
   return messageError ? error(messageError.error) : { kind: "steer", subagentId: steer.subagentId, message: steer.message as string };
 }

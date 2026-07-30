@@ -125,20 +125,45 @@ test("batch actions validate counts and preserve ordered item failures", () => {
   });
 });
 
-test("target actions preserve invalid targets and join accepts duplicates", () => {
-  for (const action of ["cancel", "inspect", "remove"] as const) {
+test("target actions preserve invalid and duplicate targets as ordered failures", () => {
+  for (const action of ["cancel", "inspect", "join", "remove"] as const) {
     assert.deepEqual(parseSubagentInvocation({ action, subagentIds: [subagentId, runId, subagentId] }), {
       action,
       subagentIds: [
         subagentId,
-        { subagentId: runId, error: "Unknown or invalid subagent ID." },
+        { subagentId: runId, error: `Invalid subagentId format: ${runId}.` },
         { subagentId, error: `Duplicate subagentId ${subagentId} in this request; the first occurrence was processed.` },
       ],
     });
   }
-  assert.deepEqual(parseSubagentInvocation({ action: "join", subagentIds: [subagentId, subagentId] }), {
-    action: "join",
-    subagentIds: [subagentId, subagentId],
+});
+
+test("resume and steer preserve duplicate targets as ordered failures", () => {
+  assert.deepEqual(parseSubagentInvocation({
+    action: "resume",
+    resumes: [
+      { subagentId, prompt: "first" },
+      { subagentId, prompt: "second" },
+    ],
+  }), {
+    action: "resume",
+    resumes: [
+      { kind: "resume", subagentId, prompt: "first" },
+      { subagentId, error: `Duplicate subagentId ${subagentId} in this request; the first occurrence was processed.` },
+    ],
+  });
+  assert.deepEqual(parseSubagentInvocation({
+    action: "steer",
+    messages: [
+      { subagentId, message: "first" },
+      { subagentId, message: "second" },
+    ],
+  }), {
+    action: "steer",
+    messages: [
+      { kind: "steer", subagentId, message: "first" },
+      { subagentId, error: `Duplicate subagentId ${subagentId} in this request; the first occurrence was processed.` },
+    ],
   });
 });
 

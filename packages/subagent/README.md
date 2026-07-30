@@ -94,11 +94,16 @@ Finished blocks also include `joined`. Failed blocks include `failure`, whose pr
 
 ## Response envelopes
 
-Item-processing actions return:
+Batch item-processing actions return aggregate counts followed by their ordered results:
 
 ```json
 {
   "action": "spawn",
+  "summary": {
+    "requested": 2,
+    "succeeded": 1,
+    "failed": 1
+  },
   "results": [
     {
       "ok": true,
@@ -117,9 +122,11 @@ Item-processing actions return:
 }
 ```
 
-Successful items are flat—there is no `data` wrapper. Targeted failures include `subagentId`; failures against a live subagent also include its current status and capabilities. Failed spawns include the requested label. Items remain in input order and one failure does not prevent valid siblings from proceeding.
+Successful items are flat—there is no `data` wrapper. Targeted failures include `subagentId`; failures against a live subagent also include its current status and capabilities. Failed spawns include the requested label. Items remain in input order and one failure does not prevent valid siblings from proceeding. For actions targeting existing subagents, the first occurrence of a `subagentId` is processed and later occurrences are ordered item failures.
 
-Invocation-level failures use `{ "action": "...", "error": "..." }`.
+`summary` counts item-action success, not subagent execution status: a successfully joined subagent with `status: "failed"` still increments `succeeded`. `agents` and `list` use the same `action` and `results` shape without a batch summary.
+
+Invocation-level failures use `{ "action": "...", "error": "..." }`. Failures are communicated through `error` or `failure` prose; responses do not include machine-readable error codes.
 
 The package entry point exports `CanonicalLiveSubagent`, `CanonicalFinishedSubagent`, `SubagentIdentity`, `SubagentAction`, `SubagentStatus`, and the response-envelope types for typed integrations.
 

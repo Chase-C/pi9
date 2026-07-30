@@ -1,6 +1,7 @@
 import { expectTypeOf, test } from "vitest";
 import type {
   CanonicalLiveSubagent as PublicCanonicalLiveSubagent,
+  SubagentBatchSummary,
   SubagentResponseEnvelope,
   SubagentResultsEnvelope,
   SubagentStatus,
@@ -20,6 +21,7 @@ test("the package exports its canonical public contract types", () => {
   expectTypeOf<CanonicalLiveSubagent["status"]>().toEqualTypeOf<SubagentStatus>();
   expectTypeOf<CanonicalLiveSubagent["ok"]>().toEqualTypeOf<true>();
   expectTypeOf<SubagentResultsEnvelope<"list">["action"]>().toEqualTypeOf<"list">();
+  expectTypeOf<NonNullable<SubagentResultsEnvelope<"spawn">["summary"]>>().toEqualTypeOf<SubagentBatchSummary>();
   expectTypeOf<SubagentResponseEnvelope>().toHaveProperty("action");
 });
 

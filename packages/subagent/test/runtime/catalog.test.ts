@@ -486,6 +486,26 @@ test("spawn validation is ordered, isolated, and does not allocate or consume ca
   expect(manager.listConversations()).toHaveLength(2);
 });
 
+test("spawn rejects unknown requested skills before allocating conversations", async () => {
+  const skillRegistry = { agents: new Map([
+    ["invalid-skill", { ...config, name: "invalid-skill", skills: ["definitely-missing-subagent-test-skill"] }],
+  ]) } as any;
+  const manager = new SubagentRuntime(skillRegistry, 2, runner);
+  const batch = manager.startRun(ctx, [
+    { kind: "spawn", agent: "invalid-skill", prompt: "invalid", label: "invalid" },
+    { kind: "spawn", agent: "invalid-skill", prompt: "override", label: "override", skills: [] },
+  ] as any);
+
+  expect(batch.starts[0]).toEqual({
+    ok: false,
+    inputIndex: 0,
+    error: "Unknown skill: definitely-missing-subagent-test-skill",
+  });
+  expect(batch.starts[1]).toMatchObject({ ok: true, inputIndex: 1 });
+  expect(manager.listConversations()).toHaveLength(1);
+  await batch.completion;
+});
+
 test("joining marks the latest result joined and unlocks resume", async () => {
   const manager = new SubagentRuntime(registry, 1, runner);
   const initial = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "old", label: "old" }] as any);
@@ -538,7 +558,6 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
     prompt: "again",
   }] as any).starts[0]).toMatchObject({
     error: `Subagent ${first.conversationId} was not found.`,
-    code: "SUBAGENT_NOT_FOUND",
   });
 
   expect(() => manager.inspectSubagents([first.conversationId])).toThrow(`Subagent ${first.conversationId} was not found.`);
@@ -619,7 +638,7 @@ test("batch removal isolates terminal, active, and unknown conversations", async
       conversationId: active.conversationId,
       error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
     },
-    { ok: false, conversationId: "amber-acorn", error: "Subagent amber-acorn was not found.", code: "SUBAGENT_NOT_FOUND" },
+    { ok: false, conversationId: "amber-acorn", error: "Subagent amber-acorn was not found." },
   ]);
   expect(() => manager.runSnapshot(terminal.runId)).toThrow(`Unknown run: ${terminal.runId}.`);
   expect(manager.inspectSubagents([active.conversationId])[0].snapshot.status.kind).toBe("running");

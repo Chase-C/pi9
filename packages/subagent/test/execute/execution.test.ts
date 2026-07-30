@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { Conversation } from "../../src/conversation.js";
 import { completedRun } from "../../src/conversation.js";
-import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, resolveModel, resolveTaskCwd, executeRun } from "../../src/execute.js";
+import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, resolveModel, resolveRequestedSkills, resolveTaskCwd, executeRun } from "../../src/execute.js";
 
 const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
 function resumable(messages: any[], prompt: () => Promise<void>, abort = vi.fn()) {
@@ -167,6 +167,32 @@ test("RunAttempt terminalizes an invalid requested model before session allocati
   await expect(executeRun({ cwd: "/unvalidated-parent", model: parent, modelRegistry: registry(parent) } as any, agent, agent.requireCurrentRun())).resolves.toMatchObject({
     status: { kind: "done", outcome: "error", error: "Unknown model: missing" },
   });
+});
+
+test("resolves requested skills and reports discovery and read failures", () => {
+  const skill = { name: "review", filePath: "/skills/review/SKILL.md", baseDir: "/skills/review" } as any;
+  const dependencies = {
+    getAgentDir: () => "/agent",
+    loadSkills: () => ({ skills: [skill] }),
+    readSkillFile: () => "---\nname: review\n---\nReview carefully.",
+  } as any;
+
+  expect(resolveRequestedSkills("/work", ["review"], dependencies)).toEqual({
+    ok: true,
+    value: ["<skill name=\"review\" location=\"/skills/review/SKILL.md\">\nReferences are relative to /skills/review.\n\nReview carefully.\n</skill>"],
+  });
+  expect(resolveRequestedSkills("/work", ["missing"], dependencies)).toEqual({
+    ok: false,
+    error: "Unknown skill: missing",
+  });
+  expect(resolveRequestedSkills("/work", ["review"], {
+    ...dependencies,
+    loadSkills: () => { throw new Error("catalog unavailable"); },
+  })).toEqual({ ok: false, error: "Could not discover requested skills: catalog unavailable" });
+  expect(resolveRequestedSkills("/work", ["review"], {
+    ...dependencies,
+    readSkillFile: () => { throw new Error("permission denied"); },
+  })).toEqual({ ok: false, error: "Could not load requested skill: permission denied" });
 });
 
 test("resolves and validates relative and absolute requested working directories", async () => {

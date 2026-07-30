@@ -15,6 +15,9 @@ test("description names typed action inputs without restating task unions", () =
     prepareInvocation: async () => settings,
   });
   const description = tool.description;
+  assert.match(description, /Batch entries are independent; one failure does not stop valid siblings/);
+  assert.match(description, /Repeated subagentIds are rejected after the first occurrence/);
+  assert.match(description, /completed status means execution finished; joined means its latest result was collected/);
   assert.match(description, /list\(statuses\?, joined\?\): List direct child subagents with descendant context/);
   assert.match(description, /spawn\(spawns\)/);
   assert.match(description, /resume\(resumes\)/);
@@ -22,7 +25,7 @@ test("description names typed action inputs without restating task unions", () =
   assert.match(description, /cancel\(subagentIds\)/);
   assert.match(description, /inspect\(subagentIds\)/);
   assert.match(description, /join\(subagentIds\).*blocks while running, idempotent after/);
-  assert.match(description, /remove\(subagentIds\).*inactive subagent subtrees/);
+  assert.match(description, /remove\(subagentIds\).*inactive subagent subtrees, including unjoined results/);
   assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union|acknowledg|lifecycle|latest outcome|list\(scope|state\?/i);
   const properties = (tool.parameters as any).properties;
   assert.deepEqual(Object.keys(properties.spawns.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
@@ -99,10 +102,11 @@ test("mixed join target errors remain ordered item failures", async () => {
   const result = await tool.execute("call", { action: "join", subagentIds: ["valid-run", "ghost-silently", 42] }, undefined, undefined, {});
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
+  assert.deepEqual(response.summary, { requested: 3, succeeded: 0, failed: 3 });
   assert.deepEqual(response.results, [
-    { ok: false, subagentId: "valid-run", error: "Unknown or invalid subagent ID." },
-    { ok: false, subagentId: "ghost-silently", error: "Unknown or invalid subagent ID." },
-    { ok: false, subagentId: "42", error: "Unknown or invalid subagent ID." },
+    { ok: false, subagentId: "valid-run", error: "Invalid subagentId format: valid-run." },
+    { ok: false, subagentId: "ghost-silently", error: "Invalid subagentId format: ghost-silently." },
+    { ok: false, subagentId: "42", error: "Invalid subagentId format: 42." },
   ]);
 });
 

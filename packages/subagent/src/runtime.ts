@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
 import { Conversation, RunSteerError, effectiveStatus, type ConversationSnapshot, type ConversationUpdateKind, type ConversationUpdateListener, type NestedJoinTargetSnapshot, type RunBinding, type RunSnapshot, type RunViewStatus, type SteerReceipt } from "./conversation.js";
-import { resolveModel, resolveTaskCwd } from "./execute.js";
+import { resolveModel, resolveRequestedSkills, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type RunRef, type SubagentId } from "./identifiers.js";
 import { RunScheduler, type RunExecutor } from "./scheduler.js";
 import { projectLiveSubagent, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
@@ -9,11 +9,7 @@ import type { SpawnRequest, ResumeRequest } from "./schema.js";
 
 export type { ConversationUpdateListener } from "./conversation.js";
 
-export const SUBAGENT_NOT_FOUND_CODE = "SUBAGENT_NOT_FOUND" as const;
-
 export class SubagentNotFoundError extends Error {
-  readonly code = SUBAGENT_NOT_FOUND_CODE;
-
   constructor(readonly subagentId: string) {
     super(`Subagent ${subagentId} was not found.`);
     this.name = "SubagentNotFoundError";
@@ -22,7 +18,7 @@ export class SubagentNotFoundError extends Error {
 
 export type OrderedStartOutcome =
   | ({ readonly ok: true; readonly inputIndex: number; readonly steer?: SteerReceipt } & RunRef)
-  | { readonly ok: false; readonly inputIndex: number; readonly error: string; readonly code?: string };
+  | { readonly ok: false; readonly inputIndex: number; readonly error: string };
 export interface RunHandle { readonly starts: readonly OrderedStartOutcome[]; readonly completion: Promise<readonly OrderedStartOutcome[]> }
 export interface JoinProjection extends RunRef { readonly status: RunViewStatus }
 export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; markJoined(): void; release(): void }
@@ -31,14 +27,14 @@ export type SubagentCaller = RunRef;
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
 export type RemoveOutcome =
   | { readonly ok: true; readonly conversationId: ConversationId; readonly label: string; readonly removedIds: readonly ConversationId[] }
-  | { readonly ok: false; readonly conversationId: string; readonly error: string; readonly code?: typeof SUBAGENT_NOT_FOUND_CODE };
+  | { readonly ok: false; readonly conversationId: string; readonly error: string };
 export interface SteerResult extends RunRef { readonly steer: SteerReceipt }
 
 type RunRecord = RunRef & {
   readonly agent: Conversation;
 };
 interface BoundRecord { readonly conversationId: ConversationId; readonly binding: RunBinding }
-type Reservation = { readonly agent: Conversation; readonly runId: RunId } | { readonly error: string; readonly code?: typeof SUBAGENT_NOT_FOUND_CODE };
+type Reservation = { readonly agent: Conversation; readonly runId: RunId } | { readonly error: string };
 
 /** Owns retained conversations and their exact-run records. */
 export class SubagentRuntime {
@@ -132,7 +128,6 @@ export class SubagentRuntime {
           ok: false,
           inputIndex,
           error: reservation.error,
-          ...(reservation.code ? { code: reservation.code } : {}),
         });
         continue;
       }
@@ -157,6 +152,8 @@ export class SubagentRuntime {
     if (!model.ok) return { error: model.error };
     const cwd = resolveTaskCwd(ctx.cwd, requested.cwd);
     if (!cwd.ok) return { error: cwd.error };
+    const skills = resolveRequestedSkills(cwd.value, requested.skills ?? []);
+    if (!skills.ok) return { error: skills.error };
     if (this.conversations.size >= this.maxConversations) return { error: this.capacityError() };
     const conversationId = this.conversationIds.allocate();
     const runId = this.runIds.allocate();
@@ -171,8 +168,7 @@ export class SubagentRuntime {
     const subagentId = task.subagentId;
     const agent = subagentId ? this.conversations.get(subagentId) : undefined;
     if (!agent) {
-      const error = new SubagentNotFoundError(String(subagentId));
-      return { error: error.message, code: error.code };
+      return { error: new SubagentNotFoundError(String(subagentId)).message };
     }
     if (caller && agent.parentConversationId !== caller.conversationId) {
       return { error: `Subagent ${agent.conversationId} is not directly owned by caller subagent ${caller.conversationId}.` };
@@ -378,8 +374,7 @@ export class SubagentRuntime {
     for (const id of unique) {
       const conversation = this.conversations.get(id as ConversationId);
       if (!conversation) {
-        const error = new SubagentNotFoundError(id);
-        failures.set(id, { ok: false, conversationId: id, error: error.message, code: error.code });
+        failures.set(id, { ok: false, conversationId: id, error: new SubagentNotFoundError(id).message });
         continue;
       }
       try {

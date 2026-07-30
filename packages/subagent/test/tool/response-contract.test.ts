@@ -35,7 +35,7 @@ test("malformed removal targets remain ordered item failures", () => {
       conversationId,
       {
         subagentId: "not-a-real-conversation",
-        error: "Unknown or invalid subagent ID.",
+        error: "Invalid subagentId format: not-a-real-conversation.",
       },
     ],
   });

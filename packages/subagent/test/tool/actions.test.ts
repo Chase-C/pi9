@@ -116,6 +116,7 @@ test("spawn returns stable subagent IDs without execution IDs", async () => {
   assert.deepEqual(received, [tasks]);
   assert.deepEqual(json(result), {
     action: "spawn",
+    summary: { requested: 2, succeeded: 1, failed: 1 },
     results: [
       canonical(),
       { ok: false, agent: "missing", label: "missing agent", error: "Unknown agent: missing." },
@@ -144,8 +145,16 @@ test("spawn and resume return independent ordered receipt arrays", async () => {
   }, {} as any);
 
   assert.deepEqual(received.map(task => task.kind), ["spawn", "resume"]);
-  assert.deepEqual(json(spawned), { action: "spawn", results: [canonical()] });
-  assert.deepEqual(json(resumed), { action: "resume", results: [canonical()] });
+  assert.deepEqual(json(spawned), {
+    action: "spawn",
+    summary: { requested: 1, succeeded: 1, failed: 0 },
+    results: [canonical()],
+  });
+  assert.deepEqual(json(resumed), {
+    action: "resume",
+    summary: { requested: 1, succeeded: 1, failed: 0 },
+    results: [canonical()],
+  });
 });
 
 test("resume failures retain their conversation identity", async () => {
@@ -163,7 +172,11 @@ test("resume failures retain their conversation identity", async () => {
     resumes: [{ kind: "resume", subagentId: conversationId, prompt: "continue" }],
   }, {} as any);
 
-  assert.deepEqual(json(result), { action: "resume", results: [{ ...canonical(), ok: false, error }] });
+  assert.deepEqual(json(result), {
+    action: "resume",
+    summary: { requested: 1, succeeded: 0, failed: 1 },
+    results: [{ ...canonical(), ok: false, error }],
+  });
 });
 
 test("spawn returns task parse failures while starting valid siblings", async () => {
@@ -189,6 +202,7 @@ test("spawn returns task parse failures while starting valid siblings", async ()
 
   assert.deepEqual(json(result), {
     action: "spawn",
+    summary: { requested: 3, succeeded: 1, failed: 2 },
     results: [
       canonical(),
       { ok: false, label: "invalid spawn", error: tasks[1].error },
@@ -243,6 +257,7 @@ test("steer isolates failures from sibling messages", async () => {
 
   assert.deepEqual(json(result), {
     action: "steer",
+    summary: { requested: 2, succeeded: 1, failed: 1 },
     results: [
       { ...canonical(), ok: false, error: "Subagent is queued and cannot be steered." },
       { ...canonical(secondSubagentId), steer: { id: 1, state: "queued", acceptedAt: 1 } },
@@ -261,7 +276,11 @@ test("cancel aborts a subagent while retaining its identity", async () => {
 
   const result = await cancelAction(deps(manager), { action: "cancel", subagentIds: [conversationId] });
 
-  assert.deepEqual(json(result), { action: "cancel", results: [canonical()] });
+  assert.deepEqual(json(result), {
+    action: "cancel",
+    summary: { requested: 1, succeeded: 1, failed: 0 },
+    results: [canonical()],
+  });
 });
 
 test("cancel starts valid targets concurrently while preserving input order", async () => {
@@ -291,6 +310,7 @@ test("cancel starts valid targets concurrently while preserving input order", as
 
   assert.deepEqual(json(await resultPromise), {
     action: "cancel",
+    summary: { requested: 2, succeeded: 2, failed: 0 },
     results: [canonical(), canonical(secondSubagentId)],
   });
 });
@@ -316,6 +336,7 @@ test("cancel isolates malformed and runtime failures from valid siblings", async
 
   assert.deepEqual(json(result), {
     action: "cancel",
+    summary: { requested: 3, succeeded: 1, failed: 2 },
     results: [
       { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" },
       { ...canonical(), ok: false, error: `Subagent ${conversationId} is completed and cannot be cancelled.` },
@@ -413,7 +434,6 @@ test("inspect isolates malformed and unknown targets from valid siblings", () =>
     ok: false,
     subagentId: unknownSubagentId,
     error: `Subagent ${unknownSubagentId} was not found.`,
-    code: "SUBAGENT_NOT_FOUND",
   });
 });
 
@@ -536,6 +556,7 @@ test("remove returns the identity and complete removed subtree", async () => {
   assert.deepEqual(received, [conversationId]);
   assert.deepEqual(json(result), {
     action: "remove",
+    summary: { requested: 1, succeeded: 1, failed: 0 },
     results: [{
       ok: true,
       subagentId: conversationId,
@@ -562,7 +583,6 @@ test("remove preserves ordered malformed and runtime failures without hiding val
           ok: false as const,
           conversationId: unknownConversationId,
           error: `Subagent ${unknownConversationId} was not found.`,
-          code: "SUBAGENT_NOT_FOUND" as const,
         },
       ];
     },
@@ -571,6 +591,7 @@ test("remove preserves ordered malformed and runtime failures without hiding val
   assert.deepEqual(received, [conversationId, unknownConversationId]);
   assert.deepEqual(json(result), {
     action: "remove",
+    summary: { requested: 3, succeeded: 1, failed: 2 },
     results: [
       {
         ok: true,
@@ -583,10 +604,41 @@ test("remove preserves ordered malformed and runtime failures without hiding val
         ok: false,
         subagentId: unknownConversationId,
         error: `Subagent ${unknownConversationId} was not found.`,
-        code: "SUBAGENT_NOT_FOUND",
       },
     ],
   });
+});
+
+test("join releases its binding before projecting final resumable actions", async () => {
+  let joined = false;
+  let released = false;
+  const entries = [{
+    conversationId,
+    runId,
+    status: { kind: "done", outcome: "completed", completedAt: 2, output: "done" },
+  }];
+  const manager = {
+    bindSubagentJoin: () => joinBinding(entries, Promise.resolve(), {
+      markJoined: () => { joined = true; },
+      release: () => { released = true; },
+    }),
+    onConversationUpdate: () => () => {},
+    projectSubagent: () => canonical(conversationId, "completed", {
+      joined,
+      availableActions: joined && released
+        ? ["resume", "inspect", "join", "remove"]
+        : ["inspect", "join", "remove"],
+    }),
+  };
+
+  const result = await joinAction(
+    deps(manager),
+    { action: "join", subagentIds: [conversationId] },
+    undefined,
+    undefined,
+  );
+
+  assert.deepEqual(json(result).results[0].availableActions, ["resume", "inspect", "join", "remove"]);
 });
 
 test("join returns projected child errors as successful tool results", async () => {
@@ -621,6 +673,7 @@ test("join returns projected child errors as successful tool results", async () 
   );
   assert.deepEqual(json(result), {
     action: "join",
+    summary: { requested: 1, succeeded: 1, failed: 0 },
     results: [canonical(conversationId, "failed", {
       joined: true,
       availableActions: ["inspect", "join", "remove"],
@@ -632,6 +685,7 @@ test("join returns projected child errors as successful tool results", async () 
   assert.ok(updates.length >= 1);
   assert.deepEqual(JSON.parse(updates[0].content[0].text), {
     action: "join",
+    summary: { requested: 1, succeeded: 1, failed: 0 },
     results: [canonical(conversationId, "failed", {
       joined: true,
       availableActions: ["inspect", "join", "remove"],
@@ -802,7 +856,6 @@ test("nested join records one binding for valid siblings and returns invalid tar
       ok: false,
       subagentId: unknownSubagentId,
       error: `Subagent ${unknownSubagentId} was not found.`,
-      code: "SUBAGENT_NOT_FOUND",
     },
   ]);
 });
@@ -922,7 +975,6 @@ test("join isolates malformed and unknown targets from valid siblings", async ()
       ok: false,
       subagentId: unknownSubagentId,
       error: `Subagent ${unknownSubagentId} was not found.`,
-      code: "SUBAGENT_NOT_FOUND",
     },
   ]);
 });
@@ -955,7 +1007,6 @@ test("join returns item errors without binding when no target resolves", async (
       ok: false,
       subagentId: "quiet-otter",
       error: "Subagent quiet-otter was not found.",
-      code: "SUBAGENT_NOT_FOUND",
     },
   ]);
 });
