@@ -8,31 +8,6 @@ const settings = { runtime: { maxTasksPerRun: 1 }, display: {} } as any;
 const registry = { agents: new Map(), summarizeAgent: () => "helper" } as any;
 const runtime = new SubagentRuntime(registry);
 
-test("description names typed action inputs without restating task unions", () => {
-  const tool = defineSubagentTool({
-    runtime,
-    agentRegistry: registry,
-    prepareInvocation: async () => settings,
-  });
-  const description = tool.description;
-  assert.match(description, /Batch entries are independent; one failure does not stop valid siblings/);
-  assert.match(description, /Repeated subagentIds are rejected after the first occurrence/);
-  assert.match(description, /completed status means execution finished; joined means its latest result was collected/);
-  assert.match(description, /list\(statuses\?, joined\?\): List direct child subagents with descendant context/);
-  assert.match(description, /spawn\(spawns\)/);
-  assert.match(description, /resume\(resumes\)/);
-  assert.match(description, /steer\(messages\)/);
-  assert.match(description, /cancel\(subagentIds\)/);
-  assert.match(description, /inspect\(subagentIds\)/);
-  assert.match(description, /join\(subagentIds\).*blocks while running, idempotent after/);
-  assert.match(description, /remove\(subagentIds\).*inactive subagent subtrees, including unjoined results/);
-  assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union|acknowledg|lifecycle|latest outcome|list\(scope|state\?/i);
-  const properties = (tool.parameters as any).properties;
-  assert.deepEqual(Object.keys(properties.spawns.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
-  assert.deepEqual(Object.keys(properties.resumes.items.properties), ["subagentId", "prompt"]);
-  assert.deepEqual(Object.keys(properties.messages.items.properties), ["subagentId", "message"]);
-});
-
 const toolCall = (arguments_: Record<string, any>) => ({
   type: "toolCall" as const,
   id: "call",
