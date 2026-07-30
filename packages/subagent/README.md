@@ -76,6 +76,7 @@ Every live-subagent success starts with the same caller-relative block:
   "label": "map authentication",
   "agent": "scout",
   "status": "running",
+  "joined": false,
   "availableActions": ["steer", "cancel", "inspect", "join"]
 }
 ```
@@ -88,7 +89,7 @@ The public statuses are:
 - `failed`
 - `cancelled`
 
-Finished blocks also include `joined`. Failed blocks include `failure`, whose prose identifies whether execution failed, was interrupted, or was skipped. `availableActions` contains every action currently legal for that caller. It can change between calls, so rejected actions against a live subagent return its current canonical fields for self-correction.
+Every block includes `joined`. It is always `false` while active because there is no finished result to collect. Failed blocks include `failure`, whose prose identifies whether execution failed, was interrupted, or was skipped. `availableActions` contains every action currently legal for that caller. It can change between calls, so rejected actions against a live subagent return its current canonical fields for self-correction.
 
 `status` describes execution only. `joined` separately records whether the latest result has been collected. Joining is idempotent and remains available after completion. Resume appears only after a finished result is joined and a reusable session remains.
 
@@ -111,6 +112,7 @@ Batch item-processing actions return aggregate counts followed by their ordered 
       "label": "auth map",
       "agent": "scout",
       "status": "queued",
+      "joined": false,
       "availableActions": ["cancel", "inspect", "join"]
     },
     {
@@ -134,11 +136,11 @@ The package entry point exports `CanonicalLiveSubagent`, `CanonicalFinishedSubag
 
 ## Listing and inspection
 
-`list({ statuses: ["running", "failed"] })` filters direct children with OR semantics. `list({ joined: false })` returns finished direct children whose latest result still needs collection. When `joined` is supplied, active children do not match because they have no finished result.
+`list({ statuses: ["running", "failed"] })` filters direct children with OR semantics. `list({ joined: false })` returns active direct children and finished children whose latest result still needs collection. `list({ joined: true })` returns only finished children whose latest result was collected.
 
 Each direct child carries the canonical block and a `descendants` tree. Descendant nodes contain only `{ subagentId, label, agent, status }` plus nested descendants. Filters do not alter those informational trees.
 
-Inspection is side-effect-free and bounded. Running results can include phase, elapsed time, requested and effective configuration, recent tools, message snippets, steer receipts, turns, and compactions. Completed output remains exclusive to `join`.
+Inspection is side-effect-free. `generation` identifies the current spawn/resume execution with a one-based number, `metrics` describes that generation, and `totalMetrics` aggregates the current and all prior generations. `history` contains only prior generations, including their status, collection state, metrics, and steer receipts. Running results can also include phase, requested and effective configuration, recent tools, and message snippets. Completed output remains exclusive to `join`.
 
 ## Join, resume, cancellation, and removal
 
@@ -156,7 +158,7 @@ Recursive delegation uses the same rules:
 
 Concurrency is shared across the recursive tree. `maxConversations` defaults to `100`; new spawns are rejected at capacity until subagents are removed. Existing subagents can still be inspected, joined, resumed when eligible, or removed.
 
-Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. `/subagents` opens the inventory, agent browser, and settings UI. The overlay retains a **Previous runs** section for local history, while ordinary tool responses describe only the current subagent.
+Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. `/subagents` opens the inventory, agent browser, and settings UI. The overlay retains a **Previous runs** section, while `inspect` exposes prior-generation history without outputs or internal run IDs.
 
 The widget defaults to summary mode. Progress mode shows queued/running rows up to the configured limit.
 
@@ -176,4 +178,4 @@ Each event payload is the canonical live-subagent block. Granular internal outco
 
 There is no compatibility layer for earlier lifecycle, filtering, nesting, or event contracts. Callers must use required labels, the five public statuses, the `joined` flag, caller-relative `availableActions`, direct-child listing, flat result items, and the three lifecycle events documented above.
 
-Private execution history remains runtime-local and supports the overlay's historical view. It is not a provider-facing identity model and is not restored as live work after restart.
+Execution history remains runtime-local and is not restored as live work after restart. `inspect` projects generation numbers, statuses, collection state, metrics, and steer receipts, but stable `subagentId` remains the provider-facing identity.

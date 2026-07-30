@@ -204,7 +204,10 @@ export function parseSubagentInvocation(
   }
 }
 
-function invalidSubagentId(value: unknown): string {
+function subagentIdError(value: unknown): string {
+  if (typeof value === "string" && /^[a-z]+-[a-z]+$/.test(value)) {
+    return `Subagent ${value} was not found.`;
+  }
   return `Invalid subagentId format: ${String(value)}.`;
 }
 
@@ -242,7 +245,7 @@ function parseSubagentTargets(
       seen.add(item);
       return item;
     }
-    return { subagentId: String(item), error: invalidSubagentId(item) };
+    return { subagentId: String(item), error: subagentIdError(item) };
   });
 }
 
@@ -300,7 +303,7 @@ export function parseResumeTask(raw: unknown): ParsedResumeRequest {
   const error = (message: string): ParsedResumeRequest => ({ ...identity, error: message });
   const extra = Object.keys(task).find(key => !RESUME_TASK_KEYS.has(key));
   if (extra) return error(`Resume task property ${extra} is not allowed.`);
-  if (!isSubagentId(task.subagentId)) return error(invalidSubagentId(task.subagentId));
+  if (!isSubagentId(task.subagentId)) return error(subagentIdError(task.subagentId));
   const promptError = validateNonBlank(task.prompt, "Resume task prompt");
   return promptError ? error(promptError.error) : { kind: "resume", subagentId: task.subagentId, prompt: task.prompt as string };
 }
@@ -312,7 +315,7 @@ export function parseSteerMessage(raw: unknown): ParsedSteerRequest {
   const error = (message: string): ParsedSteerRequest => ({ ...identity, error: message });
   const extra = Object.keys(steer).find(key => !STEER_MESSAGE_KEYS.has(key));
   if (extra) return error(`Steer message property ${extra} is not allowed.`);
-  if (!isSubagentId(steer.subagentId)) return error(invalidSubagentId(steer.subagentId));
+  if (!isSubagentId(steer.subagentId)) return error(subagentIdError(steer.subagentId));
   const messageError = validateNonBlank(steer.message, "Steer message");
   return messageError ? error(messageError.error) : { kind: "steer", subagentId: steer.subagentId, message: steer.message as string };
 }

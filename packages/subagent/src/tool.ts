@@ -19,6 +19,7 @@ import {
   type DispatchRenderView,
   type InspectedRunRenderItem,
   type JoinRenderView,
+  type RunMetricsRenderItem,
   type SubagentToolDetails,
 } from "./tool-renderer.js";
 
@@ -473,12 +474,15 @@ function projectInspection(
   callerConversationId?: ConversationId,
 ): Omit<InspectedRunRenderItem, "subagentId" | "agent" | "label" | "status"> {
   const status = effectiveStatus(run.status);
+  const now = Date.now();
+  let runs: readonly RunSnapshot[] = [run];
   let config: Pick<ConversationSnapshot, "requestedOverrides" | "effectiveConfig"> & {
     parentSubagentId?: ConversationId;
     depth?: number;
   } = {};
   try {
     const conversation = runtime.conversation(conversationId);
+    runs = conversation.runs;
     config = {
       ...(conversation.parentConversationId ? { parentSubagentId: conversation.parentConversationId } : {}),
       ...(conversation.requestedOverrides ? { requestedOverrides: conversation.requestedOverrides } : {}),
@@ -486,12 +490,31 @@ function projectInspection(
       depth: runtime.conversationDepth(conversationId, callerConversationId),
     };
   } catch {}
+  const history = runs.slice(0, -1).map((historicalRun, index) => ({
+    generation: index + 1,
+    kind: historicalRun.kind,
+    status: projectSubagentStatus(historicalRun.status),
+    joined: historicalRun.joined,
+    ...runMetrics(historicalRun, now),
+    steers: historicalRun.steers,
+  }));
+  const metrics = runMetrics(run, now);
+  const totalMetrics = runs.reduce<RunMetricsRenderItem>((total, generationRun) => {
+    const generationMetrics = runMetrics(generationRun, now);
+    return {
+      elapsedMs: total.elapsedMs + generationMetrics.elapsedMs,
+      turns: total.turns + generationMetrics.turns,
+      compactions: total.compactions + generationMetrics.compactions,
+      tokens: total.tokens + generationMetrics.tokens,
+    };
+  }, { elapsedMs: 0, turns: 0, compactions: 0, tokens: 0 });
   return {
     ...config,
     ...(status === "running" ? { phase: run.activity.phase } : {}),
-    elapsedMs: runElapsedMs(run, Date.now()),
-    turns: run.activity.turns,
-    compactions: run.activity.compactions,
+    generation: runs.length,
+    metrics,
+    totalMetrics,
+    history,
     ...(status === "running" && run.activity.messageSnippet
       ? { messageSnippet: truncateText(run.activity.messageSnippet, 500) }
       : {}),
@@ -507,6 +530,15 @@ function projectInspection(
         : tool.isError ? "error" : "completed",
     })),
     steers: (run.steers ?? []).slice(-5),
+  };
+}
+
+function runMetrics(run: RunSnapshot, now: number): RunMetricsRenderItem {
+  return {
+    elapsedMs: runElapsedMs(run, now),
+    turns: run.activity.turns,
+    compactions: run.activity.compactions,
+    tokens: run.usage?.totalTokens ?? 0,
   };
 }
 

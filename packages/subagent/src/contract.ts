@@ -15,7 +15,7 @@ interface CanonicalSubagentBase extends SubagentIdentity {
 
 export type CanonicalActiveSubagent = CanonicalSubagentBase & {
   readonly status: "queued" | "running";
-  readonly joined?: never;
+  readonly joined: false;
   readonly failure?: never;
 };
 
@@ -106,7 +106,7 @@ export function projectLiveSubagent(
     agent: source.agent,
   };
   if (status === "queued" || status === "running") {
-    return { ...base, status, availableActions };
+    return { ...base, status, joined: false, availableActions };
   }
   if (status === "failed") {
     const failure = projectFailure(source.runStatus, failureMode);

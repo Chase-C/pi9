@@ -15,6 +15,9 @@ This changelog starts with version `v0.2.1`.
 
 ### Changed
 
+- Project active subagents with `joined: false`, so `list({ joined: false })` includes active and uncollected finished children.
+- Expose the current one-based `generation`, generation-scoped `metrics`, aggregate `totalMetrics`, and prior-generation `history` through inspection without legacy top-level counters.
+- Report plausible lowercase two-word unknown subagent IDs as not found while retaining format errors for malformed values.
 - Make join blocking and idempotent, require join before resume, and report collection state with `joined`.
 - Make cancellation wait for settlement and forcibly abandon unresponsive executions after an internal bound while releasing scheduler capacity.
 - Return failed execution explanations in `failure`, reserving `error` for action and invocation failures.

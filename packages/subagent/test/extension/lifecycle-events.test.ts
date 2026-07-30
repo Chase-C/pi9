@@ -42,6 +42,7 @@ test("finished events use the root-relative canonical block", async () => {
         label: "work",
         agent: "worker",
         status: "queued",
+        joined: false,
         availableActions: ["cancel", "inspect", "join"],
       },
     },
@@ -53,6 +54,7 @@ test("finished events use the root-relative canonical block", async () => {
         label: "work",
         agent: "worker",
         status: "running",
+        joined: false,
         availableActions: ["steer", "cancel", "inspect", "join"],
       },
     },
@@ -104,7 +106,7 @@ test("non-status changes do not publish public lifecycle events", () => {
   let listener: ((agent: Conversation, kind: any) => void) | undefined;
   const source = {
     onConversationUpdate: (next: typeof listener) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", status: "running" as const, availableActions: [] }),
+    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", status: "running" as const, joined: false as const, availableActions: [] }),
   };
   const emitted: Array<{ event: string; data: any }> = [];
   registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, source);

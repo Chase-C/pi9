@@ -72,15 +72,15 @@ test("unknown actions return a structured global error envelope", async () => {
   });
 });
 
-test("mixed join target errors remain ordered item failures", async () => {
+test("plausible unknown join IDs use not-found wording while malformed IDs remain invalid", async () => {
   const tool: any = defineSubagentTool({ runtime, agentRegistry: registry, prepareInvocation: async () => settings });
   const result = await tool.execute("call", { action: "join", subagentIds: ["valid-run", "ghost-silently", 42] }, undefined, undefined, {});
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
   assert.deepEqual(response.summary, { requested: 3, succeeded: 0, failed: 3 });
   assert.deepEqual(response.results, [
-    { ok: false, subagentId: "valid-run", error: "Invalid subagentId format: valid-run." },
-    { ok: false, subagentId: "ghost-silently", error: "Invalid subagentId format: ghost-silently." },
+    { ok: false, subagentId: "valid-run", error: "Subagent valid-run was not found." },
+    { ok: false, subagentId: "ghost-silently", error: "Subagent ghost-silently was not found." },
     { ok: false, subagentId: "42", error: "Invalid subagentId format: 42." },
   ]);
 });

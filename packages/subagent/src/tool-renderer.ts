@@ -69,6 +69,21 @@ export interface InspectedRunErrorRenderItem {
   error: string;
 }
 
+export interface RunMetricsRenderItem {
+  elapsedMs: number;
+  turns: number;
+  compactions: number;
+  tokens: number;
+}
+
+export interface RunHistoryRenderItem extends RunMetricsRenderItem {
+  generation: number;
+  kind: RunKind;
+  status: SubagentStatus;
+  joined: boolean;
+  steers: readonly SteerReceipt[];
+}
+
 export interface InspectedRunRenderItem {
   subagentId: ConversationId;
   parentSubagentId?: ConversationId;
@@ -79,9 +94,10 @@ export interface InspectedRunRenderItem {
   label?: string;
   status: SubagentStatus;
   phase?: RunPhase;
-  elapsedMs: number;
-  turns: number;
-  compactions: number;
+  generation: number;
+  metrics: RunMetricsRenderItem;
+  totalMetrics: RunMetricsRenderItem;
+  history: readonly RunHistoryRenderItem[];
   messageSnippet?: string;
   errorSnippet?: string;
   recentTools: Array<JoinActivityRenderItem & { status: "running" | "completed" | "error" | "interrupted" }>;
@@ -330,7 +346,7 @@ function expandedLines(details: SubagentResultDetails, theme?: ThemeLike): strin
         const label = run.label || run.agent || run.subagentId;
         const lines = [
           `${statusMarker(theme, run.status)} ${paint(theme, "text", label)} ${paint(theme, "muted", "·")} ${statusText(theme, run.status)}${run.phase ? ` ${paint(theme, "muted", `· ${run.phase.replaceAll("_", " ")}`)}` : ""}`,
-          `  ${tag(theme, "subagent", run.subagentId)} ${paint(theme, "muted", `· ${run.turns} turns · ${run.compactions} compactions · ${run.elapsedMs}ms`)}`,
+          `  ${tag(theme, "subagent", run.subagentId)} ${paint(theme, "muted", `· generation ${run.generation} · ${run.metrics.turns} turns · ${run.metrics.compactions} compactions · ${run.metrics.elapsedMs}ms`)}`,
         ];
         if (run.messageSnippet) lines.push(`  ${paint(theme, "dim", `[partial] ${run.messageSnippet}`)}`);
         if (run.errorSnippet) lines.push(`  ${paint(theme, "error", run.errorSnippet)}`);
