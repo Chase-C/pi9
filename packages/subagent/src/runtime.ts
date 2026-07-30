@@ -1,6 +1,6 @@
 import type { AgentSessionEvent, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
-import { Conversation, RunSteerError, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type Run, type RunSnapshot, type SteerReceipt } from "./conversation.js";
+import { Conversation, RunSteerError, effectiveStatus, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type Run, type RunSnapshot, type SteerReceipt } from "./conversation.js";
 import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun, resolveModel, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type SubagentId } from "./identifiers.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
@@ -182,7 +182,7 @@ export class RunScheduler {
         result = agent.runHistory.find(item => item.runId === run.runId)!;
       } else if (signal?.aborted || !this._isTracked(agent.conversationId)) {
         result = skippedRun(agent, run.runId);
-      } else if (agent.status.kind === "done" && !agent.hasCurrentRun) {
+      } else if (!agent.hasCurrentRun) {
         result = agent.runHistory.find(item => item.runId === run.runId)!;
       } else {
         this._leases.set(agent.conversationId, lease);
@@ -190,7 +190,7 @@ export class RunScheduler {
           result = await this._executor(ctx, agent, run, signal);
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
-          if (agent.status.kind === "done" && !agent.hasCurrentRun) {
+          if (!agent.hasCurrentRun) {
             result = agent.runHistory.find(item => item.runId === run.runId)!;
           } else {
             error = message;
@@ -206,7 +206,7 @@ export class RunScheduler {
       }
 
       const status = result.status;
-      end({ status: status.kind === "done" ? status.outcome : status.kind, error });
+      end({ status: effectiveStatus(status), error });
       return result;
     }, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId, kind });
     this._queued.set(run.runId, scheduled);
@@ -430,7 +430,7 @@ export class SubagentRuntime {
     let terminal = false;
     const targets = (): NestedJoinTargetSnapshot[] => base.project().map(value => ({
       runId: value.runId, conversationId: value.conversationId,
-      status: value.status.kind === "done" ? value.status.outcome : value.status.kind,
+      status: effectiveStatus(value.status),
     }));
     this.updateNestedJoin(caller.runId, attemptIndex, { targets: targets() });
     void base.completion.then(() => {

@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../agents.js";
-import type { ConversationSnapshot } from "../conversation.js";
+import { effectiveStatus, type ConversationSnapshot } from "../conversation.js";
 
 export type ConversationLayoutMode = "flat" | "tree";
 
@@ -112,7 +112,7 @@ function conversationMatches(conversation: ConversationSnapshot, query: string):
       run.runId,
       run.kind,
       run.prompt,
-      run.status.kind === "done" ? run.status.outcome : run.status.kind,
+      effectiveStatus(run.status),
       run.activity.messageSnippet,
       ...run.activity.toolHistory.flatMap(tool => [tool.name, tool.inputSummary]),
     );

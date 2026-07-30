@@ -2,9 +2,10 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { Text } from "@earendil-works/pi-tui";
 
 import { AgentRegistry } from "./agents.js";
-import type { Conversation, ConversationSnapshot, ConversationUpdateKind } from "./conversation.js";
+import { effectiveStatus, type Conversation, type ConversationSnapshot, type ConversationUpdateKind } from "./conversation.js";
 import { SubagentRuntime } from "./runtime.js";
 import { CompletionNotifier } from "./notifications.js";
+import { runElapsedMs } from "./run-format.js";
 import { timingAsync } from "./timing.js";
 import { makeChildSubagentTool } from "./tool.js";
 import { defineSubagentTool } from "./tool.js";
@@ -98,7 +99,7 @@ export function registerSubagentLifecycleEvents(events: SubagentEventBus | undef
     events.emit("subagent:updated", { subagentId: snapshot.conversationId, kind, snapshot: publicSnapshot });
     if (kind !== "status" || !run) return;
     const status = run.status;
-    const key = `${run.runId}:${status.kind}:${status.kind === "queued" ? status.queuedAt : status.kind === "running" ? status.startedAt : status.completedAt}`;
+    const key = `${run.runId}:${effectiveStatus(status)}:${status.kind === "queued" ? status.queuedAt : status.kind === "running" ? status.startedAt : status.completedAt}`;
     if (seen.has(key)) return; seen.add(key);
     const event = status.kind === "queued" ? "subagent:queued" : status.kind === "running" ? "subagent:started" : "subagent:completed";
     events.emit(event, { subagentId: snapshot.conversationId, ...(status.kind === "done" ? { outcome: status.outcome } : {}), snapshot: publicSnapshot });
@@ -131,5 +132,5 @@ export function registerSubagentMetadataPersistence(pi: MetadataPi, source: Meta
 }
 export function projectSubagentRunIndex(snapshot: ReturnType<Conversation["snapshot"]>) {
   const run = snapshot.runs.at(-1); if (!run || run.status.kind !== "done") throw new Error("Cannot persist a non-terminal run.");
-  return { version: 3, subagentId: snapshot.conversationId, agent: snapshot.config.name, ...(snapshot.label ? { label: snapshot.label } : {}), kind: run.kind, status: run.status.outcome, completedAt: run.status.completedAt, ...(run.status.startedAt !== undefined ? { startedAt: run.status.startedAt, elapsedMs: Math.max(0, run.status.completedAt - run.status.startedAt) } : {}) };
+  return { version: 3, subagentId: snapshot.conversationId, agent: snapshot.config.name, ...(snapshot.label ? { label: snapshot.label } : {}), kind: run.kind, status: run.status.outcome, completedAt: run.status.completedAt, ...(run.status.startedAt !== undefined ? { startedAt: run.status.startedAt, elapsedMs: runElapsedMs(run) } : {}) };
 }

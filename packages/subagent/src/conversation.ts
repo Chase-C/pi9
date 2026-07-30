@@ -5,7 +5,7 @@ import { resolveRequestedConfig } from "./agents.js";
 import { RunActivity, type RunActivityListener } from "./activity.js";
 import type { ConversationId, RunId } from "./identifiers.js";
 import type { ConversationLifecycleState } from "./lifecycle.js";
-import type { RunOutcomeStatus, SpawnRequest } from "./schema.js";
+import type { RunOutcomeStatus, RunStatus, SpawnRequest } from "./schema.js";
 
 export type { RunOutcomeStatus } from "./schema.js";
 export type { ConversationLifecycleState } from "./lifecycle.js";
@@ -197,7 +197,7 @@ export function errorRun(agent: Conversation, runId: RunId, error: string): RunS
 export function interruptedRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return finalizeRun(agent, runId, { status: "interrupted", error }); }
 export function skippedRun(agent: Conversation, runId: RunId): RunSnapshot { return finalizeRun(agent, runId, { status: "skipped", error: "Agent skipped." }); }
 
-export function effectiveStatus(status: RunViewStatus): string {
+export function effectiveStatus(status: RunViewStatus): RunStatus {
   return status.kind === "done" ? status.outcome : status.kind;
 }
 

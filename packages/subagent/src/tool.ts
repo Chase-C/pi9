@@ -1,9 +1,9 @@
 import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { Conversation, ConversationSnapshot, NestedJoinAttemptSnapshot, RunSnapshot, SteerReceipt } from "./conversation.js";
+import { effectiveStatus, type Conversation, type ConversationSnapshot, type NestedJoinAttemptSnapshot, type RunSnapshot, type SteerReceipt } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId, SubagentId } from "./identifiers.js";
 import { runElapsedMs } from "./run-format.js";
-import type { JoinBinding, NestedJoinBinding, RunScheduler, SubagentRuntime } from "./runtime.js";
+import type { JoinBinding, NestedJoinBinding, RunScheduler, SubagentCaller, SubagentRuntime } from "./runtime.js";
 import { parseSubagentInvocation, SubagentParams, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
@@ -69,6 +69,12 @@ type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { act
 type OrderedDispatchOutcome =
   | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId; readonly steer?: SteerReceipt }
   | { readonly ok: false; readonly inputIndex: number; readonly error: string };
+function callerOf(deps: ActionDeps): SubagentCaller | undefined {
+  return deps.parent
+    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
+    : undefined;
+}
+
 type RunReceipt = ItemResult<{
   readonly label?: string;
   readonly subagentId: ConversationId;
@@ -139,7 +145,7 @@ export function listAction(
       canResume: conversation.canResume,
       runs: conversation.runs.map(run => ({
         kind: run.kind,
-        status: (run.status.kind === "done" ? run.status.outcome : run.status.kind) as RunStatus,
+        status: effectiveStatus(run.status),
         createdAt: run.createdAt,
       })),
     };
@@ -169,9 +175,7 @@ async function startTasks(
   tasks: InvocationFor<"spawn">["spawns"] | InvocationFor<"resume">["resumes"],
   ctx: ExtensionContext,
 ): Promise<ActionResult> {
-  const owner = deps.parent
-    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
-    : undefined;
+  const owner = callerOf(deps);
   const outcomes: OrderedDispatchOutcome[] = [];
   const validTasks: RunRequest[] = [];
   const validIndexes: number[] = [];
@@ -199,9 +203,7 @@ export async function steerAction(
   deps: ActionDeps,
   invocation: InvocationFor<"steer">,
 ): Promise<ActionResult> {
-  const owner = deps.parent
-    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
-    : undefined;
+  const owner = callerOf(deps);
   const outcomes: OrderedDispatchOutcome[] = [];
 
   for (let inputIndex = 0; inputIndex < invocation.messages.length; inputIndex++) {
@@ -235,9 +237,7 @@ export async function cancelAction(
   deps: ActionDeps,
   invocation: InvocationFor<"cancel">,
 ): Promise<ActionResult> {
-  const owner = deps.parent
-    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
-    : undefined;
+  const owner = callerOf(deps);
   const runs = await Promise.all(invocation.subagentIds.map(async target => {
     if (typeof target !== "string") return { subagentId: target.subagentId, error: target.error };
     try {
@@ -258,9 +258,7 @@ export function inspectAction(
   deps: ActionDeps,
   invocation: InvocationFor<"inspect">,
 ): ActionResult {
-  const owner = deps.parent
-    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
-    : undefined;
+  const owner = callerOf(deps);
   const runs = invocation.subagentIds.map((target, inputIndex) => {
     if (typeof target !== "string") return { inputIndex, subagentId: target.subagentId, error: target.error };
     try {
@@ -283,9 +281,7 @@ export async function joinAction(
   onUpdate: AgentToolUpdateCallback<SubagentToolDetails> | undefined,
   toolCallId?: string,
 ): Promise<ActionResult> {
-  const owner = deps.parent
-    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
-    : undefined;
+  const owner = callerOf(deps);
   const targets = invocation.subagentIds.map(target => {
     if (typeof target !== "string") return target;
     try {
@@ -378,9 +374,7 @@ export async function removeAction(
   invocation: InvocationFor<"remove">,
 ): Promise<ActionResult> {
   const validIds = invocation.subagentIds.filter((target): target is ConversationId => typeof target === "string");
-  const caller = deps.parent
-    ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
-    : undefined;
+  const caller = callerOf(deps);
   const removed = await deps.runtime.removeConversations(validIds, caller);
   const results = invocation.subagentIds.map(target => {
     if (typeof target !== "string") return { ok: false as const, subagentId: target.subagentId, error: target.error };
@@ -463,11 +457,7 @@ function projectInspection(
   run: RunSnapshot,
   callerConversationId?: ConversationId,
 ): InspectedRunRenderItem {
-  const status = run.status.kind === "done" ? run.status.outcome : run.status.kind;
-  const end = run.status.kind === "done" ? run.status.completedAt : Date.now();
-  const start = run.status.kind === "queued" ? run.status.queuedAt
-    : run.status.kind === "running" ? run.status.startedAt
-    : run.status.startedAt ?? run.createdAt;
+  const status = effectiveStatus(run.status);
   let config: Pick<ConversationSnapshot, "requestedOverrides" | "effectiveConfig"> & {
     agent?: string;
     label?: string;
@@ -490,7 +480,7 @@ function projectInspection(
     ...config,
     status,
     ...(status === "running" ? { phase: run.activity.phase } : {}),
-    elapsedMs: Math.max(0, end - start),
+    elapsedMs: runElapsedMs(run, Date.now()),
     turns: run.activity.turns,
     compactions: run.activity.compactions,
     ...(status === "running" && run.activity.messageSnippet
@@ -556,7 +546,7 @@ function renderJoinedRuns(
       return { ...(value.agentName ? { agent: value.agentName } : {}), ...(value.label ? { label: value.label } : {}) };
     } catch { return {}; }
   };
-  const status = (run: RunSnapshot): RunStatus => run.status.kind === "done" ? run.status.outcome : run.status.kind;
+  const status = (run: RunSnapshot): RunStatus => effectiveStatus(run.status);
   const activity = (run: RunSnapshot) => run.activity.toolHistory.map(tool => ({
     toolCallId: tool.id, tool: tool.name, ...(tool.inputSummary ? { summary: tool.inputSummary } : {}),
   }));

@@ -5,6 +5,7 @@ import type { RunOutcomeStatus, ConversationUpdateKind } from "./conversation.js
 import type { SubagentRuntime } from "./runtime.js";
 import { RUN_OUTCOME_STATUSES } from "./schema.js";
 import type { RunId } from "./identifiers.js";
+import { formatElapsed, runElapsedMs } from "./run-format.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisplaySettings } from "./settings.js";
 
 /** The current serializable completion summary shared by notification production and rendering. */
@@ -157,15 +158,6 @@ function statusColor(status: RunOutcomeStatus): ThemeColor {
   if (status === "error") return "error";
   if (status === "aborted" || status === "interrupted") return "warning";
   return "dim";
-}
-
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remSeconds = Math.floor(seconds - minutes * 60);
-  return `${minutes}m${remSeconds.toString().padStart(2, "0")}s`;
 }
 
 export interface NotifierContext {
@@ -394,7 +386,6 @@ export class CompletionNotifier {
 
 function projectCompletionNotification(value: CompletionCandidate): CompletionNotification | undefined {
   if (value.run.status.kind !== "done") return;
-  const started = value.run.status.startedAt ?? value.run.createdAt;
   return {
     subagentId: value.conversation.conversationId,
     agent: value.conversation.config.name,
@@ -402,7 +393,7 @@ function projectCompletionNotification(value: CompletionCandidate): CompletionNo
     status: value.run.status.outcome,
     generation: value.generation,
     completedAt: value.run.status.completedAt,
-    elapsedMs: Math.max(0, value.run.status.completedAt - started),
+    elapsedMs: runElapsedMs(value.run),
   };
 }
 
