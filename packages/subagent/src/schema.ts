@@ -25,8 +25,13 @@ export const SteerMessageSchema = Type.Object({
   message: Type.String(),
 }, { additionalProperties: false });
 
+const SPAWN_TASK_KEYS = new Set(Object.keys(SpawnTaskSchema.properties));
+const RESUME_TASK_KEYS = new Set(Object.keys(ResumeTaskSchema.properties));
+const STEER_MESSAGE_KEYS = new Set(Object.keys(SteerMessageSchema.properties));
+
 export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
-export const RUN_STATUSES = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"] as const;
+export const RUN_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
+export const RUN_STATUSES = ["queued", "running", ...RUN_OUTCOME_STATUSES] as const;
 export const CONVERSATION_STATES = ["active", "awaiting_join", "resumable", "terminal"] as const;
 export const LIST_SCOPES = ["children", "descendants"] as const;
 
@@ -42,6 +47,7 @@ export const SubagentParams = Type.Object({
 
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
+export type RunOutcomeStatus = (typeof RUN_OUTCOME_STATUSES)[number];
 export type RunStatus = (typeof RUN_STATUSES)[number];
 export type ConversationState = (typeof CONVERSATION_STATES)[number];
 export type ListScope = (typeof LIST_SCOPES)[number];
@@ -266,7 +272,7 @@ export function parseSpawnTask(raw: unknown): ParsedSpawnRequest {
     ...(typeof task.agent === "string" && task.agent.trim() ? { agent: task.agent } : {}),
     ...(typeof task.label === "string" && task.label.trim() ? { label: task.label } : {}),
   });
-  const extra = Object.keys(task).find(key => !["agent", "prompt", "label", "skills", "model", "thinking", "cwd"].includes(key));
+  const extra = Object.keys(task).find(key => !SPAWN_TASK_KEYS.has(key));
   if (extra) return error(`Spawn task property ${extra} is not allowed.`);
   if (typeof task.agent !== "string" || !task.agent.trim()) return error("Spawn task agent must be a non-empty string.");
   const promptError = validateNonBlank(task.prompt, "Spawn task prompt");
@@ -295,7 +301,7 @@ export function parseResumeTask(raw: unknown): ParsedResumeRequest {
   if (!task) return { error: "Resume task must be an object." };
   const identity = task.subagentId === undefined ? {} : { subagentId: String(task.subagentId) };
   const error = (message: string): ParsedResumeRequest => ({ ...identity, error: message });
-  const extra = Object.keys(task).find(key => !["subagentId", "prompt"].includes(key));
+  const extra = Object.keys(task).find(key => !RESUME_TASK_KEYS.has(key));
   if (extra) return error(`Resume task property ${extra} is not allowed.`);
   if (!isSubagentId(task.subagentId)) return error("Unknown or invalid subagent ID.");
   const promptError = validateNonBlank(task.prompt, "Resume task prompt");
@@ -307,7 +313,7 @@ export function parseSteerMessage(raw: unknown): ParsedSteerRequest {
   if (!steer) return { error: "Steer message must be an object." };
   const identity = steer.subagentId === undefined ? {} : { subagentId: String(steer.subagentId) };
   const error = (message: string): ParsedSteerRequest => ({ ...identity, error: message });
-  const extra = Object.keys(steer).find(key => !["subagentId", "message"].includes(key));
+  const extra = Object.keys(steer).find(key => !STEER_MESSAGE_KEYS.has(key));
   if (extra) return error(`Steer message property ${extra} is not allowed.`);
   if (!isSubagentId(steer.subagentId)) return error("Unknown or invalid subagent ID.");
   const messageError = validateNonBlank(steer.message, "Steer message");

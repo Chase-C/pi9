@@ -1,8 +1,8 @@
 import type { AgentSessionEvent, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
-import { Conversation, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type Run, type RunSnapshot, type SteerReceipt } from "./conversation.js";
+import { Conversation, RunSteerError, errorRun, interruptedRun, skippedRun, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type Run, type RunSnapshot, type SteerReceipt } from "./conversation.js";
 import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun, resolveModel, resolveTaskCwd } from "./execute.js";
-import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId } from "./identifiers.js";
+import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type SubagentId } from "./identifiers.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
 import { timingStart } from "./timing.js";
 
@@ -367,68 +367,47 @@ export class SubagentRuntime {
     return { starts, completion: Promise.allSettled(executions).then(() => starts) };
   }
 
-  async steerSubagent(subagentId: ConversationId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
-    const agent = this.requireConversation(subagentId);
-    const runId = agent.latestRunId;
-    try {
-      return await this.steerRun(runId, prompt, caller);
-    } catch (error) {
-      throw new Error(this.subagentExecutionError(error, subagentId, runId));
-    }
+  async steerSubagent(subagentId: SubagentId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
+    const record = this.latestSubagentRecord(subagentId);
+    this.assertCallerAccess(record.conversationId, caller, "steer");
+    return this.steerRecord(record, prompt, `Subagent ${subagentId}`);
   }
 
-  async cancelSubagent(subagentId: ConversationId, caller?: SubagentCaller): Promise<CancelResult> {
-    const agent = this.requireConversation(subagentId);
-    const runId = agent.latestRunId;
-    try {
-      return await this.cancelRun(runId, caller);
-    } catch (error) {
-      throw new Error(this.subagentExecutionError(error, subagentId, runId));
-    }
+  async cancelSubagent(subagentId: SubagentId, caller?: SubagentCaller): Promise<CancelResult> {
+    const record = this.latestSubagentRecord(subagentId);
+    this.assertCallerAccess(record.conversationId, caller, "cancel");
+    return this.cancelRecord(record, `Subagent ${subagentId}`);
   }
 
-  inspectSubagents(subagentIds: readonly ConversationId[], caller?: SubagentCaller): InspectedRun[] {
+  inspectSubagents(subagentIds: readonly SubagentId[], caller?: SubagentCaller): InspectedRun[] {
     return subagentIds.map(subagentId => {
-      const agent = this.requireConversation(subagentId);
-      const run = agent.runHistory.at(-1)!;
-      this.assertCallerAccess(subagentId, caller, "inspect");
-      return { conversationId: subagentId, snapshot: run };
+      const record = this.latestSubagentRecord(subagentId);
+      this.assertCallerAccess(record.conversationId, caller, "inspect");
+      return { conversationId: record.conversationId, snapshot: this.runSnapshot(record.runId) };
     });
   }
 
-  validateSubagentJoin(subagentId: ConversationId, caller?: SubagentCaller): void {
+  validateSubagentJoin(subagentId: SubagentId, caller?: SubagentCaller): void {
     this.assertDirectOwner(this.requireConversation(subagentId), caller, "join");
   }
 
-  bindSubagentJoin(subagentIds: readonly ConversationId[], caller?: SubagentCaller, toolCallId?: string): JoinBinding | NestedJoinBinding {
-    const agents = subagentIds.map(subagentId => this.requireConversation(subagentId));
-    for (const agent of agents) this.assertDirectOwner(agent, caller, "join");
-    const runIds = agents.map(agent => agent.latestRunId);
+  bindSubagentJoin(subagentIds: readonly SubagentId[], caller?: SubagentCaller, toolCallId?: string): JoinBinding | NestedJoinBinding {
+    const records = subagentIds.map(subagentId => this.latestSubagentRecord(subagentId));
+    for (const record of records) this.assertDirectOwner(record.agent, caller, "join");
+    const runIds = records.map(record => record.runId);
     return caller ? this.bindNestedJoin(caller, runIds, toolCallId) : this.bindJoin(runIds);
   }
 
   async steerRun(runId: RunId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
     const record = this.requireRunRecord(runId);
     this.assertCallerAccess(record.conversationId, caller, "steer");
-    const steer = await record.agent.steer(runId, prompt);
-    return { conversationId: record.conversationId, runId, steer };
+    return this.steerRecord(record, prompt, `Run ${runId}`);
   }
 
   async cancelRun(runId: RunId, caller?: SubagentCaller): Promise<CancelResult> {
     const record = this.requireRunRecord(runId);
     this.assertCallerAccess(record.conversationId, caller, "cancel");
-    const run = this.runSnapshot(runId);
-    if (run.status.kind === "done") {
-      throw new Error(`Run ${runId} is ${run.status.outcome} and cannot be cancelled.`);
-    }
-    const wasQueued = run.status.kind === "queued";
-    const aborting = record.agent.abort("Run cancelled.");
-    if (wasQueued) {
-      const aborted = record.agent.runHistory.find(item => item.runId === runId)!;
-      this._scheduler.cancelQueued(runId, aborted);
-    }
-    await aborting;
-    return { conversationId: record.conversationId, runId, status: "aborted" };
+    return this.cancelRecord(record, `Run ${runId}`);
   }
 
   inspectRuns(runIds: readonly RunId[], caller?: SubagentCaller): InspectedRun[] {
@@ -572,6 +551,39 @@ export class SubagentRuntime {
     }
     return false;
   }
+
+  private latestSubagentRecord(subagentId: SubagentId): RunRecord {
+    const agent = this.requireConversation(subagentId);
+    return this.requireRunRecord(agent.latestRunId);
+  }
+
+  private async steerRecord(record: RunRecord, prompt: string, target: string): Promise<SteerResult> {
+    try {
+      const steer = await record.agent.steer(record.runId, prompt);
+      return { conversationId: record.conversationId, runId: record.runId, steer };
+    } catch (error) {
+      if (error instanceof RunSteerError) {
+        throw new Error(`${target} is ${error.status} and cannot be steered.`);
+      }
+      throw error;
+    }
+  }
+
+  private async cancelRecord(record: RunRecord, target: string): Promise<CancelResult> {
+    const run = this.runSnapshot(record.runId);
+    if (run.status.kind === "done") {
+      throw new Error(`${target} is ${run.status.outcome} and cannot be cancelled.`);
+    }
+    const wasQueued = run.status.kind === "queued";
+    const aborting = record.agent.abort("Run cancelled.");
+    if (wasQueued) {
+      const aborted = record.agent.runHistory.find(item => item.runId === record.runId)!;
+      this._scheduler.cancelQueued(record.runId, aborted);
+    }
+    await aborting;
+    return { conversationId: record.conversationId, runId: record.runId, status: "aborted" };
+  }
+
   private requireRunRecord(runId: RunId): RunRecord { const record = this.runs.get(runId); if (!record) throw new Error(`Unknown run: ${runId}.`); return record; }
 
   removeConversation(conversationId: string, caller?: SubagentCaller): Promise<RemoveResult> {
@@ -647,11 +659,6 @@ export class SubagentRuntime {
     return `Subagent ${agent.conversationId} cannot be resumed.`;
   }
   private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Subagent capacity (${this.maxConversations}) reached. Remove terminal subagents${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
-  private subagentExecutionError(error: unknown, subagentId: ConversationId, runId: RunId): string {
-    return (error instanceof Error ? error.message : String(error))
-      .replaceAll(`Run ${runId}`, `Subagent ${subagentId}`)
-      .replaceAll(`run ${runId}`, "execution");
-  }
   private withDeferredUpdates<T>(operation: () => T): T {
     this.updateDeferralDepth++;
     try {

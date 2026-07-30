@@ -81,7 +81,7 @@ describe("subagent overlay behavior", () => {
     const conversation = fakeAgent({ conversationId: "conversation-1", runId: "run-1", status: { kind: status } });
     const { component, callbacks } = overlay([conversation]);
     component.handleInput("c");
-    expect(callbacks.onCancel).toHaveBeenCalledWith("run-1");
+    expect(callbacks.onCancel).toHaveBeenCalledWith("conversation-1");
     expect(callbacks.onRemove).not.toHaveBeenCalled();
   });
 

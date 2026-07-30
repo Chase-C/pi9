@@ -895,11 +895,19 @@ test("steering targets an exact running run without creating history", async () 
     runId: started.runId,
     steer: { id: 1, state: "queued", acceptedAt: expect.any(Number) },
   });
-  expect(prompts).toEqual(["focus on tests"]);
+  await expect(manager.steerSubagent(started.conversationId, "focus on docs")).resolves.toMatchObject({
+    conversationId: started.conversationId,
+    runId: started.runId,
+    steer: { id: 2, state: "queued", acceptedAt: expect.any(Number) },
+  });
+  expect(prompts).toEqual(["focus on tests", "focus on docs"]);
   expect(manager.conversation(started.conversationId).runs).toHaveLength(1);
 
   finish();
   await batch.completion;
+  await expect(manager.steerSubagent(started.conversationId, "too late")).rejects.toThrow(
+    `Subagent ${started.conversationId} is completed and cannot be steered.`,
+  );
 });
 
 test("cancelling an active run retains its conversation and exact outcome", async () => {

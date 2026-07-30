@@ -4,7 +4,7 @@ import type { AgentSource } from "./agents.js";
 import type { ConversationEffectiveConfig, ConversationRequestedOverrides, RunKind, RunPhase, SteerReceipt } from "./conversation.js";
 import type { ConversationId } from "./identifiers.js";
 import { formatElapsed, formatTokens } from "./run-format.js";
-import type { ConversationState, DispatchTaskKind, RunStatus, SubagentAction } from "./schema.js";
+import { RUN_STATUSES, type ConversationState, type DispatchTaskKind, type RunStatus, type SubagentAction } from "./schema.js";
 
 type ThemeLike = Partial<Pick<Theme, "fg" | "bold">>;
 type ThemeColor = Parameters<Theme["fg"]>[0];
@@ -501,8 +501,7 @@ function dispatchOutcomeSummary(spawned: number, resumed: number, steered: numbe
 
 function statusSummary(statuses: readonly RunStatus[], theme?: ThemeLike): string {
   if (statuses.length === 0) return "";
-  const order: readonly RunStatus[] = ["queued", "running", "completed", "error", "aborted", "interrupted", "skipped"];
-  const parts = order.flatMap(status => {
+  const parts = RUN_STATUSES.flatMap(status => {
     const total = statuses.filter(value => value === status).length;
     return total ? [`${total} ${status}`] : [];
   });

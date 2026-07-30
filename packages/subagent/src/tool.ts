@@ -1,7 +1,7 @@
 import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Conversation, ConversationSnapshot, NestedJoinAttemptSnapshot, RunSnapshot, SteerReceipt } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
-import type { ConversationId, RunId } from "./identifiers.js";
+import type { ConversationId, RunId, SubagentId } from "./identifiers.js";
 import { runElapsedMs } from "./run-format.js";
 import type { JoinBinding, NestedJoinBinding, SubagentRuntime } from "./runtime.js";
 import { parseSubagentInvocation, SubagentParams, type ConversationState, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
@@ -227,7 +227,7 @@ export async function cancelAction(
   const runs = await Promise.all(invocation.subagentIds.map(async target => {
     if (typeof target !== "string") return { subagentId: target.subagentId, error: target.error };
     try {
-      const result = await deps.runtime.cancelSubagent(target as ConversationId, owner);
+      const result = await deps.runtime.cancelSubagent(target as SubagentId, owner);
       return { subagentId: result.conversationId, status: result.status };
     } catch (error) {
       return { subagentId: target, error: error instanceof Error ? error.message : String(error) };
@@ -250,7 +250,7 @@ export function inspectAction(
   const runs = invocation.subagentIds.map((target, inputIndex) => {
     if (typeof target !== "string") return { inputIndex, subagentId: target.subagentId, error: target.error };
     try {
-      const inspected = deps.runtime.inspectSubagents([target as ConversationId], owner)[0];
+      const inspected = deps.runtime.inspectSubagents([target as SubagentId], owner)[0];
       return projectInspection(deps.runtime, inspected.conversationId, inspected.snapshot, owner?.conversationId);
     } catch (error) {
       return { inputIndex, subagentId: target, error: error instanceof Error ? error.message : String(error) };
@@ -275,13 +275,13 @@ export async function joinAction(
   const targets = invocation.subagentIds.map(target => {
     if (typeof target !== "string") return target;
     try {
-      deps.runtime.validateSubagentJoin(target as ConversationId, owner);
+      deps.runtime.validateSubagentJoin(target as SubagentId, owner);
       return target;
     } catch (error) {
       return { subagentId: target, error: error instanceof Error ? error.message : String(error) };
     }
   });
-  const validSubagentIds = targets.filter((target): target is ConversationId => typeof target === "string");
+  const validSubagentIds = targets.filter((target): target is SubagentId => typeof target === "string");
 
   if (validSubagentIds.length === 0) {
     const result = targets as JoinOutput[];

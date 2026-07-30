@@ -72,6 +72,29 @@ test("session events expose the current running phase", async () => {
   assert.equal(phase(), "settling");
 });
 
+test("summarizes stable subagent targets in nested tool activity", () => {
+  let emit!: (event: any) => void;
+  const agent = make();
+  agent.bindSession({
+    subscribe(listener: (event: any) => void) { emit = listener; return () => {}; },
+  } as any);
+
+  for (const action of ["cancel", "inspect", "join", "remove"] as const) {
+    emit({
+      type: "tool_execution_start",
+      toolCallId: action,
+      toolName: "subagent",
+      args: { action, subagentIds: ["calm-otter", "quiet-fox"] },
+    });
+    emit({ type: "tool_execution_end", toolCallId: action, toolName: "subagent", isError: false });
+  }
+
+  assert.deepEqual(
+    agent.snapshot().runs[0].activity.toolHistory.map(tool => tool.inputSummary),
+    ["cancel 2 subagents", "inspect 2 subagents", "join 2 subagents", "remove 2 subagents"],
+  );
+});
+
 test("preserves immutable exact run history across resume", () => {
   const agent = make();
   agent.bindSession(session());

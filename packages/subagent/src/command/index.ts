@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRegistry } from "../agents.js";
+import type { SubagentId } from "../identifiers.js";
 import type { SubagentRuntime } from "../runtime.js";
 import { prepareSubagentRuntime, SubagentSettingsStore, type SubagentSettings } from "../settings.js";
 import { updateSubagentWidget } from "../widget.js";
@@ -72,16 +73,16 @@ export function registerSubagentsCommand(
               return start.conversationId;
             },
             onResume: (conversationId, prompt) => {
-              const start = runtime.startRun(ctx, [{ kind: "resume", subagentId: conversationId as any, prompt }]).starts[0];
+              const start = runtime.startRun(ctx, [{ kind: "resume", subagentId: conversationId as SubagentId, prompt }]).starts[0];
               if (!start?.ok) notify(ctx, start?.error ?? `Could not resume conversation ${conversationId}.`, "warning");
               else {
                 updateSubagentWidget(ctx, runtime.listConversations(), settings);
                 notify(ctx, `Resumed subagent ${conversationId}.`, "info");
               }
             },
-            onCancel: async runId => {
+            onCancel: async subagentId => {
               try {
-                await runtime.cancelRun(runId as any);
+                await runtime.cancelSubagent(subagentId as SubagentId);
                 notify(ctx, "Cancelled subagent.", "info");
               } catch (error) {
                 notify(ctx, errorMessage(error), "warning");

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { ContextEvent, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { Conversation } from "./conversation.js";
+import type { Conversation, ConversationSnapshot, RunSnapshot } from "./conversation.js";
 import type { RunOutcomeStatus, ConversationUpdateKind } from "./conversation.js";
 import type { SubagentRuntime } from "./runtime.js";
+import { RUN_OUTCOME_STATUSES } from "./schema.js";
 import type { RunId } from "./identifiers.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisplaySettings } from "./settings.js";
 
@@ -21,6 +22,12 @@ interface TrackedCompletionNotification extends CompletionNotification {
   runId: string;
 }
 
+interface CompletionCandidate {
+  conversation: ConversationSnapshot;
+  run: RunSnapshot;
+  generation: number;
+}
+
 export interface CompletionNotificationMessageDetails {
   /** Runtime-local correlation only; never rendered or accepted by lifecycle actions. */
   notificationEpoch?: string;
@@ -35,7 +42,7 @@ export interface CompletionNotificationMessage {
 export type CompletionNotificationMessagePayload = CompletionNotificationMessage;
 
 const COMPLETION_GRACE_MS = 500;
-const TERMINAL_RUN_STATUSES = new Set<unknown>(["completed", "error", "aborted", "interrupted", "skipped"]);
+const TERMINAL_RUN_STATUSES = new Set<unknown>(RUN_OUTCOME_STATUSES);
 const RESULTS_INSTRUCTION = "Use `subagent join` when you need these terminal outcomes.";
 
 type AgentMessage = ContextEvent["messages"][number];
@@ -225,17 +232,7 @@ export class CompletionNotifier {
       candidate.conversation.conversationId === subagentId && candidate.generation === generation);
     if (!value || this.observed.has(value.run.runId) || this.claimCountByRun.has(value.run.runId)) return;
     if (value.run.acknowledged || value.run.observerCount > 0) return;
-    const started = value.run.status.kind === "done" ? value.run.status.startedAt ?? value.run.createdAt : value.run.createdAt;
-    if (value.run.status.kind !== "done") return;
-    return {
-      subagentId: value.conversation.conversationId,
-      agent: value.conversation.config.name,
-      ...(value.conversation.label ? { label: value.conversation.label } : {}),
-      status: value.run.status.outcome,
-      generation: value.generation,
-      completedAt: value.run.status.completedAt,
-      elapsedMs: Math.max(0, value.run.status.completedAt - started),
-    };
+    return projectCompletionNotification(value);
   }
 
   beginTool(scope: string, toolCallId: string, params: unknown): void {
@@ -355,9 +352,8 @@ export class CompletionNotifier {
     for (const candidate of eligible) {
       const value = live.get(candidate.run.runId);
       if (!value || value.run.acknowledged || value.run.observerCount || this.claimCountByRun.has(value.run.runId)) continue;
-      const started = value.run.status.kind === "done" ? value.run.status.startedAt ?? value.run.createdAt : value.run.createdAt;
-      if (value.run.status.kind !== "done") continue;
-      entries.push({ runId: value.run.runId, subagentId: value.conversation.conversationId, agent: value.conversation.config.name, ...(value.conversation.label ? { label: value.conversation.label } : {}), status: value.run.status.outcome, generation: value.generation, completedAt: value.run.status.completedAt, elapsedMs: Math.max(0, value.run.status.completedAt - started) });
+      const projected = projectCompletionNotification(value);
+      if (projected) entries.push({ runId: value.run.runId, ...projected });
     }
     if (!entries.length || !this.deps.pi.sendMessage) return;
     const message = createCompletionNotificationMessage(entries, this.notificationEpoch);
@@ -389,12 +385,27 @@ export class CompletionNotifier {
     try { return this.deps.manager.conversation(subagentId).runs.at(-1)?.runId; } catch { return; }
   }
 
-  private catalog() {
+  private catalog(): CompletionCandidate[] {
     return this.deps.manager.listConversations().flatMap(conversation => conversation.runs
       .map((run, index) => ({ conversation, run, generation: index + 1 }))
       .filter(value => value.run.status.kind === "done"));
   }
 }
+
+function projectCompletionNotification(value: CompletionCandidate): CompletionNotification | undefined {
+  if (value.run.status.kind !== "done") return;
+  const started = value.run.status.startedAt ?? value.run.createdAt;
+  return {
+    subagentId: value.conversation.conversationId,
+    agent: value.conversation.config.name,
+    ...(value.conversation.label ? { label: value.conversation.label } : {}),
+    status: value.run.status.outcome,
+    generation: value.generation,
+    completedAt: value.run.status.completedAt,
+    elapsedMs: Math.max(0, value.run.status.completedAt - started),
+  };
+}
+
 function formatUiNotification(entries: readonly CompletionNotification[]): string {
   const summary = entries.map(entry => `${entry.agent}${entry.label ? ` (${entry.label})` : ""} · ${entry.status}`).join(", ");
   return `${formatCompletionHeader(entries.length)} ${summary}`;

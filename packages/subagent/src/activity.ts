@@ -140,8 +140,7 @@ function toolInputSummary(toolName: string, args: unknown): string | undefined {
       const count = action === "spawn" ? countPart(input.spawns, "task")
         : action === "resume" ? countPart(input.resumes, "task")
         : action === "steer" ? countPart(input.messages, "message")
-        : action === "cancel" || action === "inspect" || action === "join" ? countPart(input.runIds, "run")
-        : action === "remove" ? countPart(input.conversationIds, "conversation")
+        : action === "cancel" || action === "inspect" || action === "join" || action === "remove" ? countPart(input.subagentIds, "subagent")
         : undefined;
       return joinParts([action, count]);
     }

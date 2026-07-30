@@ -76,8 +76,6 @@ export class ConversationIdAllocator extends IdAllocatorBase<ConversationId> {
   }
 }
 
-export class SubagentIdAllocator extends ConversationIdAllocator {}
-
 /** Allocates unique run IDs for one owning runtime lifetime. */
 export class RunIdAllocator extends IdAllocatorBase<RunId> {
   constructor(randomIndex?: RandomIndex) {

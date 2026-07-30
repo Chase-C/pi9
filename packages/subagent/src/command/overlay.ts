@@ -37,7 +37,7 @@ export interface OverlayOptions {
   onSettingsChange(change: SubagentSettingsChange): SubagentSettings | void;
   onStart(agent: string, prompt: string): string | undefined;
   onResume(conversationId: string, prompt: string): void;
-  onCancel?(runId: string): void;
+  onCancel?(subagentId: string): void;
   onRemove?(conversationId: string): void;
 }
 
@@ -469,7 +469,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const conversation = this.findConversation(conversationId);
     if (!conversation) return;
     const run = this.findRun(conversation, runId);
-    if (run?.status.kind === "queued" || run?.status.kind === "running") this.options.onCancel?.(run.runId);
+    if (run?.status.kind === "queued" || run?.status.kind === "running") this.options.onCancel?.(conversation.conversationId);
   }
 
   private removeConversation(conversationId: string): void {

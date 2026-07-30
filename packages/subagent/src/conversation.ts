@@ -4,16 +4,12 @@ import type { AgentConfig, AgentRequestedConfig, AgentSource } from "./agents.js
 import { resolveRequestedConfig } from "./agents.js";
 import { RunActivity, type RunActivityListener } from "./activity.js";
 import type { ConversationId, RunId } from "./identifiers.js";
-import type { SpawnRequest } from "./schema.js";
+import type { RunOutcomeStatus, SpawnRequest } from "./schema.js";
+
+export type { RunOutcomeStatus } from "./schema.js";
 
 /** A run starts a conversation or resumes its existing SDK session. */
 export type RunKind = "spawn" | "resume";
-export type RunOutcomeStatus =
-  | "completed"
-  | "error"
-  | "aborted"
-  | "skipped"
-  | "interrupted";
 
 export type RunOutcome =
   | { readonly status: "completed"; readonly output?: string; readonly error?: never }
@@ -22,6 +18,12 @@ export type RunOutcome =
       readonly output?: never;
       readonly error?: string;
     };
+
+export class RunSteerError extends Error {
+  constructor(readonly runId: RunId, readonly status: string) {
+    super(`Run ${runId} is ${status} and cannot be steered.`);
+  }
+}
 
 export type ConversationUpdateKind =
   | "status"
@@ -233,7 +235,6 @@ export class Conversation {
   readonly requestedOverrides?: ConversationRequestedOverrides;
   readonly label?: string;
   private readonly runs: Run[] = [];
-  private currentRun?: Run;
   private session?: AgentSession;
   private stopping?: { runId: RunId; abortSettled: boolean; executionSettled: boolean };
   private steerTail: Promise<void> = Promise.resolve();
@@ -259,17 +260,16 @@ export class Conversation {
         ...(spawn.thinking !== undefined ? { thinking: spawn.thinking } : {}),
       });
     }
-    this.currentRun = this.newRun(initialRunId, "spawn", spawn.prompt);
-    this.runs.push(this.currentRun);
+    this.runs.push(this.newRun(initialRunId, "spawn", spawn.prompt));
   }
 
-  get hasCurrentRun(): boolean { return this.currentRun !== undefined; }
+  get hasCurrentRun(): boolean { return this.latestRun().state.kind !== "done"; }
   get runHistory(): readonly RunSnapshot[] { return this.runs.map(run => this.project(run)); }
-  get latestRunId(): RunId { return this.runs[this.runs.length - 1].runId; }
-  get status(): RunViewStatus { return this.project(this.runs[this.runs.length - 1]).status; }
+  get latestRunId(): RunId { return this.latestRun().runId; }
+  get status(): RunViewStatus { return this.project(this.latestRun()).status; }
   get canResume(): boolean {
-    const latest = this.runs.at(-1);
-    return !this.currentRun && !this.stopping && !!this.session && latest?.state.kind === "done" &&
+    const latest = this.latestRun();
+    return !this.stopping && !!this.session && latest.state.kind === "done" &&
       latest.acknowledged && latest.observerCount === 0 &&
       (latest.state.result.status === "completed"
         || latest.state.result.status === "interrupted"
@@ -285,13 +285,13 @@ export class Conversation {
     if (this.runs.some(run => run.runId === runId)) throw new Error(`Run ${runId} already exists.`);
     const run = this.newRun(runId, "resume", prompt);
     this.runs.push(run);
-    this.currentRun = run;
     return run;
   }
 
   requireCurrentRun(): Run {
-    if (!this.currentRun) throw new Error(`Conversation ${this.conversationId} has no active run.`);
-    return this.currentRun;
+    const run = this.latestRun();
+    if (run.state.kind === "done") throw new Error(`Conversation ${this.conversationId} has no active run.`);
+    return run;
   }
 
   bindSession(session: AgentSession): void {
@@ -311,11 +311,11 @@ export class Conversation {
 
   steer(runId: RunId, prompt: string): Promise<SteerReceipt> {
     const pending = this.steerTail.then(async () => {
-      if (this.stopping) throw new Error(`Run ${runId} is stopping and cannot be steered.`);
+      if (this.stopping) throw new RunSteerError(runId, "stopping");
       const run = this.requireRun(runId);
       if (run.state.kind !== "running") {
         const status = run.state.kind === "queued" ? "queued" : run.state.result.status;
-        throw new Error(`Run ${runId} is ${status} and cannot be steered.`);
+        throw new RunSteerError(runId, status);
       }
       const session = run.state.session;
       await session.steer(prompt);
@@ -350,16 +350,16 @@ export class Conversation {
 
   settle(runId: RunId, outcome: RunOutcome): RunSnapshot {
     const run = this.requireRun(runId);
-    if (run !== this.currentRun) return this.project(run);
+    if (run !== this.latestRun()) return this.project(run);
     this.unsubscribe?.(); this.unsubscribe = undefined;
-    if (run.settle(outcome)) { this.currentRun = undefined; this.listener(this, "status"); }
+    if (run.settle(outcome)) this.listener(this, "status");
     return this.project(run);
   }
 
   /** Terminalizes immediately, then finalizes in-flight steering before cancellation completes. */
   async abort(reason = "Agent aborted."): Promise<void> {
-    const run = this.currentRun;
-    if (!run) return;
+    if (!this.hasCurrentRun) return;
+    const run = this.latestRun();
     this.stopping = { runId: run.runId, abortSettled: false, executionSettled: false };
     const runningSession = run.state.kind === "running" ? run.state.session : undefined;
     clearSessionQueue(runningSession);
@@ -399,6 +399,7 @@ export class Conversation {
 
   snapshot(): ConversationSnapshot {
     const runs = this.runHistory;
+    const currentRun = this.hasCurrentRun ? runs.at(-1) : undefined;
     return Object.freeze({
       conversationId: this.conversationId,
       ...(this.parentConversationId ? { parentConversationId: this.parentConversationId } : {}),
@@ -407,7 +408,7 @@ export class Conversation {
       createdAt: this.createdAt,
       config: { name: this.agentName, description: this.config.description, source: this.config.source, sourcePath: this.config.sourcePath, model: this.requestedConfig.model, thinking: this.requestedConfig.thinking, tools: this.requestedConfig.tools, ...(this.requestedConfig.skills !== undefined ? { skills: this.requestedConfig.skills } : {}) },
       runs,
-      ...(this.currentRun ? { currentRun: runs[runs.length - 1] } : {}),
+      ...(currentRun ? { currentRun } : {}),
       ...(this.stopping ? { isStopping: true as const } : {}),
       ...(this.effectiveConfig ? { effectiveConfig: this.effectiveConfig } : {}),
       ...(this.requestedOverrides ? { requestedOverrides: this.requestedOverrides } : {}),
@@ -415,6 +416,9 @@ export class Conversation {
     });
   }
 
+  private latestRun(): Run {
+    return this.runs[this.runs.length - 1];
+  }
   private requireRun(runId: RunId): Run {
     const run = this.runs.find(candidate => candidate.runId === runId);
     if (!run) throw new Error(`Unknown run ${runId} in conversation ${this.conversationId}.`);

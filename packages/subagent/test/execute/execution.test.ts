@@ -28,8 +28,8 @@ test("child session lifecycle observers span finalized tool execution events", a
     messages: [{ role: "assistant", content: [{ type: "text", text: "finished" }] }],
     subscribe(listener: (event: any) => void) { listeners.push(listener); return () => { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); }; },
     async prompt() {
-      const start = { type: "tool_execution_start", toolCallId: "child-call", toolName: "subagent", args: { action: "inspect", runIds: ["adapt-ably"] } };
-      const end = { type: "tool_execution_end", toolCallId: "child-call", toolName: "subagent", result: { details: { action: "inspect", runs: [{ runId: "adapt-ably", status: "completed" }] } } };
+      const start = { type: "tool_execution_start", toolCallId: "child-call", toolName: "subagent", args: { action: "inspect", subagentIds: ["amber-acorn"] } };
+      const end = { type: "tool_execution_end", toolCallId: "child-call", toolName: "subagent", result: { details: { action: "inspect", runs: [{ subagentId: "amber-acorn", status: "completed" }] } } };
       for (const listener of [...listeners]) listener(start);
       for (const listener of [...listeners]) listener(end);
     },

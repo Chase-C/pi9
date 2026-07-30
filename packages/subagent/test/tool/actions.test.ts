@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { agentsAction, cancelAction, inspectAction, joinAction, listAction, removeAction, resumeAction, spawnAction, steerAction } from "../../src/tool.js";
+import { agentsAction, cancelAction, inspectAction, joinAction, listAction, removeAction, resumeAction, spawnAction, steerAction, type ActionDeps } from "../../src/tool.js";
 
 const conversationId = "amber-acorn" as any;
 const runId = "adapt-ably" as any;
@@ -22,18 +22,15 @@ const snapshot = (status: any = { kind: "running", startedAt: 1 }) => ({
   currentRun: undefined,
   canResume: false,
 });
-const deps = (manager: any) => ({
+type ActionRuntime = ActionDeps["runtime"];
+type ActionRuntimeOverrides = Partial<Record<keyof ActionRuntime, any>>;
+const deps = (runtime: ActionRuntimeOverrides): ActionDeps => ({
   runtime: {
-    ...manager,
-    steerSubagent: manager.steerSubagent ?? manager.steerRun,
-    cancelSubagent: manager.cancelSubagent ?? manager.cancelRun,
-    inspectSubagents: manager.inspectSubagents ?? manager.inspectRuns ?? ((ids: any[]) => ids.map(() => ({ conversationId, snapshot: snapshot().runs[0] }))),
-    validateSubagentJoin: manager.validateSubagentJoin ?? ((id: any) => (manager.inspectRuns ?? (() => []))([id])),
-    bindSubagentJoin: manager.bindSubagentJoin ?? ((ids: any[], owner: any, toolCallId: any) =>
-      owner && manager.bindNestedJoin ? manager.bindNestedJoin(owner, ids, toolCallId) : manager.bindJoin(ids)),
-  },
-  agentRegistry: { agents: new Map(), summarizeAgent: () => "" },
-}) as any;
+    validateSubagentJoin: () => {},
+    ...runtime,
+  } as ActionRuntime,
+  agentRegistry: { agents: new Map(), summarizeAgent: () => "" } as ActionDeps["agentRegistry"],
+});
 const json = (result: any) => JSON.parse(result.content[0].text);
 const joinBinding = (
   entries: any[],
@@ -168,7 +165,7 @@ test("spawn returns task parse failures while starting valid siblings", async ()
 test("steer sends multiple messages in input order", async () => {
   const received: any[] = [];
   const manager = {
-    steerRun: async (target: any, prompt: string) => {
+    steerSubagent: async (target: any, prompt: string) => {
       received.push([target, prompt]);
       return { conversationId, runId: target, steer: { id: received.length, state: "queued", acceptedAt: received.length } };
     },
@@ -195,7 +192,7 @@ test("steer sends multiple messages in input order", async () => {
 test("steer isolates failures from sibling messages", async () => {
   const secondSubagentId = "quiet-otter" as any;
   const manager = {
-    steerRun: async (target: any) => {
+    steerSubagent: async (target: any) => {
       if (target === conversationId) throw new Error("Subagent is queued and cannot be steered.");
       return { conversationId: target, runId };
     },
@@ -218,16 +215,16 @@ test("steer isolates failures from sibling messages", async () => {
   });
 });
 
-test("cancel aborts an exact run while retaining its identity", async () => {
+test("cancel aborts a subagent while retaining its identity", async () => {
   const manager = {
-    cancelRun: async (target: any) => {
-      assert.equal(target, runId);
-      return { conversationId, runId: target, status: "aborted" };
+    cancelSubagent: async (target: any) => {
+      assert.equal(target, conversationId);
+      return { conversationId, runId, status: "aborted" };
     },
     listConversations: () => [snapshot({ kind: "done", outcome: "aborted", completedAt: 2, error: "Run cancelled." })],
   };
 
-  const result = await cancelAction(deps(manager), { action: "cancel", subagentIds: [runId] });
+  const result = await cancelAction(deps(manager), { action: "cancel", subagentIds: [conversationId] });
 
   assert.equal(result.isError, false);
   assert.deepEqual(json(result), {
@@ -237,26 +234,26 @@ test("cancel aborts an exact run while retaining its identity", async () => {
 });
 
 test("cancel starts valid targets concurrently while preserving input order", async () => {
-  const secondRunId = "assemble-abruptly" as any;
+  const secondSubagentId = "quiet-otter" as any;
   const started: any[] = [];
   let releaseFirst!: () => void;
   const firstPending = new Promise<void>(resolve => { releaseFirst = resolve; });
   const manager = {
-    cancelRun: async (target: any) => {
+    cancelSubagent: async (target: any) => {
       started.push(target);
-      if (target === runId) await firstPending;
-      return { conversationId, runId: target, status: "aborted" };
+      if (target === conversationId) await firstPending;
+      return { conversationId: target, runId, status: "aborted" };
     },
     listConversations: () => [],
   };
 
   const resultPromise = cancelAction(deps(manager), {
     action: "cancel",
-    subagentIds: [runId, secondRunId],
+    subagentIds: [conversationId, secondSubagentId],
   });
 
   try {
-    assert.deepEqual(started, [runId, secondRunId]);
+    assert.deepEqual(started, [conversationId, secondSubagentId]);
   } finally {
     releaseFirst();
   }
@@ -265,17 +262,17 @@ test("cancel starts valid targets concurrently while preserving input order", as
     action: "cancel",
     results: [
       { ok: true, data: { subagentId: conversationId, status: "aborted" } },
-      { ok: true, data: { subagentId: conversationId, status: "aborted" } },
+      { ok: true, data: { subagentId: secondSubagentId, status: "aborted" } },
     ],
   });
 });
 
 test("cancel isolates malformed and runtime failures from valid siblings", async () => {
-  const secondRunId = "assemble-abruptly" as any;
+  const secondSubagentId = "quiet-otter" as any;
   const manager = {
-    cancelRun: async (target: any) => {
-      if (target === runId) throw new Error(`Run ${target} is completed and cannot be cancelled.`);
-      return { conversationId, runId: target, status: "aborted" };
+    cancelSubagent: async (target: any) => {
+      if (target === conversationId) throw new Error(`Subagent ${target} is completed and cannot be cancelled.`);
+      return { conversationId: target, runId, status: "aborted" };
     },
     listConversations: () => [],
   };
@@ -284,8 +281,8 @@ test("cancel isolates malformed and runtime failures from valid siblings", async
     action: "cancel",
     subagentIds: [
       { subagentId: "not-an-id", error: "invalid subagentId format" },
-      runId,
-      secondRunId,
+      conversationId,
+      secondSubagentId,
     ],
   });
 
@@ -293,8 +290,8 @@ test("cancel isolates malformed and runtime failures from valid siblings", async
     action: "cancel",
     results: [
       { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" },
-      { ok: false, subagentId: runId, error: `Run ${runId} is completed and cannot be cancelled.` },
-      { ok: true, data: { subagentId: conversationId, status: "aborted" } },
+      { ok: false, subagentId: conversationId, error: `Subagent ${conversationId} is completed and cannot be cancelled.` },
+      { ok: true, data: { subagentId: secondSubagentId, status: "aborted" } },
     ],
   });
 });
@@ -307,8 +304,8 @@ test("inspect returns bounded progress without terminal output", () => {
   };
   running.steers = [1, 2, 3, 4, 5, 6].map(id => ({ id, state: "processed", acceptedAt: id }));
   const manager = {
-    inspectRuns: (ids: any[]) => {
-      assert.deepEqual(ids, [runId]);
+    inspectSubagents: (ids: any[]) => {
+      assert.deepEqual(ids, [conversationId]);
       return [{ conversationId, snapshot: running }];
     },
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
@@ -321,7 +318,7 @@ test("inspect returns bounded progress without terminal output", () => {
     }),
     conversationDepth: () => 2,
   };
-  const result = inspectAction(deps(manager), { action: "inspect", subagentIds: [runId] });
+  const result = inspectAction(deps(manager), { action: "inspect", subagentIds: [conversationId] });
   const response = json(result);
   assert.equal(response.action, "inspect");
   const [{ data: entry }] = response.results;
@@ -347,23 +344,23 @@ test("inspect returns bounded progress without terminal output", () => {
 
 test("inspect shows requested overrides before effective configuration is available", () => {
   const manager = {
-    inspectRuns: () => [{ conversationId, snapshot: snapshot().runs[0] }],
+    inspectSubagents: () => [{ conversationId, snapshot: snapshot().runs[0] }],
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
     conversation: () => ({ ...snapshot(), requestedOverrides: { model: "requested/model", thinking: "high" } }),
   };
 
-  const [{ data: entry }] = json(inspectAction(deps(manager), { action: "inspect", subagentIds: [runId] })).results;
+  const [{ data: entry }] = json(inspectAction(deps(manager), { action: "inspect", subagentIds: [conversationId] })).results;
 
   assert.deepEqual(entry.requestedOverrides, { model: "requested/model", thinking: "high" });
   assert.equal("effectiveConfig" in entry, false);
 });
 
 test("inspect isolates malformed and unknown targets from valid siblings", () => {
-  const unknownRunId = "assemble-abruptly" as any;
+  const unknownSubagentId = "quiet-otter" as any;
   const malformed = { subagentId: "not-an-id", error: "invalid subagentId format" };
   const manager = {
-    inspectRuns: ([target]: any[]) => {
-      if (target === unknownRunId) throw new Error(`Unknown run: ${target}.`);
+    inspectSubagents: ([target]: any[]) => {
+      if (target === unknownSubagentId) throw new Error(`Unknown subagent: ${target}.`);
       return [{ conversationId, snapshot: snapshot().runs[0] }];
     },
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
@@ -371,13 +368,13 @@ test("inspect isolates malformed and unknown targets from valid siblings", () =>
 
   const result = inspectAction(deps(manager), {
     action: "inspect",
-    subagentIds: [runId, malformed, unknownRunId],
+    subagentIds: [conversationId, malformed, unknownSubagentId],
   });
 
   const entries = json(result).results;
   assert.equal(entries[0].data.subagentId, conversationId);
   assert.deepEqual(entries[1], { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" });
-  assert.deepEqual(entries[2], { ok: false, subagentId: unknownRunId, error: `Unknown run: ${unknownRunId}.` });
+  assert.deepEqual(entries[2], { ok: false, subagentId: unknownSubagentId, error: `Unknown subagent: ${unknownSubagentId}.` });
   assert.equal(result.isError, false);
 });
 
@@ -388,11 +385,11 @@ test("inspect omits terminal output and completed message text", () => {
   terminal.activity.messageSnippet = "SECRET MESSAGE";
   terminal.activity.toolHistory = [{ id: "active-tool", name: "bash", startedAt: 1 }];
   const manager = {
-    inspectRuns: () => [{ conversationId, snapshot: terminal }],
+    inspectSubagents: () => [{ conversationId, snapshot: terminal }],
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
   };
 
-  const result = inspectAction(deps(manager), { action: "inspect", subagentIds: [runId] });
+  const result = inspectAction(deps(manager), { action: "inspect", subagentIds: [conversationId] });
 
   assert.equal(result.isError, false);
   assert.doesNotMatch(result.content[0].text, /SECRET/);
@@ -407,11 +404,11 @@ test("inspect includes a bounded diagnostic for a failed run", () => {
     kind: "done", outcome: "error", completedAt: 2, startedAt: 1, error: "Model request failed.",
   }).runs[0];
   const manager = {
-    inspectRuns: () => [{ conversationId, snapshot: terminal }],
+    inspectSubagents: () => [{ conversationId, snapshot: terminal }],
     conversationDisplay: () => ({ conversationId, agentName: "helper" }),
   };
 
-  const result = inspectAction(deps(manager), { action: "inspect", subagentIds: [runId] });
+  const result = inspectAction(deps(manager), { action: "inspect", subagentIds: [conversationId] });
 
   assert.equal(result.isError, false);
   assert.equal(json(result).results[0].data.errorSnippet, "Model request failed.");
@@ -423,11 +420,11 @@ test("inspect bounds diagnostics for every terminal outcome with an error", () =
       kind: "done", outcome, completedAt: 2, startedAt: 1, error: "Failure \n".repeat(100),
     }).runs[0];
     const manager = {
-      inspectRuns: () => [{ conversationId, snapshot: terminal }],
+      inspectSubagents: () => [{ conversationId, snapshot: terminal }],
       conversationDisplay: () => ({ conversationId, agentName: "helper" }),
     };
 
-    const [{ data: entry }] = json(inspectAction(deps(manager), { action: "inspect", subagentIds: [runId] })).results;
+    const [{ data: entry }] = json(inspectAction(deps(manager), { action: "inspect", subagentIds: [conversationId] })).results;
 
     assert.equal(entry.errorSnippet.length, 500);
     assert.doesNotMatch(entry.errorSnippet, /\s{2,}/);
@@ -531,19 +528,18 @@ test("join returns projected child errors as successful tool results", async () 
     status: { kind: "done", outcome: "error", completedAt: 2, error: "child failed" },
   }];
   const manager = {
-    bindJoin: (ids: any) => {
-      assert.deepEqual(ids, [runId]);
+    bindSubagentJoin: (ids: any) => {
+      assert.deepEqual(ids, [conversationId]);
       return joinBinding(entries, Promise.resolve(), {
         release: () => { released++; },
         acknowledge: () => { acknowledged++; },
       });
     },
     onConversationUpdate: () => () => {},
-    runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
   };
   const result = await joinAction(
     deps(manager),
-    { action: "join", subagentIds: [runId] },
+    { action: "join", subagentIds: [conversationId] },
     undefined,
     update => updates.push(update),
   );
@@ -577,13 +573,12 @@ test("join projects elapsed time, turns, and tokens for rendering", async () => 
   };
   const entries = [{ conversationId, runId, status: conversation.runs[0].status }];
   const manager = {
-    bindJoin: () => joinBinding(entries),
+    bindSubagentJoin: () => joinBinding(entries),
     onConversationUpdate: () => () => {},
     listConversations: () => [conversation],
-    runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
   };
 
-  const result = await joinAction(deps(manager), { action: "join", subagentIds: [runId] }, undefined, undefined);
+  const result = await joinAction(deps(manager), { action: "join", subagentIds: [conversationId] }, undefined, undefined);
 
   assert.deepEqual((result.details as any).runs[0], {
     subagentId: conversationId,
@@ -602,29 +597,29 @@ test("join projects elapsed time, turns, and tokens for rendering", async () => 
 });
 
 test("join streams updates and preserves binding order", async () => {
+  const secondSubagentId = "quiet-otter" as any;
   const secondRunId = "assemble-abruptly" as any;
   let listener: any;
   const entries = [
     { conversationId, runId, status: { kind: "done", outcome: "completed", completedAt: 2 } },
-    { conversationId, runId: secondRunId, status: { kind: "done", outcome: "completed", completedAt: 2 } },
+    { conversationId: secondSubagentId, runId: secondRunId, status: { kind: "done", outcome: "completed", completedAt: 2 } },
   ];
   const manager = {
-    bindJoin: () => joinBinding(entries),
+    bindSubagentJoin: () => joinBinding(entries),
     onConversationUpdate: (fn: any) => {
       listener = fn;
       return () => {};
     },
-    runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
   };
   const updates: any[] = [];
   const promise = joinAction(
     deps(manager),
-    { action: "join", subagentIds: [runId, secondRunId] },
+    { action: "join", subagentIds: [conversationId, secondSubagentId] },
     undefined,
     update => updates.push(update),
   );
   listener();
-  assert.deepEqual(json(await promise).results.map((entry: any) => entry.data.subagentId), [conversationId, conversationId]);
+  assert.deepEqual(json(await promise).results.map((entry: any) => entry.data.subagentId), [conversationId, secondSubagentId]);
   assert.ok(updates.length >= 2);
 });
 
@@ -632,15 +627,14 @@ test("caller cancellation releases join without cancelling child work", async ()
   const controller = new AbortController();
   let released = 0;
   const manager = {
-    bindJoin: () => joinBinding([], new Promise(() => {}), {
+    bindSubagentJoin: () => joinBinding([], new Promise(() => {}), {
       release: () => { released++; },
     }),
     onConversationUpdate: () => () => {},
-    runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
   };
   const promise = joinAction(
     deps(manager),
-    { action: "join", subagentIds: [runId] },
+    { action: "join", subagentIds: [conversationId] },
     controller.signal,
     undefined,
   );
@@ -659,7 +653,7 @@ test("child join binds its captured owner and suspends the parent queue slot", a
   let boundOwner: any;
   let boundToolCallId: any;
   const manager = {
-    bindNestedJoin: (owner: any, _ids: any, toolCallId: any) => {
+    bindSubagentJoin: (_ids: any, owner: any, toolCallId: any) => {
       boundOwner = owner;
       boundToolCallId = toolCallId;
       return { ...joinBinding([]), interrupt: () => {} };
@@ -675,25 +669,25 @@ test("child join binds its captured owner and suspends the parent queue slot", a
   await joinAction({
     ...deps(manager),
     parent: { conversationId, runId: () => runId },
-  }, { action: "join", subagentIds: [runId] }, undefined, undefined, "join-call-1");
+  }, { action: "join", subagentIds: [conversationId] }, undefined, undefined, "join-call-1");
   assert.equal(suspended, conversationId);
   assert.deepEqual(boundOwner, { conversationId, runId });
   assert.equal(boundToolCallId, "join-call-1");
 });
 
 test("nested join records one binding for valid siblings and returns invalid targets in place", async () => {
+  const childSubagentId = "quiet-otter" as any;
   const childRunId = "assemble-abruptly" as any;
-  const unknownRunId = "capture-keenly" as any;
+  const unknownSubagentId = "gentle-fox" as any;
   let boundIds: any[] = [];
   const manager = {
-    inspectRuns: ([target]: any[]) => {
-      if (target === unknownRunId) throw new Error(`Unknown run: ${target}.`);
-      return [{ conversationId, snapshot: { ...snapshot().runs[0], runId: target } }];
+    validateSubagentJoin: (target: any) => {
+      if (target === unknownSubagentId) throw new Error(`Unknown subagent: ${target}.`);
     },
-    bindNestedJoin: (_owner: any, ids: any[]) => {
+    bindSubagentJoin: (ids: any[]) => {
       boundIds = ids;
       return {
-        ...joinBinding([{ conversationId, runId: childRunId, status: { kind: "done", outcome: "completed", completedAt: 2 } }]),
+        ...joinBinding([{ conversationId: childSubagentId, runId: childRunId, status: { kind: "done", outcome: "completed", completedAt: 2 } }]),
         interrupt: () => {},
       };
     },
@@ -707,16 +701,16 @@ test("nested join records one binding for valid siblings and returns invalid tar
     action: "join",
     subagentIds: [
       { subagentId: "not-an-id", error: "invalid subagentId format" },
-      childRunId,
-      unknownRunId,
+      childSubagentId,
+      unknownSubagentId,
     ],
   }, undefined, undefined);
 
-  assert.deepEqual(boundIds, [childRunId]);
+  assert.deepEqual(boundIds, [childSubagentId]);
   assert.deepEqual(json(result).results, [
     { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" },
-    { ok: true, data: { subagentId: conversationId, status: "completed" } },
-    { ok: false, subagentId: unknownRunId, error: `Unknown run: ${unknownRunId}.` },
+    { ok: true, data: { subagentId: childSubagentId, status: "completed" } },
+    { ok: false, subagentId: unknownSubagentId, error: `Unknown subagent: ${unknownSubagentId}.` },
   ]);
 });
 
@@ -737,13 +731,12 @@ test("a bound join acknowledges an aborted outcome after cancellation", async ()
     acknowledge: () => { acknowledged++; },
   });
   const manager = {
-    bindJoin: () => binding,
+    bindSubagentJoin: () => binding,
     onConversationUpdate: () => () => {},
-    runner: { suspendAgentSlotDuring: async (_id: any, fn: any) => fn() },
   };
   const pending = joinAction(
     deps(manager),
-    { action: "join", subagentIds: [runId] },
+    { action: "join", subagentIds: [conversationId] },
     undefined,
     undefined,
   );
@@ -772,7 +765,7 @@ test("join projection retains terminal descendant joins and final detached backg
     [backgroundRunId, { ...done(backgroundRunId), status: { kind: "running", startedAt: 1 } }],
   ]);
   const manager = {
-    bindJoin: () => joinBinding([{ conversationId, runId, status: snapshots.get(runId).status }]),
+    bindSubagentJoin: () => joinBinding([{ conversationId, runId, status: snapshots.get(runId).status }]),
     onConversationUpdate: () => () => {},
     runSnapshot: (id: any) => snapshots.get(id),
     listConversations: () => [],
@@ -782,7 +775,7 @@ test("join projection retains terminal descendant joins and final detached backg
       : [],
   };
 
-  const result = await joinAction(deps(manager), { action: "join", subagentIds: [runId] }, undefined, undefined);
+  const result = await joinAction(deps(manager), { action: "join", subagentIds: [conversationId] }, undefined, undefined);
   const child = (result.details as any).runs[0].joins[0].targets[0];
   assert.equal(child.joins[0].targets[0].subagentId, "leaf-c");
   assert.equal(child.background[0].entries[0].detachedAtFinal, true);
@@ -791,17 +784,16 @@ test("join projection retains terminal descendant joins and final detached backg
 });
 
 test("join isolates malformed and unknown targets from valid siblings", async () => {
-  const unknownRunId = "assemble-abruptly" as any;
+  const unknownSubagentId = "quiet-otter" as any;
   const malformed = { subagentId: "not-an-id", error: "join received invalid subagentId format 'not-an-id'." };
   const entries = [{ conversationId, runId, status: { kind: "done", outcome: "completed", completedAt: 2, output: "done" } }];
   let subscribed = false;
   const manager = {
-    inspectRuns: ([target]: any[]) => {
-      if (target === unknownRunId) throw new Error(`Unknown run: ${target}.`);
-      return [{ conversationId, snapshot: snapshot().runs[0] }];
+    validateSubagentJoin: (target: any) => {
+      if (target === unknownSubagentId) throw new Error(`Unknown subagent: ${target}.`);
     },
-    bindJoin: (ids: any[]) => {
-      assert.deepEqual(ids, [runId]);
+    bindSubagentJoin: (ids: any[]) => {
+      assert.deepEqual(ids, [conversationId]);
       return joinBinding(entries);
     },
     onConversationUpdate: () => {
@@ -812,7 +804,7 @@ test("join isolates malformed and unknown targets from valid siblings", async ()
 
   const result = await joinAction(
     deps(manager),
-    { action: "join", subagentIds: [runId, malformed, unknownRunId] },
+    { action: "join", subagentIds: [conversationId, malformed, unknownSubagentId] },
     undefined,
     undefined,
   );
@@ -822,15 +814,15 @@ test("join isolates malformed and unknown targets from valid siblings", async ()
   assert.deepEqual(json(result).results, [
     { ok: true, data: { subagentId: conversationId, status: "completed", output: "done" } },
     { ok: false, subagentId: malformed.subagentId, error: malformed.error },
-    { ok: false, subagentId: unknownRunId, error: `Unknown run: ${unknownRunId}.` },
+    { ok: false, subagentId: unknownSubagentId, error: `Unknown subagent: ${unknownSubagentId}.` },
   ]);
 });
 
 test("join returns item errors without binding when no target resolves", async () => {
   let subscribed = false;
   const manager = {
-    inspectRuns: () => { throw new Error("Unknown run: assemble-abruptly."); },
-    bindJoin: () => { throw new Error("must not bind"); },
+    validateSubagentJoin: () => { throw new Error("Unknown subagent: quiet-otter."); },
+    bindSubagentJoin: () => { throw new Error("must not bind"); },
     onConversationUpdate: () => {
       subscribed = true;
       return () => {};
@@ -840,7 +832,7 @@ test("join returns item errors without binding when no target resolves", async (
     deps(manager),
     { action: "join", subagentIds: [
       { subagentId: "not-an-id", error: "invalid subagentId format" },
-      "assemble-abruptly" as any,
+      "quiet-otter" as any,
     ] },
     undefined,
     undefined,
@@ -849,6 +841,6 @@ test("join returns item errors without binding when no target resolves", async (
   assert.equal(subscribed, false);
   assert.deepEqual(json(result).results, [
     { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" },
-    { ok: false, subagentId: "assemble-abruptly", error: "Unknown run: assemble-abruptly." },
+    { ok: false, subagentId: "quiet-otter", error: "Unknown subagent: quiet-otter." },
   ]);
 });
