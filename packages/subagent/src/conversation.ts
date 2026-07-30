@@ -191,11 +191,10 @@ export class Run {
   }
 }
 
-export function finalizeRun(agent: Conversation, runId: RunId, outcome: RunOutcome): RunSnapshot { return agent.settle(runId, outcome); }
-export function completedRun(agent: Conversation, runId: RunId, output: string): RunSnapshot { return finalizeRun(agent, runId, { status: "completed", output }); }
-export function errorRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return finalizeRun(agent, runId, { status: "error", error }); }
-export function interruptedRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return finalizeRun(agent, runId, { status: "interrupted", error }); }
-export function skippedRun(agent: Conversation, runId: RunId): RunSnapshot { return finalizeRun(agent, runId, { status: "skipped", error: "Agent skipped." }); }
+export function completedRun(agent: Conversation, runId: RunId, output: string): RunSnapshot { return agent.settle(runId, { status: "completed", output }); }
+export function errorRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return agent.settle(runId, { status: "error", error }); }
+export function interruptedRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return agent.settle(runId, { status: "interrupted", error }); }
+export function skippedRun(agent: Conversation, runId: RunId): RunSnapshot { return agent.settle(runId, { status: "skipped", error: "Agent skipped." }); }
 
 export function effectiveStatus(status: RunViewStatus): RunStatus {
   return status.kind === "done" ? status.outcome : status.kind;

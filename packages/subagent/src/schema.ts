@@ -33,12 +33,11 @@ const STEER_MESSAGE_KEYS = new Set(Object.keys(SteerMessageSchema.properties));
 export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
 export const RUN_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
 export const RUN_STATUSES = ["queued", "running", ...RUN_OUTCOME_STATUSES] as const;
-export const CONVERSATION_STATES = CONVERSATION_LIFECYCLE_STATES;
 export const LIST_SCOPES = ["children", "descendants"] as const;
 
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
-  state: Type.Optional(Type.Array(StringEnum(CONVERSATION_STATES), { minItems: 1 })),
+  state: Type.Optional(Type.Array(StringEnum(CONVERSATION_LIFECYCLE_STATES), { minItems: 1 })),
   scope: Type.Optional(StringEnum(LIST_SCOPES)),
   spawns: Type.Optional(Type.Array(SpawnTaskSchema, { minItems: 1 })),
   resumes: Type.Optional(Type.Array(ResumeTaskSchema, { minItems: 1 })),
@@ -54,7 +53,7 @@ export type ConversationState = ConversationLifecycleState;
 export type ListScope = (typeof LIST_SCOPES)[number];
 
 export const isConversationState = (value: unknown): value is ConversationState =>
-  typeof value === "string" && (CONVERSATION_STATES as readonly string[]).includes(value);
+  typeof value === "string" && (CONVERSATION_LIFECYCLE_STATES as readonly string[]).includes(value);
 
 export type SpawnRequest = {
   kind: "spawn";
@@ -81,9 +80,6 @@ export type SteerRequest = {
 
 export type RunRequest = SpawnRequest | ResumeRequest;
 export type SubagentTarget = SubagentId | { subagentId: string; error: string };
-export type CancelTarget = SubagentTarget;
-export type InspectTarget = SubagentTarget;
-export type JoinTarget = SubagentTarget;
 export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
 export type ParsedRunRequest = ParsedSpawnRequest | ParsedResumeRequest;
 export type ParsedSpawnRequest = SpawnRequest | { error: string; agent?: string; label?: string };
@@ -96,9 +92,9 @@ export type SubagentInvocation =
   | { action: "spawn"; spawns: ParsedSpawnRequest[] }
   | { action: "resume"; resumes: ParsedResumeRequest[] }
   | { action: "steer"; messages: ParsedSteerRequest[] }
-  | { action: "cancel"; subagentIds: CancelTarget[] }
-  | { action: "inspect"; subagentIds: InspectTarget[] }
-  | { action: "join"; subagentIds: JoinTarget[] }
+  | { action: "cancel"; subagentIds: SubagentTarget[] }
+  | { action: "inspect"; subagentIds: SubagentTarget[] }
+  | { action: "join"; subagentIds: SubagentTarget[] }
   | { action: "remove"; subagentIds: SubagentTarget[] };
 
 export type SubagentInvocationParseError = {

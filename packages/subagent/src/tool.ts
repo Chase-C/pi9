@@ -2,7 +2,7 @@ import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type T
 import { effectiveStatus, type Conversation, type ConversationSnapshot, type NestedJoinAttemptSnapshot, type RunSnapshot, type SteerReceipt } from "./conversation.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId, SubagentId } from "./identifiers.js";
-import { runElapsedMs } from "./run-format.js";
+import { runElapsedMs, truncateText } from "./run-format.js";
 import type { JoinBinding, NestedJoinBinding, RunScheduler, SubagentCaller, SubagentRuntime } from "./runtime.js";
 import { parseSubagentInvocation, SubagentParams, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
@@ -191,7 +191,7 @@ async function startTasks(
   }
   outcomes.sort((left, right) => left.inputIndex - right.inputIndex);
 
-  const conversations = conversationSnapshots(deps.runtime);
+  const conversations = deps.runtime.listConversations();
   const receipts = outcomes.map((outcome, index) => projectRunReceipt(tasks[index], outcome, conversations));
   return resultsResult(action, receipts, {
     action,
@@ -229,7 +229,7 @@ export async function steerAction(
       });
   return resultsResult("steer", results, {
     action: "steer",
-    tasks: renderDispatchItems(invocation.messages, outcomes, conversationSnapshots(deps.runtime)),
+    tasks: renderDispatchItems(invocation.messages, outcomes, deps.runtime.listConversations()),
   });
 }
 
@@ -484,30 +484,21 @@ function projectInspection(
     turns: run.activity.turns,
     compactions: run.activity.compactions,
     ...(status === "running" && run.activity.messageSnippet
-      ? { messageSnippet: truncateInspectionText(run.activity.messageSnippet, 500) }
+      ? { messageSnippet: truncateText(run.activity.messageSnippet, 500) }
       : {}),
     ...(run.status.kind === "done" && run.status.error
-      ? { errorSnippet: truncateInspectionText(run.status.error, 500) }
+      ? { errorSnippet: truncateText(run.status.error, 500) }
       : {}),
     recentTools: run.activity.toolHistory.slice(-3).reverse().map(tool => ({
       toolCallId: tool.id,
       tool: tool.name,
-      ...(tool.inputSummary ? { summary: truncateInspectionText(tool.inputSummary, 160) } : {}),
+      ...(tool.inputSummary ? { summary: truncateText(tool.inputSummary, 160) } : {}),
       status: tool.completedAt === undefined
         ? run.status.kind === "done" ? "interrupted" : "running"
         : tool.isError ? "error" : "completed",
     })),
     steers: (run.steers ?? []).slice(-5),
   };
-}
-
-function truncateInspectionText(value: string, limit: number): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
-}
-
-function conversationSnapshots(runtime: ActionRuntime): ConversationSnapshot[] {
-  return runtime.listConversations();
 }
 
 type JoinedOutput = {
@@ -531,7 +522,7 @@ function renderJoinedRuns(
   runtime: ActionRuntime,
   final: boolean,
 ): JoinedRunRenderItem[] {
-  const conversations = conversationSnapshots(runtime);
+  const conversations = runtime.listConversations();
   const byRun = new Map(conversations.flatMap(conversation => conversation.runs.map(run =>
     [run.runId, { conversation, run }] as const)));
   const snapshot = (runId: RunId): RunSnapshot | undefined => {

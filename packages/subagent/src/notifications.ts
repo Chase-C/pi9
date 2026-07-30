@@ -5,7 +5,7 @@ import type { RunOutcomeStatus, ConversationUpdateKind } from "./conversation.js
 import type { SubagentRuntime } from "./runtime.js";
 import { RUN_OUTCOME_STATUSES } from "./schema.js";
 import type { RunId } from "./identifiers.js";
-import { formatElapsed, runElapsedMs } from "./run-format.js";
+import { formatElapsed, runElapsedMs, truncateText } from "./run-format.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisplaySettings } from "./settings.js";
 
 /** The current serializable completion summary shared by notification production and rendering. */
@@ -40,8 +40,6 @@ export interface CompletionNotificationMessage {
   details: CompletionNotificationMessageDetails;
 }
 
-export type CompletionNotificationMessagePayload = CompletionNotificationMessage;
-
 const COMPLETION_GRACE_MS = 500;
 const TERMINAL_RUN_STATUSES = new Set<unknown>(RUN_OUTCOME_STATUSES);
 const RESULTS_INSTRUCTION = "Use `subagent join` when you need these terminal outcomes.";
@@ -59,7 +57,7 @@ type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
 export function createCompletionNotificationMessage(
   entries: readonly CompletionNotification[],
   notificationEpoch?: string,
-): CompletionNotificationMessagePayload {
+): CompletionNotificationMessage {
   const completions = entries.map(copyCompletionNotification);
   return {
     content: formatNotificationContent(completions),
@@ -132,19 +130,13 @@ interface CompletionEntryFormatOptions {
 
 function formatCompletionEntry(entry: CompletionNotification, options: CompletionEntryFormatOptions): string {
   const labelPart = entry.label !== undefined
-    ? ` (${compactRendererLabel(entry.label, options.display.toolCallLabelMaxLength)})`
+    ? ` (${truncateText(entry.label, options.display.toolCallLabelMaxLength, true)})`
     : "";
   const status = colorCompletionStatus(entry.status, options.theme);
   const identityPart = options.expanded
     ? ` · subagentId ${entry.subagentId}`
     : "";
   return `- ${entry.agent}${labelPart} · ${status} · ${formatElapsed(entry.elapsedMs)}${identityPart}`;
-}
-
-function compactRendererLabel(value: string, limit: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= limit) return normalized;
-  return `${normalized.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
 function colorCompletionStatus(status: RunOutcomeStatus, theme: Pick<Theme, "fg"> | undefined): string {

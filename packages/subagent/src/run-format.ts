@@ -17,6 +17,13 @@ export function formatElapsed(milliseconds: number): string {
   return `${minutes}m${remainder.toString().padStart(2, "0")}s`;
 }
 
+export function truncateText(value: string, limit: number, trimEnd = false): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= limit) return text;
+  const truncated = text.slice(0, Math.max(0, limit - 1));
+  return `${trimEnd ? truncated.trimEnd() : truncated}…`;
+}
+
 export function formatTokens(tokens: number): string {
   if (tokens < 1_000) return `${tokens} tokens`;
   if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}k tokens`;

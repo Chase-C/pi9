@@ -3,7 +3,7 @@ import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-
 import type { AgentSource } from "./agents.js";
 import type { ConversationEffectiveConfig, ConversationRequestedOverrides, RunKind, RunPhase, SteerReceipt } from "./conversation.js";
 import type { ConversationId } from "./identifiers.js";
-import { formatElapsed, formatTokens } from "./run-format.js";
+import { formatElapsed, formatTokens, truncateText } from "./run-format.js";
 import { RUN_STATUSES, type ConversationState, type DispatchTaskKind, type RunStatus, type SubagentAction } from "./schema.js";
 
 type ThemeLike = Partial<Pick<Theme, "fg" | "bold">>;
@@ -352,7 +352,7 @@ function renderJoinRoot(run: JoinedRunRenderItem, index: number, expanded: boole
   ];
   const message = run.output ?? run.error;
   if (terminal && !expanded) {
-    if (failed && message) lines.push(`  ${paint(theme, "error", truncate(message, 320))}`);
+    if (failed && message) lines.push(`  ${paint(theme, "error", truncateText(message, 320))}`);
     return lines;
   }
 
@@ -366,7 +366,7 @@ function renderJoinRoot(run: JoinedRunRenderItem, index: number, expanded: boole
   const activity = renderJoinNode(run.activity, run.joins, run.background, "  ", expanded, theme);
   if (expanded) appendSection(lines, activity);
   else lines.push(...activity);
-  if (terminal && message) appendSection(lines, [`  ${paint(theme, failed ? "error" : "dim", truncate(message, 1200))}`]);
+  if (terminal && message) appendSection(lines, [`  ${paint(theme, failed ? "error" : "dim", truncateText(message, 1200))}`]);
   return lines;
 }
 
@@ -402,7 +402,7 @@ function renderActivity(activity: readonly JoinActivityRenderItem[] | undefined,
   const all = (activity ?? []).filter(item => !item.toolCallId || !omitted.has(item.toolCallId));
   const recent = all.slice(-3).reverse();
   const lines = recent.map(item => {
-    const summary = item.summary ? `(${truncate(item.summary, 100)})` : "";
+    const summary = item.summary ? `(${truncateText(item.summary, 100)})` : "";
     return `${indent}${paint(theme, "muted", `${item.tool}${summary}`)}`;
   });
   const additional = all.length - recent.length;
@@ -468,11 +468,6 @@ function runStats(run: { elapsedMs?: number; turns?: number; tokens?: number }, 
     run.tokens !== undefined ? formatTokens(run.tokens) : undefined,
   ].filter((part): part is string => part !== undefined);
   return parts.length ? ` ${paint(theme, "muted", `· ${parts.join(" · ")}`)}` : "";
-}
-
-function truncate(value: string, limit: number): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
 }
 
 function callSuffix(action: string, input: Record<string, unknown> | undefined): string {
