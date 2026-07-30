@@ -4,7 +4,7 @@ import { Conversation, RunSteerError, effectiveStatus, type ConversationSnapshot
 import { resolveModel, resolveRequestedSkills, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type RunRef, type SubagentId } from "./identifiers.js";
 import { RunScheduler, type RunExecutor } from "./scheduler.js";
-import { projectLiveSubagent, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
+import { projectLiveSubagent, projectSubagentRunStatus, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
 
 export type { ConversationUpdateListener } from "./conversation.js";
@@ -197,7 +197,8 @@ export class SubagentRuntime {
       return { conversationId: record.conversationId, runId: record.runId, steer };
     } catch (error) {
       if (error instanceof RunSteerError) {
-        throw new Error(`Subagent ${subagentId} is ${error.status} and cannot be steered.`);
+        const status = error.status === "stopping" ? "cancelled" : projectSubagentRunStatus(error.status);
+        throw new Error(`Subagent ${subagentId} is ${status} and cannot be steered.`);
       }
       throw error;
     }
@@ -208,7 +209,7 @@ export class SubagentRuntime {
     this.assertDirectOwner(record.agent, caller, "cancel");
     const run = this.runSnapshot(record.runId);
     if (run.status.kind === "done") {
-      throw new Error(`Subagent ${subagentId} is ${run.status.outcome} and cannot be cancelled.`);
+      throw new Error(`Subagent ${subagentId} is ${projectSubagentRunStatus(run.status.outcome)} and cannot be cancelled.`);
     }
     const wasQueued = run.status.kind === "queued";
     void record.agent.abort("Run cancelled.");

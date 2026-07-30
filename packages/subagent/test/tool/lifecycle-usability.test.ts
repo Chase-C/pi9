@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import { completedRun } from "../../src/conversation.js";
 import { SubagentRuntime } from "../../src/runtime.js";
-import { inspectAction, listAction } from "../../src/tool.js";
+import { cancelAction, inspectAction, joinAction, listAction, resumeAction, steerAction } from "../../src/tool.js";
 
 const knownModel = { provider: "test", id: "known" } as any;
 const config = {
@@ -121,4 +121,71 @@ test("inspect separates current generation metrics from prior generation history
   expect(inspected.totalMetrics.elapsedMs).toBe(
     inspected.history[0].elapsedMs + inspected.metrics.elapsedMs,
   );
+});
+
+test("unauthorized lifecycle failures do not expose canonical target metadata", async () => {
+  const runner = async (_ctx: any, agent: any, run: any) => {
+    agent.bindSession(session());
+    return agent.settle(run.runId, "error", { error: "TOP SECRET FAILURE" });
+  };
+  const runtime = new SubagentRuntime(registry, 4, runner);
+  const start = async (prompt: string, caller?: { conversationId: any; runId: any }) => {
+    const handle = runtime.startRun(
+      ctx,
+      [{ kind: "spawn", agent: "worker", prompt, label: `SECRET ${prompt}` }],
+      caller ? { caller } : {},
+    );
+    await handle.completion;
+    return handle.starts[0] as any;
+  };
+  const firstRoot = await start("first-root");
+  const secondRoot = await start("second-root");
+  const child = await start("child", { conversationId: secondRoot.conversationId, runId: secondRoot.runId });
+  const leaf = await start("leaf", { conversationId: child.conversationId, runId: child.runId });
+
+  const cases = [
+    {
+      name: "sibling",
+      target: secondRoot.conversationId,
+      actionDeps: { ...deps(runtime), parent: { conversationId: firstRoot.conversationId, runId: () => firstRoot.runId } },
+    },
+    {
+      name: "ancestor",
+      target: secondRoot.conversationId,
+      actionDeps: { ...deps(runtime), parent: { conversationId: child.conversationId, runId: () => child.runId } },
+    },
+    { name: "root-to-nested", target: leaf.conversationId, actionDeps: deps(runtime) },
+  ];
+
+  for (const item of cases) {
+    const results = [
+      response(await resumeAction(item.actionDeps as any, { action: "resume", resumes: [{ kind: "resume", subagentId: item.target, prompt: "again" }] }, ctx as any)).results[0],
+      response(await steerAction(item.actionDeps as any, { action: "steer", messages: [{ kind: "steer", subagentId: item.target, message: "redirect" }] })).results[0],
+      response(await cancelAction(item.actionDeps as any, { action: "cancel", subagentIds: [item.target] })).results[0],
+      response(inspectAction(item.actionDeps as any, { action: "inspect", subagentIds: [item.target] })).results[0],
+      response(await joinAction(item.actionDeps as any, { action: "join", subagentIds: [item.target] }, undefined, undefined)).results[0],
+    ];
+
+    for (const result of results) {
+      expect(result, item.name).toEqual({
+        ok: false,
+        subagentId: item.target,
+        error: expect.stringContaining("not directly owned"),
+      });
+      expect(JSON.stringify(result)).not.toContain("SECRET");
+    }
+  }
+
+  const ownedFailure = response(await steerAction(deps(runtime), {
+    action: "steer",
+    messages: [{ kind: "steer", subagentId: firstRoot.conversationId, message: "redirect" }],
+  })).results[0];
+  expect(ownedFailure).toMatchObject({
+    ok: false,
+    subagentId: firstRoot.conversationId,
+    label: "SECRET first-root",
+    status: "failed",
+    failure: "Subagent failed: TOP SECRET FAILURE",
+    error: expect.stringContaining("cannot be steered"),
+  });
 });

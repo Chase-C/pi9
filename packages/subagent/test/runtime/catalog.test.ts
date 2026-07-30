@@ -976,6 +976,33 @@ test("steering targets an exact running run without creating history", async () 
   );
 });
 
+test("terminal action errors use only public lifecycle statuses", async () => {
+  const outcomes = [
+    ["completed", "completed"],
+    ["error", "failed"],
+    ["aborted", "cancelled"],
+    ["interrupted", "failed"],
+    ["skipped", "failed"],
+  ] as const;
+  const runner = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(session());
+    return agent.settle(attempt.runId, attempt.prompt, { error: "internal detail" });
+  };
+  const manager = new SubagentRuntime(registry, 1, runner);
+
+  for (const [outcome, publicStatus] of outcomes) {
+    const batch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: outcome, label: outcome }]);
+    const started = batch.starts[0] as any;
+    await batch.completion;
+    await expect(manager.steerSubagent(started.conversationId, "too late")).rejects.toThrow(
+      `Subagent ${started.conversationId} is ${publicStatus} and cannot be steered.`,
+    );
+    await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(
+      `Subagent ${started.conversationId} is ${publicStatus} and cannot be cancelled.`,
+    );
+  }
+});
+
 test("cancelling an active run retains its conversation and exact outcome", async () => {
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
@@ -997,13 +1024,19 @@ test("cancelling an active run retains its conversation and exact outcome", asyn
     outcome: "aborted",
     error: "Run cancelled.",
   });
+  await expect(manager.steerSubagent(started.conversationId, "too late")).rejects.toThrow(
+    `Subagent ${started.conversationId} is cancelled and cannot be steered.`,
+  );
+  await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(
+    `Subagent ${started.conversationId} is cancelled and cannot be cancelled.`,
+  );
   release();
   await expect(cancelling).resolves.toEqual({
     conversationId: started.conversationId,
     runId: started.runId,
   });
   expect(manager.listConversations().map(value => value.conversationId)).toContain(started.conversationId);
-  await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(`Subagent ${started.conversationId} is aborted and cannot be cancelled.`);
+  await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(`Subagent ${started.conversationId} is cancelled and cannot be cancelled.`);
 
   const join = manager.bindSubagentJoin([started.conversationId]);
   await join.completion;

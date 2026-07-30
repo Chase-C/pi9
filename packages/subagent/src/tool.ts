@@ -98,7 +98,9 @@ function targetFailure(
 ): TargetFailure {
   const failure = actionFailure(error);
   try {
-    const live = deps.runtime.projectSubagent(subagentId, callerOf(deps), { maxLength: 500 });
+    const caller = callerOf(deps);
+    deps.runtime.validateSubagentJoin(subagentId as SubagentId, caller);
+    const live = deps.runtime.projectSubagent(subagentId, caller, { maxLength: 500 });
     return { ...live, ok: false, error: failure.error };
   } catch {
     return { ok: false, subagentId, error: failure.error };

@@ -21,7 +21,7 @@ export type RunOutcomeStatus = (typeof RUN_OUTCOME_STATUSES)[number];
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export class RunSteerError extends Error {
-  constructor(readonly runId: RunId, readonly status: string) {
+  constructor(readonly runId: RunId, readonly status: RunStatus | "stopping") {
     super(`Run ${runId} is ${status} and cannot be steered.`);
   }
 }

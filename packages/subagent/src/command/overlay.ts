@@ -37,6 +37,7 @@ export interface OverlayOptions {
   onSettingsChange(change: SubagentSettingsChange): SubagentSettings | void;
   onStart(agent: string, prompt: string): string | undefined;
   onResume(conversationId: string, prompt: string): void;
+  onCollect?(subagentId: string): Promise<void> | void;
   onCancel?(subagentId: string): void;
   onRemove?(conversationId: string): void;
 }
@@ -107,6 +108,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     if (this.detail) {
       if (isCancelKey(data, this.keybindings)) this.detail = undefined;
       else if (data.toLowerCase() === "r") this.openResumePrompt(this.detail.conversationId);
+      else if (data.toLowerCase() === "g") void this.collectResult(this.detail.conversationId);
       else if (data.toLowerCase() === "c") this.cancelRun(this.detail.conversationId, this.detail.runId);
       else if (data.toLowerCase() === "x") this.removeConversation(this.detail.conversationId);
       this.requestRender();
@@ -352,7 +354,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       }
     }
 
-    lines.push("", this.muted(`enter inspect${run.status.kind === "queued" || run.status.kind === "running" ? " · c cancel" : ""}${this.isResumeAvailable(conversation) ? " · r resume" : ""} · x remove`));
+    lines.push("", this.muted(`enter inspect${run.status.kind === "queued" || run.status.kind === "running" ? " · c cancel" : ""}${this.isCollectAvailable(conversation) ? " · g collect" : ""}${this.isResumeAvailable(conversation) ? " · r resume" : ""} · x remove`));
     if (this.promptTarget?.kind === "resume") lines.push("", this.accent("Resume conversation"), ...this.renderPrompt(width));
     if (this.actionError) lines.push(this.error(this.actionError));
     return lines;
@@ -419,6 +421,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const run = conversation.currentRun ?? conversation.runs.at(-1);
       this.detail = { conversationId: conversation.conversationId, ...(run ? { runId: run.runId } : {}) };
     } else if (data.toLowerCase() === "r") this.openResumePrompt(conversation.conversationId);
+    else if (data.toLowerCase() === "g") void this.collectResult(conversation.conversationId);
     else if (data.toLowerCase() === "c") this.cancelRun(conversation.conversationId);
     else if (data.toLowerCase() === "x") this.removeConversation(conversation.conversationId);
     this.requestRender();
@@ -463,6 +466,19 @@ export class SubagentOverlayComponent implements Component, Focusable {
       this.options.notify(this.actionError, "warning");
       this.requestRender();
     }
+  }
+
+  private async collectResult(conversationId: string): Promise<void> {
+    const conversation = this.findConversation(conversationId);
+    if (!conversation || !this.isCollectAvailable(conversation) || !this.options.onCollect) return;
+    this.actionError = "";
+    try {
+      await this.options.onCollect(conversation.conversationId);
+    } catch (error) {
+      this.actionError = error instanceof Error ? error.message : String(error);
+      this.options.notify(this.actionError, "warning");
+    }
+    this.requestRender();
   }
 
   private cancelRun(conversationId: string, runId?: string): void {
@@ -522,6 +538,11 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
 
   private renderPrompt(width: number): string[] { return this.prompt.render(Math.max(8, width)); }
+  private isCollectAvailable(conversation: ConversationSnapshot): boolean {
+    const latest = conversation.runs.at(-1);
+    return !conversation.parentConversationId && !conversation.isStopping
+      && latest?.status.kind === "done" && !latest.joined && latest.observerCount === 0;
+  }
   private isResumeAvailable(conversation: ConversationSnapshot): boolean {
     const latest = conversation.runs.at(-1);
     return !conversation.parentConversationId && !conversation.isStopping
@@ -560,9 +581,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private row(content: string, width: number): string { return `${this.border("│")}${pad(content, width)}${this.border("│")}`; }
   private helpText(): string {
     if (this.focusRegion === "prompt") return "enter submit · esc cancel";
-    if (this.detail) return "c cancel · r resume · x remove · esc back";
+    if (this.detail) return "c cancel · g collect · r resume · x remove · esc back";
     if (this.page === "agents") return "↑↓ select · / filter · enter/s start · tab pages · esc close";
-    if (this.page === "conversations") return "↑↓ select · enter inspect · / filter · t flat/tree · c cancel · r resume · x remove · tab pages · esc close";
+    if (this.page === "conversations") return "↑↓ select · enter inspect · / filter · t flat/tree · c cancel · g collect · r resume · x remove · tab pages · esc close";
     return this.settings.isEditing ? "type value · enter save · esc cancel" : "↑↓ select · enter/space change · tab pages · esc close";
   }
 }

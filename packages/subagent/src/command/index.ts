@@ -80,6 +80,17 @@ export function registerSubagentsCommand(
                 notify(ctx, `Resumed subagent ${conversationId}.`, "info");
               }
             },
+            onCollect: async subagentId => {
+              const binding = runtime.bindSubagentJoin([subagentId as SubagentId]);
+              try {
+                await binding.completion;
+                binding.markJoined();
+                notify(ctx, `Collected subagent ${subagentId}.`, "info");
+              } finally {
+                binding.release();
+                updateSubagentWidget(ctx, runtime.listConversations(), settings);
+              }
+            },
             onCancel: async subagentId => {
               try {
                 await runtime.cancelSubagent(subagentId as SubagentId);
