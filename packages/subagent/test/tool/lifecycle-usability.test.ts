@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import { completedRun } from "../../src/conversation.js";
 import { SubagentRuntime } from "../../src/runtime.js";
-import { cancelAction, inspectAction, joinAction, listAction, resumeAction, steerAction } from "../../src/tool.js";
+import { cancelAction, inspectAction, joinAction, listAction, removeAction, resumeAction, steerAction } from "../../src/tool.js";
 
 const knownModel = { provider: "test", id: "known" } as any;
 const config = {
@@ -143,7 +143,7 @@ test("unauthorized lifecycle failures do not expose canonical target metadata", 
   const child = await start("child", { conversationId: secondRoot.conversationId, runId: secondRoot.runId });
   const leaf = await start("leaf", { conversationId: child.conversationId, runId: child.runId });
 
-  const cases = [
+  const unauthorizedCases = [
     {
       name: "sibling",
       target: secondRoot.conversationId,
@@ -154,26 +154,54 @@ test("unauthorized lifecycle failures do not expose canonical target metadata", 
       target: secondRoot.conversationId,
       actionDeps: { ...deps(runtime), parent: { conversationId: child.conversationId, runId: () => child.runId } },
     },
-    { name: "root-to-nested", target: leaf.conversationId, actionDeps: deps(runtime) },
   ];
 
-  for (const item of cases) {
+  for (const item of unauthorizedCases) {
     const results = [
       response(await resumeAction(item.actionDeps as any, { action: "resume", resumes: [{ kind: "resume", subagentId: item.target, prompt: "again" }] }, ctx as any)).results[0],
       response(await steerAction(item.actionDeps as any, { action: "steer", messages: [{ kind: "steer", subagentId: item.target, message: "redirect" }] })).results[0],
       response(await cancelAction(item.actionDeps as any, { action: "cancel", subagentIds: [item.target] })).results[0],
       response(inspectAction(item.actionDeps as any, { action: "inspect", subagentIds: [item.target] })).results[0],
       response(await joinAction(item.actionDeps as any, { action: "join", subagentIds: [item.target] }, undefined, undefined)).results[0],
+      response(await removeAction(item.actionDeps as any, { action: "remove", subagentIds: [item.target] })).results[0],
     ];
 
     for (const result of results) {
       expect(result, item.name).toEqual({
         ok: false,
         subagentId: item.target,
-        error: expect.stringContaining("not directly owned"),
+        error: expect.stringMatching(/not (?:directly owned|a descendant)/),
       });
       expect(JSON.stringify(result)).not.toContain("SECRET");
     }
+  }
+
+  const indirect = { target: leaf.conversationId, actionDeps: deps(runtime) };
+  const inspected = response(inspectAction(indirect.actionDeps as any, {
+    action: "inspect",
+    subagentIds: [indirect.target],
+  })).results[0];
+  expect(inspected).toMatchObject({
+    ok: true,
+    subagentId: indirect.target,
+    label: "SECRET leaf",
+    status: "failed",
+    actionHints: ["inspect"],
+  });
+
+  const indirectMutations = [
+    response(await resumeAction(indirect.actionDeps as any, { action: "resume", resumes: [{ kind: "resume", subagentId: indirect.target, prompt: "again" }] }, ctx as any)).results[0],
+    response(await steerAction(indirect.actionDeps as any, { action: "steer", messages: [{ kind: "steer", subagentId: indirect.target, message: "redirect" }] })).results[0],
+    response(await cancelAction(indirect.actionDeps as any, { action: "cancel", subagentIds: [indirect.target] })).results[0],
+    response(await joinAction(indirect.actionDeps as any, { action: "join", subagentIds: [indirect.target] }, undefined, undefined)).results[0],
+    response(await removeAction(indirect.actionDeps as any, { action: "remove", subagentIds: [indirect.target] })).results[0],
+  ];
+  for (const result of indirectMutations) {
+    expect(result).toEqual({
+      ok: false,
+      subagentId: indirect.target,
+      error: expect.stringContaining("not directly owned"),
+    });
   }
 
   const ownedFailure = response(await steerAction(deps(runtime), {

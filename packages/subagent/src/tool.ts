@@ -684,7 +684,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "  spawn(spawns): Start labelled subagents.",
       "  resume(resumes): Continue existing subagents after joining their latest results.",
       "  steer(messages): Send messages to running subagents.",
-      "  inspect(subagentIds): Check status and progress without waiting.",
+      "  inspect(subagentIds): Check any descendant's status and progress without waiting.",
       "  join(subagentIds): Wait for and collect a subagent's result; blocks while running, idempotent after.",
       "  cancel(subagentIds): Cancel active subagents; context and results are retained.",
       "  remove(subagentIds): Permanently discard inactive subagent subtrees, including unjoined results.",
