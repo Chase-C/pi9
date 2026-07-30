@@ -16,6 +16,7 @@ export interface RunQueueLease {
 export interface RunQueueTask<T> {
   readonly completion: Promise<T>;
   cancel(result: T): boolean;
+  abandon(result: T): boolean;
 }
 
 export class RunQueue {
@@ -33,23 +34,27 @@ export class RunQueue {
     let resolveTask!: (value: T) => void;
     let rejectTask!: (reason?: unknown) => void;
     let pending = true;
+    let abandoned = false;
+    let occupyingSlot = false;
     const completion = new Promise<T>((resolve, reject) => { resolveTask = resolve; rejectTask = reject; });
     const queuedAt = Date.now();
     const start = () => {
       pending = false;
       this._running++;
-      let active = true;
+      occupyingSlot = true;
       const lease: RunQueueLease = {
         suspendDuring: async <R>(fn: () => Promise<R>): Promise<R> => {
-          if (!active) return fn();
-          active = false;
+          if (!occupyingSlot || abandoned) return fn();
+          occupyingSlot = false;
           this._running--;
           this._flush();
           try {
             return await fn();
           } finally {
-            await this._acquire();
-            active = true;
+            if (!abandoned) {
+              await this._acquire();
+              occupyingSlot = true;
+            }
           }
         },
       };
@@ -59,7 +64,10 @@ export class RunQueue {
         task(lease)
           .then(resolveTask, rejectTask)
           .finally(() => {
-            if (active) this._running--;
+            if (occupyingSlot) {
+              occupyingSlot = false;
+              this._running--;
+            }
             end({ running: this._running, pending: this._pending.length });
             this._flush();
           });
@@ -67,14 +75,27 @@ export class RunQueue {
     };
     this._pending.push(start);
     this._flush();
+    const cancel = (result: T): boolean => {
+      if (!pending) return false;
+      const index = this._pending.indexOf(start);
+      if (index < 0) return false;
+      this._pending.splice(index, 1);
+      pending = false;
+      resolveTask(result);
+      return true;
+    };
     return {
       completion,
-      cancel: result => {
-        if (!pending) return false;
-        const index = this._pending.indexOf(start);
-        if (index < 0) return false;
-        this._pending.splice(index, 1);
-        pending = false;
+      cancel,
+      abandon: result => {
+        if (cancel(result)) return true;
+        if (abandoned) return false;
+        abandoned = true;
+        if (occupyingSlot) {
+          occupyingSlot = false;
+          this._running--;
+          this._flush();
+        }
         resolveTask(result);
         return true;
       },
@@ -216,5 +237,9 @@ export class RunScheduler {
 
   cancelQueued(runId: RunId, result: RunSnapshot): boolean {
     return this._queued.get(runId)?.cancel(result) ?? false;
+  }
+
+  abandon(runId: RunId, result: RunSnapshot): boolean {
+    return this._queued.get(runId)?.abandon(result) ?? false;
   }
 }

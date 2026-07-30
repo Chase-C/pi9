@@ -15,15 +15,15 @@ test("description names typed action inputs without restating task unions", () =
     prepareInvocation: async () => settings,
   });
   const description = tool.description;
-  assert.match(description, /list\(scope\?, state\?\): List subagents by lifecycle; scope defaults to children/);
+  assert.match(description, /list\(statuses\?, joined\?\): List direct child subagents with descendant context/);
   assert.match(description, /spawn\(spawns\)/);
   assert.match(description, /resume\(resumes\)/);
   assert.match(description, /steer\(messages\)/);
   assert.match(description, /cancel\(subagentIds\)/);
   assert.match(description, /inspect\(subagentIds\)/);
-  assert.match(description, /join\(subagentIds\)/);
-  assert.match(description, /remove\(subagentIds\).*terminal subagent subtrees/);
-  assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union/);
+  assert.match(description, /join\(subagentIds\).*blocks while running, idempotent after/);
+  assert.match(description, /remove\(subagentIds\).*inactive subagent subtrees/);
+  assert.doesNotMatch(description, /Spawn:|Resume:|Steer:|union|acknowledg|lifecycle|latest outcome|list\(scope|state\?/i);
   const properties = (tool.parameters as any).properties;
   assert.deepEqual(Object.keys(properties.spawns.items.properties), ["agent", "prompt", "label", "skills", "model", "thinking", "cwd"]);
   assert.deepEqual(Object.keys(properties.resumes.items.properties), ["subagentId", "prompt"]);

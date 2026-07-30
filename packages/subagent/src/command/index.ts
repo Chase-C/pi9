@@ -63,7 +63,7 @@ export function registerSubagentsCommand(
               return settings;
             },
             onStart: (agent, prompt) => {
-              const start = runtime.startRun(ctx, [{ kind: "spawn", agent, prompt }]).starts[0];
+              const start = runtime.startRun(ctx, [{ kind: "spawn", agent, prompt, label: prompt }]).starts[0];
               if (!start?.ok) {
                 notify(ctx, start?.error ?? "Could not start run.", "warning");
                 return undefined;

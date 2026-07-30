@@ -60,7 +60,7 @@ export interface FakeAgentOptions {
   activeTools?: string[];
   usage?: Usage;
   totalUsage?: Usage;
-  canResume?: boolean;
+  resumable?: boolean;
   isStopping?: boolean;
   requestedOverrides?: ConversationSnapshot["requestedOverrides"];
   previousRuns?: RunSnapshot[];
@@ -99,7 +99,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     }))
     ?? [];
   const isActive = status.kind === "queued" || status.kind === "running";
-  if (isActive && options.canResume) throw new Error("An active fake conversation cannot be resumable.");
+  if (isActive && options.resumable) throw new Error("An active fake conversation cannot be resumable.");
   const run: RunSnapshot = {
     runId: (options.runId ?? "r1") as RunSnapshot["runId"],
     kind: options.kind ?? "spawn",
@@ -115,16 +115,11 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     },
     usage: options.totalUsage ?? options.usage ?? ZERO_USAGE,
     observerCount: 0,
-    acknowledged: options.canResume ?? false,
+    joined: options.resumable ?? false,
     steers: [],
   };
   const runs = options.runs ?? [...(options.previousRuns ?? []), run];
   const latest = runs.at(-1)!;
-  const state = options.isStopping || latest.status.kind !== "done"
-    ? "active"
-    : !latest.acknowledged
-      ? "awaiting_join"
-      : options.canResume ? "resumable" : "terminal";
   return {
     conversationId: (options.conversationId ?? "c1") as ConversationSnapshot["conversationId"],
     ...(options.parentConversationId
@@ -133,7 +128,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     ...(options.spawnedByRunId
       ? { spawnedByRunId: options.spawnedByRunId as RunSnapshot["runId"] }
       : {}),
-    label: options.label,
+    label: options.label ?? options.options?.agent ?? config.name ?? "helper",
     createdAt: options.createdAt ?? 1,
     config: {
       name: options.options?.agent ?? config.name ?? "helper",
@@ -149,8 +144,6 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     ...(latest.status.kind !== "done" ? { currentRun: latest } : {}),
     ...(options.isStopping ? { isStopping: true as const } : {}),
     ...(options.requestedOverrides ? { requestedOverrides: options.requestedOverrides } : {}),
-    state,
-    canResume: state === "resumable",
   };
 }
 

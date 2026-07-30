@@ -9,10 +9,10 @@ import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, resolveModel, resolveTaskCwd, execute
 
 const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
 function resumable(messages: any[], prompt: () => Promise<void>, abort = vi.fn()) {
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first" }, () => {});
+  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
   const session = { messages, subscribe: () => () => {}, prompt, abort } as any;
   agent.bindSession(session); completedRun(agent, "adapt-ably" as any, "first");
-  agent.acknowledge("adapt-ably" as any);
+  agent.markJoined("adapt-ably" as any);
   const attempt = agent.beginResume("balance-boldly" as any, "continue");
   return { agent, attempt, session, abort };
 }
@@ -35,9 +35,9 @@ test("child session lifecycle observers span finalized tool execution events", a
     },
     abort: vi.fn(),
   } as any;
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first" }, () => {});
+  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
   agent.bindSession(session); completedRun(agent, "adapt-ably" as any, "first");
-  agent.acknowledge("adapt-ably" as any);
+  agent.markJoined("adapt-ably" as any);
   const attempt = agent.beginResume("balance-boldly" as any, "continue");
   const observed: any[] = [];
 
@@ -162,7 +162,7 @@ test("does not reinterpret an unknown qualified reference as a different bare mo
 test("RunAttempt terminalizes an invalid requested model before session allocation", async () => {
   const parent = model("parent-provider", "parent-model");
   const invalidConfig = { ...config, model: "missing" };
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, invalidConfig, { kind: "spawn", agent: "worker", prompt: "first" }, () => {});
+  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, invalidConfig, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
 
   await expect(executeRun({ cwd: "/unvalidated-parent", model: parent, modelRegistry: registry(parent) } as any, agent, agent.requireCurrentRun())).resolves.toMatchObject({
     status: { kind: "done", outcome: "error", error: "Unknown model: missing" },

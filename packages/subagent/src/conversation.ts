@@ -4,9 +4,9 @@ import type { AgentConfig, AgentRequestedConfig, AgentSource } from "./agents.js
 import { resolveRequestedConfig } from "./agents.js";
 import { RunActivity, type RunActivityListener } from "./activity.js";
 import type { ConversationId, RunId } from "./identifiers.js";
-import type { ConversationLifecycleState, RunOutcomeStatus, RunStatus, SpawnRequest } from "./schema.js";
+import type { RunOutcomeStatus, RunStatus, SpawnRequest } from "./schema.js";
 
-export type { ConversationLifecycleState, RunOutcomeStatus } from "./schema.js";
+export type { RunOutcomeStatus } from "./schema.js";
 
 /** A run starts a conversation or resumes its existing SDK session. */
 export type RunKind = "spawn" | "resume";
@@ -15,7 +15,7 @@ export type RunOutcome =
   | { readonly status: "completed"; readonly output?: string; readonly error?: never }
   | {
       readonly status: Exclude<RunOutcomeStatus, "completed">;
-      readonly output?: never;
+      readonly output?: string;
       readonly error?: string;
     };
 
@@ -32,7 +32,7 @@ export type ConversationUpdateKind =
   | "turn"
   | "usage"
   | "compaction"
-  | "acknowledgement"
+  | "joined"
   | "observer"
   | "nestedJoin"
   | "steer"
@@ -91,7 +91,7 @@ export interface RunSnapshot {
   readonly activity: RunActivitySnapshot;
   readonly usage: Usage;
   readonly observerCount: number;
-  readonly acknowledged: boolean;
+  readonly joined: boolean;
   readonly nestedJoins?: readonly NestedJoinAttemptSnapshot[];
   readonly steers: readonly SteerReceipt[];
 }
@@ -99,7 +99,7 @@ export interface ConversationSnapshot {
   readonly conversationId: ConversationId;
   readonly parentConversationId?: ConversationId;
   readonly spawnedByRunId?: RunId;
-  readonly label?: string;
+  readonly label: string;
   readonly createdAt: number;
   readonly config: AgentViewConfig;
   readonly runs: readonly RunSnapshot[];
@@ -107,8 +107,6 @@ export interface ConversationSnapshot {
   readonly isStopping?: true;
   readonly effectiveConfig?: ConversationEffectiveConfig;
   readonly requestedOverrides?: ConversationRequestedOverrides;
-  readonly state: ConversationLifecycleState;
-  readonly canResume: boolean;
 }
 
 export type AttemptState =
@@ -122,15 +120,17 @@ export class Run {
   readonly activity: RunActivity;
   state: AttemptState = { kind: "queued" };
   observerCount = 0;
-  acknowledged = false;
+  joined = false;
   readonly nestedJoins: Array<{ toolCallId?: string; targets: NestedJoinTargetSnapshot[]; state: NestedJoinAttemptState; startedAt: number; completedAt?: number; error?: string }> = [];
   readonly steers: TrackedSteerReceipt[] = [];
+  sessionMessageStart = 0;
   constructor(readonly runId: RunId, readonly kind: RunKind, readonly prompt: string, private readonly onChange: RunActivityListener) {
     this.activity = new RunActivity(onChange, event => this.handleSessionEvent(event));
   }
 
   attach(session: AgentSession): void {
     if (this.state.kind !== "queued") throw new Error(`Cannot attach a session to a run that is ${this.state.kind}.`);
+    this.sessionMessageStart = Array.isArray(session.messages) ? session.messages.length : 0;
     this.state = { kind: "running", session, startedAt: Date.now() };
   }
 
@@ -222,8 +222,20 @@ function messageText(content: unknown): string {
     .join("\n");
 }
 
+function latestAssistantText(session: AgentSession | undefined, startIndex: number): string | undefined {
+  const messages = session?.messages;
+  if (!Array.isArray(messages)) return;
+  for (let index = messages.length - 1; index >= startIndex; index--) {
+    const message = messages[index] as { role?: unknown; content?: unknown };
+    if (message?.role !== "assistant") continue;
+    const text = messageText(message.content).trim();
+    if (text) return text;
+  }
+  return;
+}
+
 export type ConversationUpdateListener = (agent: Conversation, kind: ConversationUpdateKind) => void;
-export interface RunBinding { readonly runId: RunId; snapshot(): RunSnapshot; acknowledge(): void; release(): void }
+export interface RunBinding { readonly runId: RunId; snapshot(): RunSnapshot; markJoined(): void; release(): void }
 
 /** One persistent conversation containing an append-only, exact-run history. */
 export class Conversation {
@@ -233,7 +245,7 @@ export class Conversation {
   readonly spawnedByRunId?: RunId;
   readonly requestedConfig: AgentRequestedConfig;
   readonly requestedOverrides?: ConversationRequestedOverrides;
-  readonly label?: string;
+  readonly label: string;
   private readonly runs: Run[] = [];
   private session?: AgentSession;
   private stopping?: { runId: RunId; abortSettled: boolean; executionSettled: boolean };
@@ -250,7 +262,7 @@ export class Conversation {
     options: { parentConversationId?: ConversationId; spawnedByRunId?: RunId } = {},
   ) {
     this.agentName = spawn.agent;
-    this.label = spawn.label;
+    this.label = spawn.label ?? spawn.prompt;
     this.parentConversationId = options.parentConversationId;
     this.spawnedByRunId = options.spawnedByRunId;
     this.requestedConfig = resolveRequestedConfig(config, spawn);
@@ -267,25 +279,32 @@ export class Conversation {
   get runHistory(): readonly RunSnapshot[] { return this.runs.map(run => this.project(run)); }
   get latestRunId(): RunId { return this.latestRun().runId; }
   get status(): RunViewStatus { return this.project(this.latestRun()).status; }
-  get lifecycleState(): ConversationLifecycleState {
-    const latest = this.latestRun();
-    if (this.stopping || latest.state.kind !== "done") return "active";
-    if (!latest.acknowledged) return "awaiting_join";
-    return this.session && latest.observerCount === 0 &&
-      (latest.state.result.status === "completed"
-        || latest.state.result.status === "interrupted"
-        || latest.state.result.status === "aborted")
-      ? "resumable"
-      : "terminal";
+  get hasActiveExecution(): boolean {
+    return this.stopping !== undefined || this.latestRun().state.kind !== "done";
   }
-  get canResume(): boolean { return this.lifecycleState === "resumable"; }
+  get latestResultJoined(): boolean {
+    const latest = this.latestRun();
+    return latest.state.kind === "done" && latest.joined;
+  }
+  get hasRetainedResumableSession(): boolean {
+    const latest = this.latestRun();
+    return latest.state.kind === "done" && this.session !== undefined
+      && (latest.state.result.status === "completed"
+        || latest.state.result.status === "interrupted"
+        || latest.state.result.status === "aborted");
+  }
+  get isResumeAllowed(): boolean {
+    const latest = this.latestRun();
+    return !this.stopping && latest.state.kind === "done" && latest.observerCount === 0
+      && latest.joined && this.hasRetainedResumableSession;
+  }
 
   private newRun(runId: RunId, kind: "spawn" | "resume", prompt: string): Run {
     return new Run(runId, kind, prompt, update => this.listener(this, update));
   }
 
   beginResume(runId: RunId, prompt: string): Run {
-    if (!this.canResume) throw new Error(`Conversation ${this.conversationId} cannot be resumed.`);
+    if (!this.isResumeAllowed) throw new Error(`Conversation ${this.conversationId} cannot be resumed.`);
     if (this.runs.some(run => run.runId === runId)) throw new Error(`Run ${runId} already exists.`);
     const run = this.newRun(runId, "resume", prompt);
     this.runs.push(run);
@@ -342,7 +361,7 @@ export class Conversation {
     return {
       runId,
       snapshot: () => this.project(run),
-      acknowledge: () => this.acknowledge(runId),
+      markJoined: () => this.markJoined(runId),
       release: () => {
         if (released) return;
         released = true;
@@ -367,7 +386,12 @@ export class Conversation {
     this.stopping = { runId: run.runId, abortSettled: false, executionSettled: false };
     const runningSession = run.state.kind === "running" ? run.state.session : undefined;
     clearSessionQueue(runningSession);
-    this.settle(run.runId, { status: "aborted", error: reason });
+    const partialOutput = latestAssistantText(runningSession, run.sessionMessageStart);
+    this.settle(run.runId, {
+      status: "aborted",
+      error: reason,
+      ...(partialOutput ? { output: partialOutput } : {}),
+    });
     const aborting = Promise.resolve(runningSession?.abort()).catch(() => undefined);
     await this.steerTail;
     clearSessionQueue(runningSession);
@@ -384,6 +408,18 @@ export class Conversation {
     this.listener(this, "status");
   }
 
+  forceAbandonCancellation(runId: RunId): RunSnapshot {
+    const run = this.requireRun(runId);
+    if (this.stopping?.runId === runId) {
+      this.unsubscribe?.();
+      this.unsubscribe = undefined;
+      this.session = undefined;
+      this.stopping = undefined;
+      this.listener(this, "status");
+    }
+    return this.project(run);
+  }
+
   beginNestedJoin(runId: RunId, targets: readonly RunId[], toolCallId?: string): number {
     const index = this.requireRun(runId).beginNestedJoin(targets, toolCallId);
     this.listener(this, "nestedJoin");
@@ -394,10 +430,10 @@ export class Conversation {
     this.listener(this, "nestedJoin");
   }
 
-  acknowledge(runId: RunId): void {
+  markJoined(runId: RunId): void {
     const run = this.requireRun(runId);
-    run.acknowledged = true;
-    this.listener(this, "acknowledgement");
+    run.joined = true;
+    this.listener(this, "joined");
   }
   setEffectiveConfig(config: ConversationEffectiveConfig): void { this.effectiveConfig = config; }
 
@@ -408,7 +444,7 @@ export class Conversation {
       conversationId: this.conversationId,
       ...(this.parentConversationId ? { parentConversationId: this.parentConversationId } : {}),
       ...(this.spawnedByRunId ? { spawnedByRunId: this.spawnedByRunId } : {}),
-      ...(this.label ? { label: this.label } : {}),
+      label: this.label,
       createdAt: this.createdAt,
       config: { name: this.agentName, description: this.config.description, source: this.config.source, sourcePath: this.config.sourcePath, model: this.requestedConfig.model, thinking: this.requestedConfig.thinking, tools: this.requestedConfig.tools, ...(this.requestedConfig.skills !== undefined ? { skills: this.requestedConfig.skills } : {}) },
       runs,
@@ -416,8 +452,6 @@ export class Conversation {
       ...(this.stopping ? { isStopping: true as const } : {}),
       ...(this.effectiveConfig ? { effectiveConfig: this.effectiveConfig } : {}),
       ...(this.requestedOverrides ? { requestedOverrides: this.requestedOverrides } : {}),
-      state: this.lifecycleState,
-      canResume: this.lifecycleState === "resumable",
     });
   }
 
@@ -442,6 +476,6 @@ export class Conversation {
       ...(attempt.completedAt !== undefined ? { completedAt: attempt.completedAt } : {}),
       ...(attempt.error !== undefined ? { error: attempt.error } : {}),
     }));
-    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, acknowledged: run.acknowledged, nestedJoins: Object.freeze(nestedJoins), steers: Object.freeze(run.steers.map(projectSteer)) });
+    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, joined: run.joined, nestedJoins: Object.freeze(nestedJoins), steers: Object.freeze(run.steers.map(projectSteer)) });
   }
 }

@@ -8,13 +8,29 @@ function fixture(mode: "auto" | "steer" | "none" = "auto", idle = true, send?: (
   const sent: any[] = [];
   const notified: any[] = [];
   const scheduled: Array<{ fn: () => void; delay: number; cancelled: boolean }> = [];
-  const run: any = { runId: "bright-otter", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "completed", completedAt: 2, output: "SECRET" } };
-  const conversations: any[] = [{ conversationId: "calm-river", config: { name: "worker" }, runs: [run] }];
+  const run: any = { runId: "bright-otter", createdAt: 1, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 2, output: "SECRET" } };
+  const conversations: any[] = [{ conversationId: "calm-river", label: "primary task", config: { name: "worker" }, runs: [run] }];
   const manager: any = {
     onConversationUpdate(fn: any) { listener = fn; return () => { listener = undefined; }; },
     listConversations: () => conversations,
     conversation: (id: string) => conversations.find(value => value.conversationId === id),
     runSnapshot: (runId: string) => conversations.flatMap(value => value.runs).find(value => value.runId === runId) ?? run,
+    projectSubagent: (id: string) => {
+      const conversation = conversations.find(value => value.conversationId === id);
+      const latest = conversation.runs.at(-1);
+      const status = latest.status.outcome === "completed" ? "completed"
+        : latest.status.outcome === "aborted" ? "cancelled" : "failed";
+      return {
+        ok: true,
+        subagentId: id,
+        label: conversation.label ?? conversation.config.name,
+        agent: conversation.config.name,
+        status,
+        joined: latest.joined,
+        availableActions: ["inspect", "join", "remove"],
+        ...(status === "failed" ? { failure: `Subagent failed: ${latest.status.error ?? "unknown error"}` } : {}),
+      };
+    },
   };
   const pi: any = {
     on(event: string, fn: any) { handlers.set(event, fn); },
@@ -29,7 +45,7 @@ test("notifies a terminal run once without leaking output", () => {
   f.fire("session_start"); f.flush();
   assert.equal(f.sent.length, 1);
   assert.equal(f.sent[0].message.display, false);
-  assert.deepEqual(f.notified, [{ message: "1 subagent finished: worker · completed", level: "info" }]);
+  assert.deepEqual(f.notified, [{ message: "1 subagent finished: worker (primary task) · completed", level: "info" }]);
   assert.doesNotMatch(JSON.stringify(f.sent[0]), /SECRET/);
   f.fire("turn_end");
   assert.equal(f.sent.length, 1);
@@ -53,7 +69,7 @@ test("context reconciliation removes a queued completion observed before model d
 
 test("context reconciliation rebuilds a completion batch from still-unobserved runs", () => {
   const f = fixture();
-  const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "error", completedAt: 3 } };
+  const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, joined: false, status: { kind: "done", outcome: "error", completedAt: 3 } };
   f.conversations.push({ conversationId: "still-forest", config: { name: "explorer" }, label: "second <task>", runs: [second] });
   f.fire("session_start"); f.flush();
   const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
@@ -68,7 +84,7 @@ test("context reconciliation rebuilds a completion batch from still-unobserved r
   assert.equal(reconciled.length, 1);
   assert.equal(reconciled[0].content, [
     "<subagent-notification>",
-    '  <run subagentId="still-forest" status="error" agent="explorer" label="second &lt;task&gt;"/>',
+    '  <subagent subagentId="still-forest" status="failed" agent="explorer" label="second &lt;task&gt;" joined="false" availableActions="inspect,join,remove" failure="Subagent failed: unknown error"/>',
     "</subagent-notification>",
   ].join("\n"));
   assert.deepEqual(reconciled[0].details.completions.map((entry: any) => entry.subagentId), ["still-forest"]);
@@ -77,11 +93,11 @@ test("context reconciliation rebuilds a completion batch from still-unobserved r
   f.notifier.unsubscribe();
 });
 
-test("context reconciliation omits queued completions acknowledged before delivery", () => {
+test("context reconciliation omits queued completions joined before delivery", () => {
   const f = fixture();
   f.fire("session_start"); f.flush();
   const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
-  f.run.acknowledged = true;
+  f.run.joined = true;
 
   assert.deepEqual(f.notifier.reconcileMessages([queued] as never), []);
   f.notifier.unsubscribe();
@@ -112,8 +128,8 @@ test("context reconciliation hides a completion while a lifecycle tool claims it
 
 test("joined descendants stay silent while detached descendants remain eligible", () => {
   const f = fixture();
-  f.run.acknowledged = true;
-  const detached: any = { runId: "wander-widely", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "completed", completedAt: 2 } };
+  f.run.joined = true;
+  const detached: any = { runId: "wander-widely", createdAt: 1, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 2 } };
   f.conversations.push({ conversationId: "young-maple", config: { name: "worker" }, runs: [detached] });
   f.fire("session_start"); f.flush();
   assert.deepEqual(f.sent[0].message.details.completions.map((entry: any) => entry.subagentId), ["young-maple"]);
@@ -122,8 +138,8 @@ test("joined descendants stay silent while detached descendants remain eligible"
 
 test("reconciliation resolves the latest execution for a resumed subagent", () => {
   const f = fixture();
-  f.run.acknowledged = true;
-  const resumed: any = { runId: "gather-gently", createdAt: 3, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "completed", completedAt: 4 } };
+  f.run.joined = true;
+  const resumed: any = { runId: "gather-gently", createdAt: 3, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 4 } };
   f.conversations[0].runs.push(resumed);
   f.fire("session_start"); f.flush();
   const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
@@ -147,16 +163,16 @@ test("old completion messages do not rebound to a later execution", () => {
   const f = fixture();
   f.fire("session_start"); f.flush();
   const old = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
-  f.run.acknowledged = true;
-  f.conversations[0].runs.push({ runId: "gather-gently", createdAt: 3, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "completed", completedAt: 4 } });
+  f.run.joined = true;
+  f.conversations[0].runs.push({ runId: "gather-gently", createdAt: 3, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 4 } });
 
   assert.deepEqual(f.notifier.reconcileMessages([old] as never), []);
   f.notifier.unsubscribe();
 });
 
-test("none mode and acknowledged runs are ineligible", () => {
+test("none mode and joined runs are ineligible", () => {
   const none = fixture("none"); none.fire("session_start"); none.flush(); assert.equal(none.sent.length, 0); none.notifier.unsubscribe();
-  const acknowledged = fixture(); acknowledged.run.acknowledged = true; acknowledged.fire("session_start"); acknowledged.flush(); assert.equal(acknowledged.sent.length, 0); acknowledged.notifier.unsubscribe();
+  const joined = fixture(); joined.run.joined = true; joined.fire("session_start"); joined.flush(); assert.equal(joined.sent.length, 0); joined.notifier.unsubscribe();
 });
 
 test("tool execution end releases claims when execution was rejected before the tool ran", () => {
@@ -204,7 +220,7 @@ test("recursive cancel holds its descendant claim through grace and marks the ou
   f.update("status"); f.flush(500);
   assert.equal(f.sent.length, 0);
 
-  f.notifier.completeTool("child:delegate-boldly", "cancel-descendant", { content: [], details: { action: "cancel", runs: [{ subagentId: "calm-river", status: "aborted" }] } });
+  f.notifier.completeTool("child:delegate-boldly", "cancel-descendant", { content: [], details: { action: "cancel", runs: [{ subagentId: "calm-river", status: "cancelled" }] } });
   f.flush();
   assert.equal(f.sent.length, 0);
   f.notifier.unsubscribe();
@@ -212,7 +228,7 @@ test("recursive cancel holds its descendant claim through grace and marks the ou
 
 test("finalized results cannot mark unclaimed runs observed", () => {
   const f = fixture();
-  const unrelated: any = { runId: "wander-widely", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "done", outcome: "completed", completedAt: 2 } };
+  const unrelated: any = { runId: "wander-widely", createdAt: 1, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 2 } };
   f.conversations.push({ conversationId: "young-maple", config: { name: "worker" }, runs: [unrelated] });
   f.notifier.beginTool("child:delegate-boldly", "inspect-target", { action: "inspect", subagentIds: ["calm-river"] });
   f.notifier.completeTool("child:delegate-boldly", "inspect-target", { content: [], details: { action: "inspect", runs: [{ subagentId: "young-maple", status: "completed" }] } });
@@ -236,7 +252,7 @@ test("inspected skipped outcomes are terminal and stay silent", () => {
   f.run.status = { kind: "done", outcome: "skipped", completedAt: 2, error: "Agent skipped." };
   f.notifier.beginTool("child:delegate-boldly", "inspect-skipped", { action: "inspect", subagentIds: ["calm-river"] });
   f.fire("session_start"); f.flush();
-  f.notifier.completeTool("child:delegate-boldly", "inspect-skipped", { content: [], details: { action: "inspect", runs: [{ subagentId: "calm-river", status: "skipped" }] } });
+  f.notifier.completeTool("child:delegate-boldly", "inspect-skipped", { content: [], details: { action: "inspect", runs: [{ subagentId: "calm-river", status: "failed" }] } });
   f.flush();
   assert.equal(f.sent.length, 0);
   f.notifier.unsubscribe();
@@ -247,7 +263,7 @@ test("terminal outcomes returned by cancel stay silent when their claims are rel
   f.fire("tool_execution_start", { toolCallId: "cancel-call", toolName: "subagent", args: { action: "cancel", subagentIds: ["calm-river"] } });
   f.fire("session_start"); f.flush();
   assert.equal(f.sent.length, 0);
-  f.fire("tool_execution_end", { toolCallId: "cancel-call", toolName: "subagent", result: { content: [], details: { action: "cancel", runs: [{ subagentId: "calm-river", status: "aborted" }] } } });
+  f.fire("tool_execution_end", { toolCallId: "cancel-call", toolName: "subagent", result: { content: [], details: { action: "cancel", runs: [{ subagentId: "calm-river", status: "cancelled" }] } } });
   f.flush();
   f.fire("turn_end");
   assert.equal(f.sent.length, 0);
@@ -312,7 +328,7 @@ test("removal during the grace window drops stale completion delivery", () => {
 
 test("later completions do not restart the first completion's grace deadline", () => {
   const f = fixture();
-  const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "running", startedAt: 1 } };
+  const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, joined: false, status: { kind: "running", startedAt: 1 } };
   f.run.status = { kind: "running", startedAt: 1 };
   f.conversations.push({ conversationId: "still-forest", config: { name: "explorer" }, runs: [second] });
   f.fire("session_start"); f.flush();
@@ -329,7 +345,7 @@ test("later completions do not restart the first completion's grace deadline", (
 
 test("coalesces completions that settle during the same grace window", () => {
   const f = fixture();
-  const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, acknowledged: false, status: { kind: "running", startedAt: 1 } };
+  const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, joined: false, status: { kind: "running", startedAt: 1 } };
   f.run.status = { kind: "running", startedAt: 1 };
   f.conversations.push({ conversationId: "still-forest", config: { name: "explorer" }, runs: [second] });
   f.fire("session_start"); f.flush();
@@ -361,13 +377,13 @@ test("inspecting an active run does not hide its later completion", () => {
   f.notifier.unsubscribe();
 });
 
-test("successful join acknowledgement remains suppressed after its claim is released", () => {
+test("successful join markJoinedment remains suppressed after its claim is released", () => {
   const f = fixture();
-  f.fire("tool_execution_start", { toolCallId: "join-acknowledged", toolName: "subagent", args: { action: "join", subagentIds: ["calm-river"] } });
+  f.fire("tool_execution_start", { toolCallId: "join-joined", toolName: "subagent", args: { action: "join", subagentIds: ["calm-river"] } });
   f.fire("session_start");
   f.flush();
-  f.run.acknowledged = true;
-  f.fire("tool_execution_end", { toolCallId: "join-acknowledged", toolName: "subagent", result: { content: [], details: {} } });
+  f.run.joined = true;
+  f.fire("tool_execution_end", { toolCallId: "join-joined", toolName: "subagent", result: { content: [], details: {} } });
   f.flush();
   f.fire("turn_end");
   assert.equal(f.sent.length, 0);

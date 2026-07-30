@@ -7,9 +7,9 @@ const conversationId = "amber-acorn";
 
 test("spawn and resume are separate ordered batch actions", () => {
   assert.deepEqual(SUBAGENT_ACTIONS, ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"]);
-  assert.deepEqual(parseSubagentInvocation({ action: "spawn", spawns: [{ agent: "helper", prompt: "work" }] }), {
+  assert.deepEqual(parseSubagentInvocation({ action: "spawn", spawns: [{ agent: "helper", prompt: "work", label: "task" }] }), {
     action: "spawn",
-    spawns: [{ kind: "spawn", agent: "helper", prompt: "work" }],
+    spawns: [{ kind: "spawn", agent: "helper", prompt: "work", label: "task" }],
   });
   assert.deepEqual(parseSubagentInvocation({ action: "resume", resumes: [{ subagentId: conversationId, prompt: "continue" }] }), {
     action: "resume",

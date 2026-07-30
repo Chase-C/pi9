@@ -1,6 +1,6 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { RunSnapshot } from "./conversation.js";
-import type { RunStatus } from "./schema.js";
+import type { RunStatus, SubagentStatus } from "./schema.js";
 
 export function runElapsedMs(run: RunSnapshot, now = Date.now()): number {
   const start = run.status.kind === "queued" ? run.status.queuedAt
@@ -27,11 +27,11 @@ export function truncateText(value: string, limit: number, trimEnd = false): str
 }
 
 /** The shared status palette for every run-status surface. */
-export function statusColor(status: RunStatus): ThemeColor {
+export function statusColor(status: RunStatus | SubagentStatus): ThemeColor {
   if (status === "completed") return "success";
-  if (status === "error") return "error";
+  if (status === "error" || status === "failed") return "error";
   if (status === "skipped") return "dim";
-  return "warning"; // queued, running, aborted, interrupted
+  return "warning";
 }
 
 export function formatTokens(tokens: number): string {

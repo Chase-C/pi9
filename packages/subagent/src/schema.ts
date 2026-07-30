@@ -5,13 +5,10 @@ import { isSubagentId, type SubagentId } from "./identifiers.js";
 
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 
-export const CONVERSATION_LIFECYCLE_STATES = ["active", "awaiting_join", "resumable", "terminal"] as const;
-export type ConversationLifecycleState = (typeof CONVERSATION_LIFECYCLE_STATES)[number];
-
 export const SpawnTaskSchema = Type.Object({
   agent: Type.String(),
   prompt: Type.String(),
-  label: Type.Optional(Type.String()),
+  label: Type.String(),
   skills: Type.Optional(Type.Array(Type.String())),
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
@@ -33,14 +30,13 @@ const RESUME_TASK_KEYS = new Set(Object.keys(ResumeTaskSchema.properties));
 const STEER_MESSAGE_KEYS = new Set(Object.keys(SteerMessageSchema.properties));
 
 export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
+export const SUBAGENT_STATUSES = ["queued", "running", "completed", "failed", "cancelled"] as const;
 export const RUN_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
 export const RUN_STATUSES = ["queued", "running", ...RUN_OUTCOME_STATUSES] as const;
-export const LIST_SCOPES = ["children", "descendants"] as const;
-
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
-  state: Type.Optional(Type.Array(StringEnum(CONVERSATION_LIFECYCLE_STATES), { minItems: 1 })),
-  scope: Type.Optional(StringEnum(LIST_SCOPES)),
+  statuses: Type.Optional(Type.Array(StringEnum(SUBAGENT_STATUSES), { minItems: 1 })),
+  joined: Type.Optional(Type.Boolean()),
   spawns: Type.Optional(Type.Array(SpawnTaskSchema, { minItems: 1 })),
   resumes: Type.Optional(Type.Array(ResumeTaskSchema, { minItems: 1 })),
   messages: Type.Optional(Type.Array(SteerMessageSchema, { minItems: 1 })),
@@ -49,19 +45,18 @@ export const SubagentParams = Type.Object({
 
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
+export type SubagentStatus = (typeof SUBAGENT_STATUSES)[number];
 export type RunOutcomeStatus = (typeof RUN_OUTCOME_STATUSES)[number];
 export type RunStatus = (typeof RUN_STATUSES)[number];
-export type ConversationState = ConversationLifecycleState;
-export type ListScope = (typeof LIST_SCOPES)[number];
 
-export const isConversationState = (value: unknown): value is ConversationState =>
-  typeof value === "string" && (CONVERSATION_LIFECYCLE_STATES as readonly string[]).includes(value);
+export const isSubagentStatus = (value: unknown): value is SubagentStatus =>
+  typeof value === "string" && (SUBAGENT_STATUSES as readonly string[]).includes(value);
 
 export type SpawnRequest = {
   kind: "spawn";
   agent: string;
   prompt: string;
-  label?: string;
+  label: string;
   skills?: string[];
   model?: string;
   thinking?: ModelThinkingLevel;
@@ -90,7 +85,7 @@ export type ParsedSteerRequest = SteerRequest | { error: string; subagentId?: st
 
 export type SubagentInvocation =
   | { action: "agents" }
-  | { action: "list"; scope: ListScope; state?: ConversationState[] }
+  | { action: "list"; statuses?: SubagentStatus[]; joined?: boolean }
   | { action: "spawn"; spawns: ParsedSpawnRequest[] }
   | { action: "resume"; resumes: ParsedResumeRequest[] }
   | { action: "steer"; messages: ParsedSteerRequest[] }
@@ -118,7 +113,7 @@ const ACTION_LIST = `${SUBAGENT_ACTIONS.slice(0, -1).map(action => `"${action}"`
 
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
-  list: ["action", "scope", "state"],
+  list: ["action", "statuses", "joined"],
   spawn: ["action", "spawns"],
   resume: ["action", "resumes"],
   steer: ["action", "messages"],
@@ -165,25 +160,25 @@ export function parseSubagentInvocation(
   switch (parsedAction) {
     case "agents": return { action: parsedAction };
     case "list": {
-      if (params.scope !== undefined && !LIST_SCOPES.includes(params.scope as ListScope)) {
-        return { error: "list scope must be children or descendants.", action: parsedAction };
-      }
-      const invalidState = params.state !== undefined && (
-        !Array.isArray(params.state)
-        || params.state.length === 0
-        || !params.state.every(isConversationState)
+      const invalidStatuses = params.statuses !== undefined && (
+        !Array.isArray(params.statuses)
+        || params.statuses.length === 0
+        || !params.statuses.every(isSubagentStatus)
       );
-      if (invalidState) {
+      if (invalidStatuses) {
         return {
-          error: "list state must be a non-empty array of active, awaiting_join, resumable, or terminal.",
+          error: "list statuses must be a non-empty array of queued, running, completed, failed, or cancelled.",
           action: parsedAction,
         };
+      }
+      if (params.joined !== undefined && typeof params.joined !== "boolean") {
+        return { error: "list joined must be a boolean.", action: parsedAction };
       }
 
       return {
         action: parsedAction,
-        scope: (params.scope as ListScope | undefined) ?? "children",
-        ...(params.state ? { state: params.state as ConversationState[] } : {}),
+        ...(params.statuses ? { statuses: params.statuses as SubagentStatus[] } : {}),
+        ...(params.joined !== undefined ? { joined: params.joined } : {}),
       };
     }
     case "spawn": {
@@ -237,7 +232,7 @@ function parseSubagentTargets(
   const seen = new Set<SubagentId>();
   return value.map(item => {
     if (isSubagentId(item)) {
-      if (seen.has(item)) {
+      if (action !== "join" && seen.has(item)) {
         return {
           subagentId: item,
           error: `Duplicate subagentId ${item} in this request; the first occurrence was processed.`,
@@ -278,7 +273,7 @@ export function parseSpawnTask(raw: unknown): ParsedSpawnRequest {
   if (typeof task.agent !== "string" || !task.agent.trim()) return error("Spawn task agent must be a non-empty string.");
   const promptError = validateNonBlank(task.prompt, "Spawn task prompt");
   if (promptError) return error(promptError.error);
-  if (task.label !== undefined && (typeof task.label !== "string" || !task.label.trim())) return error("Spawn task label must be a non-empty string when present.");
+  if (typeof task.label !== "string" || !task.label.trim()) return error("Spawn task label must be a non-empty string.");
   if (task.skills !== undefined && (!Array.isArray(task.skills) || !task.skills.every(skill => typeof skill === "string" && skill.trim()))) return error("Spawn task skills must contain only non-empty strings.");
   for (const field of ["model", "cwd"] as const) {
     const value = task[field];
@@ -289,7 +284,7 @@ export function parseSpawnTask(raw: unknown): ParsedSpawnRequest {
     kind: "spawn",
     agent: task.agent,
     prompt: task.prompt as string,
-    ...(task.label !== undefined ? { label: task.label as string } : {}),
+    label: task.label as string,
     ...(task.skills !== undefined ? { skills: task.skills as string[] } : {}),
     ...(task.model !== undefined ? { model: task.model as string } : {}),
     ...(task.thinking !== undefined ? { thinking: task.thinking as ModelThinkingLevel } : {}),

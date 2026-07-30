@@ -18,7 +18,7 @@ const make = () => new Conversation(
   cid,
   r1,
   config,
-  { kind: "spawn", agent: "helper", prompt: "one" },
+  { kind: "spawn", agent: "helper", prompt: "one", label: "one" },
   () => {},
 );
 
@@ -28,7 +28,7 @@ test("preserves only explicit spawn model and thinking overrides", () => {
     cid,
     r1,
     { ...config, model: "agent-default" },
-    { kind: "spawn", agent: "helper", prompt: "one", model: "task-model", thinking: "high" },
+    { kind: "spawn", agent: "helper", prompt: "one", label: "one", model: "task-model", thinking: "high" },
     () => {},
   ).snapshot();
 
@@ -99,7 +99,7 @@ test("preserves immutable exact run history across resume", () => {
   const agent = make();
   agent.bindSession(session());
   const first = agent.settle(r1, { status: "completed", output: "first" });
-  agent.acknowledge(r1);
+  agent.markJoined(r1);
   const historical = agent.snapshot().runs[0];
 
   agent.beginResume(r2, "two");
@@ -119,20 +119,33 @@ test("preserves immutable exact run history across resume", () => {
   assert.ok(Object.isFrozen(first));
 });
 
-test("resume capability requires the latest resumable outcome to be joined", () => {
+test("resume capability requires the latest resumable outcome to be fully joined", () => {
   const agent = make();
   agent.bindSession(session());
   agent.settle(r1, { status: "completed", output: "ok" });
 
-  assert.equal(agent.canResume, false);
-  assert.equal(agent.snapshot().state, "awaiting_join");
+  assert.equal(agent.isResumeAllowed, false);
+  assert.equal(agent.latestResultJoined, false);
   const binding = agent.bindRun(r1);
-  binding.acknowledge();
-  assert.equal(agent.canResume, false, "an accepted join must release before resume");
-  assert.equal(agent.snapshot().state, "terminal");
+  binding.markJoined();
+  assert.equal(agent.latestResultJoined, true);
+  assert.equal(agent.isResumeAllowed, false, "an accepted join must release before resume");
   binding.release();
-  assert.equal(agent.canResume, true);
-  assert.equal(agent.snapshot().state, "resumable");
+  assert.equal(agent.isResumeAllowed, true);
+});
+
+test("non-resumable results remain unavailable after join", () => {
+  const agent = make();
+  agent.bindSession(session());
+  agent.settle(r1, { status: "error", error: "failed" });
+
+  const binding = agent.bindRun(r1);
+  binding.markJoined();
+  binding.release();
+
+  assert.equal(agent.latestResultJoined, true);
+  assert.equal(agent.hasRetainedResumableSession, false);
+  assert.equal(agent.isResumeAllowed, false);
 });
 
 test("logical abort terminalizes before best-effort SDK abort resolves", async () => {
@@ -146,20 +159,18 @@ test("logical abort terminalizes before best-effort SDK abort resolves", async (
   assert.equal(status.kind, "done");
   assert.equal(status.kind === "done" && status.outcome, "aborted");
   assert.equal(status.kind === "done" && status.error, "stopped");
-  assert.equal(agent.canResume, false);
+  assert.equal(agent.isResumeAllowed, false);
   assert.equal(agent.snapshot().isStopping, true);
-  assert.equal(agent.snapshot().state, "active");
 
   agent.executionSettled(r1);
-  assert.equal(agent.canResume, false);
+  assert.equal(agent.isResumeAllowed, false);
   assert.equal(agent.snapshot().isStopping, true);
   release();
   await aborting;
-  assert.equal(agent.canResume, false);
-  agent.acknowledge(r1);
-  assert.equal(agent.canResume, true);
+  assert.equal(agent.isResumeAllowed, false);
+  agent.markJoined(r1);
+  assert.equal(agent.isResumeAllowed, true);
   assert.equal(agent.snapshot().isStopping, undefined);
-  assert.equal(agent.snapshot().state, "resumable");
 });
 
 test("steer receipts become delivered when the queued user message enters the turn", async () => {
@@ -295,15 +306,15 @@ test("new steers reject without reaching the SDK once shutdown starts", async ()
   await aborting;
 });
 
-test("bindings track observers and acknowledge an exact run", () => {
+test("bindings track observers and markJoined an exact run", () => {
   const agent = make();
   const first = agent.bindRun(r1);
   const second = agent.bindRun(r1);
   assert.equal(agent.snapshot().runs[0].observerCount, 2);
   first.release();
   second.release();
-  agent.acknowledge(r1);
-  assert.equal(agent.snapshot().runs[0].acknowledged, true);
+  agent.markJoined(r1);
+  assert.equal(agent.snapshot().runs[0].joined, true);
 });
 
 test("nested join attempts preserve immutable owner history, target order, and duplicates", () => {

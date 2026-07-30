@@ -69,7 +69,7 @@ test("steer renders receipts and inspect renders bounded activity", () => {
       steers: [{ id: 1, state: "processed", acceptedAt: 1, deliveredAt: 2, processedAt: 3 }],
     }],
   };
-  assert.equal(renderResult(inspect), "✓ Inspected 1 run · 1 running\n  scout");
+  assert.equal(renderResult(inspect), "✓ Inspected 1 subagent · 1 running\n  scout");
   assert.match(renderResult(inspect, true), /running · thinking[\s\S]*\[partial\] Checking tests\.[\s\S]*read\(test.ts\) · completed[\s\S]*steer #1 · processed/);
 });
 
@@ -79,7 +79,7 @@ test("inspect renders terminal error diagnostics in expanded mode", () => {
     runs: [{
       subagentId: "quiet-otter" as any,
       agent: "scout",
-      status: "error",
+      status: "failed",
       elapsedMs: 25,
       turns: 2,
       compactions: 1,
@@ -97,19 +97,19 @@ test("cancel renders successful and failed targets", () => {
   const cancel: SubagentToolDetails = {
     action: "cancel",
     runs: [
-      { subagentId: "quiet-otter", status: "aborted" },
+      { subagentId: "quiet-otter", status: "cancelled" },
       { subagentId: "not-an-id", error: "invalid subagentId format" },
     ],
   };
 
-  assert.equal(renderResult(cancel), "✓ Cancelled 1 run · 1 error\n  quiet-otter · not-an-id");
+  assert.equal(renderResult(cancel), "✓ Cancelled 1 subagent · 1 error\n  quiet-otter · not-an-id");
   assert.match(renderResult(cancel, true), /quiet-otter · cancelled[\s\S]*not-an-id · not cancelled[\s\S]*invalid subagentId format/);
 });
 
 test("inspect renders per-target errors without hiding the result", () => {
   const inspect: SubagentToolDetails = {
     action: "inspect",
-    runs: [{ inputIndex: 0, subagentId: "not-an-id", error: "invalid subagentId format" }],
+    runs: [{ subagentId: "not-an-id", error: "invalid subagentId format" }],
   };
 
   assert.equal(renderResult(inspect), "✓ Inspected 1 target · 1 error\n  not-an-id");
@@ -130,29 +130,37 @@ test("agents render configuration tags in expanded mode", () => {
   ].join("\n"));
 });
 
-test("list renders grouped conversations and nested run status", () => {
+test("list renders canonical statuses and descendant context", () => {
   const details: SubagentToolDetails = {
     action: "list",
     conversations: [
       {
-        subagentId: "quiet-otter" as any, depth: 1, agent: "scout", label: "auth map", createdAt: 1, state: "active", canResume: false,
-        runs: [{ kind: "spawn", status: "running", createdAt: 1 }],
+        subagentId: "quiet-otter" as any,
+        agent: "scout",
+        label: "auth map",
+        status: "running",
+        availableActions: ["steer", "cancel", "inspect", "join"],
+        descendants: [{ subagentId: "small-fox" as any, agent: "reviewer", label: "nested review", status: "completed" }],
       },
       {
-        subagentId: "amber-fox" as any, depth: 1, agent: "reviewer", label: "risk review", createdAt: 2, state: "resumable", canResume: true,
-        runs: [{ kind: "spawn", status: "completed", createdAt: 2 }],
+        subagentId: "amber-fox" as any,
+        agent: "reviewer",
+        label: "risk review",
+        status: "completed",
+        joined: true,
+        availableActions: ["resume", "inspect", "join", "remove"],
+        descendants: [],
       },
     ],
   };
-  assert.equal(renderResult(details), "✓ Found 2 subagents · 2 executions · 1 running · 1 completed\n  auth map · risk review");
+  assert.equal(renderResult(details), "✓ Found 2 subagents · 1 running · 1 completed\n  auth map · risk review");
   assert.equal(renderResult(details, true), [
-    "→ auth map · scout · depth 1 · active · 1 run",
+    "● auth map · scout · running",
     "  subagent quiet-otter",
-    "  ● spawn · running",
+    "  ╰─ ✓ nested review · reviewer · completed",
     "",
-    "→ risk review · reviewer · depth 1 · resumable · 1 run",
-    "  subagent amber-fox",
-    "  ✓ spawn · completed",
+    "✓ risk review · reviewer · completed",
+    "  subagent amber-fox · joined",
   ].join("\n"));
 });
 
@@ -163,10 +171,10 @@ test("list renders an empty grouped result", () => {
 test("join renders target errors without conversation identities", () => {
   const details: SubagentToolDetails = {
     action: "join",
-    runs: [{ subagentId: "not-an-id" as any, status: "error", error: "invalid subagentId format" }],
+    runs: [{ subagentId: "not-an-id" as any, status: "failed", error: "invalid subagentId format" }],
   };
   assert.equal(renderResult(details, true), [
-    "× not-an-id · error",
+    "× not-an-id · failed",
     "  subagent not-an-id",
     "",
     "  invalid subagentId format",
@@ -178,13 +186,13 @@ test("join distinguishes partial waits and terminal child errors", () => {
     action: "join",
     runs: [
       { subagentId: "quiet-otter" as any, label: "auth map", status: "completed", output: "Mapped auth.", elapsedMs: 12_400, turns: 3, tokens: 24_000 },
-      { subagentId: "calm-wren" as any, label: "test audit", status: "error", error: "Child failed.", elapsedMs: 950, turns: 1, tokens: 800 },
+      { subagentId: "calm-wren" as any, label: "test audit", status: "failed", error: "Child failed.", elapsedMs: 950, turns: 1, tokens: 800 },
     ],
   };
   const partial: SubagentToolDetails = {
     action: "join",
     runs: [
-      details.runs[0],
+      (details as Extract<SubagentToolDetails, { action: "join" }>).runs[0],
       { subagentId: "calm-wren" as any, label: "test audit", status: "running", elapsedMs: 950, turns: 1, tokens: 800 },
     ],
   };
@@ -199,7 +207,7 @@ test("join distinguishes partial waits and terminal child errors", () => {
     "",
     "  Mapped auth.",
     "",
-    "× test audit · error · 950ms · 1 turn · 800 tokens",
+    "× test audit · failed · 950ms · 1 turn · 800 tokens",
     "  subagent calm-wren",
     "",
     "  Child failed.",
@@ -226,7 +234,7 @@ test("join renders recent filtered activity, recursive groups, outcomes, and bac
       ],
       joins: [
         { status: "completed", toolCallId: "represented-join", targets: [{ subagentId: "c1" as any, label: "child", agent: "scout", status: "completed" }] },
-        { status: "completed", targets: [{ subagentId: "c1" as any, label: "child", agent: "scout", status: "error", error: "target failed" }] },
+        { status: "completed", targets: [{ subagentId: "c1" as any, label: "child", agent: "scout", status: "failed", error: "target failed" }] },
         { status: "running", targets: [{ subagentId: "c2" as any, label: "branch", status: "running", activity: [{ tool: "read", summary: "nested" }], joins: [{ status: "running", targets: [{ subagentId: "c3" as any, label: "leaf", agent: "reviewer", status: "running" }] }] }] },
       ],
       background: [{ ownerLabel: "root task", entries: [
@@ -236,10 +244,10 @@ test("join renders recent filtered activity, recursive groups, outcomes, and bac
     }],
   };
   const collapsed = renderResult(details);
-  assert.match(collapsed, /subagent join\(1 run\) · 5 total tool calls/);
+  assert.match(collapsed, /subagent join\(1 subagent\) · 5 total tool calls/);
   assert.doesNotMatch(collapsed, /too old|read\(a\)|grep\(b\)|bash\(c\)/);
   assert.match(collapsed, /✓ joined 1 · child[\s\S]*✓ joined 1 · child/);
-  assert.match(collapsed, /╰─ ● branch · running[\s\S]*subagent join\(1 run\) · 1 total tool call[\s\S]*╰─ ● leaf · reviewer · running/);
+  assert.match(collapsed, /╰─ ● branch · running[\s\S]*subagent join\(1 subagent\) · 1 total tool call[\s\S]*╰─ ● leaf · reviewer · running/);
   assert.doesNotMatch(collapsed, /read\(nested\)/);
   assert.match(collapsed, /background · 1 active · 1 completed/);
   assert.doesNotMatch(collapsed, /bg-r2|detached at final/);

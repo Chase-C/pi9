@@ -7,7 +7,7 @@ import { fakeAgent } from "../helpers/fake-agent.js";
 test("extension reconciles completion messages at the provider context boundary", () => {
   const handlers = new Map<string, (event: any) => any>();
   const completed: any = fakeAgent({ status: { kind: "done", outcome: "completed", completedAt: 2 } });
-  completed.runs[0] = { ...completed.runs[0], acknowledged: true };
+  completed.runs[0] = { ...completed.runs[0], joined: true };
   const runtime = {
     scheduler: { setChildTool: vi.fn(), setChildSessionEvent: vi.fn() },
     listConversations: () => [completed],

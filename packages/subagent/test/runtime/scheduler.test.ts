@@ -4,7 +4,7 @@ import { completedRun } from "../../src/conversation.js";
 import { RunScheduler } from "../../src/scheduler.js";
 
 const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
-const makeAgent = (conversationId: string, runId: string) => new Conversation(conversationId as any, runId as any, config, { kind: "spawn", agent: "worker", prompt: runId }, () => {});
+const makeAgent = (conversationId: string, runId: string) => new Conversation(conversationId as any, runId as any, config, { kind: "spawn", agent: "worker", prompt: runId, label: runId }, () => {});
 const session = () => ({ messages: [], subscribe: () => () => {}, abort() {} }) as any;
 
 test("queue leases enforce concurrency and dispatch the next run after completion", async () => {
@@ -35,7 +35,7 @@ test("an executor failure resolves the resumed run snapshot", async () => {
   const agent = makeAgent("amber-acorn", "adapt-ably");
   const spawn = agent.requireCurrentRun();
   await scheduler.run({} as any, undefined, agent, spawn);
-  agent.acknowledge(spawn.runId);
+  agent.markJoined(spawn.runId);
   const resume = agent.beginResume("balance-boldly" as any, "continue");
 
   await expect(scheduler.run({} as any, undefined, agent, resume)).resolves.toMatchObject({

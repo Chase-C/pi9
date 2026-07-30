@@ -352,7 +352,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       }
     }
 
-    lines.push("", this.muted(`enter inspect${run.status.kind === "queued" || run.status.kind === "running" ? " · c cancel" : ""}${this.canResumeConversation(conversation) ? " · r resume" : ""} · x remove`));
+    lines.push("", this.muted(`enter inspect${run.status.kind === "queued" || run.status.kind === "running" ? " · c cancel" : ""}${this.isResumeAvailable(conversation) ? " · r resume" : ""} · x remove`));
     if (this.promptTarget?.kind === "resume") lines.push("", this.accent("Resume conversation"), ...this.renderPrompt(width));
     if (this.actionError) lines.push(this.error(this.actionError));
     return lines;
@@ -426,7 +426,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
 
   private openResumePrompt(conversationId: string): void {
     const conversation = this.findConversation(conversationId);
-    if (!conversation || !this.canResumeConversation(conversation)) return;
+    if (!conversation || !this.isResumeAvailable(conversation)) return;
     this.openPrompt({ kind: "resume", conversationId });
   }
 
@@ -454,7 +454,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
         this.options.onStart(target.name, prompt);
       } else {
         const conversation = this.findConversation(target.conversationId);
-        if (!conversation || !this.canResumeConversation(conversation)) throw new Error("Conversation is no longer available to resume.");
+        if (!conversation || !this.isResumeAvailable(conversation)) throw new Error("Conversation is no longer available to resume.");
         this.options.onResume(target.conversationId, prompt);
       }
       this.closePrompt();
@@ -522,8 +522,11 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
 
   private renderPrompt(width: number): string[] { return this.prompt.render(Math.max(8, width)); }
-  private canResumeConversation(conversation: ConversationSnapshot): boolean {
-    return !conversation.parentConversationId && conversation.canResume && conversation.runs.at(-1)?.status.kind === "done";
+  private isResumeAvailable(conversation: ConversationSnapshot): boolean {
+    const latest = conversation.runs.at(-1);
+    return !conversation.parentConversationId && !conversation.isStopping
+      && latest?.status.kind === "done" && latest.joined && latest.observerCount === 0
+      && (latest.status.outcome === "completed" || latest.status.outcome === "interrupted" || latest.status.outcome === "aborted");
   }
   private setFocus(region: FocusRegion): void { this.focusRegion = region; this.syncFocus(); this.requestRender(); }
   private syncFocus(): void {

@@ -4,6 +4,7 @@ import { Conversation, RunSteerError, effectiveStatus, type ConversationSnapshot
 import { resolveModel, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type SubagentId } from "./identifiers.js";
 import { RunScheduler, type RunExecutor } from "./scheduler.js";
+import { projectLiveSubagent, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
 
 export type ConversationUpdateListener = (agent: Conversation, kind: ConversationUpdateKind) => void;
@@ -24,7 +25,7 @@ export type OrderedStartOutcome =
   | { readonly ok: false; readonly inputIndex: number; readonly error: string; readonly code?: typeof SUBAGENT_NOT_FOUND_CODE };
 export interface RunHandle { readonly starts: readonly OrderedStartOutcome[]; readonly completion: Promise<readonly OrderedStartOutcome[]> }
 export interface JoinProjection { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: RunViewStatus }
-export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; acknowledge(): void; release(): void }
+export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; markJoined(): void; release(): void }
 export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: RunId; readonly attemptIndex: number; interrupt(error?: string): void }
 export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId }
 export interface SubagentCaller { readonly conversationId: ConversationId; readonly runId: RunId }
@@ -64,7 +65,13 @@ export class SubagentRuntime {
   private readonly runIds = new RunIdAllocator();
   private readonly _scheduler: RunScheduler;
 
-  constructor(readonly registry: AgentRegistry, maxRunning = 4, executor?: RunExecutor, private _maxConversations = 100) {
+  constructor(
+    readonly registry: AgentRegistry,
+    maxRunning = 4,
+    executor?: RunExecutor,
+    private _maxConversations = 100,
+    private readonly cancellationSettlementMs = 5_000,
+  ) {
     this._scheduler = new RunScheduler({ maxRunning, ...(executor ? { executor } : {}), isTracked: id => this.conversations.has(id as ConversationId) });
   }
   get scheduler(): RunScheduler { return this._scheduler; }
@@ -75,22 +82,10 @@ export class SubagentRuntime {
   }
   onConversationUpdate(listener: ConversationUpdateListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   listConversations(): ConversationSnapshot[] { return [...this.conversations.values()].map(a => a.snapshot()); }
-  queryConversations(callerConversationId?: ConversationId, scope: "children" | "descendants" = "children"): ConversationSnapshot[] {
-    const children = new Map<ConversationId | undefined, Conversation[]>();
-    for (const conversation of this.conversations.values()) {
-      const siblings = children.get(conversation.parentConversationId) ?? [];
-      siblings.push(conversation);
-      children.set(conversation.parentConversationId, siblings);
-    }
-    const direct = children.get(callerConversationId) ?? [];
-    if (scope === "children") return direct.map(conversation => conversation.snapshot());
-    const result: ConversationSnapshot[] = [];
-    const visit = (conversation: Conversation) => {
-      result.push(conversation.snapshot());
-      for (const child of children.get(conversation.conversationId) ?? []) visit(child);
-    };
-    for (const conversation of direct) visit(conversation);
-    return result;
+  queryConversations(callerConversationId?: ConversationId): ConversationSnapshot[] {
+    return [...this.conversations.values()]
+      .filter(conversation => conversation.parentConversationId === callerConversationId)
+      .map(conversation => conversation.snapshot());
   }
   conversationDepth(conversationId: ConversationId, callerConversationId?: ConversationId): number {
     let current = this.requireConversation(conversationId);
@@ -107,6 +102,30 @@ export class SubagentRuntime {
     return depth;
   }
   conversation(conversationId: string): ConversationSnapshot { return this.requireConversation(conversationId).snapshot(); }
+  projectSubagent(
+    conversationId: string,
+    caller?: SubagentCaller,
+    failureMode: FailureProjectionMode = "full",
+  ): CanonicalLiveSubagent {
+    const conversation = this.requireConversation(conversationId);
+    const latest = conversation.runHistory.at(-1)!;
+    const directlyOwned = caller
+      ? conversation.parentConversationId === caller.conversationId
+      : conversation.parentConversationId === undefined;
+    const removableSubtree = this.conversationSubtree(conversation.conversationId)
+      .every(item => !item.hasActiveExecution);
+    return projectLiveSubagent({
+      subagentId: conversation.conversationId,
+      label: conversation.label,
+      agent: conversation.agentName,
+      runStatus: latest.status,
+      joined: latest.joined,
+      directlyOwned,
+      retainedResumableSession: conversation.hasRetainedResumableSession,
+      executionSettled: !conversation.isStopping,
+      removableSubtree,
+    }, failureMode);
+  }
 
   /** Resolves and reserves the complete batch synchronously; executions never inherit caller cancellation. */
   startRun(ctx: ExtensionContext, tasks: readonly (SpawnRequest | ResumeRequest)[], options: { caller?: SubagentCaller } = {}): RunHandle {
@@ -182,7 +201,7 @@ export class SubagentRuntime {
       if (status === "queued") return { error: `Subagent ${subagentId} is queued. Wait for or join it before resuming.` };
       return { error: `Subagent ${subagentId} cannot be resumed.` };
     }
-    if (!agent.canResume) return { error: this.resumeError(agent) };
+    if (!agent.isResumeAllowed) return { error: this.resumeError(agent) };
     const runId = this.runIds.allocate();
     if (!runId) return { error: "Run ID space exhausted." };
     agent.beginResume(runId, task.prompt);
@@ -191,7 +210,7 @@ export class SubagentRuntime {
 
   async steerSubagent(subagentId: SubagentId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
     const record = this.latestSubagentRecord(subagentId);
-    this.assertCallerAccess(record.conversationId, caller, "steer");
+    this.assertDirectOwner(record.agent, caller, "steer");
     try {
       const steer = await record.agent.steer(record.runId, prompt);
       return { conversationId: record.conversationId, runId: record.runId, steer };
@@ -205,25 +224,29 @@ export class SubagentRuntime {
 
   async cancelSubagent(subagentId: SubagentId, caller?: SubagentCaller): Promise<CancelResult> {
     const record = this.latestSubagentRecord(subagentId);
-    this.assertCallerAccess(record.conversationId, caller, "cancel");
+    this.assertDirectOwner(record.agent, caller, "cancel");
     const run = this.runSnapshot(record.runId);
     if (run.status.kind === "done") {
       throw new Error(`Subagent ${subagentId} is ${run.status.outcome} and cannot be cancelled.`);
     }
     const wasQueued = run.status.kind === "queued";
-    const aborting = record.agent.abort("Run cancelled.");
+    void record.agent.abort("Run cancelled.");
     if (wasQueued) {
-      const aborted = record.agent.runHistory.find(item => item.runId === record.runId)!;
-      this._scheduler.cancelQueued(record.runId, aborted);
+      const cancelled = record.agent.runHistory.find(item => item.runId === record.runId)!;
+      this._scheduler.cancelQueued(record.runId, cancelled);
     }
-    await aborting;
+    const settled = await this.waitForCancellationSettlement(record.agent);
+    if (!settled) {
+      const cancelled = record.agent.forceAbandonCancellation(record.runId);
+      this._scheduler.abandon(record.runId, cancelled);
+    }
     return { conversationId: record.conversationId, runId: record.runId, status: "aborted" };
   }
 
   inspectSubagents(subagentIds: readonly SubagentId[], caller?: SubagentCaller): InspectedRun[] {
     return subagentIds.map(subagentId => {
       const record = this.latestSubagentRecord(subagentId);
-      this.assertCallerAccess(record.conversationId, caller, "inspect");
+      this.assertDirectOwner(record.agent, caller, "inspect");
       return { conversationId: record.conversationId, snapshot: this.runSnapshot(record.runId) };
     });
   }
@@ -258,7 +281,7 @@ export class SubagentRuntime {
       records = runIds.map(id => {
         const record = this.runs.get(id);
         if (!record) throw new Error(`Unknown run: ${id}.`);
-        this.assertCallerAccess(record.conversationId, caller, "join");
+        this.assertDirectOwner(record.agent, caller, "join");
         return record;
       });
     } catch (error) {
@@ -279,7 +302,7 @@ export class SubagentRuntime {
     return {
       ownerRunId: caller.runId, attemptIndex,
       get runIds() { return base.runIds; }, completion: base.completion,
-      project: () => base.project(), acknowledge: () => base.acknowledge(), release: () => base.release(),
+      project: () => base.project(), markJoined: () => base.markJoined(), release: () => base.release(),
       interrupt: (error = "Nested join interrupted.") => {
         if (terminal) return; terminal = true;
         this.updateNestedJoin(caller.runId, attemptIndex, { targets: targets(), state: "interrupted", error });
@@ -294,7 +317,7 @@ export class SubagentRuntime {
   }
   conversationDisplay(conversationId: ConversationId): ConversationDisplayIdentity {
     const live = this.requireConversation(conversationId);
-    return { conversationId, ...(live.label ? { label: live.label } : {}), agentName: live.agentName };
+    return { conversationId, label: live.label, agentName: live.agentName };
   }
   directSpawnedChildren(runId: RunId): readonly RunIdentity[] {
     return [...this.conversations.values()]
@@ -321,7 +344,7 @@ export class SubagentRuntime {
     return {
       runIds: Object.freeze(records.map(record => record.runId)), completion,
       project: () => attached.map(item => ({ conversationId: item.conversationId, runId: item.binding.runId, status: item.binding.snapshot().status })),
-      acknowledge: () => { for (const item of attached) if (item.binding.snapshot().status.kind === "done") item.binding.acknowledge(); },
+      markJoined: () => { for (const item of attached) if (item.binding.snapshot().status.kind === "done") item.binding.markJoined(); },
       release: () => { if (released) return; released = true; unsubscribe(); for (const item of attached) item.binding.release(); },
     };
   }
@@ -353,25 +376,6 @@ export class SubagentRuntime {
     }
   }
 
-  private assertCallerAccess(targetConversationId: ConversationId, caller: SubagentCaller | undefined, action: string): void {
-    if (!caller) return;
-    this.requireCallerRecord(caller, action);
-    if (!this.isConversationDescendant(targetConversationId, caller.conversationId)) {
-      throw new Error(`Conversation ${targetConversationId} is not a descendant of caller conversation ${caller.conversationId}.`);
-    }
-  }
-
-  private isConversationDescendant(candidateId: ConversationId, ownerId: ConversationId): boolean {
-    let current = this.conversations.get(candidateId);
-    const seen = new Set<ConversationId>();
-    while (current?.parentConversationId && !seen.has(current.conversationId)) {
-      if (current.parentConversationId === ownerId) return true;
-      seen.add(current.conversationId);
-      current = this.conversations.get(current.parentConversationId);
-    }
-    return false;
-  }
-
   private latestSubagentRecord(subagentId: SubagentId): RunRecord {
     const agent = this.requireConversation(subagentId);
     return this.requireRunRecord(agent.latestRunId);
@@ -396,7 +400,7 @@ export class SubagentRuntime {
         continue;
       }
       try {
-        this.assertCallerAccess(conversation.conversationId, caller, "remove");
+        this.assertDirectOwner(conversation, caller, "remove");
         candidates.push(conversation);
       } catch (error) {
         errors.push({ conversationId: id, error: error instanceof Error ? error.message : String(error) });
@@ -417,7 +421,7 @@ export class SubagentRuntime {
     });
     for (const root of roots) {
       const subtree = candidateSubtrees.get(root.conversationId)!;
-      const active = subtree.filter(conversation => conversation.lifecycleState === "active");
+      const active = subtree.filter(conversation => conversation.hasActiveExecution);
       if (active.length) {
         const error = `Subagent subtree ${root.conversationId} has active subagents: ${active.map(conversation => conversation.conversationId).join(", ")}. Cancel them before removal.`;
         for (const target of candidates) {
@@ -448,7 +452,7 @@ export class SubagentRuntime {
         conversationId: conversation.conversationId,
         conversationIds: subtreeIds,
         agentName: conversation.agentName,
-        ...(conversation.label ? { label: conversation.label } : {}),
+        label: conversation.label,
       }];
     });
     const inputOrder = new Map(unique.map((id, index) => [id, index]));
@@ -471,13 +475,31 @@ export class SubagentRuntime {
     if (!found) throw new SubagentNotFoundError(id);
     return found;
   }
+  private waitForCancellationSettlement(agent: Conversation): Promise<boolean> {
+    if (!agent.isStopping) return Promise.resolve(true);
+    return new Promise(resolve => {
+      let done = false;
+      const finish = (settled: boolean) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        unsubscribe();
+        resolve(settled);
+      };
+      const unsubscribe = this.onConversationUpdate(updated => {
+        if (updated === agent && !agent.isStopping) finish(true);
+      });
+      const timer = setTimeout(() => finish(false), this.cancellationSettlementMs);
+      if (!agent.isStopping) finish(true);
+    });
+  }
   private resumeError(agent: Conversation): string {
     if (agent.isStopping) {
       return `Subagent ${agent.conversationId} is still settling a cancelled execution. Wait for it to finish before resuming.`;
     }
     return `Subagent ${agent.conversationId} cannot be resumed.`;
   }
-  private capacityError(): string { const removable = [...this.conversations.values()].filter(a => a.lifecycleState !== "active").map(a => a.conversationId); return `Subagent capacity (${this.maxConversations}) reached. Remove terminal subagents${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
+  private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasActiveExecution).map(a => a.conversationId); return `Subagent capacity (${this.maxConversations}) reached. Remove inactive subagents${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
   private withDeferredUpdates<T>(operation: () => T): T {
     this.updateDeferralDepth++;
     try {

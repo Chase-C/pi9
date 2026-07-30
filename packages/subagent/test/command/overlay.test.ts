@@ -50,13 +50,13 @@ describe("subagent overlay behavior", () => {
   });
 
   it("keeps selection on the same conversation when a newer row is inserted above it", () => {
-    const first = fakeAgent({ conversationId: "conversation-1", createdAt: 1, canResume: true });
-    const second = fakeAgent({ conversationId: "conversation-2", createdAt: 2, canResume: true });
+    const first = fakeAgent({ conversationId: "conversation-1", createdAt: 1, resumable: true });
+    const second = fakeAgent({ conversationId: "conversation-2", createdAt: 2, resumable: true });
     const conversations = [first, second];
     const { component, callbacks } = overlay(conversations);
 
     component.handleInput("\x1b[B");
-    conversations.push(fakeAgent({ conversationId: "conversation-3", createdAt: 3, canResume: true }));
+    conversations.push(fakeAgent({ conversationId: "conversation-3", createdAt: 3, resumable: true }));
     component.handleInput("r");
     component.handleInput("follow up");
     component.handleInput("\r");
@@ -67,7 +67,7 @@ describe("subagent overlay behavior", () => {
   it("does not resume active or non-resumable conversations", () => {
     for (const conversation of [
       fakeAgent({ status: { kind: "running" } }),
-      fakeAgent({ status: { kind: "completed" }, canResume: false }),
+      fakeAgent({ status: { kind: "completed" }, resumable: false }),
     ]) {
       const { component, callbacks } = overlay([conversation]);
       component.handleInput("r");

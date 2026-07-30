@@ -6,16 +6,20 @@ This changelog starts with version `v0.2.1`.
 
 ### Breaking
 
-- Replace public `conversationId` and `runId` targeting with one stable `subagentId` across resume, steer, cancel, inspect, join, and remove.
-- Require the latest outcome to be joined before a subagent can resume; settled unjoined work now reports `awaiting_join`.
-- Restrict join and resume to the root or direct parent that owns the target subagent.
-- Remove deep runtime helpers that target private execution IDs; lifecycle operations now target stable `subagentId` values only.
+- Replace the public lifecycle vocabulary with `queued`, `running`, `completed`, `failed`, and `cancelled` statuses plus the orthogonal finished-result `joined` flag.
+- Require a nonblank label for every spawn and expose caller-relative `availableActions` on every live-subagent result.
+- Replace `list(scope?, state?)` with direct-child `list(statuses?, joined?)`; listed children include minimal informational descendant trees.
+- Flatten successful result items from `{ ok: true, data }` to `{ ok: true, ...fields }` and embed current canonical fields in failures targeting live subagents.
+- Restrict every targeted lifecycle action to direct children.
+- Rename the completion event to `subagent:finished`; lifecycle event and completion-notification payloads now use the canonical block.
 
 ### Changed
 
-- Remove execution IDs from tool responses, notifications, lifecycle events, metadata, list histories, errors, and recursive join rendering while retaining private execution bookkeeping and the existing identifier vocabularies.
-- Bind every latest execution in a join batch before publishing observer or nested-join updates, preventing re-entrant resume from moving a stable target during binding.
-- Correlate completion messages with their runtime instance so reused runtime-local identifiers cannot revive stale notifications.
+- Make join blocking and idempotent, require join before resume, and report collection state with `joined`.
+- Make cancellation wait for settlement and forcibly abandon unresponsive executions after an internal bound while releasing scheduler capacity.
+- Return failed execution explanations in `failure`, reserving `error` for action and invocation failures.
+- Remove ordinary provider-facing execution-history summaries while preserving the overlay's **Previous runs** history.
+- Bind every target in a join batch before publishing observer or nested-join updates, preventing resume races during binding.
 
 ## [0.9.2] - 2026-07-29
 

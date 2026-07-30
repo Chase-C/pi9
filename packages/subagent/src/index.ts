@@ -2,7 +2,7 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { Text } from "@earendil-works/pi-tui";
 
 import { AgentRegistry } from "./agents.js";
-import { effectiveStatus, type Conversation, type ConversationSnapshot, type ConversationUpdateKind } from "./conversation.js";
+import { type Conversation, type ConversationSnapshot, type ConversationUpdateKind } from "./conversation.js";
 import { SubagentRuntime } from "./runtime.js";
 import {
   CompletionNotifier,
@@ -15,6 +15,9 @@ import { defineSubagentTool, makeChildSubagentTool } from "./tool.js";
 import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, prepareSubagentRuntime, type SubagentSettings } from "./settings.js";
 import { registerSubagentsCommand } from "./command/index.js";
 import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "./widget.js";
+
+export type { CanonicalLiveSubagent } from "./contract.js";
+export type { SubagentAction, SubagentStatus } from "./schema.js";
 
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;
@@ -79,29 +82,30 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
 }
 
 export interface SubagentEventBus { emit(event: string, data: unknown): void }
-export interface SubagentLifecycleEventSource { onConversationUpdate?(listener: (agent: Conversation, kind: ConversationUpdateKind) => void): () => void }
+export interface SubagentLifecycleEventSource {
+  onConversationUpdate?(listener: (agent: Conversation, kind: ConversationUpdateKind) => void): () => void;
+  projectSubagent(conversationId: string): ReturnType<SubagentRuntime["projectSubagent"]>;
+}
 
 /** Emits lifecycle events keyed by stable subagent identity. */
 export function registerSubagentLifecycleEvents(events: SubagentEventBus | undefined, source: SubagentLifecycleEventSource): () => void {
   if (!events?.emit || !source.onConversationUpdate) return () => {};
   const seen = new Set<string>();
   return source.onConversationUpdate((agent, kind) => {
-    const snapshot = agent.snapshot(); const run = snapshot.runs.at(-1);
-    const publicSnapshot = {
-      subagentId: snapshot.conversationId,
-      ...(snapshot.parentConversationId ? { parentSubagentId: snapshot.parentConversationId } : {}),
-      ...(snapshot.label ? { label: snapshot.label } : {}),
-      agent: snapshot.config.name,
-      canResume: snapshot.canResume,
-      status: run?.status,
-    };
-    events.emit("subagent:updated", { subagentId: snapshot.conversationId, kind, snapshot: publicSnapshot });
-    if (kind !== "status" || !run) return;
-    const status = run.status;
-    const key = `${run.runId}:${effectiveStatus(status)}:${status.kind === "queued" ? status.queuedAt : status.kind === "running" ? status.startedAt : status.completedAt}`;
-    if (seen.has(key)) return; seen.add(key);
-    const event = status.kind === "queued" ? "subagent:queued" : status.kind === "running" ? "subagent:started" : "subagent:completed";
-    events.emit(event, { subagentId: snapshot.conversationId, ...(status.kind === "done" ? { outcome: status.outcome } : {}), snapshot: publicSnapshot });
+    if (kind !== "status") return;
+    const internal = agent.snapshot().runs.at(-1);
+    if (!internal) return;
+    const snapshot = source.projectSubagent(agent.conversationId);
+    const timestamp = internal.status.kind === "queued" ? internal.status.queuedAt
+      : internal.status.kind === "running" ? internal.status.startedAt
+      : internal.status.completedAt;
+    const key = `${internal.runId}:${snapshot.status}:${timestamp}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const event = snapshot.status === "queued" ? "subagent:queued"
+      : snapshot.status === "running" ? "subagent:started"
+      : "subagent:finished";
+    events.emit(event, snapshot);
   });
 }
 
@@ -110,9 +114,9 @@ interface GuardContext { hasUI?: boolean; ui?: { confirm?(title: string, message
 interface GuardManager { listConversations(): ConversationSnapshot[] }
 export function registerSubagentSessionGuards(pi: GuardPi, manager: GuardManager): void { const guard = (_: unknown, ctx: GuardContext) => confirmWithActiveSubagents(ctx, manager); pi.on?.("session_before_switch", guard); pi.on?.("session_before_fork", guard); }
 export async function confirmWithActiveSubagents(ctx: GuardContext, manager: GuardManager): Promise<{ cancel: true } | undefined> {
-  const active = manager.listConversations().filter(item => item.state === "active");
+  const active = manager.listConversations().filter(item => item.currentRun !== undefined || item.isStopping);
   if (!active.length || !ctx.hasUI || !ctx.ui?.confirm) return;
-  const lines = active.slice(0, 6).map(item => `- ${item.config.name}${item.label ? ` (${item.label})` : ""}: ${item.currentRun?.status.kind ?? "stopping"}`);
+  const lines = active.slice(0, 6).map(item => `- ${item.config.name}${item.label !== item.config.name ? ` (${item.label})` : ""}: ${item.currentRun?.status.kind ?? "stopping"}`);
   if (active.length > 6) lines.push(`- ... and ${active.length - 6} more`);
   const ok = await ctx.ui.confirm("Active subagents", `${active.length} subagent${active.length === 1 ? " is" : "s are"} still active:\n${lines.join("\n")}\n\nChanging sessions will tear down this extension runtime. Continue anyway?`);
   return ok ? undefined : { cancel: true };
