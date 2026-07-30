@@ -26,8 +26,7 @@ const source = (overrides: Partial<LiveSubagentProjectionSource> = {}): LiveSuba
   runStatus: { kind: "done", outcome: "completed", completedAt: 3 },
   joined: false,
   directlyOwned: true,
-  retainedResumableSession: true,
-  executionSettled: true,
+  resumeAllowed: true,
   removableSubtree: true,
   ...overrides,
 });
@@ -87,11 +86,10 @@ test("remove is withheld when an inactive root has an active descendant", () => 
   assert.deepEqual(projectAvailableActions({ ...inactive, removableSubtree: true }), ["resume", "inspect", "join", "remove"]);
 });
 
-test("resume requires a joined result and a retained resumable session", () => {
+test("resume requires a joined result and runtime authorization", () => {
   assert.equal(projectAvailableActions(source({ joined: false })).includes("resume"), false);
-  assert.equal(projectAvailableActions(source({ joined: true, retainedResumableSession: false })).includes("resume"), false);
-  assert.equal(projectAvailableActions(source({ joined: true, executionSettled: false })).includes("resume"), false);
-  assert.equal(projectAvailableActions(source({ joined: true, retainedResumableSession: true, executionSettled: true })).includes("resume"), true);
+  assert.equal(projectAvailableActions(source({ joined: true, resumeAllowed: false })).includes("resume"), false);
+  assert.equal(projectAvailableActions(source({ joined: true, resumeAllowed: true })).includes("resume"), true);
 });
 
 test("failed projections identify the failure category and support explicit truncation", () => {

@@ -53,7 +53,13 @@ export class RunQueue {
           } finally {
             if (!abandoned) {
               await this._acquire();
-              occupyingSlot = true;
+              // abandon() may run while the reacquisition is queued.
+              if (abandoned) {
+                this._running--;
+                this._flush();
+              } else {
+                occupyingSlot = true;
+              }
             }
           }
         },

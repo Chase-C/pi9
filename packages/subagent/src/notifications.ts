@@ -22,7 +22,12 @@ export interface CompletionNotification {
   elapsedMs: number;
 }
 
-interface TrackedCompletionNotification extends CompletionNotification {
+interface CorrelatedCompletionNotification extends CompletionNotification {
+  /** Runtime-local execution identity; never rendered or accepted by lifecycle actions. */
+  runId?: string;
+}
+
+interface TrackedCompletionNotification extends CorrelatedCompletionNotification {
   runId: string;
 }
 
@@ -34,7 +39,7 @@ interface CompletionCandidate {
 export interface CompletionNotificationMessageDetails {
   /** Runtime-local correlation only; never rendered or accepted by lifecycle actions. */
   notificationEpoch?: string;
-  completions: CompletionNotification[];
+  completions: CorrelatedCompletionNotification[];
 }
 
 export interface CompletionNotificationMessage {
@@ -57,7 +62,7 @@ type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
  * collapsed/expanded presentation to preserve the existing themed surfaces.
  */
 export function createCompletionNotificationMessage(
-  entries: readonly CompletionNotification[],
+  entries: readonly CorrelatedCompletionNotification[],
   notificationEpoch?: string,
 ): CompletionNotificationMessage {
   const completions = entries.map(copyCompletionNotification);
@@ -111,9 +116,10 @@ function escapeXml(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function copyCompletionNotification(entry: CompletionNotification): CompletionNotification {
+function copyCompletionNotification(entry: CorrelatedCompletionNotification): CorrelatedCompletionNotification {
   return {
     ok: true,
+    ...(entry.runId ? { runId: entry.runId } : {}),
     subagentId: entry.subagentId,
     label: entry.label,
     agent: entry.agent,
@@ -202,7 +208,7 @@ export class CompletionNotifier {
       if (!details) return [message];
       if (details.notificationEpoch !== this.notificationEpoch) return [];
       const visible = details.completions.flatMap(entry => {
-        const current = this.currentNotificationEntry(entry.subagentId, entry.completedAt);
+        const current = entry.runId ? this.currentNotificationEntry(entry.subagentId, entry.runId) : undefined;
         return current ? [current] : [];
       });
       if (!visible.length) return [];
@@ -210,14 +216,14 @@ export class CompletionNotifier {
     });
   }
 
-  private currentNotificationEntry(subagentId: string, completedAt: number): CompletionNotification | undefined {
+  private currentNotificationEntry(subagentId: string, runId: string): TrackedCompletionNotification | undefined {
     const value = this.catalog().find(candidate =>
       candidate.conversation.conversationId === subagentId
-      && candidate.run.status.kind === "done"
-      && candidate.run.status.completedAt === completedAt);
+      && candidate.run.runId === runId);
     if (!value || this.observed.has(value.run.runId) || this.claimCountByRun.has(value.run.runId)) return;
     if (value.run.joined || value.run.observerCount > 0) return;
-    return projectCompletionNotification(this.deps.manager, value);
+    const projected = projectCompletionNotification(this.deps.manager, value);
+    return projected ? { runId: value.run.runId, ...projected } : undefined;
   }
 
   beginTool(scope: string, toolCallId: string, params: unknown): void {
@@ -408,9 +414,10 @@ function completionDetails(message: CustomMessage): CompletionNotificationMessag
   const completions = (details as { completions?: unknown }).completions;
   if (notificationEpoch !== undefined && typeof notificationEpoch !== "string") return;
   if (!Array.isArray(completions)) return;
-  const valid = completions.filter((entry): entry is CompletionNotification => Boolean(
+  const valid = completions.filter((entry): entry is CorrelatedCompletionNotification => Boolean(
     entry && typeof entry === "object" &&
     (entry as CompletionNotification).ok === true &&
+    ((entry as CorrelatedCompletionNotification).runId === undefined || typeof (entry as CorrelatedCompletionNotification).runId === "string") &&
     typeof (entry as CompletionNotification).subagentId === "string" &&
     typeof (entry as CompletionNotification).label === "string" &&
     typeof (entry as CompletionNotification).agent === "string" &&

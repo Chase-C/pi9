@@ -170,6 +170,17 @@ test("old completion messages do not rebound to a later execution", () => {
   f.notifier.unsubscribe();
 });
 
+test("old completion messages do not rebound when resumed runs share a completion timestamp", () => {
+  const f = fixture();
+  f.fire("session_start"); f.flush();
+  const old = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
+  f.run.joined = true;
+  f.conversations[0].runs.push({ runId: "gather-gently", createdAt: 3, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 2 } });
+
+  assert.deepEqual(f.notifier.reconcileMessages([old] as never), []);
+  f.notifier.unsubscribe();
+});
+
 test("none mode and joined runs are ineligible", () => {
   const none = fixture("none"); none.fire("session_start"); none.flush(); assert.equal(none.sent.length, 0); none.notifier.unsubscribe();
   const joined = fixture(); joined.run.joined = true; joined.fire("session_start"); joined.flush(); assert.equal(joined.sent.length, 0); joined.notifier.unsubscribe();

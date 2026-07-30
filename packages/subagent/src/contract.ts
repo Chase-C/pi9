@@ -20,8 +20,7 @@ export interface LiveSubagentProjectionSource {
   readonly runStatus: RunViewStatus;
   readonly joined: boolean;
   readonly directlyOwned: boolean;
-  readonly retainedResumableSession: boolean;
-  readonly executionSettled: boolean;
+  readonly resumeAllowed: boolean;
   readonly removableSubtree: boolean;
 }
 
@@ -41,7 +40,7 @@ export function projectAvailableActions(source: LiveSubagentProjectionSource): S
 
   const status = projectSubagentStatus(source.runStatus);
   const actions: SubagentAction[] = [];
-  if (isFinished(status) && source.joined && source.retainedResumableSession && source.executionSettled) actions.push("resume");
+  if (isFinished(status) && source.joined && source.resumeAllowed) actions.push("resume");
   if (status === "running") actions.push("steer");
   if (status === "queued" || status === "running") actions.push("cancel");
   actions.push("inspect", "join");

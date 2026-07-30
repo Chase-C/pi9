@@ -121,8 +121,7 @@ export class SubagentRuntime {
       runStatus: latest.status,
       joined: latest.joined,
       directlyOwned,
-      retainedResumableSession: conversation.hasRetainedResumableSession,
-      executionSettled: !conversation.isStopping,
+      resumeAllowed: conversation.isResumeAllowed,
       removableSubtree,
     }, failureMode);
   }

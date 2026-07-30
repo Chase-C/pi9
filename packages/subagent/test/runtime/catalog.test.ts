@@ -915,13 +915,18 @@ test("resume remains blocked until every accepted join releases", async () => {
   const firstStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "old", label: "old" }] as any);
   await firstStart.completion;
   const first = firstStart.starts[0] as any;
-  const join = manager.bindSubagentJoin([first.conversationId]);
-  await join.completion;
-  join.markJoined();
+  const firstJoin = manager.bindSubagentJoin([first.conversationId]);
+  const secondJoin = manager.bindSubagentJoin([first.conversationId]);
+  await Promise.all([firstJoin.completion, secondJoin.completion]);
+  firstJoin.markJoined();
 
+  expect(manager.projectSubagent(first.conversationId).availableActions).not.toContain("resume");
   expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
     .toMatchObject({ ok: false });
-  join.release();
+  firstJoin.release();
+  expect(manager.projectSubagent(first.conversationId).availableActions).not.toContain("resume");
+  secondJoin.release();
+  expect(manager.projectSubagent(first.conversationId).availableActions).toContain("resume");
   expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
     .toMatchObject({ ok: true });
 });
