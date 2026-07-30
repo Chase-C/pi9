@@ -16,7 +16,7 @@ import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, prepareSubagentRuntim
 import { registerSubagentsCommand } from "./command/index.js";
 import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "./widget.js";
 
-export type { CanonicalLiveSubagent } from "./contract.js";
+export type { CanonicalLiveSubagent, CanonicalSubagentFailure, SubagentItemOutcome } from "./contract.js";
 export type { SubagentAction, SubagentStatus } from "./schema.js";
 
 interface SubagentExtensionDependencies {
@@ -46,7 +46,7 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   });
   pi.on("context", event => ({ messages: completionNotifier.reconcileMessages(event.messages) }));
   runtime.scheduler.setChildTool(parent =>
-    makeChildSubagentTool({ manager: runtime, registry: agentRegistry, parent, getCurrentSettings })
+    makeChildSubagentTool({ runtime, agentRegistry, parent, getCurrentSettings })
   );
   runtime.scheduler.setChildSessionEvent((_parent, run, event) =>
     completionNotifier.handleToolEvent(`child:${run.runId}`, event)

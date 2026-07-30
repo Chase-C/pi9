@@ -1,12 +1,12 @@
 import { defineTool, type AgentToolUpdateCallback, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { effectiveStatus, type Conversation, type ConversationSnapshot, type NestedJoinAttemptSnapshot, type RunSnapshot, type SteerReceipt } from "./conversation.js";
-import { projectSubagentStatus, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
+import { effectiveStatus, type Conversation, type ConversationSnapshot, type NestedJoinAttemptSnapshot, type RunSnapshot, type RunViewStatus } from "./conversation.js";
+import { projectSubagentRunStatus, projectSubagentStatus, type CanonicalLiveSubagent, type CanonicalSubagentFailure, type FailureProjectionMode, type SubagentItemOutcome } from "./contract.js";
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId, SubagentId } from "./identifiers.js";
 import { runElapsedMs, truncateText } from "./run-format.js";
-import { SubagentNotFoundError, type JoinBinding, type NestedJoinBinding, type SubagentCaller, type SubagentRuntime } from "./runtime.js";
+import { SubagentNotFoundError, type JoinBinding, type NestedJoinBinding, type OrderedStartOutcome, type SubagentCaller, type SubagentRuntime } from "./runtime.js";
 import type { RunScheduler } from "./scheduler.js";
-import { parseSubagentInvocation, SubagentParams, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type SubagentStatus } from "./schema.js";
+import { parseSubagentInvocation, SubagentParams, type RunRequest, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError, type SubagentStatus } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
   renderSubagentCall,
@@ -19,25 +19,24 @@ import {
   type SubagentToolDetails,
 } from "./tool-renderer.js";
 
-export interface ActionRuntime {
-  queryConversations: SubagentRuntime["queryConversations"];
-  conversationDepth: SubagentRuntime["conversationDepth"];
-  listConversations: SubagentRuntime["listConversations"];
-  startRun: SubagentRuntime["startRun"];
-  steerSubagent: SubagentRuntime["steerSubagent"];
-  cancelSubagent: SubagentRuntime["cancelSubagent"];
-  inspectSubagents: SubagentRuntime["inspectSubagents"];
-  validateSubagentJoin: SubagentRuntime["validateSubagentJoin"];
-  bindSubagentJoin: SubagentRuntime["bindSubagentJoin"];
-  onConversationUpdate: SubagentRuntime["onConversationUpdate"];
-  removeConversations: SubagentRuntime["removeConversations"];
-  conversation: SubagentRuntime["conversation"];
-  conversationDisplay: SubagentRuntime["conversationDisplay"];
-  projectSubagent: SubagentRuntime["projectSubagent"];
-  runSnapshot: SubagentRuntime["runSnapshot"];
-  unjoinedDirectChildren: SubagentRuntime["unjoinedDirectChildren"];
-  scheduler: Pick<RunScheduler, "suspendAgentSlotDuring">;
-}
+export type ActionRuntime = Pick<SubagentRuntime,
+  | "queryConversations"
+  | "conversationDepth"
+  | "listConversations"
+  | "startRun"
+  | "steerSubagent"
+  | "cancelSubagent"
+  | "inspectSubagents"
+  | "validateSubagentJoin"
+  | "bindSubagentJoin"
+  | "onConversationUpdate"
+  | "removeConversations"
+  | "conversation"
+  | "conversationDisplay"
+  | "projectSubagent"
+  | "runSnapshot"
+  | "unjoinedDirectChildren"
+> & { scheduler: Pick<RunScheduler, "suspendAgentSlotDuring"> };
 
 export interface ActionDeps {
   runtime: ActionRuntime;
@@ -64,21 +63,14 @@ export type SubagentResponseEnvelope<A extends SubagentAction = SubagentAction, 
   | SubagentResultsEnvelope<A, T>
   | SubagentErrorEnvelope;
 
-export type ItemResult<T extends object, I extends object = Record<never, never>> =
-  | ({ ok: true } & T)
-  | ({ ok: false; error: string; code?: string } & I);
-
 type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { action: A }>;
-type OrderedDispatchOutcome =
-  | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId; readonly steer?: SteerReceipt }
-  | { readonly ok: false; readonly inputIndex: number; readonly error: string; readonly code?: string };
+type OrderedDispatchOutcome = OrderedStartOutcome;
 function callerOf(deps: ActionDeps): SubagentCaller | undefined {
   return deps.parent
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
 }
 
-type ResultIdentity = { readonly agent?: string; readonly label?: string };
 type DescendantSummary = {
   readonly subagentId: ConversationId;
   readonly label: string;
@@ -105,29 +97,15 @@ function targetFailure(
   deps: ActionDeps,
   subagentId: string,
   error: unknown,
-): { ok: false; subagentId: string; error: string; code?: string } & Partial<Omit<CanonicalLiveSubagent, "ok" | "subagentId">> {
+): CanonicalSubagentFailure & { readonly subagentId: string } {
   const failure = actionFailure(error);
   try {
-    const { ok: _, ...live } = deps.runtime.projectSubagent(subagentId, callerOf(deps), { maxLength: 500 });
-    return { ok: false, ...live, error: failure.error, ...(failure.code ? { code: failure.code } : {}) };
+    const live = deps.runtime.projectSubagent(subagentId, callerOf(deps), { maxLength: 500 });
+    return { ...live, ok: false, error: failure.error, ...(failure.code ? { code: failure.code } : {}) };
   } catch {
     return { ok: false, subagentId, error: failure.error, ...(failure.code ? { code: failure.code } : {}) };
   }
 }
-
-type RunReceipt = ItemResult<{
-  readonly agent: string;
-  readonly label: string;
-  readonly subagentId: ConversationId;
-  readonly status: CanonicalLiveSubagent["status"];
-  readonly joined?: boolean;
-  readonly availableActions: CanonicalLiveSubagent["availableActions"];
-  readonly failure?: string;
-}, {
-  readonly agent?: string;
-  readonly label?: string;
-  readonly subagentId?: string;
-}>;
 
 function resultsEnvelope<A extends SubagentAction, T>(action: A, results: T[]): SubagentResultsEnvelope<A, T> {
   return { action, results };
@@ -323,12 +301,12 @@ export async function joinAction(
 ): Promise<ActionResult> {
   const owner = callerOf(deps);
   const targets = invocation.subagentIds.map(target => {
-    if (typeof target !== "string") return target;
+    if (typeof target !== "string") return { ok: false as const, ...target };
     try {
       deps.runtime.validateSubagentJoin(target as SubagentId, owner);
       return target;
     } catch (error) {
-      return { subagentId: target, ...actionFailure(error) };
+      return { ok: false as const, subagentId: target, ...actionFailure(error) };
     }
   });
   const validSubagentIds = targets.filter((target): target is SubagentId => typeof target === "string");
@@ -342,10 +320,10 @@ export async function joinAction(
   try {
     binding = deps.runtime.bindSubagentJoin(validSubagentIds, owner, toolCallId);
   } catch (error) {
-    const results = targets.map(target => typeof target === "string"
+    const failures = targets.map(target => typeof target === "string"
       ? targetFailure(deps, target, error)
       : targetFailure(deps, target.subagentId, target.error));
-    return resultsResult("join", results, { action: "join", runs: renderJoinedRuns(targets as JoinOutput[], deps.runtime, true) });
+    return resultsResult("join", failures, { action: "join", runs: renderJoinedRuns(failures, deps.runtime, true) });
   }
 
   const output = (): JoinOutput[] => {
@@ -397,19 +375,14 @@ export async function joinAction(
 }
 
 function projectJoinedEntry(entry: ReturnType<JoinBinding["project"]>[number]): JoinedOutput {
-  return entry.status.kind === "done"
-    ? {
-        subagentId: entry.conversationId,
-        runId: entry.runId,
-        status: entry.status.outcome,
-        ...(entry.status.output !== undefined ? { output: entry.status.output } : {}),
-        ...(entry.status.error !== undefined ? { error: entry.status.error } : {}),
-      }
-    : {
-        subagentId: entry.conversationId,
-        runId: entry.runId,
-        status: entry.status.kind,
-      };
+  return {
+    ok: true,
+    subagentId: entry.conversationId,
+    runId: entry.runId,
+    status: entry.status,
+    ...(entry.status.kind === "done" && entry.status.output !== undefined ? { output: entry.status.output } : {}),
+    ...(entry.status.kind === "done" && entry.status.error !== undefined ? { error: entry.status.error } : {}),
+  };
 }
 
 export async function removeAction(
@@ -453,7 +426,7 @@ function projectRunReceipt(
   deps: ActionDeps,
   task: RunRequest | { error: string; agent?: string; label?: string; subagentId?: string } | undefined,
   outcome: OrderedDispatchOutcome,
-): RunReceipt {
+): SubagentItemOutcome {
   if (outcome.ok) return canonicalSubagent(deps, outcome.conversationId);
 
   if (task && !("error" in task) && task.kind === "resume") {
@@ -543,21 +516,21 @@ function projectInspection(
 }
 
 type JoinedOutput = {
-  subagentId: ConversationId;
-  runId: RunId;
-  status: RunStatus;
-  output?: string;
-  error?: string;
+  readonly ok: true;
+  readonly subagentId: ConversationId;
+  readonly runId: RunId;
+  readonly status: RunViewStatus;
+  readonly output?: string;
+  readonly error?: string;
 };
-type JoinOutputError = { subagentId: string; agent?: string; label?: string; error: string; code?: string };
-type JoinOutput = JoinedOutput | JoinOutputError;
+type JoinOutput = JoinedOutput | (CanonicalSubagentFailure & { readonly subagentId: string });
 
 function projectJoinResults(
   output: readonly JoinOutput[],
   deps: ActionDeps,
-): Array<ItemResult<CanonicalLiveSubagent & { output?: string }, { subagentId: string } & ResultIdentity>> {
+): SubagentItemOutcome[] {
   return output.map(value => {
-    if ("status" in value) {
+    if (value.ok) {
       return {
         ...canonicalSubagent(deps, value.subagentId),
         ...(value.output !== undefined ? { output: value.output } : {}),
@@ -604,7 +577,7 @@ function renderJoinedRuns(
   };
   const target = (value: NestedJoinAttemptSnapshot["targets"][number]): JoinTargetRenderItem => {
     const run = snapshot(value.runId);
-    const targetStatus = run ? status(run) : nestedTargetStatus(value.status);
+    const targetStatus = run ? status(run) : value.status ? projectSubagentRunStatus(value.status) : "failed";
     const base: JoinTargetRenderItem = { ...(value.conversationId ? { subagentId: value.conversationId, ...display(value.conversationId) } : {}), status: targetStatus };
     if (!run) return base;
     return {
@@ -621,24 +594,18 @@ function renderJoinedRuns(
     targets: attempt.targets.map(target), ...(attempt.error ? { error: attempt.error } : {}), ...(attempt.toolCallId ? { toolCallId: attempt.toolCallId } : {}),
   }));
   return output.map(value => {
-    if (!("status" in value)) return { ...value, status: "failed" };
+    if (!value.ok) {
+      const { ok: _, ...failure } = value;
+      return { ...failure, status: "failed" };
+    }
     const run = snapshot(value.runId);
-    const projected = { subagentId: value.subagentId, status: run ? status(run) : joinedOutputStatus(value.status), ...(value.output !== undefined ? { output: value.output } : {}), ...(value.error !== undefined ? { error: value.error } : {}) };
+    const projected = { subagentId: value.subagentId, status: run ? status(run) : projectSubagentStatus(value.status), ...(value.output !== undefined ? { output: value.output } : {}), ...(value.error !== undefined ? { error: value.error } : {}) };
     if (!run) return projected;
     const info = display(value.subagentId);
     const represented = (run.nestedJoins ?? []).flatMap(attempt => attempt.toolCallId ? [attempt.toolCallId] : []);
     return { ...projected, ...info, kind: run.kind, prompt: run.prompt, ...runStats(run), activity: activity(run), joins: joins(run),
       background: background(run.runId, info.label ?? info.agent), joinToolCallIds: represented };
   }) as JoinedRunRenderItem[];
-}
-
-function joinedOutputStatus(status: RunStatus): SubagentStatus {
-  if (status === "queued" || status === "running" || status === "completed") return status;
-  return status === "aborted" ? "cancelled" : "failed";
-}
-
-function nestedTargetStatus(status: NestedJoinAttemptSnapshot["targets"][number]["status"]): SubagentStatus {
-  return status ? joinedOutputStatus(status) : "failed";
 }
 
 function runStats(run: RunSnapshot): Pick<JoinedRunRenderItem, "elapsedMs" | "turns" | "tokens"> {
@@ -721,17 +688,17 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
 }
 
 export interface ChildToolDeps {
-  manager: SubagentRuntime;
-  registry: AgentRegistry;
+  runtime: SubagentRuntime;
+  agentRegistry: AgentRegistry;
   parent: Conversation;
   getCurrentSettings: () => SubagentSettings;
 }
 
 export function makeChildSubagentTool(deps: ChildToolDeps): ToolDefinition {
-  const { manager, registry, parent, getCurrentSettings } = deps;
+  const { runtime, agentRegistry, parent, getCurrentSettings } = deps;
   return defineSubagentTool({
-    runtime: manager,
-    agentRegistry: registry,
+    runtime,
+    agentRegistry,
     prepareInvocation: async () => getCurrentSettings(),
     parent: {
       conversationId: parent.conversationId,

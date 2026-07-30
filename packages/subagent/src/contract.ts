@@ -1,6 +1,6 @@
 import type { RunViewStatus } from "./conversation.js";
 import type { ConversationId } from "./identifiers.js";
-import type { SubagentAction, SubagentStatus } from "./schema.js";
+import type { RunStatus, SubagentAction, SubagentStatus } from "./schema.js";
 
 export interface CanonicalLiveSubagent {
   readonly ok: true;
@@ -12,6 +12,21 @@ export interface CanonicalLiveSubagent {
   readonly availableActions: SubagentAction[];
   readonly failure?: string;
 }
+
+export interface CanonicalSubagentFailure {
+  readonly ok: false;
+  readonly error: string;
+  readonly code?: string;
+  readonly subagentId?: string;
+  readonly agent?: string;
+  readonly label?: string;
+  readonly status?: SubagentStatus;
+  readonly joined?: boolean;
+  readonly availableActions?: SubagentAction[];
+  readonly failure?: string;
+}
+
+export type SubagentItemOutcome = CanonicalLiveSubagent | CanonicalSubagentFailure;
 
 export interface LiveSubagentProjectionSource {
   readonly subagentId: ConversationId;
@@ -29,10 +44,12 @@ export type FailureProjectionMode = "full" | { readonly maxLength: number };
 const TRUNCATION_MARKER = "… [truncated]";
 
 export function projectSubagentStatus(status: RunViewStatus): SubagentStatus {
-  if (status.kind !== "done") return status.kind;
-  if (status.outcome === "completed") return "completed";
-  if (status.outcome === "aborted") return "cancelled";
-  return "failed";
+  return projectSubagentRunStatus(status.kind === "done" ? status.outcome : status.kind);
+}
+
+export function projectSubagentRunStatus(status: RunStatus): SubagentStatus {
+  if (status === "queued" || status === "running" || status === "completed") return status;
+  return status === "aborted" ? "cancelled" : "failed";
 }
 
 export function projectAvailableActions(source: LiveSubagentProjectionSource): SubagentAction[] {

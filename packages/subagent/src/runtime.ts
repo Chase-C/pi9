@@ -1,13 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
-import { Conversation, RunSteerError, effectiveStatus, type ConversationSnapshot, type ConversationUpdateKind, type NestedJoinTargetSnapshot, type RunBinding, type RunSnapshot, type RunViewStatus, type SteerReceipt } from "./conversation.js";
+import { Conversation, RunSteerError, effectiveStatus, type ConversationSnapshot, type ConversationUpdateKind, type ConversationUpdateListener, type NestedJoinTargetSnapshot, type RunBinding, type RunSnapshot, type RunViewStatus, type SteerReceipt } from "./conversation.js";
 import { resolveModel, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type SubagentId } from "./identifiers.js";
 import { RunScheduler, type RunExecutor } from "./scheduler.js";
 import { projectLiveSubagent, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
 
-export type ConversationUpdateListener = (agent: Conversation, kind: ConversationUpdateKind) => void;
+export type { ConversationUpdateListener } from "./conversation.js";
 
 export const SUBAGENT_NOT_FOUND_CODE = "SUBAGENT_NOT_FOUND" as const;
 
@@ -21,8 +21,8 @@ export class SubagentNotFoundError extends Error {
 }
 
 export type OrderedStartOutcome =
-  | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId }
-  | { readonly ok: false; readonly inputIndex: number; readonly error: string; readonly code?: typeof SUBAGENT_NOT_FOUND_CODE };
+  | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId; readonly steer?: SteerReceipt }
+  | { readonly ok: false; readonly inputIndex: number; readonly error: string; readonly code?: string };
 export interface RunHandle { readonly starts: readonly OrderedStartOutcome[]; readonly completion: Promise<readonly OrderedStartOutcome[]> }
 export interface JoinProjection { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: RunViewStatus }
 export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; markJoined(): void; release(): void }
