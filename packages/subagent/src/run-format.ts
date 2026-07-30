@@ -1,4 +1,6 @@
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { RunSnapshot } from "./conversation.js";
+import type { RunStatus } from "./schema.js";
 
 export function runElapsedMs(run: RunSnapshot, now = Date.now()): number {
   const start = run.status.kind === "queued" ? run.status.queuedAt
@@ -22,6 +24,14 @@ export function truncateText(value: string, limit: number, trimEnd = false): str
   if (text.length <= limit) return text;
   const truncated = text.slice(0, Math.max(0, limit - 1));
   return `${trimEnd ? truncated.trimEnd() : truncated}…`;
+}
+
+/** The shared status palette for every run-status surface. */
+export function statusColor(status: RunStatus): ThemeColor {
+  if (status === "completed") return "success";
+  if (status === "error") return "error";
+  if (status === "skipped") return "dim";
+  return "warning"; // queued, running, aborted, interrupted
 }
 
 export function formatTokens(tokens: number): string {

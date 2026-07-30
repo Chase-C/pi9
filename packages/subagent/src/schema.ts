@@ -2,9 +2,11 @@ import { StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 import { isSubagentId, type SubagentId } from "./identifiers.js";
-import { CONVERSATION_LIFECYCLE_STATES, type ConversationLifecycleState } from "./lifecycle.js";
 
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
+
+export const CONVERSATION_LIFECYCLE_STATES = ["active", "awaiting_join", "resumable", "terminal"] as const;
+export type ConversationLifecycleState = (typeof CONVERSATION_LIFECYCLE_STATES)[number];
 
 export const SpawnTaskSchema = Type.Object({
   agent: Type.String(),
@@ -112,6 +114,8 @@ export interface ParseSubagentInvocationOptions {
   maxTasks?: number;
 }
 
+const ACTION_LIST = `${SUBAGENT_ACTIONS.slice(0, -1).map(action => `"${action}"`).join(", ")}, or "${SUBAGENT_ACTIONS.at(-1)}"`;
+
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
   list: ["action", "scope", "state"],
@@ -135,14 +139,14 @@ export function parseSubagentInvocation(
 
   if (!action) {
     return {
-      error: 'Provide an action: "agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", or "remove".',
+      error: `Provide an action: ${ACTION_LIST}.`,
       missingAction: true,
     };
   }
 
   if (typeof action !== "string" || !SUBAGENT_ACTIONS.includes(action as SubagentAction)) {
     return {
-      error: `Unknown action: ${String(action)}. Use "agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", or "remove".`,
+      error: `Unknown action: ${String(action)}. Use ${ACTION_LIST}.`,
     };
   }
 

@@ -2,6 +2,7 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
 import type { ConversationSnapshot, ConversationUpdateKind, RunSnapshot } from "./conversation.js";
+import { formatElapsed } from "./run-format.js";
 import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentDisplaySettings, type SubagentSettings, type SubagentUiSettings, type WidgetMode } from "./settings.js";
 
 export interface ProgressWidgetRow {
@@ -14,13 +15,6 @@ export interface ProgressWidgetRow {
 function activeRun(conversation: ConversationSnapshot): RunSnapshot | undefined {
   const run = conversation.currentRun;
   return run?.status.kind === "queued" || run?.status.kind === "running" ? run : undefined;
-}
-
-function formatElapsed(milliseconds: number): string {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s`;
 }
 
 function latestActivity(run: RunSnapshot): string {
@@ -43,7 +37,7 @@ export function formatProgressWidgetRow(conversation: ConversationSnapshot, run:
     conversation,
     run,
     status,
-    text: `${marker} ${identity}${agent} · ${status} ${formatElapsed(now - timestamp)} · ${latestActivity(run)}`,
+    text: `${marker} ${identity}${agent} · ${status} ${formatElapsed(Math.max(0, now - timestamp))} · ${latestActivity(run)}`,
   };
 }
 

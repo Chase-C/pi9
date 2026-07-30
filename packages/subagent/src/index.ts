@@ -4,18 +4,17 @@ import { Text } from "@earendil-works/pi-tui";
 import { AgentRegistry } from "./agents.js";
 import { effectiveStatus, type Conversation, type ConversationSnapshot, type ConversationUpdateKind } from "./conversation.js";
 import { SubagentRuntime } from "./runtime.js";
-import { CompletionNotifier } from "./notifications.js";
-import { runElapsedMs } from "./run-format.js";
-import { timingAsync } from "./timing.js";
-import { makeChildSubagentTool } from "./tool.js";
-import { defineSubagentTool } from "./tool.js";
-import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, prepareSubagentRuntime, type SubagentSettings } from "./settings.js";
-import { registerSubagentsCommand } from "./command/index.js";
-import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "./widget.js";
 import {
+  CompletionNotifier,
   formatCompletionNotificationMessage,
   type CompletionNotificationMessageDetails,
 } from "./notifications.js";
+import { runElapsedMs } from "./run-format.js";
+import { timingAsync } from "./timing.js";
+import { defineSubagentTool, makeChildSubagentTool } from "./tool.js";
+import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, prepareSubagentRuntime, type SubagentSettings } from "./settings.js";
+import { registerSubagentsCommand } from "./command/index.js";
+import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "./widget.js";
 
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;
@@ -43,10 +42,10 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
     getMode: () => currentSettings.runtime.completionNotify,
   });
   pi.on("context", event => ({ messages: completionNotifier.reconcileMessages(event.messages) }));
-  runtime.scheduler?.setChildTool?.(parent =>
+  runtime.scheduler.setChildTool(parent =>
     makeChildSubagentTool({ manager: runtime, registry: agentRegistry, parent, getCurrentSettings })
   );
-  runtime.scheduler?.setChildSessionEvent?.((_parent, run, event) =>
+  runtime.scheduler.setChildSessionEvent((_parent, run, event) =>
     completionNotifier.handleToolEvent(`child:${run.runId}`, event)
   );
 

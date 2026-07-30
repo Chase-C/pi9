@@ -3,7 +3,7 @@ import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-
 import type { AgentSource } from "./agents.js";
 import type { ConversationEffectiveConfig, ConversationRequestedOverrides, RunKind, RunPhase, SteerReceipt } from "./conversation.js";
 import type { ConversationId } from "./identifiers.js";
-import { formatElapsed, formatTokens, truncateText } from "./run-format.js";
+import { formatElapsed, formatTokens, statusColor, truncateText } from "./run-format.js";
 import { RUN_STATUSES, type ConversationState, type DispatchTaskKind, type RunStatus, type SubagentAction } from "./schema.js";
 
 type ThemeLike = Partial<Pick<Theme, "fg" | "bold">>;
@@ -530,17 +530,14 @@ function tag(theme: ThemeLike | undefined, name: string, value: string): string 
 }
 
 function statusText(theme: ThemeLike | undefined, status: RunStatus): string {
-  const color: ThemeColor = status === "completed" ? "success"
-    : status === "queued" || status === "running" ? "warning"
-      : "error";
-  return paint(theme, color, status);
+  return paint(theme, statusColor(status), status);
 }
 
 function statusMarker(theme: ThemeLike | undefined, status: RunStatus): string {
   if (status === "completed") return paint(theme, "success", "✓");
   if (status === "running") return paint(theme, "warning", "●");
   if (status === "queued") return paint(theme, "warning", "…");
-  return paint(theme, "error", "×");
+  return paint(theme, statusColor(status), "×");
 }
 
 function isTerminal(status: RunStatus): boolean {

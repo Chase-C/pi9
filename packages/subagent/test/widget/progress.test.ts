@@ -24,7 +24,7 @@ test("progress mode renders one active line and excludes settled conversations",
     );
 
     expect(renderWidgetContent(setWidget.mock.calls[0]![1], undefined, 120))
-      .toEqual(["● Investigate · scout · running 4s · starting…"]);
+      .toEqual(["● Investigate · scout · running 4.0s · starting…"]);
   } finally {
     vi.useRealTimers();
   }
@@ -33,7 +33,7 @@ test("progress mode renders one active line and excludes settled conversations",
 test("progress mode falls back to the agent name and shows queued elapsed time", () => {
   expect(formatProgressWidgetLines([
     fakeAgent({ config: { name: "planner" }, status: { kind: "queued", queuedAt: 2_000 } }),
-  ], 7_000)).toEqual(["○ planner · queued 5s · starting…"]);
+  ], 7_000)).toEqual(["○ planner · queued 5.0s · starting…"]);
 });
 
 test("progress activity prefers the unfinished latest tool and its input", () => {
@@ -46,7 +46,7 @@ test("progress activity prefers the unfinished latest tool and its input", () =>
         { id: "current", name: "read", startedAt: 3, inputSummary: "src/widget.ts" },
       ] },
     }),
-  ], 5_000)).toEqual(["● helper · running 4s · read src/widget.ts"]);
+  ], 5_000)).toEqual(["● helper · running 4.0s · read src/widget.ts"]);
 });
 
 test("progress activity uses the current assistant message before completed tools", () => {
@@ -56,7 +56,7 @@ test("progress activity uses the current assistant message before completed tool
       messageSnippet: "Writing\n  an answer",
       activity: { toolHistory: [{ id: "done", name: "read", startedAt: 1, completedAt: 2, inputSummary: "src" }] },
     }),
-  ], 5_000)).toEqual(["● helper · running 4s · Writing an answer"]);
+  ], 5_000)).toEqual(["● helper · running 4.0s · Writing an answer"]);
 });
 
 test("progress activity falls back to the most recently completed tool", () => {
@@ -68,7 +68,7 @@ test("progress activity falls back to the most recently completed tool", () => {
         { id: "latest", name: "grep", startedAt: 3, completedAt: 4, inputSummary: "TODO" },
       ] },
     }),
-  ], 5_000)).toEqual(["● helper · running 4s · grep TODO"]);
+  ], 5_000)).toEqual(["● helper · running 4.0s · grep TODO"]);
 });
 
 test("progress mode clears when no conversations are active", () => {
@@ -126,8 +126,8 @@ test("progress mode limits active rows and appends an overflow line", () => {
     );
 
     expect(renderWidgetContent(setWidget.mock.calls[0]![1], undefined, 120)).toEqual([
-      "● One · helper · running 1s · starting…",
-      "○ Two · helper · queued 1s · starting…",
+      "● One · helper · running 1.0s · starting…",
+      "○ Two · helper · queued 1.0s · starting…",
       "+1 more",
     ]);
   } finally {

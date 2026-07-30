@@ -44,7 +44,7 @@ test("extension reconciles completion messages at the provider context boundary"
 test("loading settings for a tool invocation refreshes the visible widget", async () => {
   let tool: any;
   const runtime = {
-    scheduler: { setChildTool: vi.fn() },
+    scheduler: { setChildTool: vi.fn(), setChildSessionEvent: vi.fn() },
     configure: vi.fn(),
     listConversations: () => [fakeAgent({ status: { kind: "running", startedAt: 1 } })],
     onConversationUpdate: () => () => {},

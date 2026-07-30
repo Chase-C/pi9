@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { ContextEvent, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { ContextEvent, Theme } from "@earendil-works/pi-coding-agent";
 import type { Conversation, ConversationSnapshot, RunSnapshot } from "./conversation.js";
 import type { RunOutcomeStatus, ConversationUpdateKind } from "./conversation.js";
 import type { SubagentRuntime } from "./runtime.js";
 import { RUN_OUTCOME_STATUSES } from "./schema.js";
 import type { RunId } from "./identifiers.js";
-import { formatElapsed, runElapsedMs, truncateText } from "./run-format.js";
+import { formatElapsed, runElapsedMs, statusColor, truncateText } from "./run-format.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisplaySettings } from "./settings.js";
 
 /** The current serializable completion summary shared by notification production and rendering. */
@@ -140,16 +140,7 @@ function formatCompletionEntry(entry: CompletionNotification, options: Completio
 }
 
 function colorCompletionStatus(status: RunOutcomeStatus, theme: Pick<Theme, "fg"> | undefined): string {
-  const color = statusColor(status);
-  return typeof theme?.fg === "function" ? theme.fg(color, status) : status;
-}
-
-/** Uses the completion renderer palette for every current terminal status. */
-function statusColor(status: RunOutcomeStatus): ThemeColor {
-  if (status === "completed") return "success";
-  if (status === "error") return "error";
-  if (status === "aborted" || status === "interrupted") return "warning";
-  return "dim";
+  return typeof theme?.fg === "function" ? theme.fg(statusColor(status), status) : status;
 }
 
 export interface NotifierContext {

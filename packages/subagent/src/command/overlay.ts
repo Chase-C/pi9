@@ -13,7 +13,7 @@ import {
 import type { AgentConfig } from "../agents.js";
 import { effectiveStatus, type ConversationSnapshot, type RunSnapshot } from "../conversation.js";
 import type { RunId } from "../identifiers.js";
-import { formatElapsed, formatTokens, runElapsedMs } from "../run-format.js";
+import { formatElapsed, formatTokens, runElapsedMs, statusColor } from "../run-format.js";
 import type { SubagentRuntime } from "../runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../settings.js";
 import { clamp, isCancelKey, isDownKey, isEnterKey, isShiftTabKey, isUpKey, type SubagentKeybindings } from "./input.js";
@@ -551,11 +551,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private border(text: string): string { return this.theme.fg?.("border", text) ?? text; }
   private tag(name: string, value: string): string { return `${this.muted(name)} ${this.theme.fg?.("accent", value) ?? value}`; }
   private statusText(run: RunSnapshot, text: string): string {
-    if (run.status.kind === "queued" || run.status.kind === "running") return this.theme.fg?.("warning", text) ?? text;
-    if (run.status.outcome === "completed") return this.success(text);
-    if (run.status.outcome === "error") return this.error(text);
-    if (run.status.outcome === "aborted" || run.status.outcome === "interrupted") return this.theme.fg?.("warning", text) ?? text;
-    return this.dim(text);
+    return this.theme.fg?.(statusColor(effectiveStatus(run.status)), text) ?? text;
   }
   private statusAccent(run: RunSnapshot, text: string): string { return this.statusText(run, text); }
   private row(content: string, width: number): string { return `${this.border("│")}${pad(content, width)}${this.border("│")}`; }

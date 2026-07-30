@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { Conversation } from "../../src/conversation.js";
 import { completedRun } from "../../src/conversation.js";
-import { RunScheduler } from "../../src/runtime.js";
+import { RunScheduler } from "../../src/scheduler.js";
 
 const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
 const makeAgent = (conversationId: string, runId: string) => new Conversation(conversationId as any, runId as any, config, { kind: "spawn", agent: "worker", prompt: runId }, () => {});

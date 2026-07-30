@@ -3,7 +3,8 @@ import { effectiveStatus, type Conversation, type ConversationSnapshot, type Nes
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId, SubagentId } from "./identifiers.js";
 import { runElapsedMs, truncateText } from "./run-format.js";
-import { SubagentNotFoundError, type JoinBinding, type NestedJoinBinding, type RunScheduler, type SubagentCaller, type SubagentRuntime } from "./runtime.js";
+import { SubagentNotFoundError, type JoinBinding, type NestedJoinBinding, type SubagentCaller, type SubagentRuntime } from "./runtime.js";
+import type { RunScheduler } from "./scheduler.js";
 import { parseSubagentInvocation, SubagentParams, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
@@ -105,19 +106,15 @@ type RunReceipt = ItemResult<{
   readonly subagentId?: string;
 }>;
 
-function jsonResult(json: unknown, details: SubagentToolDetails): ActionResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(json, null, 2) }],
-    details,
-  };
-}
-
 function resultsEnvelope<A extends SubagentAction, T>(action: A, results: T[]): SubagentResultsEnvelope<A, T> {
   return { action, results };
 }
 
 function resultsResult<A extends SubagentAction, T>(action: A, results: T[], details: SubagentToolDetails): ActionResult {
-  return jsonResult(resultsEnvelope(action, results), details);
+  return {
+    content: [{ type: "text", text: JSON.stringify(resultsEnvelope(action, results), null, 2) }],
+    details,
+  };
 }
 
 export function errorResult(message: string, requestedAction?: SubagentAction): ActionResult {
@@ -213,7 +210,7 @@ async function startTasks(
   outcomes.sort((left, right) => left.inputIndex - right.inputIndex);
 
   const conversations = deps.runtime.listConversations();
-  const receipts = outcomes.map((outcome, index) => projectRunReceipt(tasks[index], outcome, conversations));
+  const receipts = outcomes.map(outcome => projectRunReceipt(tasks[outcome.inputIndex], outcome, conversations));
   return resultsResult(action, receipts, {
     action,
     tasks: renderDispatchItems(tasks, outcomes, conversations),

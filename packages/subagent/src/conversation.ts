@@ -4,11 +4,9 @@ import type { AgentConfig, AgentRequestedConfig, AgentSource } from "./agents.js
 import { resolveRequestedConfig } from "./agents.js";
 import { RunActivity, type RunActivityListener } from "./activity.js";
 import type { ConversationId, RunId } from "./identifiers.js";
-import type { ConversationLifecycleState } from "./lifecycle.js";
-import type { RunOutcomeStatus, RunStatus, SpawnRequest } from "./schema.js";
+import type { ConversationLifecycleState, RunOutcomeStatus, RunStatus, SpawnRequest } from "./schema.js";
 
-export type { RunOutcomeStatus } from "./schema.js";
-export type { ConversationLifecycleState } from "./lifecycle.js";
+export type { ConversationLifecycleState, RunOutcomeStatus } from "./schema.js";
 
 /** A run starts a conversation or resumes its existing SDK session. */
 export type RunKind = "spawn" | "resume";
