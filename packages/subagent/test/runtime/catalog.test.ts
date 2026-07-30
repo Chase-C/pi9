@@ -149,10 +149,15 @@ test("removing a conversation deletes its complete terminal subtree", async () =
   await expect(manager.removeConversation(child.conversationId)).resolves.toEqual({
     removed: 2,
     conversationIds: [grand.conversationId, child.conversationId],
+    removals: [{
+      conversationId: child.conversationId,
+      conversationIds: [grand.conversationId, child.conversationId],
+      agentName: "worker",
+    }],
     errors: [],
   });
-  expect(() => manager.conversation(child.conversationId)).toThrow(`Unknown conversation: ${child.conversationId}.`);
-  expect(() => manager.conversation(grand.conversationId)).toThrow(`Unknown conversation: ${grand.conversationId}.`);
+  expect(() => manager.conversation(child.conversationId)).toThrow(`Subagent ${child.conversationId} was not found.`);
+  expect(() => manager.conversation(grand.conversationId)).toThrow(`Subagent ${grand.conversationId} was not found.`);
   expect(manager.conversation(root.conversationId).conversationId).toBe(root.conversationId);
 });
 
@@ -180,6 +185,11 @@ test("removal completes before notifying listeners and isolates listener failure
   await expect(manager.removeConversation(root.conversationId)).resolves.toEqual({
     removed: 3,
     conversationIds: [grand.conversationId, child.conversationId, root.conversationId],
+    removals: [{
+      conversationId: root.conversationId,
+      conversationIds: [grand.conversationId, child.conversationId, root.conversationId],
+      agentName: "worker",
+    }],
     errors: [],
   });
   expect(updates).toEqual([
@@ -188,7 +198,7 @@ test("removal completes before notifying listeners and isolates listener failure
     `${root.conversationId}:removed`,
   ]);
   for (const identity of [root, child, grand]) {
-    expect(() => manager.conversation(identity.conversationId)).toThrow(`Unknown conversation: ${identity.conversationId}.`);
+    expect(() => manager.conversation(identity.conversationId)).toThrow(`Subagent ${identity.conversationId} was not found.`);
     expect(() => manager.runSnapshot(identity.runId)).toThrow(`Unknown run: ${identity.runId}.`);
   }
 });
@@ -234,6 +244,10 @@ test("overlapping removal targets collapse into one subtree operation", async ()
   await expect(manager.removeConversations([root.conversationId, child.conversationId])).resolves.toEqual({
     removed: 2,
     conversationIds: [child.conversationId, root.conversationId],
+    removals: [
+      { conversationId: root.conversationId, conversationIds: [child.conversationId, root.conversationId], agentName: "worker" },
+      { conversationId: child.conversationId, conversationIds: [child.conversationId], agentName: "worker" },
+    ],
     errors: [],
   });
 });
@@ -533,18 +547,22 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
   await expect(manager.removeConversation(first.conversationId)).resolves.toEqual({
     removed: 1,
     conversationIds: [first.conversationId],
+    removals: [{ conversationId: first.conversationId, conversationIds: [first.conversationId], agentName: "worker" }],
     errors: [],
   });
   expect(manager.listConversations()).toEqual([]);
-  expect(() => manager.conversation(first.conversationId)).toThrow("Unknown conversation");
-  expect((manager.startRun(ctx, [{
+  expect(() => manager.conversation(first.conversationId)).toThrow(`Subagent ${first.conversationId} was not found.`);
+  expect(manager.startRun(ctx, [{
     kind: "resume",
     subagentId: first.conversationId,
     prompt: "again",
-  }] as any).starts[0] as any).error).toContain("Unknown subagent");
+  }] as any).starts[0]).toMatchObject({
+    error: `Subagent ${first.conversationId} was not found.`,
+    code: "SUBAGENT_NOT_FOUND",
+  });
 
-  expect(() => manager.inspectSubagents([first.conversationId])).toThrow(`Unknown conversation: ${first.conversationId}.`);
-  expect(() => manager.bindSubagentJoin([second.conversationId])).toThrow(`Unknown conversation: ${second.conversationId}.`);
+  expect(() => manager.inspectSubagents([first.conversationId])).toThrow(`Subagent ${first.conversationId} was not found.`);
+  expect(() => manager.bindSubagentJoin([second.conversationId])).toThrow(`Subagent ${second.conversationId} was not found.`);
 
   const replacement = manager.startRun(ctx, [{
     kind: "spawn",
@@ -589,6 +607,7 @@ test("removal rejects active conversations without changing their runs", async (
   await expect(manager.removeConversation(active.conversationId)).resolves.toEqual({
     removed: 0,
     conversationIds: [],
+    removals: [],
     errors: [{
       conversationId: active.conversationId,
       error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
@@ -620,12 +639,17 @@ test("batch removal isolates terminal, active, and unknown conversations", async
   await expect(manager.removeConversations([terminal.conversationId, active.conversationId, "amber-acorn"])).resolves.toEqual({
     removed: 1,
     conversationIds: [terminal.conversationId],
+    removals: [{ conversationId: terminal.conversationId, conversationIds: [terminal.conversationId], agentName: "worker" }],
     errors: [
       {
         conversationId: active.conversationId,
         error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
       },
-      { conversationId: "amber-acorn", error: "Unknown subagent: amber-acorn." },
+      {
+        conversationId: "amber-acorn",
+        error: "Subagent amber-acorn was not found.",
+        code: "SUBAGENT_NOT_FOUND",
+      },
     ],
   });
   expect(() => manager.runSnapshot(terminal.runId)).toThrow(`Unknown run: ${terminal.runId}.`);
@@ -754,8 +778,8 @@ test("removed conversation runs cannot be joined", async () => {
   await manager.removeConversation(child.conversationId);
   await manager.removeConversation(root.conversationId);
   await manager.removeConversation(grand.conversationId);
-  expect(() => manager.bindSubagentJoin([root.conversationId])).toThrow(`Unknown conversation: ${root.conversationId}.`);
-  expect(() => manager.inspectSubagents([child.conversationId])).toThrow(`Unknown conversation: ${child.conversationId}.`);
+  expect(() => manager.bindSubagentJoin([root.conversationId])).toThrow(`Subagent ${root.conversationId} was not found.`);
+  expect(() => manager.inspectSubagents([child.conversationId])).toThrow(`Subagent ${child.conversationId} was not found.`);
   expect(() => manager.runSnapshot(grand.runId)).toThrow(`Unknown run: ${grand.runId}.`);
 });
 

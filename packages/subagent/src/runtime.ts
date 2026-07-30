@@ -222,9 +222,20 @@ export class RunScheduler {
 
 export type ConversationUpdateListener = (agent: Conversation, kind: ConversationUpdateKind) => void;
 
+export const SUBAGENT_NOT_FOUND_CODE = "SUBAGENT_NOT_FOUND" as const;
+
+export class SubagentNotFoundError extends Error {
+  readonly code = SUBAGENT_NOT_FOUND_CODE;
+
+  constructor(readonly subagentId: string) {
+    super(`Subagent ${subagentId} was not found.`);
+    this.name = "SubagentNotFoundError";
+  }
+}
+
 export type OrderedStartOutcome =
   | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId }
-  | { readonly ok: false; readonly inputIndex: number; readonly error: string };
+  | { readonly ok: false; readonly inputIndex: number; readonly error: string; readonly code?: typeof SUBAGENT_NOT_FOUND_CODE };
 export interface RunHandle { readonly starts: readonly OrderedStartOutcome[]; readonly completion: Promise<readonly OrderedStartOutcome[]> }
 export interface JoinProjection { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: ConversationSnapshot["runs"][number]["status"] }
 export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; acknowledge(): void; release(): void }
@@ -232,7 +243,18 @@ export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: Ru
 export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId }
 export interface SubagentCaller { readonly conversationId: ConversationId; readonly runId: RunId }
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
-export interface RemoveResult { removed: number; conversationIds: ConversationId[]; errors: Array<{ conversationId: string; error: string }> }
+export interface RemovedSubtree {
+  readonly conversationId: ConversationId;
+  readonly conversationIds: ConversationId[];
+  readonly agentName: string;
+  readonly label?: string;
+}
+export interface RemoveResult {
+  removed: number;
+  conversationIds: ConversationId[];
+  removals: RemovedSubtree[];
+  errors: Array<{ conversationId: string; error: string; code?: typeof SUBAGENT_NOT_FOUND_CODE }>;
+}
 export interface CancelResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: "aborted" }
 export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly steer: SteerReceipt }
 export interface InspectedRun { readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }
@@ -315,6 +337,7 @@ export class SubagentRuntime {
       let agent: Conversation | undefined;
       let runId: RunId | undefined;
       let error = callerError;
+      let errorCode: typeof SUBAGENT_NOT_FOUND_CODE | undefined;
       if (!error && task.kind === "spawn") {
         const config = this.registry.agents.get(task.agent);
         if (!config) error = `Unknown agent: ${task.agent}.`;
@@ -338,7 +361,11 @@ export class SubagentRuntime {
       } else if (!error && task.kind === "resume") {
         const subagentId = task.subagentId;
         agent = subagentId ? this.conversations.get(subagentId) : undefined;
-        if (!agent) error = `Unknown subagent: ${subagentId}.`;
+        if (!agent) {
+          const missing = new SubagentNotFoundError(String(subagentId));
+          error = missing.message;
+          errorCode = missing.code;
+        }
         else if (options.caller && agent.parentConversationId !== options.caller.conversationId) {
           error = `Subagent ${agent.conversationId} is not directly owned by caller subagent ${options.caller.conversationId}.`;
         }
@@ -354,7 +381,15 @@ export class SubagentRuntime {
         else if (!agent.canResume) error = this.resumeError(agent);
         else { runId = this.runIds.allocate(); if (!runId) error = "Run ID space exhausted."; else agent.beginResume(runId, task.prompt); }
       }
-      if (!agent || !runId || error) { starts.push({ ok: false, inputIndex, error: error ?? "Could not start run." }); continue; }
+      if (!agent || !runId || error) {
+        starts.push({
+          ok: false,
+          inputIndex,
+          error: error ?? "Could not start run.",
+          ...(errorCode ? { code: errorCode } : {}),
+        });
+        continue;
+      }
       this.runs.set(runId, { runId, conversationId: agent.conversationId, agent });
       const run = agent.requireCurrentRun();
       const execution = this._scheduler.run(ctx, undefined, agent, run)
@@ -454,9 +489,8 @@ export class SubagentRuntime {
     return record.agent.runHistory.find(run => run.runId === runId)!;
   }
   conversationDisplay(conversationId: ConversationId): ConversationDisplayIdentity {
-    const live = this.conversations.get(conversationId);
-    if (live) return { conversationId, ...(live.label ? { label: live.label } : {}), agentName: live.agentName };
-    throw new Error(`Unknown conversation: ${conversationId}.`);
+    const live = this.requireConversation(conversationId);
+    return { conversationId, ...(live.label ? { label: live.label } : {}), agentName: live.agentName };
   }
   directSpawnedChildren(runId: RunId): readonly RunIdentity[] {
     return [...this.conversations.values()]
@@ -573,11 +607,15 @@ export class SubagentRuntime {
     const unique = [...new Set(ids)];
     const removed: ConversationId[] = [];
     const removedConversations: Conversation[] = [];
-    const errors: Array<{ conversationId: string; error: string }> = [];
+    const errors: RemoveResult["errors"] = [];
     const candidates: Conversation[] = [];
     for (const id of unique) {
       const conversation = this.conversations.get(id as ConversationId);
-      if (!conversation) { errors.push({ conversationId: id, error: `Unknown subagent: ${id}.` }); continue; }
+      if (!conversation) {
+        const error = new SubagentNotFoundError(id);
+        errors.push({ conversationId: id, error: error.message, code: error.code });
+        continue;
+      }
       try {
         this.assertCallerAccess(conversation.conversationId, caller, "remove");
         candidates.push(conversation);
@@ -585,6 +623,10 @@ export class SubagentRuntime {
         errors.push({ conversationId: id, error: error instanceof Error ? error.message : String(error) });
       }
     }
+    const candidateSubtrees = new Map(candidates.map(conversation => [
+      conversation.conversationId,
+      this.conversationSubtree(conversation.conversationId),
+    ]));
     const requested = new Set(candidates.map(conversation => conversation.conversationId));
     const roots = candidates.filter(conversation => {
       let parentId = conversation.parentConversationId;
@@ -595,7 +637,7 @@ export class SubagentRuntime {
       return true;
     });
     for (const root of roots) {
-      const subtree = this.conversationSubtree(root.conversationId);
+      const subtree = candidateSubtrees.get(root.conversationId)!;
       const active = subtree.filter(conversation => conversation.lifecycleState === "active");
       if (active.length) {
         const error = `Subagent subtree ${root.conversationId} has active subagents: ${active.map(conversation => conversation.conversationId).join(", ")}. Cancel them before removal.`;
@@ -616,9 +658,23 @@ export class SubagentRuntime {
         try { listener(conversation, "removed"); } catch {}
       }
     }
+    const removedSet = new Set(removed);
+    const removals = candidates.flatMap(conversation => {
+      if (!removedSet.has(conversation.conversationId)) return [];
+      const subtreeIds = candidateSubtrees.get(conversation.conversationId)!
+        .map(item => item.conversationId)
+        .filter(id => removedSet.has(id))
+        .reverse();
+      return [{
+        conversationId: conversation.conversationId,
+        conversationIds: subtreeIds,
+        agentName: conversation.agentName,
+        ...(conversation.label ? { label: conversation.label } : {}),
+      }];
+    });
     const inputOrder = new Map(unique.map((id, index) => [id, index]));
     errors.sort((left, right) => (inputOrder.get(left.conversationId) ?? unique.length) - (inputOrder.get(right.conversationId) ?? unique.length));
-    return { removed: removed.length, conversationIds: removed, errors };
+    return { removed: removed.length, conversationIds: removed, removals, errors };
   }
   private conversationSubtree(rootId: ConversationId): Conversation[] {
     const result: Conversation[] = [];
@@ -631,7 +687,11 @@ export class SubagentRuntime {
     visit(this.requireConversation(rootId));
     return result;
   }
-  private requireConversation(id: string): Conversation { const found = this.conversations.get(id as ConversationId); if (!found) throw new Error(`Unknown conversation: ${id}.`); return found; }
+  private requireConversation(id: string): Conversation {
+    const found = this.conversations.get(id as ConversationId);
+    if (!found) throw new SubagentNotFoundError(id);
+    return found;
+  }
   private resumeError(agent: Conversation): string {
     if (agent.isStopping) {
       return `Subagent ${agent.conversationId} is still settling a cancelled execution. Wait for it to finish before resuming.`;

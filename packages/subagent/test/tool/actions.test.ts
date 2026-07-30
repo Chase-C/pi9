@@ -2,6 +2,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 import type { ConversationSnapshot } from "../../src/conversation.js";
 import { ZERO_USAGE } from "../helpers/fake-agent.js";
+import { SubagentNotFoundError } from "../../src/runtime.js";
 import { agentsAction, cancelAction, inspectAction, joinAction, listAction, removeAction, resumeAction, spawnAction, steerAction, type ActionDeps, type ActionRuntime } from "../../src/tool.js";
 
 const conversationId = "amber-acorn" as any;
@@ -40,9 +41,9 @@ const runtimeDefaults: ActionRuntime = {
   validateSubagentJoin: () => {},
   bindSubagentJoin: () => { throw new Error("Unexpected bindSubagentJoin call."); },
   onConversationUpdate: () => () => {},
-  removeConversations: async () => ({ removed: 0, conversationIds: [], errors: [] }),
+  removeConversations: async () => ({ removed: 0, conversationIds: [], removals: [], errors: [] }),
   conversation: () => { throw new Error("Unknown conversation."); },
-  conversationDisplay: () => { throw new Error("Unknown conversation."); },
+  conversationDisplay: id => ({ conversationId: id, agentName: "helper" }),
   runSnapshot: () => { throw new Error("Unknown run."); },
   unjoinedDirectChildren: () => [],
   scheduler: { suspendAgentSlotDuring: async (_id, operation) => operation() },
@@ -98,7 +99,7 @@ test("spawn returns stable subagent IDs without execution IDs", async () => {
   assert.deepEqual(json(result), {
     action: "spawn",
     results: [
-      { ok: true, data: { label: "valid task", subagentId: conversationId } },
+      { ok: true, data: { agent: "helper", label: "valid task", subagentId: conversationId } },
       { ok: false, agent: "missing", label: "missing agent", error: "Unknown agent: missing." },
     ],
   });
@@ -127,11 +128,11 @@ test("spawn and resume return independent ordered receipt arrays", async () => {
   assert.deepEqual(received.map(task => task.kind), ["spawn", "resume"]);
   assert.deepEqual(json(spawned), {
     action: "spawn",
-    results: [{ ok: true, data: { subagentId: conversationId } }],
+    results: [{ ok: true, data: { agent: "helper", subagentId: conversationId } }],
   });
   assert.deepEqual(json(resumed), {
     action: "resume",
-    results: [{ ok: true, data: { label: "retained task", subagentId: conversationId } }],
+    results: [{ ok: true, data: { agent: "helper", label: "retained task", subagentId: conversationId } }],
   });
 });
 
@@ -177,7 +178,7 @@ test("spawn returns task parse failures while starting valid siblings", async ()
   assert.deepEqual(json(result), {
     action: "spawn",
     results: [
-      { ok: true, data: { subagentId: conversationId } },
+      { ok: true, data: { agent: "helper", subagentId: conversationId } },
       { ok: false, label: "invalid spawn", error: tasks[1].error },
       { ok: false, agent: "missing", error: "Unknown agent: missing." },
     ],
@@ -232,7 +233,7 @@ test("steer isolates failures from sibling messages", async () => {
     action: "steer",
     results: [
       { ok: false, subagentId: conversationId, error: "Subagent is queued and cannot be steered." },
-      { ok: true, data: { subagentId: secondSubagentId, steer: { id: 1, state: "queued", acceptedAt: 1 } } },
+      { ok: true, data: { subagentId: secondSubagentId, agent: "helper", steer: { id: 1, state: "queued", acceptedAt: 1 } } },
     ],
   });
 });
@@ -250,7 +251,7 @@ test("cancel aborts a subagent while retaining its identity", async () => {
 
   assert.deepEqual(json(result), {
     action: "cancel",
-    results: [{ ok: true, data: { subagentId: conversationId, status: "aborted" } }],
+    results: [{ ok: true, data: { subagentId: conversationId, agent: "helper", status: "aborted" } }],
   });
 });
 
@@ -282,8 +283,8 @@ test("cancel starts valid targets concurrently while preserving input order", as
   assert.deepEqual(json(await resultPromise), {
     action: "cancel",
     results: [
-      { ok: true, data: { subagentId: conversationId, status: "aborted" } },
-      { ok: true, data: { subagentId: secondSubagentId, status: "aborted" } },
+      { ok: true, data: { subagentId: conversationId, agent: "helper", status: "aborted" } },
+      { ok: true, data: { subagentId: secondSubagentId, agent: "helper", status: "aborted" } },
     ],
   });
 });
@@ -312,7 +313,7 @@ test("cancel isolates malformed and runtime failures from valid siblings", async
     results: [
       { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" },
       { ok: false, subagentId: conversationId, error: `Subagent ${conversationId} is completed and cannot be cancelled.` },
-      { ok: true, data: { subagentId: secondSubagentId, status: "aborted" } },
+      { ok: true, data: { subagentId: secondSubagentId, agent: "helper", status: "aborted" } },
     ],
   });
 });
@@ -381,10 +382,13 @@ test("inspect isolates malformed and unknown targets from valid siblings", () =>
   const malformed = { subagentId: "not-an-id", error: "invalid subagentId format" };
   const manager = {
     inspectSubagents: ([target]: any[]) => {
-      if (target === unknownSubagentId) throw new Error(`Unknown subagent: ${target}.`);
+      if (target === unknownSubagentId) throw new SubagentNotFoundError(target);
       return [{ conversationId, snapshot: snapshot().runs[0] }];
     },
-    conversationDisplay: () => ({ conversationId, agentName: "helper" }),
+    conversationDisplay: (target: any) => {
+      if (target === unknownSubagentId) throw new SubagentNotFoundError(target);
+      return { conversationId, agentName: "helper" };
+    },
   };
 
   const result = inspectAction(deps(manager), {
@@ -395,7 +399,12 @@ test("inspect isolates malformed and unknown targets from valid siblings", () =>
   const entries = json(result).results;
   assert.equal(entries[0].data.subagentId, conversationId);
   assert.deepEqual(entries[1], { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" });
-  assert.deepEqual(entries[2], { ok: false, subagentId: unknownSubagentId, error: `Unknown subagent: ${unknownSubagentId}.` });
+  assert.deepEqual(entries[2], {
+    ok: false,
+    subagentId: unknownSubagentId,
+    error: `Subagent ${unknownSubagentId} was not found.`,
+    code: "SUBAGENT_NOT_FOUND",
+  });
 });
 
 test("inspect omits terminal output and completed message text", () => {
@@ -495,10 +504,22 @@ test("list filters conversation lifecycle states and retains complete run histor
   assert.deepEqual(awaitingResponse.results.map((conversation: any) => conversation.subagentId), ["closed-canyon"]);
 });
 
-test("remove forwards only the explicit conversation batch", async () => {
+test("remove returns the identity and complete removed subtree", async () => {
+  const childSubagentId = "quiet-otter" as any;
   let received: any;
-  const summary = { removed: 1, conversationIds: [conversationId], errors: [] };
+  const summary = {
+    removed: 2,
+    conversationIds: [childSubagentId, conversationId],
+    removals: [{
+      conversationId,
+      conversationIds: [childSubagentId, conversationId],
+      agentName: "helper",
+      label: "retained task",
+    }],
+    errors: [],
+  };
   const result = await removeAction(deps({
+    conversationDisplay: id => ({ conversationId: id, agentName: "helper", label: "retained task" }),
     removeConversations: async (ids: any) => {
       received = ids;
       return summary;
@@ -507,7 +528,17 @@ test("remove forwards only the explicit conversation batch", async () => {
   assert.deepEqual(received, [conversationId]);
   assert.deepEqual(json(result), {
     action: "remove",
-    results: [{ ok: true, data: { subagentId: conversationId, removed: true } }],
+    results: [{
+      ok: true,
+      data: {
+        subagentId: conversationId,
+        agent: "helper",
+        label: "retained task",
+        removed: true,
+        removedCount: 2,
+        removedIds: [childSubagentId, conversationId],
+      },
+    }],
   });
 });
 
@@ -516,12 +547,21 @@ test("remove preserves ordered malformed and runtime failures without hiding val
   const malformed = { subagentId: "not-an-id", error: "invalid subagentId format" };
   let received: any;
   const result = await removeAction(deps({
+    conversationDisplay: (id: any) => {
+      if (id === unknownConversationId) throw new SubagentNotFoundError(id);
+      return { conversationId: id, agentName: "helper" };
+    },
     removeConversations: async (ids: any) => {
       received = ids;
       return {
         removed: 1,
         conversationIds: [conversationId],
-        errors: [{ conversationId: unknownConversationId, error: `Unknown conversation: ${unknownConversationId}.` }],
+        removals: [{ conversationId, conversationIds: [conversationId], agentName: "helper" }],
+        errors: [{
+          conversationId: unknownConversationId,
+          error: `Subagent ${unknownConversationId} was not found.`,
+          code: "SUBAGENT_NOT_FOUND" as const,
+        }],
       };
     },
   }), { action: "remove", subagentIds: [conversationId, malformed, unknownConversationId] });
@@ -530,9 +570,23 @@ test("remove preserves ordered malformed and runtime failures without hiding val
   assert.deepEqual(json(result), {
     action: "remove",
     results: [
-      { ok: true, data: { subagentId: conversationId, removed: true } },
+      {
+        ok: true,
+        data: {
+          subagentId: conversationId,
+          agent: "helper",
+          removed: true,
+          removedCount: 1,
+          removedIds: [conversationId],
+        },
+      },
       { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" },
-      { ok: false, subagentId: unknownConversationId, error: `Unknown conversation: ${unknownConversationId}.` },
+      {
+        ok: false,
+        subagentId: unknownConversationId,
+        error: `Subagent ${unknownConversationId} was not found.`,
+        code: "SUBAGENT_NOT_FOUND",
+      },
     ],
   });
 });
@@ -566,7 +620,7 @@ test("join returns projected child errors as successful tool results", async () 
     action: "join",
     results: [{
       ok: true,
-      data: { subagentId: conversationId, status: "error", error: "child failed" },
+      data: { subagentId: conversationId, agent: "helper", status: "error", error: "child failed" },
     }],
   });
   assert.equal(released, 1);
@@ -574,7 +628,7 @@ test("join returns projected child errors as successful tool results", async () 
   assert.ok(updates.length >= 1);
   assert.deepEqual(JSON.parse(updates[0].content[0].text), {
     action: "join",
-    results: [{ ok: true, data: { subagentId: conversationId, status: "error", error: "child failed" } }],
+    results: [{ ok: true, data: { subagentId: conversationId, agent: "helper", status: "error", error: "child failed" } }],
   });
 });
 
@@ -699,7 +753,11 @@ test("nested join records one binding for valid siblings and returns invalid tar
   let boundIds: any[] = [];
   const manager = {
     validateSubagentJoin: (target: any) => {
-      if (target === unknownSubagentId) throw new Error(`Unknown subagent: ${target}.`);
+      if (target === unknownSubagentId) throw new SubagentNotFoundError(target);
+    },
+    conversationDisplay: (target: any) => {
+      if (target === unknownSubagentId) throw new SubagentNotFoundError(target);
+      return { conversationId: target, agentName: "helper" };
     },
     bindSubagentJoin: (ids: any[]) => {
       boundIds = ids;
@@ -726,8 +784,13 @@ test("nested join records one binding for valid siblings and returns invalid tar
   assert.deepEqual(boundIds, [childSubagentId]);
   assert.deepEqual(json(result).results, [
     { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" },
-    { ok: true, data: { subagentId: childSubagentId, status: "completed" } },
-    { ok: false, subagentId: unknownSubagentId, error: `Unknown subagent: ${unknownSubagentId}.` },
+    { ok: true, data: { subagentId: childSubagentId, agent: "helper", status: "completed" } },
+    {
+      ok: false,
+      subagentId: unknownSubagentId,
+      error: `Subagent ${unknownSubagentId} was not found.`,
+      code: "SUBAGENT_NOT_FOUND",
+    },
   ]);
 });
 
@@ -760,7 +823,7 @@ test("a bound join acknowledges an aborted outcome after cancellation", async ()
   resolve();
   assert.deepEqual(json(await pending).results, [{
     ok: true,
-    data: { subagentId: conversationId, status: "aborted", error: "Run cancelled." },
+    data: { subagentId: conversationId, agent: "helper", status: "aborted", error: "Run cancelled." },
   }]);
   assert.equal(acknowledged, 1);
 });
@@ -807,7 +870,11 @@ test("join isolates malformed and unknown targets from valid siblings", async ()
   let subscribed = false;
   const manager = {
     validateSubagentJoin: (target: any) => {
-      if (target === unknownSubagentId) throw new Error(`Unknown subagent: ${target}.`);
+      if (target === unknownSubagentId) throw new SubagentNotFoundError(target);
+    },
+    conversationDisplay: (target: any) => {
+      if (target === unknownSubagentId) throw new SubagentNotFoundError(target);
+      return { conversationId: target, agentName: "helper" };
     },
     bindSubagentJoin: (ids: any[]) => {
       assert.deepEqual(ids, [conversationId]);
@@ -828,16 +895,22 @@ test("join isolates malformed and unknown targets from valid siblings", async ()
 
   assert.equal(subscribed, true);
   assert.deepEqual(json(result).results, [
-    { ok: true, data: { subagentId: conversationId, status: "completed", output: "done" } },
+    { ok: true, data: { subagentId: conversationId, agent: "helper", status: "completed", output: "done" } },
     { ok: false, subagentId: malformed.subagentId, error: malformed.error },
-    { ok: false, subagentId: unknownSubagentId, error: `Unknown subagent: ${unknownSubagentId}.` },
+    {
+      ok: false,
+      subagentId: unknownSubagentId,
+      error: `Subagent ${unknownSubagentId} was not found.`,
+      code: "SUBAGENT_NOT_FOUND",
+    },
   ]);
 });
 
 test("join returns item errors without binding when no target resolves", async () => {
   let subscribed = false;
   const manager = {
-    validateSubagentJoin: () => { throw new Error("Unknown subagent: quiet-otter."); },
+    validateSubagentJoin: () => { throw new SubagentNotFoundError("quiet-otter"); },
+    conversationDisplay: () => { throw new SubagentNotFoundError("quiet-otter"); },
     bindSubagentJoin: () => { throw new Error("must not bind"); },
     onConversationUpdate: () => {
       subscribed = true;
@@ -856,6 +929,11 @@ test("join returns item errors without binding when no target resolves", async (
   assert.equal(subscribed, false);
   assert.deepEqual(json(result).results, [
     { ok: false, subagentId: "not-an-id", error: "invalid subagentId format" },
-    { ok: false, subagentId: "quiet-otter", error: "Unknown subagent: quiet-otter." },
+    {
+      ok: false,
+      subagentId: "quiet-otter",
+      error: "Subagent quiet-otter was not found.",
+      code: "SUBAGENT_NOT_FOUND",
+    },
   ]);
 });
