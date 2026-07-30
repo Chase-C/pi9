@@ -44,12 +44,12 @@ export interface FakeAgentOptions {
   prompt?: string;
   createdAt?: number;
   kind?: RunKind;
-  config?: Partial<ConversationSnapshot["config"]>;
+  config?: Partial<ConversationSnapshot["agent"] & ConversationSnapshot["requestedConfig"]>;
   options?: {
     agent?: string;
     prompt?: string;
     model?: string;
-    thinking?: ConversationSnapshot["config"]["thinking"];
+    thinking?: ConversationSnapshot["requestedConfig"]["thinking"];
   };
   status?: StatusInput;
   activity?: { phase?: RunSnapshot["activity"]["phase"]; toolHistory?: RunToolUse[] };
@@ -60,7 +60,8 @@ export interface FakeAgentOptions {
   activeTools?: string[];
   usage?: Usage;
   totalUsage?: Usage;
-  canResume?: boolean;
+  resumable?: boolean;
+  isStopping?: boolean;
   requestedOverrides?: ConversationSnapshot["requestedOverrides"];
   previousRuns?: RunSnapshot[];
   runs?: RunSnapshot[];
@@ -97,6 +98,8 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
       startedAt: 1,
     }))
     ?? [];
+  const isActive = status.kind === "queued" || status.kind === "running";
+  if (isActive && options.resumable) throw new Error("An active fake conversation cannot be resumable.");
   const run: RunSnapshot = {
     runId: (options.runId ?? "r1") as RunSnapshot["runId"],
     kind: options.kind ?? "spawn",
@@ -112,10 +115,11 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     },
     usage: options.totalUsage ?? options.usage ?? ZERO_USAGE,
     observerCount: 0,
-    acknowledged: false,
+    joined: options.resumable ?? false,
     steers: [],
   };
   const runs = options.runs ?? [...(options.previousRuns ?? []), run];
+  const latest = runs.at(-1)!;
   return {
     conversationId: (options.conversationId ?? "c1") as ConversationSnapshot["conversationId"],
     ...(options.parentConversationId
@@ -124,22 +128,25 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     ...(options.spawnedByRunId
       ? { spawnedByRunId: options.spawnedByRunId as RunSnapshot["runId"] }
       : {}),
-    label: options.label,
+    label: options.label ?? options.options?.agent ?? config.name ?? "helper",
     createdAt: options.createdAt ?? 1,
-    config: {
+    agent: {
       name: options.options?.agent ?? config.name ?? "helper",
       description: config.description ?? "",
       source: config.source ?? "project",
-      sourcePath: config.sourcePath,
+      ...(config.sourcePath ? { sourcePath: config.sourcePath } : {}),
+    },
+    requestedConfig: {
       model: options.options?.model ?? config.model,
       thinking: options.options?.thinking ?? config.thinking,
       tools: config.tools,
       skills: config.skills,
     },
     runs,
-    currentRun: runs.at(-1),
+    resumeAllowed: options.resumable ?? false,
+    ...(latest.status.kind !== "done" ? { currentRun: latest } : {}),
+    ...(options.isStopping ? { isStopping: true as const } : {}),
     ...(options.requestedOverrides ? { requestedOverrides: options.requestedOverrides } : {}),
-    canResume: options.canResume ?? false,
   };
 }
 

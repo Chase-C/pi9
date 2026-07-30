@@ -5,13 +5,14 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { Conversation } from "../../src/conversation.js";
 import { completedRun } from "../../src/conversation.js";
-import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, resolveModel, resolveTaskCwd, executeRun } from "../../src/execute.js";
+import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, resolveModel, resolveRequestedSkills, resolveTaskCwd, executeRun } from "../../src/execute.js";
 
 const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
 function resumable(messages: any[], prompt: () => Promise<void>, abort = vi.fn()) {
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first" }, () => {});
+  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
   const session = { messages, subscribe: () => () => {}, prompt, abort } as any;
   agent.bindSession(session); completedRun(agent, "adapt-ably" as any, "first");
+  agent.markJoined("adapt-ably" as any);
   const attempt = agent.beginResume("balance-boldly" as any, "continue");
   return { agent, attempt, session, abort };
 }
@@ -27,15 +28,16 @@ test("child session lifecycle observers span finalized tool execution events", a
     messages: [{ role: "assistant", content: [{ type: "text", text: "finished" }] }],
     subscribe(listener: (event: any) => void) { listeners.push(listener); return () => { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); }; },
     async prompt() {
-      const start = { type: "tool_execution_start", toolCallId: "child-call", toolName: "subagent", args: { action: "inspect", runIds: ["adapt-ably"] } };
-      const end = { type: "tool_execution_end", toolCallId: "child-call", toolName: "subagent", result: { details: { action: "inspect", runs: [{ runId: "adapt-ably", status: "completed" }] } } };
+      const start = { type: "tool_execution_start", toolCallId: "child-call", toolName: "subagent", args: { action: "inspect", subagentIds: ["amber-acorn"] } };
+      const end = { type: "tool_execution_end", toolCallId: "child-call", toolName: "subagent", result: { details: { action: "inspect", runs: [{ subagentId: "amber-acorn", status: "completed" }] } } };
       for (const listener of [...listeners]) listener(start);
       for (const listener of [...listeners]) listener(end);
     },
     abort: vi.fn(),
   } as any;
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first" }, () => {});
+  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
   agent.bindSession(session); completedRun(agent, "adapt-ably" as any, "first");
+  agent.markJoined("adapt-ably" as any);
   const attempt = agent.beginResume("balance-boldly" as any, "continue");
   const observed: any[] = [];
 
@@ -160,11 +162,37 @@ test("does not reinterpret an unknown qualified reference as a different bare mo
 test("RunAttempt terminalizes an invalid requested model before session allocation", async () => {
   const parent = model("parent-provider", "parent-model");
   const invalidConfig = { ...config, model: "missing" };
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, invalidConfig, { kind: "spawn", agent: "worker", prompt: "first" }, () => {});
+  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, invalidConfig, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
 
   await expect(executeRun({ cwd: "/unvalidated-parent", model: parent, modelRegistry: registry(parent) } as any, agent, agent.requireCurrentRun())).resolves.toMatchObject({
     status: { kind: "done", outcome: "error", error: "Unknown model: missing" },
   });
+});
+
+test("resolves requested skills and reports discovery and read failures", () => {
+  const skill = { name: "review", filePath: "/skills/review/SKILL.md", baseDir: "/skills/review" } as any;
+  const dependencies = {
+    getAgentDir: () => "/agent",
+    loadSkills: () => ({ skills: [skill] }),
+    readSkillFile: () => "---\nname: review\n---\nReview carefully.",
+  } as any;
+
+  expect(resolveRequestedSkills("/work", ["review"], dependencies)).toEqual({
+    ok: true,
+    value: ["<skill name=\"review\" location=\"/skills/review/SKILL.md\">\nReferences are relative to /skills/review.\n\nReview carefully.\n</skill>"],
+  });
+  expect(resolveRequestedSkills("/work", ["missing"], dependencies)).toEqual({
+    ok: false,
+    error: "Unknown skill: missing",
+  });
+  expect(resolveRequestedSkills("/work", ["review"], {
+    ...dependencies,
+    loadSkills: () => { throw new Error("catalog unavailable"); },
+  })).toEqual({ ok: false, error: "Could not discover requested skills: catalog unavailable" });
+  expect(resolveRequestedSkills("/work", ["review"], {
+    ...dependencies,
+    readSkillFile: () => { throw new Error("permission denied"); },
+  })).toEqual({ ok: false, error: "Could not load requested skill: permission denied" });
 });
 
 test("resolves and validates relative and absolute requested working directories", async () => {

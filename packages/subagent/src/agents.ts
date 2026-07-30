@@ -14,7 +14,7 @@ export function isModelThinkingLevel(value: unknown): value is ModelThinkingLeve
 
 export type AgentSource = "user" | "project";
 
-export interface AgentConfig {
+export interface AgentDefinition {
   name: string;
   description: string;
   model?: string;
@@ -26,10 +26,33 @@ export interface AgentConfig {
   sourcePath?: string;
 }
 
-export function BuildAgentConfig(
+export type AgentDefinitionSummary = Readonly<Pick<
+  AgentDefinition,
+  "name" | "description" | "source" | "sourcePath"
+>>;
+
+export interface RequestedExecutionConfig {
+  readonly model?: string;
+  readonly thinking?: ModelThinkingLevel;
+  readonly skills?: readonly string[];
+  readonly tools?: readonly string[];
+  readonly cwd?: string;
+}
+
+export interface EffectiveExecutionConfig {
+  readonly model?: string;
+  readonly thinking?: ModelThinkingLevel;
+  readonly cwd: string;
+  readonly skills: readonly string[];
+  readonly tools: readonly string[];
+}
+
+export type ExecutionOverrides = Readonly<Pick<RequestedExecutionConfig, "model" | "thinking">>;
+
+export function buildAgentDefinition(
   content: string,
   source: AgentSource,
-): AgentConfig | { error: Error } {
+): AgentDefinition | { error: Error } {
   try {
     const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
     const result = {
@@ -96,8 +119,8 @@ export interface AgentRegistryOptions {
 
 export class AgentRegistry {
 
-  private _agents = new Map<string, AgentConfig>();
-  get agents(): Map<string, AgentConfig> { return this._agents }
+  private _agents = new Map<string, AgentDefinition>();
+  get agents(): Map<string, AgentDefinition> { return this._agents }
 
   /**
    * Load agent configs from the following directories:
@@ -110,7 +133,7 @@ export class AgentRegistry {
     const projectDir = discovery.includeProjectAgents && discovery.projectAgentsStrategy !== "off"
       ? nearestProjectAgentsDir(cwd)
       : undefined;
-    const agents = new Map<string, AgentConfig>();
+    const agents = new Map<string, AgentDefinition>();
     const extensions = new Set(discovery.agentFileExtensions);
 
     async function loadAgents(dir: string | undefined, source: AgentSource): Promise<void> {
@@ -129,7 +152,7 @@ export class AgentRegistry {
           continue;
         }
 
-        const result = BuildAgentConfig(content, source);
+        const result = buildAgentDefinition(content, source);
         if ("error" in result) {
           if (discovery.warnOnInvalidAgents) options.onWarning?.(`Invalid subagent definition ${path}: ${result.error.message}`);
           continue;
@@ -152,7 +175,7 @@ export class AgentRegistry {
   }
 }
 
-export function serializeAgentConfig(config: AgentConfig) {
+export function serializeAgentDefinition(config: AgentDefinition) {
   return {
     name: config.name,
     description: config.description,
@@ -166,7 +189,7 @@ export function serializeAgentConfig(config: AgentConfig) {
 }
 
 export function listAgentDefinitions(registry: AgentRegistry) {
-  return Array.from(registry.agents.values()).map(serializeAgentConfig);
+  return Array.from(registry.agents.values()).map(serializeAgentDefinition);
 }
 
 function nearestProjectAgentsDir(cwd: string): string | undefined {
@@ -182,19 +205,20 @@ function nearestProjectAgentsDir(cwd: string): string | undefined {
   }
 }
 
-export interface AgentRequestedConfig {
-  readonly model?: string;
-  readonly thinking?: ModelThinkingLevel;
-  readonly skills?: readonly string[];
-  readonly tools?: readonly string[];
-  readonly cwd?: string;
+export function summarizeAgentDefinition(definition: AgentDefinition): AgentDefinitionSummary {
+  return {
+    name: definition.name,
+    description: definition.description,
+    source: definition.source,
+    ...(definition.sourcePath ? { sourcePath: definition.sourcePath } : {}),
+  };
 }
 
 /** Resolve spawn-over-definition precedence. */
 export function resolveRequestedConfig(
-  config: AgentConfig,
+  config: AgentDefinition,
   spawn: SpawnRequest,
-): AgentRequestedConfig {
+): RequestedExecutionConfig {
   const skills = spawn.skills ?? config.skills;
   return {
     model: spawn.model ?? config.model,

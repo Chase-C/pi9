@@ -107,29 +107,15 @@ export async function executeRun(
   const agentDir = dependencies.getAgentDir();
 
   const requestedSkills = requestedConfig.skills ?? [];
-  let systemPrompt = agent.config.systemPrompt;
-  if (requestedSkills.length > 0) {
-    const { skills: available } = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true });
-    const matched: Skill[] = [];
-    let missingSkill: string | undefined;
-    for (const name of requestedSkills) {
-      const found = available.find(skill => skill.name === name);
-      if (!found) { missingSkill = name; break; }
-      matched.push({ ...found, disableModelInvocation: false });
-    }
-    if (missingSkill) return errorRun(agent, run.runId, `Unknown skill: ${missingSkill}`);
-
-    try {
-      const skillBlocks = matched.map(skill => {
-        const content = dependencies.readSkillFile(skill.filePath, "utf-8");
-        const body = stripFrontmatter(content).trim();
-        return `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
-      });
-      systemPrompt = `${systemPrompt}\n\n${skillBlocks.join("\n\n")}`;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return errorRun(agent, run.runId, `Could not load requested skill: ${message}`);
-    }
+  let skillBlocks = agent.resolvedSkillBlocks;
+  if (skillBlocks === undefined) {
+    const skillResolution = resolveRequestedSkills(cwd, requestedSkills, dependencies);
+    if (!skillResolution.ok) return errorRun(agent, run.runId, skillResolution.error);
+    skillBlocks = skillResolution.value;
+  }
+  let systemPrompt = agent.definition.systemPrompt;
+  if (skillBlocks.length > 0) {
+    systemPrompt = `${systemPrompt}\n\n${skillBlocks.join("\n\n")}`;
   }
 
   const inheritedExtensionPaths = await dependencies.loadExtensionPaths(cwd, agentDir);
@@ -235,6 +221,49 @@ async function AbortSession(session: AgentSession) {
 export type RunAgentResolution<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: string };
+
+type SkillResolutionDependencies = Pick<
+  ExecuteRunDependencies,
+  "getAgentDir" | "loadSkills" | "readSkillFile"
+>;
+
+export function resolveRequestedSkills(
+  cwd: string,
+  requestedSkills: readonly string[],
+  dependencies: SkillResolutionDependencies = DEFAULT_EXECUTE_RUN_DEPENDENCIES,
+): RunAgentResolution<readonly string[]> {
+  if (requestedSkills.length === 0) return { ok: true, value: [] };
+
+  let available: Skill[];
+  try {
+    const agentDir = dependencies.getAgentDir();
+    available = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true }).skills;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `Could not discover requested skills: ${message}` };
+  }
+
+  const matched: Skill[] = [];
+  for (const name of requestedSkills) {
+    const found = available.find(skill => skill.name === name);
+    if (!found) return { ok: false, error: `Unknown skill: ${name}` };
+    matched.push({ ...found, disableModelInvocation: false });
+  }
+
+  try {
+    return {
+      ok: true,
+      value: matched.map(skill => {
+        const content = dependencies.readSkillFile(skill.filePath, "utf-8");
+        const body = stripFrontmatter(content).trim();
+        return `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
+      }),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `Could not load requested skill: ${message}` };
+  }
+}
 
 export function resolveTaskCwd(
   parentCwd: string,

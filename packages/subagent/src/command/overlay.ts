@@ -10,10 +10,10 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { AgentConfig } from "../agents.js";
+import type { AgentDefinition } from "../agents.js";
 import { effectiveStatus, type ConversationSnapshot, type RunSnapshot } from "../conversation.js";
 import type { RunId } from "../identifiers.js";
-import { formatElapsed, formatTokens, runElapsedMs } from "../run-format.js";
+import { formatElapsed, formatTokens, runElapsedMs, statusColor } from "../run-format.js";
 import type { SubagentRuntime } from "../runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../settings.js";
 import { clamp, isCancelKey, isDownKey, isEnterKey, isShiftTabKey, isUpKey, type SubagentKeybindings } from "./input.js";
@@ -31,13 +31,14 @@ const OVERLAY_CHROME_HEIGHT = 6;
 
 export interface OverlayOptions {
   initialPage: SubagentOverlayPage;
-  agents: readonly AgentConfig[];
+  agents: readonly AgentDefinition[];
   settings: SubagentSettings;
   notify(message: string, level?: string): void;
   onSettingsChange(change: SubagentSettingsChange): SubagentSettings | void;
   onStart(agent: string, prompt: string): string | undefined;
   onResume(conversationId: string, prompt: string): void;
-  onCancel?(runId: string): void;
+  onCollect?(subagentId: string): Promise<void> | void;
+  onCancel?(subagentId: string): void;
   onRemove?(conversationId: string): void;
 }
 
@@ -107,6 +108,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     if (this.detail) {
       if (isCancelKey(data, this.keybindings)) this.detail = undefined;
       else if (data.toLowerCase() === "r") this.openResumePrompt(this.detail.conversationId);
+      else if (data.toLowerCase() === "g") void this.collectResult(this.detail.conversationId);
       else if (data.toLowerCase() === "c") this.cancelRun(this.detail.conversationId, this.detail.runId);
       else if (data.toLowerCase() === "x") this.removeConversation(this.detail.conversationId);
       this.requestRender();
@@ -169,7 +171,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private renderDetailTitle(width: number): string {
     const conversation = this.findConversation(this.detail!.conversationId);
     const run = conversation && this.findRun(conversation, this.detail!.runId);
-    const title = conversation ? `${conversation.config.name} · ${conversation.conversationId}${run ? ` · ${run.runId}` : ""}` : "Conversation unavailable";
+    const title = conversation ? `${conversation.agent.name} · ${conversation.conversationId}${run ? ` · ${run.runId}` : ""}` : "Conversation unavailable";
     return truncateToWidth(` ${this.accent("Subagents")}  ${title}`, width, "");
   }
 
@@ -251,9 +253,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const isSelected = index === selected;
       const firstPrefix = `${isSelected ? this.accent("┃ ") : "  "}${this.muted(row.treePrefix ?? "")}`;
       const continuationPrefix = `${isSelected ? this.accent("┃ ") : "  "}${this.muted(row.treeContinuation ?? "")}`;
-      const identity = conversation.label || conversation.config.name;
+      const identity = conversation.label || conversation.agent.name;
       const name = isSelected ? this.accent(identity) : identity;
-      const agent = conversation.label ? ` · ${conversation.config.name}` : "";
+      const agent = conversation.label ? ` · ${conversation.agent.name}` : "";
       const config = requestedConfigLabel(conversation);
       const title = `${name}${this.muted(`${agent}${config ? ` (${config})` : ""}`)}`;
       const status = run ? effectiveStatus(run.status) : "idle";
@@ -284,7 +286,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     return latest ? this.renderConversationChronology(conversation, latest, width) : [];
   }
 
-  private renderAgentInspector(agent: AgentConfig, width: number): string[] {
+  private renderAgentInspector(agent: AgentDefinition, width: number): string[] {
     const lines = [
       `${this.accent(agent.name)} ${this.muted(`· ${agent.source}`)}`,
       "",
@@ -307,10 +309,10 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const previousRuns = conversation.runs.slice(0, Math.max(0, runIndex));
     const status = effectiveStatus(run.status);
     const lines = [
-      `${this.accent(conversation.label || conversation.config.name)} ${this.muted(`· ${conversation.config.name} · ${status}`)}`,
+      `${this.accent(conversation.label || conversation.agent.name)} ${this.muted(`· ${conversation.agent.name} · ${status}`)}`,
       "",
       `${this.tag("conversation", conversation.conversationId)} ${this.muted("·")} ${this.tag("run", run.runId)}`,
-      `${this.tag("model", conversation.effectiveConfig?.model ?? conversation.config.model ?? "default")} ${this.muted("·")} ${this.tag("thinking", conversation.effectiveConfig?.thinking ?? conversation.config.thinking ?? "default")}`,
+      `${this.tag("model", conversation.effectiveConfig?.model ?? conversation.requestedConfig.model ?? "default")} ${this.muted("·")} ${this.tag("thinking", conversation.effectiveConfig?.thinking ?? conversation.requestedConfig.thinking ?? "default")}`,
       ...(conversation.effectiveConfig ? [this.tag("cwd", conversation.effectiveConfig.cwd)] : []),
       "",
     ];
@@ -352,7 +354,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       }
     }
 
-    lines.push("", this.muted(`enter inspect${run.status.kind === "queued" || run.status.kind === "running" ? " · c cancel" : ""}${this.canResumeConversation(conversation) ? " · r resume" : ""} · x remove`));
+    lines.push("", this.muted(`enter inspect${run.status.kind === "queued" || run.status.kind === "running" ? " · c cancel" : ""}${this.isCollectAvailable(conversation) ? " · g collect" : ""}${this.isResumeAvailable(conversation) ? " · r resume" : ""} · x remove`));
     if (this.promptTarget?.kind === "resume") lines.push("", this.accent("Resume conversation"), ...this.renderPrompt(width));
     if (this.actionError) lines.push(this.error(this.actionError));
     return lines;
@@ -374,8 +376,8 @@ export class SubagentOverlayComponent implements Component, Focusable {
       seen.add(child.conversationId);
       const last = index === siblings.length - 1;
       const childRun = child.runs[0];
-      const label = child.label || child.config.name;
-      const agent = child.label ? ` · ${child.config.name}` : "";
+      const label = child.label || child.agent.name;
+      const agent = child.label ? ` · ${child.agent.name}` : "";
       const status = childRun ? effectiveStatus(childRun.status) : "idle";
       const connector = `${prefix}${last ? "╰─" : "├─"}`;
       const content = `${this.muted(connector)} ${this.text(label)}${this.muted(agent)} ${this.muted("·")} ${childRun ? this.statusText(childRun, status) : this.muted(status)}`;
@@ -419,6 +421,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const run = conversation.currentRun ?? conversation.runs.at(-1);
       this.detail = { conversationId: conversation.conversationId, ...(run ? { runId: run.runId } : {}) };
     } else if (data.toLowerCase() === "r") this.openResumePrompt(conversation.conversationId);
+    else if (data.toLowerCase() === "g") void this.collectResult(conversation.conversationId);
     else if (data.toLowerCase() === "c") this.cancelRun(conversation.conversationId);
     else if (data.toLowerCase() === "x") this.removeConversation(conversation.conversationId);
     this.requestRender();
@@ -426,7 +429,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
 
   private openResumePrompt(conversationId: string): void {
     const conversation = this.findConversation(conversationId);
-    if (!conversation || !this.canResumeConversation(conversation)) return;
+    if (!conversation || !this.isResumeAvailable(conversation)) return;
     this.openPrompt({ kind: "resume", conversationId });
   }
 
@@ -454,7 +457,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
         this.options.onStart(target.name, prompt);
       } else {
         const conversation = this.findConversation(target.conversationId);
-        if (!conversation || !this.canResumeConversation(conversation)) throw new Error("Conversation is no longer available to resume.");
+        if (!conversation || !this.isResumeAvailable(conversation)) throw new Error("Conversation is no longer available to resume.");
         this.options.onResume(target.conversationId, prompt);
       }
       this.closePrompt();
@@ -465,11 +468,24 @@ export class SubagentOverlayComponent implements Component, Focusable {
     }
   }
 
+  private async collectResult(conversationId: string): Promise<void> {
+    const conversation = this.findConversation(conversationId);
+    if (!conversation || !this.isCollectAvailable(conversation) || !this.options.onCollect) return;
+    this.actionError = "";
+    try {
+      await this.options.onCollect(conversation.conversationId);
+    } catch (error) {
+      this.actionError = error instanceof Error ? error.message : String(error);
+      this.options.notify(this.actionError, "warning");
+    }
+    this.requestRender();
+  }
+
   private cancelRun(conversationId: string, runId?: string): void {
     const conversation = this.findConversation(conversationId);
     if (!conversation) return;
     const run = this.findRun(conversation, runId);
-    if (run?.status.kind === "queued" || run?.status.kind === "running") this.options.onCancel?.(run.runId);
+    if (run?.status.kind === "queued" || run?.status.kind === "running") this.options.onCancel?.(conversation.conversationId);
   }
 
   private removeConversation(conversationId: string): void {
@@ -522,8 +538,13 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
 
   private renderPrompt(width: number): string[] { return this.prompt.render(Math.max(8, width)); }
-  private canResumeConversation(conversation: ConversationSnapshot): boolean {
-    return conversation.canResume && conversation.runs.at(-1)?.status.kind === "done";
+  private isCollectAvailable(conversation: ConversationSnapshot): boolean {
+    const latest = conversation.runs.at(-1);
+    return !conversation.parentConversationId && !conversation.isStopping
+      && latest?.status.kind === "done" && !latest.joined && latest.observerCount === 0;
+  }
+  private isResumeAvailable(conversation: ConversationSnapshot): boolean {
+    return !conversation.parentConversationId && conversation.resumeAllowed;
   }
   private setFocus(region: FocusRegion): void { this.focusRegion = region; this.syncFocus(); this.requestRender(); }
   private syncFocus(): void {
@@ -551,19 +572,15 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private border(text: string): string { return this.theme.fg?.("border", text) ?? text; }
   private tag(name: string, value: string): string { return `${this.muted(name)} ${this.theme.fg?.("accent", value) ?? value}`; }
   private statusText(run: RunSnapshot, text: string): string {
-    if (run.status.kind === "queued" || run.status.kind === "running") return this.theme.fg?.("warning", text) ?? text;
-    if (run.status.outcome === "completed") return this.success(text);
-    if (run.status.outcome === "error") return this.error(text);
-    if (run.status.outcome === "aborted" || run.status.outcome === "interrupted") return this.theme.fg?.("warning", text) ?? text;
-    return this.dim(text);
+    return this.theme.fg?.(statusColor(effectiveStatus(run.status)), text) ?? text;
   }
   private statusAccent(run: RunSnapshot, text: string): string { return this.statusText(run, text); }
   private row(content: string, width: number): string { return `${this.border("│")}${pad(content, width)}${this.border("│")}`; }
   private helpText(): string {
     if (this.focusRegion === "prompt") return "enter submit · esc cancel";
-    if (this.detail) return "c cancel · r resume · x remove · esc back";
+    if (this.detail) return "c cancel · g collect · r resume · x remove · esc back";
     if (this.page === "agents") return "↑↓ select · / filter · enter/s start · tab pages · esc close";
-    if (this.page === "conversations") return "↑↓ select · enter inspect · / filter · t flat/tree · c cancel · r resume · x remove · tab pages · esc close";
+    if (this.page === "conversations") return "↑↓ select · enter inspect · / filter · t flat/tree · c cancel · g collect · r resume · x remove · tab pages · esc close";
     return this.settings.isEditing ? "type value · enter save · esc cancel" : "↑↓ select · enter/space change · tab pages · esc close";
   }
 }

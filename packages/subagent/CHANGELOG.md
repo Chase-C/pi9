@@ -4,6 +4,31 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Replace the public lifecycle vocabulary with `queued`, `running`, `completed`, `failed`, and `cancelled` statuses plus the orthogonal finished-result `joined` flag.
+- Require a nonblank label for every spawn and expose caller-relative `availableActions` on every live-subagent result.
+- Replace `list(scope?, state?)` with direct-child `list(statuses?, joined?)`; listed children include minimal informational descendant trees.
+- Flatten successful result items from `{ ok: true, data }` to `{ ok: true, ...fields }` and embed current canonical fields in failures targeting live subagents.
+- Restrict every targeted lifecycle action to direct children.
+- Rename the completion event to `subagent:finished`; lifecycle event and completion-notification payloads now use the canonical block.
+
+### Changed
+
+- Project active subagents with `joined: false`, so `list({ joined: false })` includes active and uncollected finished children.
+- Expose the current one-based `generation`, generation-scoped `metrics`, aggregate `totalMetrics`, and prior-generation `history` through inspection without legacy top-level counters.
+- Report plausible lowercase two-word unknown subagent IDs as not found while retaining format errors for malformed values.
+- Make join blocking and idempotent, require join before resume, and report collection state with `joined`.
+- Make cancellation wait for settlement and forcibly abandon unresponsive executions after an internal bound while releasing scheduler capacity.
+- Return failed execution explanations in `failure`, reserving `error` for action and invocation failures.
+- Remove ordinary provider-facing execution-history summaries while preserving the overlay's **Previous runs** history.
+- Bind every target in a join batch before publishing observer or nested-join updates, preventing resume races during binding.
+- Release completed join observers before projecting the final result so resumable subagents immediately advertise `resume`.
+- Validate requested skills before allocating or dispatching spawn runs.
+- Communicate action failures through prose and remove machine-readable error codes from responses.
+- Distinguish malformed subagent IDs from well-formed IDs that are not found, and clarify batch, completion, collection, and removal semantics in the tool prompt.
+- Reject repeated subagent IDs after the first batch occurrence and summarize batch item successes and failures.
+
 ## [0.9.2] - 2026-07-29
 
 ### Changed

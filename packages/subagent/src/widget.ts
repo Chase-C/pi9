@@ -2,6 +2,7 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
 import type { ConversationSnapshot, ConversationUpdateKind, RunSnapshot } from "./conversation.js";
+import { formatElapsed } from "./run-format.js";
 import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentDisplaySettings, type SubagentSettings, type SubagentUiSettings, type WidgetMode } from "./settings.js";
 
 export interface ProgressWidgetRow {
@@ -16,13 +17,6 @@ function activeRun(conversation: ConversationSnapshot): RunSnapshot | undefined 
   return run?.status.kind === "queued" || run?.status.kind === "running" ? run : undefined;
 }
 
-function formatElapsed(milliseconds: number): string {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s`;
-}
-
 function latestActivity(run: RunSnapshot): string {
   const tool = [...run.activity.toolHistory].reverse().find(candidate => candidate.completedAt === undefined);
   if (tool) return `${tool.name}${tool.inputSummary ? ` ${tool.inputSummary}` : ""}`;
@@ -35,15 +29,15 @@ function latestActivity(run: RunSnapshot): string {
 export function formatProgressWidgetRow(conversation: ConversationSnapshot, run: RunSnapshot, now = Date.now()): ProgressWidgetRow {
   const status = run.status.kind;
   if (status !== "queued" && status !== "running") throw new Error("Progress rows require an active run.");
-  const identity = conversation.label ?? conversation.config.name;
-  const agent = conversation.label ? ` · ${conversation.config.name}` : "";
+  const identity = conversation.label;
+  const agent = conversation.label !== conversation.agent.name ? ` · ${conversation.agent.name}` : "";
   const timestamp = status === "queued" ? run.status.queuedAt : run.status.startedAt;
   const marker = status === "running" ? "●" : "○";
   return {
     conversation,
     run,
     status,
-    text: `${marker} ${identity}${agent} · ${status} ${formatElapsed(now - timestamp)} · ${latestActivity(run)}`,
+    text: `${marker} ${identity}${agent} · ${status} ${formatElapsed(Math.max(0, now - timestamp))} · ${latestActivity(run)}`,
   };
 }
 

@@ -96,6 +96,40 @@ describe("subagents command registration", () => {
     expect(saved).toEqual([8, 16]);
   });
 
+  it("collects completed results through a released runtime join binding", async () => {
+    let handler: any;
+    const markJoined = vi.fn();
+    const release = vi.fn();
+    const notify = vi.fn();
+    const manager = {
+      configure: vi.fn(),
+      listConversations: () => [],
+      onConversationUpdate: () => () => {},
+      bindSubagentJoin: vi.fn(() => ({ completion: Promise.resolve(), markJoined, release })),
+    };
+    registerSubagentsCommand(
+      { registerCommand: (_name: string, registration: any) => { handler = registration.handler; } } as any,
+      manager as any,
+      { load: async () => ({ settings: DEFAULT_SUBAGENT_SETTINGS }), save: async () => {} },
+    );
+
+    await handler("conversations", {
+      hasUI: true,
+      ui: {
+        notify,
+        custom: async (factory: any) => {
+          const component = factory({ requestRender() {} }, {}, undefined, () => {});
+          await component.options.onCollect("c1");
+        },
+      },
+    });
+
+    expect(manager.bindSubagentJoin).toHaveBeenCalledWith(["c1"]);
+    expect(markJoined).toHaveBeenCalledOnce();
+    expect(markJoined.mock.invocationCallOrder[0]).toBeLessThan(release.mock.invocationCallOrder[0]);
+    expect(notify).toHaveBeenCalledWith("Collected subagent c1.", "info");
+  });
+
   it("reports asynchronous settings save failures", async () => {
     let handler: any;
     const notify = vi.fn();

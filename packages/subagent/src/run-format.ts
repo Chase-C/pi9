@@ -1,4 +1,6 @@
-import type { RunSnapshot } from "./conversation.js";
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { RunSnapshot, RunStatus } from "./conversation.js";
+import type { SubagentStatus } from "./schema.js";
 
 export function runElapsedMs(run: RunSnapshot, now = Date.now()): number {
   const start = run.status.kind === "queued" ? run.status.queuedAt
@@ -15,6 +17,21 @@ export function formatElapsed(milliseconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.floor(seconds - minutes * 60);
   return `${minutes}m${remainder.toString().padStart(2, "0")}s`;
+}
+
+export function truncateText(value: string, limit: number, trimEnd = false): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= limit) return text;
+  const truncated = text.slice(0, Math.max(0, limit - 1));
+  return `${trimEnd ? truncated.trimEnd() : truncated}…`;
+}
+
+/** The shared status palette for every run-status surface. */
+export function statusColor(status: RunStatus | SubagentStatus): ThemeColor {
+  if (status === "completed") return "success";
+  if (status === "error" || status === "failed") return "error";
+  if (status === "skipped") return "dim";
+  return "warning";
 }
 
 export function formatTokens(tokens: number): string {
