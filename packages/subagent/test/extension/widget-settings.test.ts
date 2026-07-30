@@ -32,7 +32,7 @@ test("extension reconciles completion messages at the provider context boundary"
       completions: [{
         runId: completed.runs[0].runId,
         conversationId: completed.conversationId,
-        agent: completed.config.name,
+        agent: completed.agent.name,
         status: "completed",
         elapsedMs: 1,
       }],

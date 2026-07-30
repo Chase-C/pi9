@@ -9,7 +9,7 @@ function fixture(mode: "auto" | "steer" | "none" = "auto", idle = true, send?: (
   const notified: any[] = [];
   const scheduled: Array<{ fn: () => void; delay: number; cancelled: boolean }> = [];
   const run: any = { runId: "bright-otter", createdAt: 1, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 2, output: "SECRET" } };
-  const conversations: any[] = [{ conversationId: "calm-river", label: "primary task", config: { name: "worker" }, runs: [run] }];
+  const conversations: any[] = [{ conversationId: "calm-river", label: "primary task", agent: { name: "worker" }, runs: [run] }];
   const manager: any = {
     onConversationUpdate(fn: any) { listener = fn; return () => { listener = undefined; }; },
     listConversations: () => conversations,
@@ -23,8 +23,8 @@ function fixture(mode: "auto" | "steer" | "none" = "auto", idle = true, send?: (
       return {
         ok: true,
         subagentId: id,
-        label: conversation.label ?? conversation.config.name,
-        agent: conversation.config.name,
+        label: conversation.label ?? conversation.agent.name,
+        agent: conversation.agent.name,
         status,
         joined: latest.joined,
         availableActions: ["inspect", "join", "remove"],
@@ -70,7 +70,7 @@ test("context reconciliation removes a queued completion observed before model d
 test("context reconciliation rebuilds a completion batch from still-unobserved runs", () => {
   const f = fixture();
   const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, joined: false, status: { kind: "done", outcome: "error", completedAt: 3 } };
-  f.conversations.push({ conversationId: "still-forest", config: { name: "explorer" }, label: "second <task>", runs: [second] });
+  f.conversations.push({ conversationId: "still-forest", agent: { name: "explorer" }, label: "second <task>", runs: [second] });
   f.fire("session_start"); f.flush();
   const queued = { role: "custom", customType: "subagent-completion", ...f.sent[0].message };
 
@@ -130,7 +130,7 @@ test("joined descendants stay silent while detached descendants remain eligible"
   const f = fixture();
   f.run.joined = true;
   const detached: any = { runId: "wander-widely", createdAt: 1, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 2 } };
-  f.conversations.push({ conversationId: "young-maple", config: { name: "worker" }, runs: [detached] });
+  f.conversations.push({ conversationId: "young-maple", agent: { name: "worker" }, runs: [detached] });
   f.fire("session_start"); f.flush();
   assert.deepEqual(f.sent[0].message.details.completions.map((entry: any) => entry.subagentId), ["young-maple"]);
   f.notifier.unsubscribe();
@@ -240,7 +240,7 @@ test("recursive cancel holds its descendant claim through grace and marks the ou
 test("finalized results cannot mark unclaimed runs observed", () => {
   const f = fixture();
   const unrelated: any = { runId: "wander-widely", createdAt: 1, observerCount: 0, joined: false, status: { kind: "done", outcome: "completed", completedAt: 2 } };
-  f.conversations.push({ conversationId: "young-maple", config: { name: "worker" }, runs: [unrelated] });
+  f.conversations.push({ conversationId: "young-maple", agent: { name: "worker" }, runs: [unrelated] });
   f.notifier.beginTool("child:delegate-boldly", "inspect-target", { action: "inspect", subagentIds: ["calm-river"] });
   f.notifier.completeTool("child:delegate-boldly", "inspect-target", { content: [], details: { action: "inspect", runs: [{ subagentId: "young-maple", status: "completed" }] } });
   f.fire("session_start"); f.flush();
@@ -341,7 +341,7 @@ test("later completions do not restart the first completion's grace deadline", (
   const f = fixture();
   const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, joined: false, status: { kind: "running", startedAt: 1 } };
   f.run.status = { kind: "running", startedAt: 1 };
-  f.conversations.push({ conversationId: "still-forest", config: { name: "explorer" }, runs: [second] });
+  f.conversations.push({ conversationId: "still-forest", agent: { name: "explorer" }, runs: [second] });
   f.fire("session_start"); f.flush();
 
   f.run.status = { kind: "done", outcome: "completed", startedAt: 1, completedAt: 2 };
@@ -358,7 +358,7 @@ test("coalesces completions that settle during the same grace window", () => {
   const f = fixture();
   const second: any = { runId: "gather-gently", createdAt: 1, observerCount: 0, joined: false, status: { kind: "running", startedAt: 1 } };
   f.run.status = { kind: "running", startedAt: 1 };
-  f.conversations.push({ conversationId: "still-forest", config: { name: "explorer" }, runs: [second] });
+  f.conversations.push({ conversationId: "still-forest", agent: { name: "explorer" }, runs: [second] });
   f.fire("session_start"); f.flush();
 
   f.run.status = { kind: "done", outcome: "completed", startedAt: 1, completedAt: 2 };

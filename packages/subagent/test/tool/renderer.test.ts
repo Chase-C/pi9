@@ -2,10 +2,37 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { renderSubagentCall, renderSubagentResult, type SubagentToolDetails } from "../../src/tool-renderer.js";
 
+type LegacyRenderFixture = Record<string, any>;
+
+function normalizeDetails(fixture: LegacyRenderFixture): SubagentToolDetails {
+  if (fixture.response) return fixture as SubagentToolDetails;
+  const action = fixture.action;
+  if (action === "error") return { response: { action: fixture.requestedAction ?? "unknown", error: fixture.message } };
+  if (action === "spawn" || action === "resume" || action === "steer") {
+    return { response: { action, results: [] }, view: { tasks: fixture.tasks } } as SubagentToolDetails;
+  }
+  if (action === "join") return { response: { action, results: [] }, view: { runs: fixture.runs } };
+  if (action === "remove") {
+    return {
+      response: {
+        action,
+        results: [
+          ...fixture.subagentIds.map((subagentId: any) => ({ ok: true as const, removedIds: [subagentId] })),
+          ...fixture.errors.map((error: any) => ({ ok: false as const, ...error })),
+        ],
+      },
+    };
+  }
+  const results = action === "agents" ? fixture.agents
+    : action === "list" ? fixture.conversations
+    : fixture.runs;
+  return { response: { action, results } } as SubagentToolDetails;
+}
+
 const lines = (component: { render(width: number): string[] }) => component.render(200).map(line => line.trimEnd()).join("\n");
 const renderCall = (args: unknown) => lines(renderSubagentCall(args));
-const renderResult = (details: SubagentToolDetails, expanded = false, isPartial = false, width = 200) =>
-  renderSubagentResult({ details }, { expanded, isPartial }).render(width).map(line => line.trimEnd()).join("\n");
+const renderResult = (details: LegacyRenderFixture, expanded = false, isPartial = false, width = 200) =>
+  renderSubagentResult({ details: normalizeDetails(details) }, { expanded, isPartial }).render(width).map(line => line.trimEnd()).join("\n");
 
 test("call titles summarize action-specific input counts", () => {
   assert.equal(renderCall({ action: "spawn", spawns: [{}, {}] }), "subagent spawn  2 tasks");
@@ -23,7 +50,7 @@ test("call titles summarize action-specific input counts", () => {
 });
 
 test("spawn uses outcome-first collapsed output and tagged delegation blocks when expanded", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "spawn",
     tasks: [
       { inputIndex: 0, kind: "spawn", agent: "scout", label: "auth map", prompt: "Map auth.", subagentId: "quiet-otter" as any },
@@ -47,14 +74,14 @@ test("spawn uses outcome-first collapsed output and tagged delegation blocks whe
 });
 
 test("steer renders receipts and inspect renders bounded activity", () => {
-  const steer: SubagentToolDetails = {
+  const steer: LegacyRenderFixture = {
     action: "steer",
     tasks: [{ inputIndex: 0, kind: "steer", agent: "scout", prompt: "Focus tests.", subagentId: "quiet-otter" as any, steer: { id: 1, state: "queued", acceptedAt: 1 } }],
   };
   assert.equal(renderResult(steer), "✓ Steered 1 subagent\n  scout");
   assert.match(renderResult(steer, true), /scout · steer[\s\S]*Focus tests\.[\s\S]*steered[\s\S]*steer #1 queued/);
 
-  const inspect: SubagentToolDetails = {
+  const inspect: LegacyRenderFixture = {
     action: "inspect",
     runs: [{
       subagentId: "quiet-otter" as any,
@@ -74,7 +101,7 @@ test("steer renders receipts and inspect renders bounded activity", () => {
 });
 
 test("inspect renders terminal error diagnostics in expanded mode", () => {
-  const inspect: SubagentToolDetails = {
+  const inspect: LegacyRenderFixture = {
     action: "inspect",
     runs: [{
       subagentId: "quiet-otter" as any,
@@ -94,7 +121,7 @@ test("inspect renders terminal error diagnostics in expanded mode", () => {
 });
 
 test("cancel renders successful and failed targets", () => {
-  const cancel: SubagentToolDetails = {
+  const cancel: LegacyRenderFixture = {
     action: "cancel",
     runs: [
       { subagentId: "quiet-otter", status: "cancelled" },
@@ -107,7 +134,7 @@ test("cancel renders successful and failed targets", () => {
 });
 
 test("inspect renders per-target errors without hiding the result", () => {
-  const inspect: SubagentToolDetails = {
+  const inspect: LegacyRenderFixture = {
     action: "inspect",
     runs: [{ subagentId: "not-an-id", error: "invalid subagentId format" }],
   };
@@ -117,7 +144,7 @@ test("inspect renders per-target errors without hiding the result", () => {
 });
 
 test("agents render configuration tags in expanded mode", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "agents",
     agents: [{ name: "scout", description: "Read-only reconnaissance.", source: "project", model: "anthropic/sonnet", thinking: "medium", tools: ["read", "grep"] }],
   };
@@ -131,7 +158,7 @@ test("agents render configuration tags in expanded mode", () => {
 });
 
 test("list renders canonical statuses and descendant context", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "list",
     conversations: [
       {
@@ -164,12 +191,12 @@ test("list renders canonical statuses and descendant context", () => {
   ].join("\n"));
 });
 
-test("list renders an empty grouped result", () => {
-  assert.equal(renderResult({ action: "list", conversations: [] }), "✓ No subagents found");
+test("list renders an empty canonical response", () => {
+  assert.equal(renderResult({ response: { action: "list", results: [] } }), "✓ No subagents found");
 });
 
 test("join renders target errors without conversation identities", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "join",
     runs: [{ subagentId: "not-an-id" as any, status: "failed", error: "invalid subagentId format" }],
   };
@@ -182,17 +209,17 @@ test("join renders target errors without conversation identities", () => {
 });
 
 test("join distinguishes partial waits and terminal child errors", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "join",
     runs: [
       { subagentId: "quiet-otter" as any, label: "auth map", status: "completed", output: "Mapped auth.", elapsedMs: 12_400, turns: 3, tokens: 24_000 },
       { subagentId: "calm-wren" as any, label: "test audit", status: "failed", error: "Child failed.", elapsedMs: 950, turns: 1, tokens: 800 },
     ],
   };
-  const partial: SubagentToolDetails = {
+  const partial: LegacyRenderFixture = {
     action: "join",
     runs: [
-      (details as Extract<SubagentToolDetails, { action: "join" }>).runs[0],
+      details.runs[0],
       { subagentId: "calm-wren" as any, label: "test audit", status: "running", elapsedMs: 950, turns: 1, tokens: 800 },
     ],
   };
@@ -215,7 +242,7 @@ test("join distinguishes partial waits and terminal child errors", () => {
 });
 
 test("join renders recent filtered activity, recursive groups, outcomes, and background details", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "join",
     runs: [{
       subagentId: "root-conversation" as any,
@@ -258,7 +285,7 @@ test("join renders recent filtered activity, recursive groups, outcomes, and bac
 });
 
 test("join trees color status markers and target statuses semantically", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "join",
     runs: [{
       subagentId: "root-c" as any,
@@ -281,7 +308,7 @@ test("join trees color status markers and target statuses semantically", () => {
     }],
   };
   const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` } as any;
-  const rendered = lines(renderSubagentResult({ details }, { expanded: true }, theme));
+  const rendered = lines(renderSubagentResult({ details: normalizeDetails(details) }, { expanded: true }, theme));
 
   assert.match(rendered, /<success>✓<\/success> <muted>joined 2 · child, sibling<\/muted>/);
   assert.match(rendered, /<muted>├─<\/muted> <success>✓<\/success> <text>child<\/text><muted> · scout<\/muted> <muted>·<\/muted> <success>completed<\/success>/);
@@ -289,7 +316,7 @@ test("join trees color status markers and target statuses semantically", () => {
 });
 
 test("join activity is newest-first and reports hidden tool calls", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "join",
     runs: [{
       subagentId: "root-c" as any,
@@ -327,7 +354,7 @@ test("terminal join collapse hides output and history while expansion retains th
 });
 
 test("expanded terminal joins retain recursive history, node-local filtering, and detached backgrounds", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "join",
     runs: [{
       subagentId: "root-c" as any,
@@ -378,7 +405,7 @@ test("expanded terminal joins retain recursive history, node-local filtering, an
 });
 
 test("expanded joins order and separate sections while preserving indentation across wraps", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "join",
     runs: [{
       subagentId: "root-c" as any,
@@ -406,7 +433,7 @@ test("expanded joins order and separate sections while preserving indentation ac
 });
 
 test("remove renders deleted conversations and item-local errors", () => {
-  const details: SubagentToolDetails = {
+  const details: LegacyRenderFixture = {
     action: "remove",
     removed: 2,
     subagentIds: ["quiet-otter", "amber-fox"] as any,
@@ -416,7 +443,21 @@ test("remove renders deleted conversations and item-local errors", () => {
   assert.match(renderResult(details, true), /quiet-otter · removed[\s\S]*amber-fox · removed[\s\S]*busy-newt · not removed[\s\S]*Cancel it/);
 });
 
+test("remove rendering preserves the root subtree order for overlapping targets", () => {
+  const details = {
+    response: {
+      action: "remove" as const,
+      results: [
+        { ok: true as const, removedIds: ["first-child" as any] },
+        { ok: true as const, removedIds: ["second-child" as any, "first-child" as any, "root" as any] },
+      ],
+    },
+  } as SubagentToolDetails;
+
+  assert.equal(renderResult(details), "✓ Removed 3 subagents\n  second-child · first-child · root");
+});
+
 test("errors render their message instead of structured output", () => {
-  const details: SubagentToolDetails = { action: "error", requestedAction: "join", message: "Unknown run." };
+  const details: LegacyRenderFixture = { action: "error", requestedAction: "join", message: "Unknown run." };
   assert.equal(renderResult(details), "Unknown run.");
 });

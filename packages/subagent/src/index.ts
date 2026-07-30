@@ -16,8 +16,9 @@ import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, prepareSubagentRuntim
 import { registerSubagentsCommand } from "./command/index.js";
 import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "./widget.js";
 
-export type { CanonicalLiveSubagent, CanonicalSubagentFailure, SubagentItemOutcome } from "./contract.js";
+export type { CanonicalFinishedSubagent, CanonicalLiveSubagent, SubagentIdentity } from "./contract.js";
 export type { SubagentAction, SubagentStatus } from "./schema.js";
+export type { SubagentErrorEnvelope, SubagentResponseEnvelope, SubagentResultsEnvelope } from "./tool-contract.js";
 
 interface SubagentExtensionDependencies {
   agentRegistry?: AgentRegistry;
@@ -116,7 +117,7 @@ export function registerSubagentSessionGuards(pi: GuardPi, manager: GuardManager
 export async function confirmWithActiveSubagents(ctx: GuardContext, manager: GuardManager): Promise<{ cancel: true } | undefined> {
   const active = manager.listConversations().filter(item => item.currentRun !== undefined || item.isStopping);
   if (!active.length || !ctx.hasUI || !ctx.ui?.confirm) return;
-  const lines = active.slice(0, 6).map(item => `- ${item.config.name}${item.label !== item.config.name ? ` (${item.label})` : ""}: ${item.currentRun?.status.kind ?? "stopping"}`);
+  const lines = active.slice(0, 6).map(item => `- ${item.agent.name}${item.label !== item.agent.name ? ` (${item.label})` : ""}: ${item.currentRun?.status.kind ?? "stopping"}`);
   if (active.length > 6) lines.push(`- ... and ${active.length - 6} more`);
   const ok = await ctx.ui.confirm("Active subagents", `${active.length} subagent${active.length === 1 ? " is" : "s are"} still active:\n${lines.join("\n")}\n\nChanging sessions will tear down this extension runtime. Continue anyway?`);
   return ok ? undefined : { cancel: true };
@@ -135,5 +136,5 @@ export function registerSubagentMetadataPersistence(pi: MetadataPi, source: Meta
 }
 export function projectSubagentRunIndex(snapshot: ReturnType<Conversation["snapshot"]>) {
   const run = snapshot.runs.at(-1); if (!run || run.status.kind !== "done") throw new Error("Cannot persist a non-terminal run.");
-  return { version: 3, subagentId: snapshot.conversationId, agent: snapshot.config.name, ...(snapshot.label ? { label: snapshot.label } : {}), kind: run.kind, status: run.status.outcome, completedAt: run.status.completedAt, ...(run.status.startedAt !== undefined ? { startedAt: run.status.startedAt, elapsedMs: runElapsedMs(run) } : {}) };
+  return { version: 3, subagentId: snapshot.conversationId, agent: snapshot.agent.name, ...(snapshot.label ? { label: snapshot.label } : {}), kind: run.kind, status: run.status.outcome, completedAt: run.status.completedAt, ...(run.status.startedAt !== undefined ? { startedAt: run.status.startedAt, elapsedMs: runElapsedMs(run) } : {}) };
 }

@@ -44,12 +44,12 @@ export interface FakeAgentOptions {
   prompt?: string;
   createdAt?: number;
   kind?: RunKind;
-  config?: Partial<ConversationSnapshot["config"]>;
+  config?: Partial<ConversationSnapshot["agent"] & ConversationSnapshot["requestedConfig"]>;
   options?: {
     agent?: string;
     prompt?: string;
     model?: string;
-    thinking?: ConversationSnapshot["config"]["thinking"];
+    thinking?: ConversationSnapshot["requestedConfig"]["thinking"];
   };
   status?: StatusInput;
   activity?: { phase?: RunSnapshot["activity"]["phase"]; toolHistory?: RunToolUse[] };
@@ -130,11 +130,13 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
       : {}),
     label: options.label ?? options.options?.agent ?? config.name ?? "helper",
     createdAt: options.createdAt ?? 1,
-    config: {
+    agent: {
       name: options.options?.agent ?? config.name ?? "helper",
       description: config.description ?? "",
       source: config.source ?? "project",
-      sourcePath: config.sourcePath,
+      ...(config.sourcePath ? { sourcePath: config.sourcePath } : {}),
+    },
+    requestedConfig: {
       model: options.options?.model ?? config.model,
       thinking: options.options?.thinking ?? config.thinking,
       tools: config.tools,

@@ -1,4 +1,4 @@
-import type { AgentConfig } from "../agents.js";
+import type { AgentDefinition } from "../agents.js";
 import { effectiveStatus, type ConversationSnapshot } from "../conversation.js";
 
 export type ConversationLayoutMode = "flat" | "tree";
@@ -71,7 +71,7 @@ export function projectConversations(
   return rows;
 }
 
-export function filterAgents(agents: readonly AgentConfig[], query: string): AgentConfig[] {
+export function filterAgents(agents: readonly AgentDefinition[], query: string): AgentDefinition[] {
   const normalized = query.trim().toLowerCase();
   const filtered = normalized ? agents.filter(agent => [
     agent.name,
@@ -92,18 +92,18 @@ function conversationMatches(conversation: ConversationSnapshot, query: string):
   const values = [
     conversation.conversationId,
     conversation.label,
-    conversation.config.name,
-    conversation.config.description,
-    conversation.config.source,
-    conversation.config.model,
-    conversation.config.thinking,
+    conversation.agent.name,
+    conversation.agent.description,
+    conversation.agent.source,
+    conversation.requestedConfig.model,
+    conversation.requestedConfig.thinking,
     conversation.parentConversationId,
     conversation.spawnedByRunId,
     conversation.effectiveConfig?.model,
     conversation.effectiveConfig?.thinking,
     conversation.effectiveConfig?.cwd,
-    ...(conversation.config.tools ?? []),
-    ...(conversation.config.skills ?? []),
+    ...(conversation.requestedConfig.tools ?? []),
+    ...(conversation.requestedConfig.skills ?? []),
     ...(conversation.effectiveConfig?.tools ?? []),
     ...(conversation.effectiveConfig?.skills ?? []),
   ];

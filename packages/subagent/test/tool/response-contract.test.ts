@@ -19,8 +19,10 @@ test("spawn and resume are separate ordered batch actions", () => {
 });
 
 test("command errors omit the ambiguous top-level ok property", () => {
-  const response = JSON.parse(errorResult("bad request", "spawn" as any).content[0].text);
+  const result = errorResult("bad request", "spawn" as any);
+  const response = JSON.parse(result.content[0].text);
   assert.deepEqual(response, { action: "spawn", error: "bad request" });
+  assert.deepEqual(result.details, { response });
 });
 
 test("malformed removal targets remain ordered item failures", () => {

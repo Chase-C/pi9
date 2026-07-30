@@ -29,6 +29,30 @@ test("background completion factory creates compact tagged model content", () =>
   assert.doesNotMatch(message.content, /1\.3s|subagent join/);
 });
 
+test("failed completion payload retains correlation and canonical failure fields", () => {
+  const message = createCompletionNotificationMessage([{
+    ...entry,
+    runId: "adapt-ably",
+    status: "failed",
+    failure: "Subagent failed: provider rejected the request",
+  }], "notification-epoch");
+
+  assert.deepEqual(message.details, {
+    notificationEpoch: "notification-epoch",
+    completions: [{
+      ...entry,
+      runId: "adapt-ably",
+      status: "failed",
+      failure: "Subagent failed: provider rejected the request",
+    }],
+  });
+  assert.equal(message.content, [
+    "<subagent-notification>",
+    '  <subagent subagentId="quiet-otter" status="failed" agent="helper" label="short task" joined="false" availableActions="inspect,join,remove" failure="Subagent failed: provider rejected the request"/>',
+    "</subagent-notification>",
+  ].join("\n"));
+});
+
 test("tagged completion content escapes attribute values", () => {
   const message = createCompletionNotificationMessage([{
     ...entry,

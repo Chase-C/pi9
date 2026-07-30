@@ -1,4 +1,4 @@
-import { StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 import { isSubagentId, type SubagentId } from "./identifiers.js";
@@ -31,8 +31,6 @@ const STEER_MESSAGE_KEYS = new Set(Object.keys(SteerMessageSchema.properties));
 
 export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
 export const SUBAGENT_STATUSES = ["queued", "running", "completed", "failed", "cancelled"] as const;
-export const RUN_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
-export const RUN_STATUSES = ["queued", "running", ...RUN_OUTCOME_STATUSES] as const;
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
   statuses: Type.Optional(Type.Array(StringEnum(SUBAGENT_STATUSES), { minItems: 1 })),
@@ -46,39 +44,21 @@ export const SubagentParams = Type.Object({
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 export type SubagentStatus = (typeof SUBAGENT_STATUSES)[number];
-export type RunOutcomeStatus = (typeof RUN_OUTCOME_STATUSES)[number];
-export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export const isSubagentStatus = (value: unknown): value is SubagentStatus =>
   typeof value === "string" && (SUBAGENT_STATUSES as readonly string[]).includes(value);
 
-export type SpawnRequest = {
-  kind: "spawn";
-  agent: string;
-  prompt: string;
-  label: string;
-  skills?: string[];
-  model?: string;
-  thinking?: ModelThinkingLevel;
-  cwd?: string;
-};
+type SpawnInput = Static<typeof SpawnTaskSchema>;
+type ResumeInput = Static<typeof ResumeTaskSchema>;
+type SteerInput = Static<typeof SteerMessageSchema>;
 
-export type ResumeRequest = {
-  kind: "resume";
-  subagentId: SubagentId;
-  prompt: string;
-};
-
-export type SteerRequest = {
-  kind: "steer";
-  subagentId: SubagentId;
-  message: string;
-};
+export type SpawnRequest = SpawnInput & { kind: "spawn" };
+export type ResumeRequest = Omit<ResumeInput, "subagentId"> & { kind: "resume"; subagentId: SubagentId };
+export type SteerRequest = Omit<SteerInput, "subagentId"> & { kind: "steer"; subagentId: SubagentId };
 
 export type RunRequest = SpawnRequest | ResumeRequest;
 export type SubagentTarget = SubagentId | { subagentId: string; error: string };
 export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
-export type ParsedRunRequest = ParsedSpawnRequest | ParsedResumeRequest;
 export type ParsedSpawnRequest = SpawnRequest | { error: string; agent?: string; label?: string };
 export type ParsedResumeRequest = ResumeRequest | { error: string; subagentId?: string };
 export type ParsedSteerRequest = SteerRequest | { error: string; subagentId?: string };
@@ -287,7 +267,7 @@ export function parseSpawnTask(raw: unknown): ParsedSpawnRequest {
     label: task.label as string,
     ...(task.skills !== undefined ? { skills: task.skills as string[] } : {}),
     ...(task.model !== undefined ? { model: task.model as string } : {}),
-    ...(task.thinking !== undefined ? { thinking: task.thinking as ModelThinkingLevel } : {}),
+    ...(task.thinking !== undefined ? { thinking: task.thinking as SpawnInput["thinking"] } : {}),
     ...(task.cwd !== undefined ? { cwd: task.cwd as string } : {}),
   };
 }

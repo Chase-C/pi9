@@ -121,6 +121,8 @@ Successful items are flat—there is no `data` wrapper. Targeted failures includ
 
 Invocation-level failures use `{ "action": "...", "error": "..." }`.
 
+The package entry point exports `CanonicalLiveSubagent`, `CanonicalFinishedSubagent`, `SubagentIdentity`, `SubagentAction`, `SubagentStatus`, and the response-envelope types for typed integrations.
+
 `remove` is the exception because its target is no longer live. A success is `{ "ok": true, "subagentId", "label", "removedIds" }`, where `removedIds` contains the removed subtree. `agents` returns flat `{ "ok": true, ...definition }` items.
 
 ## Listing and inspection

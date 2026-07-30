@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AgentRegistry, resolveRequestedConfig } from "./agents.js";
 import { Conversation, RunSteerError, effectiveStatus, type ConversationSnapshot, type ConversationUpdateKind, type ConversationUpdateListener, type NestedJoinTargetSnapshot, type RunBinding, type RunSnapshot, type RunViewStatus, type SteerReceipt } from "./conversation.js";
 import { resolveModel, resolveTaskCwd } from "./execute.js";
-import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type SubagentId } from "./identifiers.js";
+import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type RunRef, type SubagentId } from "./identifiers.js";
 import { RunScheduler, type RunExecutor } from "./scheduler.js";
 import { projectLiveSubagent, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
@@ -21,34 +21,20 @@ export class SubagentNotFoundError extends Error {
 }
 
 export type OrderedStartOutcome =
-  | { readonly ok: true; readonly inputIndex: number; readonly conversationId: ConversationId; readonly runId: RunId; readonly steer?: SteerReceipt }
+  | ({ readonly ok: true; readonly inputIndex: number; readonly steer?: SteerReceipt } & RunRef)
   | { readonly ok: false; readonly inputIndex: number; readonly error: string; readonly code?: string };
 export interface RunHandle { readonly starts: readonly OrderedStartOutcome[]; readonly completion: Promise<readonly OrderedStartOutcome[]> }
-export interface JoinProjection { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: RunViewStatus }
+export interface JoinProjection extends RunRef { readonly status: RunViewStatus }
 export interface JoinBinding { readonly runIds: readonly RunId[]; readonly completion: Promise<void>; project(): readonly JoinProjection[]; markJoined(): void; release(): void }
 export interface NestedJoinBinding extends JoinBinding { readonly ownerRunId: RunId; readonly attemptIndex: number; interrupt(error?: string): void }
-export interface RunIdentity { readonly runId: RunId; readonly conversationId: ConversationId }
-export interface SubagentCaller { readonly conversationId: ConversationId; readonly runId: RunId }
+export type SubagentCaller = RunRef;
 export interface ConversationDisplayIdentity { readonly conversationId: ConversationId; readonly label?: string; readonly agentName?: string }
-export interface RemovedSubtree {
-  readonly conversationId: ConversationId;
-  readonly conversationIds: ConversationId[];
-  readonly agentName: string;
-  readonly label?: string;
-}
-export interface RemoveResult {
-  removed: number;
-  conversationIds: ConversationId[];
-  removals: RemovedSubtree[];
-  errors: Array<{ conversationId: string; error: string; code?: typeof SUBAGENT_NOT_FOUND_CODE }>;
-}
-export interface CancelResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly status: "aborted" }
-export interface SteerResult { readonly conversationId: ConversationId; readonly runId: RunId; readonly steer: SteerReceipt }
-export interface InspectedRun { readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }
+export type RemoveOutcome =
+  | { readonly ok: true; readonly conversationId: ConversationId; readonly label: string; readonly removedIds: readonly ConversationId[] }
+  | { readonly ok: false; readonly conversationId: string; readonly error: string; readonly code?: typeof SUBAGENT_NOT_FOUND_CODE };
+export interface SteerResult extends RunRef { readonly steer: SteerReceipt }
 
-type RunRecord = {
-  readonly runId: RunId;
-  readonly conversationId: ConversationId;
+type RunRecord = RunRef & {
   readonly agent: Conversation;
 };
 interface BoundRecord { readonly conversationId: ConversationId; readonly binding: RunBinding }
@@ -221,7 +207,7 @@ export class SubagentRuntime {
     }
   }
 
-  async cancelSubagent(subagentId: SubagentId, caller?: SubagentCaller): Promise<CancelResult> {
+  async cancelSubagent(subagentId: SubagentId, caller?: SubagentCaller): Promise<RunRef> {
     const record = this.latestSubagentRecord(subagentId);
     this.assertDirectOwner(record.agent, caller, "cancel");
     const run = this.runSnapshot(record.runId);
@@ -239,10 +225,10 @@ export class SubagentRuntime {
       const cancelled = record.agent.forceAbandonCancellation(record.runId);
       this._scheduler.abandon(record.runId, cancelled);
     }
-    return { conversationId: record.conversationId, runId: record.runId, status: "aborted" };
+    return { conversationId: record.conversationId, runId: record.runId };
   }
 
-  inspectSubagents(subagentIds: readonly SubagentId[], caller?: SubagentCaller): InspectedRun[] {
+  inspectSubagents(subagentIds: readonly SubagentId[], caller?: SubagentCaller): Array<{ readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }> {
     return subagentIds.map(subagentId => {
       const record = this.latestSubagentRecord(subagentId);
       this.assertDirectOwner(record.agent, caller, "inspect");
@@ -318,12 +304,12 @@ export class SubagentRuntime {
     const live = this.requireConversation(conversationId);
     return { conversationId, label: live.label, agentName: live.agentName };
   }
-  directSpawnedChildren(runId: RunId): readonly RunIdentity[] {
+  directSpawnedChildren(runId: RunId): readonly RunRef[] {
     return [...this.conversations.values()]
       .filter(conversation => conversation.spawnedByRunId === runId)
       .map(conversation => ({ runId: conversation.runHistory[0].runId, conversationId: conversation.conversationId }));
   }
-  unjoinedDirectChildren(runId: RunId): readonly RunIdentity[] {
+  unjoinedDirectChildren(runId: RunId): readonly RunRef[] {
     const mentioned = new Set((this.runSnapshot(runId).nestedJoins ?? []).flatMap(attempt => attempt.targets.map(target => target.runId)));
     return this.directSpawnedChildren(runId).filter(child => !mentioned.has(child.runId));
   }
@@ -382,27 +368,25 @@ export class SubagentRuntime {
 
   private requireRunRecord(runId: RunId): RunRecord { const record = this.runs.get(runId); if (!record) throw new Error(`Unknown run: ${runId}.`); return record; }
 
-  removeConversation(conversationId: string, caller?: SubagentCaller): Promise<RemoveResult> {
-    return this.removeConversations([conversationId], caller);
+  async removeConversation(conversationId: string, caller?: SubagentCaller): Promise<RemoveOutcome> {
+    return (await this.removeConversations([conversationId], caller))[0];
   }
-  async removeConversations(ids: readonly string[], caller?: SubagentCaller): Promise<RemoveResult> {
+  async removeConversations(ids: readonly string[], caller?: SubagentCaller): Promise<RemoveOutcome[]> {
     const unique = [...new Set(ids)];
-    const removed: ConversationId[] = [];
-    const removedConversations: Conversation[] = [];
-    const errors: RemoveResult["errors"] = [];
+    const failures = new Map<string, Extract<RemoveOutcome, { ok: false }>>();
     const candidates: Conversation[] = [];
     for (const id of unique) {
       const conversation = this.conversations.get(id as ConversationId);
       if (!conversation) {
         const error = new SubagentNotFoundError(id);
-        errors.push({ conversationId: id, error: error.message, code: error.code });
+        failures.set(id, { ok: false, conversationId: id, error: error.message, code: error.code });
         continue;
       }
       try {
         this.assertDirectOwner(conversation, caller, "remove");
         candidates.push(conversation);
       } catch (error) {
-        errors.push({ conversationId: id, error: error instanceof Error ? error.message : String(error) });
+        failures.set(id, { ok: false, conversationId: id, error: error instanceof Error ? error.message : String(error) });
       }
     }
     const candidateSubtrees = new Map(candidates.map(conversation => [
@@ -418,20 +402,22 @@ export class SubagentRuntime {
       }
       return true;
     });
+    const removed = new Set<ConversationId>();
+    const removedConversations: Conversation[] = [];
     for (const root of roots) {
       const subtree = candidateSubtrees.get(root.conversationId)!;
       const active = subtree.filter(conversation => conversation.hasActiveExecution);
       if (active.length) {
         const error = `Subagent subtree ${root.conversationId} has active subagents: ${active.map(conversation => conversation.conversationId).join(", ")}. Cancel them before removal.`;
         for (const target of candidates) {
-          if (subtree.includes(target)) errors.push({ conversationId: target.conversationId, error });
+          if (subtree.includes(target)) failures.set(target.conversationId, { ok: false, conversationId: target.conversationId, error });
         }
         continue;
       }
       for (const conversation of [...subtree].reverse()) {
         this.conversations.delete(conversation.conversationId);
         for (const run of conversation.runHistory) this.runs.delete(run.runId);
-        removed.push(conversation.conversationId);
+        removed.add(conversation.conversationId);
         removedConversations.push(conversation);
       }
     }
@@ -440,23 +426,18 @@ export class SubagentRuntime {
         try { listener(conversation, "removed"); } catch {}
       }
     }
-    const removedSet = new Set(removed);
-    const removals = candidates.flatMap(conversation => {
-      if (!removedSet.has(conversation.conversationId)) return [];
-      const subtreeIds = candidateSubtrees.get(conversation.conversationId)!
+    return unique.map(id => {
+      const failure = failures.get(id);
+      if (failure) return failure;
+      const conversation = candidates.find(item => item.conversationId === id)!;
+      const removedIds = candidateSubtrees.get(conversation.conversationId)!
         .map(item => item.conversationId)
-        .filter(id => removedSet.has(id))
+        .filter(itemId => removed.has(itemId))
         .reverse();
-      return [{
-        conversationId: conversation.conversationId,
-        conversationIds: subtreeIds,
-        agentName: conversation.agentName,
-        label: conversation.label,
-      }];
+      return removedIds.length
+        ? { ok: true as const, conversationId: conversation.conversationId, label: conversation.label, removedIds }
+        : { ok: false as const, conversationId: id, error: `Subagent ${id} was not removed.` };
     });
-    const inputOrder = new Map(unique.map((id, index) => [id, index]));
-    errors.sort((left, right) => (inputOrder.get(left.conversationId) ?? unique.length) - (inputOrder.get(right.conversationId) ?? unique.length));
-    return { removed: removed.length, conversationIds: removed, removals, errors };
   }
   private conversationSubtree(rootId: ConversationId): Conversation[] {
     const result: Conversation[] = [];

@@ -213,150 +213,86 @@ It does not claim a current `status` or `availableActions`.
 - `subagent:completed` becomes `subagent:finished`, since it covers completed, failed, and cancelled statuses.
 - Historical overlay views retain their specialized execution history.
 
-## Implementation plan
+## Implementation architecture
 
-### Phase 1: Establish the canonical domain projection
+The contract above is implemented through a small set of canonical domain types and explicit boundary projections. Internal types should not be reused merely because their fields happen to overlap; reuse follows shared meaning and ownership.
 
-1. Define the five-value public `SubagentStatus`.
-2. Retain granular internal execution outcomes.
-3. Add one projection that maps internal execution state to public status.
-4. Add a caller-relative `availableActions` computation.
-5. Add a single canonical live-subagent projection used by all public surfaces, including `agent` and (for finished subagents) `joined`.
-6. Add bounded/full failure-message projection modes.
+### Agent configuration
 
-**Verification**
+`AgentDefinition` is the discovered markdown definition, including its system prompt and definition defaults. A conversation stores separate configuration concepts:
 
-- Table-driven tests for every internal state/outcome.
-- Tests for joined versus unjoined results.
-- Tests for root, direct-owner, and descendant callers.
-- Tests for inactive roots with active descendants affecting `remove`.
-- Assert every advertised action succeeds absent a race.
+- `AgentDefinitionSummary` — immutable definition identity shown by inventory and UI surfaces.
+- `RequestedExecutionConfig` — the definition defaults after spawn overrides are applied.
+- `ExecutionOverrides` — only the caller-supplied model and thinking overrides.
+- `EffectiveExecutionConfig` — the model, thinking level, working directory, skills, and tools actually used by the SDK session.
 
-### Phase 2: Replace lifecycle and acknowledgment concepts
+`ConversationSnapshot` exposes these concepts independently. It does not combine definition metadata and requested execution settings into a generic `config` object.
 
-1. Remove the public lifecycle enum and `canResume`.
-2. Replace runtime lifecycle checks with explicit internal predicates:
-   - Active execution
-   - Finished result
-   - Joined result
-   - Retained resumable session
-   - Removable subtree
-3. Rename internal `acknowledged` fields and methods to `joined`/`markJoined`.
-4. Update notification suppression and join bindings to use joined terminology.
-5. Ensure `resume` requires the latest result to have been joined.
-6. Implement bounded cancel settlement with forced abandonment: on internal timeout, detach listeners, best-effort kill the execution, and mark the run `cancelled`.
-7. Verify persisted session state loads cleanly across the `acknowledged` → `joined` rename, or migrate it.
+### Conversations and runs
 
-**Verification**
+`Conversation` owns one retained SDK session and an append-only sequence of `Run` instances. `RunState` is the authoritative mutable execution state:
 
-- Resume rejected before join.
-- Resume allowed after join when internally resumable.
-- Non-resumable failures remain non-resumable after join.
-- Repeated joins remain successful.
-- Join after cancel collects partial output and unlocks `resume` when internally resumable.
-- Notification behavior does not regress.
-- Cancel of a wedged execution settles via abandonment and returns `cancelled`.
+- `queued`, with its creation time supplied by the run;
+- `running`, with the bound SDK session and start time;
+- `done`, with the internal outcome, timestamps, output, and error directly on the state.
 
-### Phase 3: Normalize tool response contracts
+`RunSnapshot` is the serializable view used outside the mutable execution holder. It deliberately omits the SDK session while preserving detailed internal outcomes. `RunRef` is the canonical `{ conversationId, runId }` identity used by runtime records, callers, scheduler receipts, and join bindings.
 
-1. Introduce shared success and failure item constructors; failures targeting a live subagent embed the current canonical fields.
-2. Flatten `{ok:true,data:{...}}` into `{ok:true,...}`.
-3. Make every successful live-subagent result begin with the canonical fields.
-4. Update action-specific payloads:
-   - `list`: canonical block per direct child plus minimal descendant tree
-   - `spawn`: canonical block
-   - `resume`: canonical block
-   - `steer`: canonical block plus steer receipt
-   - `cancel`: canonical block
-   - `inspect`: canonical block plus progress/config diagnostics
-   - `join`: canonical block plus full output/failure and join history
-   - `remove`: removal receipt
-   - `agents`: flat discriminated definitions
-5. Preserve item order and isolated failures.
-6. Include labels in pre-allocation spawn failures.
+Detailed outcomes (`completed`, `error`, `aborted`, `interrupted`, and `skipped`) remain internal domain information. They project to the five public `SubagentStatus` values only at the public contract boundary.
 
-**Verification**
+### Public subagent projection
 
-- Contract tests covering every action.
-- Shared assertions enforcing canonical field presence and ordering.
-- Mixed success/failure batch tests.
-- Invocation-level error tests.
-- Ensure action-specific fields cannot replace or contradict canonical fields.
-- Rejected actions on live subagents carry current `status` and `availableActions`.
-- Failure-message templates are pinned so each failure category stays identifiable from prose.
+`projectLiveSubagent` is the sole owner of the caller-relative public lifecycle block. `CanonicalLiveSubagent` is a discriminated union:
 
-### Phase 4: Update schema and status filtering
+- queued and running variants cannot contain `joined` or `failure`;
+- completed and cancelled variants require `joined` and cannot contain `failure`;
+- failed variants require both `joined` and `failure`.
 
-1. Make `spawn.label` required and nonblank.
-2. Replace `list.state` with `list.statuses`, add optional `list.joined`, and remove `list.scope`.
-3. Validate only the five public statuses.
-4. Remove lifecycle-state exports from the provider contract.
-5. Update descriptions and prompt guidance:
-   - Describe `join` in one clause: waits for and collects the result; blocks while running, idempotent after.
-   - Say subagents must be joined before resuming.
-   - Keep the prompt minimal otherwise; the `joined` field and canonical-block failures teach the rest at runtime.
-   - Remove all acknowledgment language.
-   - Remove run-oriented language.
+The runtime supplies ownership, resumability, and subtree-removability facts to the projector. Callers consume `availableActions` rather than reconstructing those policies.
 
-**Verification**
+Action failures remain action-local. A failure against a retained subagent combines the current canonical fields with `ok: false` and `error`; unresolved targets and pre-allocation spawn failures carry only the identities that actually exist. There is no all-optional universal failure interface.
 
-- Schema tests for required labels.
-- Duplicate labels accepted.
-- Status filters support one or several values.
-- `joined` filter selects unjoined finished subagents.
-- Legacy `state` and `scope` rejected as a clean breaking change.
-- Tool-description tests pin the new terminology.
+### Tool input and response boundaries
 
-### Phase 5: Update renderers and overlay
+TypeBox schemas are the source of truth for spawn, resume, and steer input fields. Runtime request types are derived from those schemas and add only internal discriminators and branded subagent IDs. The manual parser remains responsible for ordered item failures and contract-specific error messages.
 
-1. Render canonical statuses consistently across tool rows.
-2. Render `failed` with the projected failure explanation.
-3. Render available actions where useful without making collapsed output noisy.
-4. Remove `latestRun` and `runCount` assumptions from list rendering.
-5. Render the minimal descendant tree under each direct child in list output.
-6. Preserve the overlay's **Previous runs** section.
-7. Update current-subagent overlay controls to derive from canonical capabilities where appropriate.
+Every item-processing action produces a `SubagentResultsEnvelope`; invocation failures produce a `SubagentErrorEnvelope`. The exact response object serialized into tool content is also stored in `SubagentToolDetails.response`.
 
-**Verification**
+Renderers consume that canonical response directly for agents, list, cancel, inspect, and remove. Only two associated views remain:
 
-- Collapsed and expanded snapshots for all statuses.
-- Overlay history tests remain intact.
-- No ordinary tool rendering mentions run IDs or latest runs.
-- Action hints match `availableActions`.
+- `DispatchRenderView` carries prompts and acceptance context omitted from provider responses.
+- `JoinRenderView` carries live nested activity, historical joins, and background work omitted from provider responses.
 
-### Phase 6: Standardize notifications and events
+These views are presentation data, not alternate sources of public subagent state.
 
-1. Project completion notifications through the root-relative canonical projector.
-2. Include `failure` for failed notifications.
-3. Rename `subagent:completed` to `subagent:finished`.
-4. Update lifecycle snapshots to canonical fields.
-5. Preserve granular internal outcomes for severity decisions.
-6. Keep persisted execution-history internals private.
+### Runtime action outcomes
 
-**Verification**
+Runtime methods return the smallest receipt needed by their callers:
 
-- Notification payload and rendering tests for completed, failed, and cancelled.
-- Caller-initiated cancel produces no finish notification for that caller.
-- Event tests for queued, started, and finished transitions.
-- Root-relative capability tests.
-- No acknowledgment or public run terminology remains.
+- cancellation returns a `RunRef`;
+- steering adds a `SteerReceipt` to a `RunRef`;
+- inspection returns the run snapshot with its conversation identity;
+- removal returns ordered `RemoveOutcome` items, one per unique requested target.
 
-### Phase 7: Regression and consistency enforcement
+Removal computes subtree effects once and returns target-relative receipts. The tool layer preserves malformed-target positions while consuming valid runtime outcomes in order; it does not reconstruct results by searching aggregate arrays.
 
-1. Add a contract test that enumerates every action.
-2. Assert every item-processing response uses `{action,results}`.
-3. Assert all successful live-subagent items contain exactly the required canonical base.
-4. Assert failures use `error`, while failed subagents use `failure`.
-5. Search source, tests, README, changelog, and rendered copy for prohibited terms:
-   - Public `terminal`
-   - Public `awaiting_join`
-   - Public `resumable`
-   - Public `state` and `canResume`
-   - Public `scope`
-   - `acknowledged`
-   - Provider-facing `latestRun`
-   - Provider-facing `runCount`
-6. Run typecheck and the complete subagent test suite.
-7. Repeat the hands-on lifecycle exercise against the revised tool.
+### Notifications, events, and persistence
 
-This should be implemented as one intentional breaking contract change rather than a compatibility layer, because retaining aliases would recreate the vocabulary ambiguity we are removing.
+Lifecycle events use the root- or owner-relative canonical subagent projection unchanged.
+
+`CompletionNotification` is the serializable form of `CanonicalFinishedSubagent` plus run correlation and timing metadata. Persisted custom messages are still validated defensively because they may come from older sessions or untyped storage. Failed persisted notifications require `failure`; completed and cancelled notifications reject it.
+
+The version 3 `subagent-run-index` entry remains a separate persistence record. It stores private execution-history metadata and is not treated as a live subagent representation.
+
+### Contract invariants
+
+The implementation and tests enforce these boundaries:
+
+1. Public tool JSON, lifecycle events, notifications, rendered text, and version 3 metadata are stable contracts.
+2. Mutable sessions never appear in snapshots or serialized payloads.
+3. Internal run outcomes are projected to public statuses in one place.
+4. Finished-state fields are enforced by discriminated types, not caller convention.
+5. Tool response and renderer data share one response object.
+6. Specialized views cannot replace or contradict canonical public fields.
+7. Ordered batch processing isolates item failures without reordering successful siblings.
+8. Direct ownership is required for actions; descendant trees remain informational.

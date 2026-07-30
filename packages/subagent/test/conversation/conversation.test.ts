@@ -34,7 +34,12 @@ test("preserves only explicit spawn model and thinking overrides", () => {
 
   assert.equal(inherited.requestedOverrides, undefined);
   assert.deepEqual(overridden.requestedOverrides, { model: "task-model", thinking: "high" });
-  assert.equal(overridden.config.model, "task-model");
+  assert.deepEqual(overridden.agent, {
+    name: "helper",
+    description: "d",
+    source: "project",
+  });
+  assert.equal(overridden.requestedConfig.model, "task-model");
 });
 
 test("a newly attached run reports the starting phase", () => {
@@ -98,13 +103,13 @@ test("summarizes stable subagent targets in nested tool activity", () => {
 test("preserves immutable exact run history across resume", () => {
   const agent = make();
   agent.bindSession(session());
-  const first = agent.settle(r1, { status: "completed", output: "first" });
+  const first = agent.settle(r1, "completed", { output: "first" });
   agent.markJoined(r1);
   const historical = agent.snapshot().runs[0];
 
   agent.beginResume(r2, "two");
   agent.bindSession(session());
-  agent.settle(r2, { status: "completed", output: "second" });
+  agent.settle(r2, "completed", { output: "second" });
 
   assert.deepEqual(agent.snapshot().runs.map(run => [
     run.runId,
@@ -122,7 +127,7 @@ test("preserves immutable exact run history across resume", () => {
 test("resume capability requires the latest resumable outcome to be fully joined", () => {
   const agent = make();
   agent.bindSession(session());
-  agent.settle(r1, { status: "completed", output: "ok" });
+  agent.settle(r1, "completed", { output: "ok" });
 
   assert.equal(agent.isResumeAllowed, false);
   assert.equal(agent.latestResultJoined, false);
@@ -137,7 +142,7 @@ test("resume capability requires the latest resumable outcome to be fully joined
 test("non-resumable results remain unavailable after join", () => {
   const agent = make();
   agent.bindSession(session());
-  agent.settle(r1, { status: "error", error: "failed" });
+  agent.settle(r1, "error", { error: "failed" });
 
   const binding = agent.bindRun(r1);
   binding.markJoined();
@@ -265,7 +270,7 @@ test("a steer accepted while the run settles returns a discarded receipt", async
 
   const steering = agent.steer(r1, "redirect");
   await Promise.resolve();
-  agent.settle(r1, { status: "aborted", error: "stopped" });
+  agent.settle(r1, "aborted", { error: "stopped" });
   release();
 
   assert.equal((await steering).state, "discarded");
@@ -281,7 +286,7 @@ test("settling a run discards steer receipts that were not processed", async () 
   } as any);
   await agent.steer(r1, "redirect");
 
-  agent.settle(r1, { status: "aborted", error: "stopped" });
+  agent.settle(r1, "aborted", { error: "stopped" });
 
   assert.equal(agent.snapshot().runs[0].steers[0].state, "discarded");
 });

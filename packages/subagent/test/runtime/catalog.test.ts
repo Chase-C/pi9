@@ -139,15 +139,10 @@ test("removing a conversation deletes its complete terminal subtree", async () =
   const grand = grandStart.starts[0] as any;
 
   await expect(manager.removeConversation(child.conversationId, { conversationId: root.conversationId, runId: root.runId })).resolves.toEqual({
-    removed: 2,
-    conversationIds: [grand.conversationId, child.conversationId],
-    removals: [{
-      conversationId: child.conversationId,
-      conversationIds: [grand.conversationId, child.conversationId],
-      agentName: "worker",
-      label: "child",
-    }],
-    errors: [],
+    ok: true,
+    conversationId: child.conversationId,
+    label: "child",
+    removedIds: [grand.conversationId, child.conversationId],
   });
   expect(() => manager.conversation(child.conversationId)).toThrow(`Subagent ${child.conversationId} was not found.`);
   expect(() => manager.conversation(grand.conversationId)).toThrow(`Subagent ${grand.conversationId} was not found.`);
@@ -176,15 +171,10 @@ test("removal completes before notifying listeners and isolates listener failure
   });
 
   await expect(manager.removeConversation(root.conversationId)).resolves.toEqual({
-    removed: 3,
-    conversationIds: [grand.conversationId, child.conversationId, root.conversationId],
-    removals: [{
-      conversationId: root.conversationId,
-      conversationIds: [grand.conversationId, child.conversationId, root.conversationId],
-      agentName: "worker",
-      label: "root",
-    }],
-    errors: [],
+    ok: true,
+    conversationId: root.conversationId,
+    label: "root",
+    removedIds: [grand.conversationId, child.conversationId, root.conversationId],
   });
   expect(updates).toEqual([
     `${grand.conversationId}:removed`,
@@ -215,9 +205,9 @@ test("removal rejects an entire subtree when a descendant is active", async () =
   await new Promise(done => setImmediate(done));
 
   const result = await manager.removeConversation(root.conversationId);
-  expect(result).toMatchObject({ removed: 0, conversationIds: [] });
-  expect(result.errors[0].error).toContain(child.conversationId);
-  expect(result.errors[0].error).not.toContain(child.runId);
+  expect(result).toMatchObject({ ok: false, conversationId: root.conversationId });
+  expect(result.ok ? "" : result.error).toContain(child.conversationId);
+  expect(result.ok ? "" : result.error).not.toContain(child.runId);
   expect(manager.conversation(root.conversationId).conversationId).toBe(root.conversationId);
   expect(manager.conversation(child.conversationId).conversationId).toBe(child.conversationId);
 
@@ -235,17 +225,10 @@ test("overlapping removal targets collapse into one subtree operation", async ()
   await childStart.completion;
   const child = childStart.starts[0] as any;
 
-  await expect(manager.removeConversations([root.conversationId, child.conversationId])).resolves.toEqual({
-    removed: 2,
-    conversationIds: [child.conversationId, root.conversationId],
-    removals: [
-      { conversationId: root.conversationId, conversationIds: [child.conversationId, root.conversationId], agentName: "worker", label: "root" },
-    ],
-    errors: [{
-      conversationId: child.conversationId,
-      error: `Subagent ${child.conversationId} is not directly owned by the root agent.`,
-    }],
-  });
+  await expect(manager.removeConversations([root.conversationId, child.conversationId])).resolves.toEqual([
+    { ok: true, conversationId: root.conversationId, label: "root", removedIds: [child.conversationId, root.conversationId] },
+    { ok: false, conversationId: child.conversationId, error: `Subagent ${child.conversationId} is not directly owned by the root agent.` },
+  ]);
 });
 
 test("child callers cannot resume or remove conversations outside their subtree", async () => {
@@ -263,8 +246,8 @@ test("child callers cannot resume or remove conversations outside their subtree"
       error: `Subagent ${unrelated.conversationId} is not directly owned by caller subagent ${owner.conversationId}.`,
     });
   await expect(manager.removeConversation(unrelated.conversationId, ownerCaller)).resolves.toMatchObject({
-    removed: 0,
-    errors: [{ conversationId: unrelated.conversationId }],
+    ok: false,
+    conversationId: unrelated.conversationId,
   });
 });
 
@@ -434,8 +417,9 @@ test("aborted conversations resume only after abort and execution settle", async
   const capacityFailure = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocked", label: "blocked" }] as any).starts[0] as any;
   expect(capacityFailure.error).not.toContain(aborted.conversationId);
   await expect(manager.removeConversation(aborted.conversationId)).resolves.toMatchObject({
-    removed: 0,
-    errors: [{ conversationId: aborted.conversationId, error: expect.stringContaining("has active subagents") }],
+    ok: false,
+    conversationId: aborted.conversationId,
+    error: expect.stringContaining("has active subagents"),
   });
   expect(manager.projectSubagent(aborted.conversationId).availableActions).not.toContain("resume");
   expect(manager.startRun(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "too-early" }] as any).starts[0])
@@ -541,10 +525,10 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
   const second = resumed.starts[0] as any;
 
   await expect(manager.removeConversation(first.conversationId)).resolves.toEqual({
-    removed: 1,
-    conversationIds: [first.conversationId],
-    removals: [{ conversationId: first.conversationId, conversationIds: [first.conversationId], agentName: "worker", label: "old" }],
-    errors: [],
+    ok: true,
+    conversationId: first.conversationId,
+    label: "old",
+    removedIds: [first.conversationId],
   });
   expect(manager.listConversations()).toEqual([]);
   expect(() => manager.conversation(first.conversationId)).toThrow(`Subagent ${first.conversationId} was not found.`);
@@ -601,13 +585,9 @@ test("removal rejects active conversations without changing their runs", async (
   await new Promise(done => setImmediate(done));
 
   await expect(manager.removeConversation(active.conversationId)).resolves.toEqual({
-    removed: 0,
-    conversationIds: [],
-    removals: [],
-    errors: [{
-      conversationId: active.conversationId,
-      error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
-    }],
+    ok: false,
+    conversationId: active.conversationId,
+    error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
   });
   expect(manager.conversation(active.conversationId).runs[0].status.kind).toBe("running");
   expect(manager.inspectSubagents([active.conversationId])[0].snapshot.runId).toBe(active.runId);
@@ -632,22 +612,15 @@ test("batch removal isolates terminal, active, and unknown conversations", async
   const active = activeStart.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
-  await expect(manager.removeConversations([terminal.conversationId, active.conversationId, "amber-acorn"])).resolves.toEqual({
-    removed: 1,
-    conversationIds: [terminal.conversationId],
-    removals: [{ conversationId: terminal.conversationId, conversationIds: [terminal.conversationId], agentName: "worker", label: "terminal" }],
-    errors: [
-      {
-        conversationId: active.conversationId,
-        error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
-      },
-      {
-        conversationId: "amber-acorn",
-        error: "Subagent amber-acorn was not found.",
-        code: "SUBAGENT_NOT_FOUND",
-      },
-    ],
-  });
+  await expect(manager.removeConversations([terminal.conversationId, active.conversationId, "amber-acorn"])).resolves.toEqual([
+    { ok: true, conversationId: terminal.conversationId, label: "terminal", removedIds: [terminal.conversationId] },
+    {
+      ok: false,
+      conversationId: active.conversationId,
+      error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
+    },
+    { ok: false, conversationId: "amber-acorn", error: "Subagent amber-acorn was not found.", code: "SUBAGENT_NOT_FOUND" },
+  ]);
   expect(() => manager.runSnapshot(terminal.runId)).toThrow(`Unknown run: ${terminal.runId}.`);
   expect(manager.inspectSubagents([active.conversationId])[0].snapshot.status.kind).toBe("running");
 
@@ -694,7 +667,7 @@ test("cancellation waits for in-flight steering and retains its discarded receip
 
   await expect(steer).resolves.toMatchObject({ steer: { state: "discarded" } });
   releaseRun();
-  await expect(cancelling).resolves.toMatchObject({ conversationId: identity.conversationId, runId: identity.runId, status: "aborted" });
+  await expect(cancelling).resolves.toMatchObject({ conversationId: identity.conversationId, runId: identity.runId });
   expect(clears).toBeGreaterThan(0);
   expect(steering).toEqual([]);
   expect(manager.runSnapshot(identity.runId).steers).toMatchObject([{ id: 1, state: "discarded" }]);
@@ -717,7 +690,7 @@ test("wedged cancellation is forcibly abandoned and releases scheduler capacity"
   const identity = wedged.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
-  await expect(manager.cancelSubagent(identity.conversationId)).resolves.toMatchObject({ status: "aborted" });
+  await expect(manager.cancelSubagent(identity.conversationId)).resolves.toMatchObject({ conversationId: identity.conversationId, runId: identity.runId });
   expect(manager.projectSubagent(identity.conversationId)).toMatchObject({ status: "cancelled", joined: false });
   const joined = manager.bindSubagentJoin([identity.conversationId]);
   await joined.completion;
@@ -1009,7 +982,6 @@ test("cancelling an active run retains its conversation and exact outcome", asyn
   await expect(cancelling).resolves.toEqual({
     conversationId: started.conversationId,
     runId: started.runId,
-    status: "aborted",
   });
   expect(manager.listConversations().map(value => value.conversationId)).toContain(started.conversationId);
   await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(`Subagent ${started.conversationId} is aborted and cannot be cancelled.`);
@@ -1047,7 +1019,6 @@ test("queued cancellation settles immediately without dispatching the executor",
   await expect(cancelling!).resolves.toEqual({
     conversationId: target.conversationId,
     runId: target.runId,
-    status: "aborted",
   });
   await expect(queued.completion).resolves.toEqual(queued.starts);
   await join.completion;
@@ -1061,9 +1032,9 @@ test("queued cancellation settles immediately without dispatching the executor",
     error: `Subagent ${target.conversationId} cannot be resumed.`,
   });
   await expect(manager.removeConversation(target.conversationId)).resolves.toMatchObject({
-    removed: 1,
-    conversationIds: [target.conversationId],
-    errors: [],
+    ok: true,
+    conversationId: target.conversationId,
+    removedIds: [target.conversationId],
   });
 
   finishBlocker();
@@ -1089,7 +1060,7 @@ test("steering rejects queued, terminal, and SDK-rejected targets", async () => 
   await new Promise(done => setImmediate(done));
 
   await expect(manager.steerSubagent(secondRun.conversationId, "queued")).rejects.toThrow("queued");
-  await expect(manager.cancelSubagent(secondRun.conversationId)).resolves.toMatchObject({ runId: secondRun.runId, status: "aborted" });
+  await expect(manager.cancelSubagent(secondRun.conversationId)).resolves.toMatchObject({ runId: secondRun.runId });
   await expect(manager.steerSubagent(firstRun.conversationId, "running")).rejects.toThrow("queue rejected");
   finishFirst();
   await Promise.all([first.completion, second.completion]);
@@ -1137,7 +1108,7 @@ test("nested callers may inspect, steer, and cancel descendants only", async () 
   await expect(manager.cancelSubagent(owner.conversationId, caller)).rejects.toThrow("not directly owned");
   const cancelling = manager.cancelSubagent(child.conversationId, caller);
   releases.get("child")!();
-  await expect(cancelling).resolves.toMatchObject({ runId: child.runId, status: "aborted" });
+  await expect(cancelling).resolves.toMatchObject({ runId: child.runId });
 
   releases.get("owner")!();
   await Promise.all([childBatch.completion, ownerBatch.completion]);

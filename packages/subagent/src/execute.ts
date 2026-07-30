@@ -107,7 +107,7 @@ export async function executeRun(
   const agentDir = dependencies.getAgentDir();
 
   const requestedSkills = requestedConfig.skills ?? [];
-  let systemPrompt = agent.config.systemPrompt;
+  let systemPrompt = agent.definition.systemPrompt;
   if (requestedSkills.length > 0) {
     const { skills: available } = dependencies.loadSkills({ cwd, agentDir, skillPaths: [], includeDefaults: true });
     const matched: Skill[] = [];

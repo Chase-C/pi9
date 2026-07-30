@@ -1,10 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import type { AgentSource } from "./agents.js";
-import type { ConversationEffectiveConfig, ConversationRequestedOverrides, RunKind, RunPhase, SteerReceipt } from "./conversation.js";
+import type { AgentSource, EffectiveExecutionConfig, ExecutionOverrides } from "./agents.js";
+import { RUN_STATUSES, type RunKind, type RunPhase, type RunStatus, type SteerReceipt } from "./conversation.js";
 import type { ConversationId } from "./identifiers.js";
 import { formatElapsed, formatTokens, statusColor, truncateText } from "./run-format.js";
-import { RUN_STATUSES, SUBAGENT_STATUSES, type DispatchTaskKind, type RunStatus, type SubagentAction, type SubagentStatus } from "./schema.js";
+import { SUBAGENT_STATUSES, type DispatchTaskKind, type SubagentAction, type SubagentStatus } from "./schema.js";
+import type { SubagentErrorEnvelope, SubagentResultsEnvelope } from "./tool-contract.js";
 
 type DisplayStatus = RunStatus | SubagentStatus;
 type ThemeLike = Partial<Pick<Theme, "fg" | "bold">>;
@@ -44,7 +45,7 @@ export interface ListedConversationRenderItem {
   label: string;
   status: SubagentStatus;
   joined?: boolean;
-  availableActions: SubagentAction[];
+  availableActions: readonly SubagentAction[];
   failure?: string;
   descendants: ListedDescendantRenderItem[];
 }
@@ -72,8 +73,8 @@ export interface InspectedRunRenderItem {
   subagentId: ConversationId;
   parentSubagentId?: ConversationId;
   depth?: number;
-  requestedOverrides?: ConversationRequestedOverrides;
-  effectiveConfig?: ConversationEffectiveConfig;
+  requestedOverrides?: ExecutionOverrides;
+  effectiveConfig?: EffectiveExecutionConfig;
   agent?: string;
   label?: string;
   status: SubagentStatus;
@@ -142,22 +143,32 @@ export interface JoinedRunRenderItem {
   joinToolCallIds?: string[];
 }
 
-export type SubagentToolDetails =
-  | { action: "agents"; agents: AgentRenderItem[] }
-  | { action: "list"; conversations: ListedConversationRenderItem[] }
-  | { action: "spawn"; tasks: DispatchTaskRenderItem[] }
-  | { action: "resume"; tasks: DispatchTaskRenderItem[] }
-  | { action: "steer"; tasks: DispatchTaskRenderItem[] }
-  | { action: "cancel"; runs: CancelledRunRenderItem[] }
-  | { action: "inspect"; runs: Array<InspectedRunRenderItem | InspectedRunErrorRenderItem> }
-  | { action: "join"; runs: JoinedRunRenderItem[] }
-  | {
-      action: "remove";
-      removed: number;
-      subagentIds: ConversationId[];
-      errors: Array<{ subagentId: string; error: string }>;
-    }
-  | { action: "error"; requestedAction?: SubagentAction; message: string };
+type RemoveRenderItem =
+  | { readonly ok: true; readonly removedIds: readonly ConversationId[] }
+  | { readonly ok: false; readonly subagentId: string; readonly error: string };
+
+export interface DispatchRenderView {
+  readonly tasks: readonly DispatchTaskRenderItem[];
+}
+
+export interface JoinRenderView {
+  readonly runs: readonly JoinedRunRenderItem[];
+}
+
+type ResultDetails<A extends SubagentResultsEnvelope["action"], T> = {
+  readonly response: SubagentResultsEnvelope<A, T>;
+};
+
+type SubagentResultDetails =
+  | ResultDetails<"agents", AgentRenderItem>
+  | ResultDetails<"list", ListedConversationRenderItem>
+  | (ResultDetails<"spawn" | "resume" | "steer", unknown> & { readonly view: DispatchRenderView })
+  | ResultDetails<"cancel", CancelledRunRenderItem>
+  | ResultDetails<"inspect", InspectedRunRenderItem | InspectedRunErrorRenderItem>
+  | (ResultDetails<"join", unknown> & { readonly view: JoinRenderView })
+  | ResultDetails<"remove", RemoveRenderItem>;
+
+export type SubagentToolDetails = SubagentResultDetails | { readonly response: SubagentErrorEnvelope };
 
 export function renderSubagentCall(args: unknown, theme?: ThemeLike): Text {
   const input = asRecord(args);
@@ -174,11 +185,12 @@ export function renderSubagentResult(
 ): Component {
   const details = result.details;
   if (!details) return new Text(fallbackText(result), 0, 0);
-  if (details.action === "error") return new Text(paint(theme, "error", details.message), 0, 0);
+  if ("error" in details.response) return new Text(paint(theme, "error", details.response.error), 0, 0);
+  const resultDetails = details as SubagentResultDetails;
 
   const lines = options.expanded
-    ? expandedLines(details, theme)
-    : collapsedLines(details, options.isPartial === true, theme);
+    ? expandedLines(resultDetails, theme)
+    : collapsedLines(resultDetails, options.isPartial === true, theme);
   return new IndentedText(lines);
 }
 
@@ -199,87 +211,98 @@ class IndentedText implements Component {
   invalidate(): void {}
 }
 
-function collapsedLines(details: Exclude<SubagentToolDetails, { action: "error" }>, partial: boolean, theme?: ThemeLike): string[] {
-  switch (details.action) {
+function collapsedLines(details: SubagentResultDetails, partial: boolean, theme?: ThemeLike): string[] {
+  switch (details.response.action) {
     case "agents": {
-      if (details.agents.length === 0) return [success(theme, "No agents available")];
+      const agents = details.response.results;
+      if (agents.length === 0) return [success(theme, "No agents available")];
       return [
-        success(theme, `Found ${count(details.agents.length, "available agent")}`),
-        secondary(details.agents.map(agent => agent.name), theme),
+        success(theme, `Found ${count(agents.length, "available agent")}`),
+        secondary(agents.map(agent => agent.name), theme),
       ];
     }
     case "list": {
-      if (details.conversations.length === 0) return [success(theme, "No subagents found")];
+      const conversations = details.response.results;
+      if (conversations.length === 0) return [success(theme, "No subagents found")];
       return [
-        success(theme, `Found ${count(details.conversations.length, "subagent")}${statusSummary(details.conversations.map(conversation => conversation.status), theme)}`),
-        secondary(details.conversations.map(conversationLabel), theme),
+        success(theme, `Found ${count(conversations.length, "subagent")}${statusSummary(conversations.map(conversation => conversation.status), theme)}`),
+        secondary(conversations.map(conversationLabel), theme),
       ];
     }
     case "spawn":
     case "resume":
     case "steer": {
-      const accepted = details.tasks.filter(task => task.subagentId);
-      const rejected = details.tasks.length - accepted.length;
+      const tasks = dispatchTasks(details);
+      const accepted = tasks.filter(task => task.subagentId);
+      const rejected = tasks.length - accepted.length;
       const spawned = accepted.filter(task => task.kind === "spawn").length;
       const resumed = accepted.filter(task => task.kind === "resume").length;
       const steered = accepted.filter(task => task.kind === "steer").length;
       const outcome = dispatchOutcomeSummary(spawned, resumed, steered, rejected, theme);
-      const labels = details.tasks.map((task, index) => taskLabel(task, index));
+      const labels = tasks.map((task, index) => taskLabel(task, index));
       return labels.length ? [success(theme, outcome), secondary(labels, theme)] : [success(theme, outcome)];
     }
     case "cancel": {
-      const cancelled = details.runs.filter(run => run.status === "cancelled").length;
-      const errors = details.runs.length - cancelled;
+      const runs = details.response.results;
+      const cancelled = runs.filter(run => run.status === "cancelled").length;
+      const errors = runs.length - cancelled;
       const summary = [`Cancelled ${count(cancelled, "subagent")}`];
       if (errors) summary.push(count(errors, "error"));
-      return [success(theme, summary.join(paint(theme, "muted", " · "))), secondary(details.runs.map(run => run.subagentId), theme)];
+      return [success(theme, summary.join(paint(theme, "muted", " · "))), secondary(runs.map(run => run.subagentId), theme)];
     }
     case "inspect": {
-      if (details.runs.length === 0) return [success(theme, "No subagents inspected")];
-      const inspected = details.runs.filter((run): run is InspectedRunRenderItem => !("error" in run));
-      const errors = details.runs.length - inspected.length;
+      const runs = details.response.results;
+      if (runs.length === 0) return [success(theme, "No subagents inspected")];
+      const inspected = runs.filter((run): run is InspectedRunRenderItem => !("error" in run));
+      const errors = runs.length - inspected.length;
       const summary = inspected.length
         ? `Inspected ${count(inspected.length, "subagent")}${statusSummary(inspected.map(run => run.status), theme)}${errors ? `${paint(theme, "muted", " · ")}${count(errors, "error")}` : ""}`
         : `Inspected ${count(errors, "target")} ${paint(theme, "muted", "·")} ${count(errors, "error")}`;
       return [
         success(theme, summary),
-        secondary(details.runs.map(run => "error" in run ? run.subagentId : run.label || run.agent || run.subagentId), theme),
+        secondary(runs.map(run => "error" in run ? run.subagentId : run.label || run.agent || run.subagentId), theme),
       ];
     }
     case "join":
-      return joinLines(details.runs, false, partial, theme);
+      return joinLines(joinRuns(details), false, partial, theme);
     case "remove": {
-      const summary = [`Removed ${count(details.removed, "subagent")}`];
-      if (details.errors.length) summary.push(count(details.errors.length, "error"));
+      const removedIds = removedSubagentIds(details.response.results);
+      const errors = details.response.results.filter((item): item is Extract<RemoveRenderItem, { ok: false }> => !item.ok);
+      const summary = [`Removed ${count(removedIds.length, "subagent")}`];
+      if (errors.length) summary.push(count(errors.length, "error"));
       const lines = [success(theme, summary.join(paint(theme, "muted", " · ")))];
-      if (details.subagentIds.length) lines.push(secondary(details.subagentIds, theme));
+      if (removedIds.length) lines.push(secondary(removedIds, theme));
       return lines;
     }
   }
 }
 
-function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }>, theme?: ThemeLike): string[] {
-  switch (details.action) {
-    case "agents":
-      if (details.agents.length === 0) return [success(theme, "No agents available")];
-      return blocks(details.agents, (agent) => [
+function expandedLines(details: SubagentResultDetails, theme?: ThemeLike): string[] {
+  switch (details.response.action) {
+    case "agents": {
+      const agents = details.response.results;
+      if (agents.length === 0) return [success(theme, "No agents available")];
+      return blocks(agents, agent => [
         `${arrow(theme)} ${paint(theme, "text", agent.name)} ${paint(theme, "muted", `· ${agent.source}`)}`,
         `  ${paint(theme, "dim", agent.description)}`,
         `  ${tag(theme, "model", agent.model ?? "inherit")} ${paint(theme, "muted", "·")} ${tag(theme, "thinking", agent.thinking ?? "inherit")}`,
         `  ${tag(theme, "tools", agent.tools?.join(", ") || "default toolset")}`,
       ]);
-    case "list":
-      if (details.conversations.length === 0) return [success(theme, "No subagents found")];
-      return blocks(details.conversations, conversation => [
+    }
+    case "list": {
+      const conversations = details.response.results;
+      if (conversations.length === 0) return [success(theme, "No subagents found")];
+      return blocks(conversations, conversation => [
         `${statusMarker(theme, conversation.status)} ${paint(theme, "text", conversationLabel(conversation))} ${paint(theme, "muted", `· ${conversation.agent} · ${statusText(theme, conversation.status)}`)}`,
         `  ${tag(theme, "subagent", conversation.subagentId)}${conversation.joined !== undefined ? paint(theme, "muted", ` · ${conversation.joined ? "joined" : "not joined"}`) : ""}`,
         ...(conversation.failure ? [`  ${paint(theme, "error", conversation.failure)}`] : []),
         ...renderDescendants(conversation.descendants, "  ", theme),
       ]);
+    }
     case "spawn":
     case "resume":
     case "steer":
-      return blocks(details.tasks, (task, index) => {
+      return blocks(dispatchTasks(details), (task, index) => {
         const label = taskLabel(task, index);
         const meta = [task.agent, task.kind].filter(Boolean).join(" · ");
         const lines = [`${task.error ? errorMarker(theme) : arrow(theme)} ${paint(theme, "text", label)}${meta ? ` ${paint(theme, "muted", `· ${meta}`)}` : ""}`];
@@ -292,14 +315,14 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
         return lines;
       });
     case "cancel":
-      return blocks(details.runs, run => run.error ? [
+      return blocks(details.response.results, run => run.error ? [
         `${errorMarker(theme)} ${paint(theme, "text", run.subagentId)} ${paint(theme, "muted", "· not cancelled")}`,
         `  ${paint(theme, "error", run.error)}`,
       ] : [
         `${arrow(theme)} ${paint(theme, "text", run.subagentId)} ${paint(theme, "muted", "· cancelled")}`,
       ]);
     case "inspect":
-      return blocks(details.runs, run => {
+      return blocks(details.response.results, run => {
         if ("error" in run) return [
           `${errorMarker(theme)} ${paint(theme, "text", run.subagentId)} ${paint(theme, "muted", "· not inspected")}`,
           `  ${paint(theme, "error", run.error)}`,
@@ -316,13 +339,14 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
         return lines;
       });
     case "join":
-      return joinLines(details.runs, true, false, theme);
+      return joinLines(joinRuns(details), true, false, theme);
     case "remove": {
-      const items = details.subagentIds.map(subagentId => [
+      const items = removedSubagentIds(details.response.results).map(subagentId => [
         `${arrow(theme)} ${paint(theme, "text", subagentId)} ${paint(theme, "muted", "· removed")}`,
         `  ${tag(theme, "subagent", subagentId)}`,
       ]);
-      for (const error of details.errors) {
+      for (const error of details.response.results) {
+        if (error.ok) continue;
         items.push([
           `${errorMarker(theme)} ${paint(theme, "text", error.subagentId)} ${paint(theme, "muted", "· not removed")}`,
           `  ${paint(theme, "error", error.error)}`,
@@ -332,6 +356,25 @@ function expandedLines(details: Exclude<SubagentToolDetails, { action: "error" }
       return lines.length ? lines : [success(theme, "No subagents removed")];
     }
   }
+}
+
+function dispatchTasks(details: SubagentResultDetails): readonly DispatchTaskRenderItem[] {
+  if ("view" in details && "tasks" in details.view) return details.view.tasks;
+  throw new Error(`Missing dispatch render view for ${details.response.action}.`);
+}
+
+function joinRuns(details: SubagentResultDetails): readonly JoinedRunRenderItem[] {
+  if ("view" in details && "runs" in details.view) return details.view.runs;
+  throw new Error(`Missing join render view for ${details.response.action}.`);
+}
+
+function removedSubagentIds(items: readonly RemoveRenderItem[]): ConversationId[] {
+  const successes = items.filter((item): item is Extract<RemoveRenderItem, { ok: true }> => item.ok);
+  const roots = successes.filter(item => !successes.some(other =>
+    other !== item
+    && item.removedIds.every(id => other.removedIds.includes(id))
+  ));
+  return roots.flatMap(item => item.removedIds);
 }
 
 function joinLines(runs: readonly JoinedRunRenderItem[], expanded: boolean, partial: boolean, theme?: ThemeLike): string[] {

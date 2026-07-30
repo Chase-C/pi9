@@ -1,32 +1,38 @@
-import type { RunViewStatus } from "./conversation.js";
+import type { RunStatus, RunViewStatus } from "./conversation.js";
 import type { ConversationId } from "./identifiers.js";
-import type { RunStatus, SubagentAction, SubagentStatus } from "./schema.js";
+import type { SubagentAction, SubagentStatus } from "./schema.js";
 
-export interface CanonicalLiveSubagent {
-  readonly ok: true;
+export interface SubagentIdentity {
   readonly subagentId: ConversationId;
   readonly label: string;
   readonly agent: string;
-  readonly status: SubagentStatus;
-  readonly joined?: boolean;
-  readonly availableActions: SubagentAction[];
-  readonly failure?: string;
 }
 
-export interface CanonicalSubagentFailure {
-  readonly ok: false;
-  readonly error: string;
-  readonly code?: string;
-  readonly subagentId?: string;
-  readonly agent?: string;
-  readonly label?: string;
-  readonly status?: SubagentStatus;
-  readonly joined?: boolean;
-  readonly availableActions?: SubagentAction[];
-  readonly failure?: string;
+interface CanonicalSubagentBase extends SubagentIdentity {
+  readonly ok: true;
+  readonly availableActions: readonly SubagentAction[];
 }
 
-export type SubagentItemOutcome = CanonicalLiveSubagent | CanonicalSubagentFailure;
+export type CanonicalActiveSubagent = CanonicalSubagentBase & {
+  readonly status: "queued" | "running";
+  readonly joined?: never;
+  readonly failure?: never;
+};
+
+export type CanonicalNonFailedSubagent = CanonicalSubagentBase & {
+  readonly status: "completed" | "cancelled";
+  readonly joined: boolean;
+  readonly failure?: never;
+};
+
+export type CanonicalFailedSubagent = CanonicalSubagentBase & {
+  readonly status: "failed";
+  readonly joined: boolean;
+  readonly failure: string;
+};
+
+export type CanonicalFinishedSubagent = CanonicalNonFailedSubagent | CanonicalFailedSubagent;
+export type CanonicalLiveSubagent = CanonicalActiveSubagent | CanonicalFinishedSubagent;
 
 export interface LiveSubagentProjectionSource {
   readonly subagentId: ConversationId;
@@ -92,17 +98,26 @@ export function projectLiveSubagent(
   failureMode: FailureProjectionMode = "full",
 ): CanonicalLiveSubagent {
   const status = projectSubagentStatus(source.runStatus);
-  const failure = projectFailure(source.runStatus, failureMode);
-  return {
-    ok: true,
+  const availableActions = projectAvailableActions(source);
+  const base = {
+    ok: true as const,
     subagentId: source.subagentId,
     label: source.label,
     agent: source.agent,
-    status,
-    ...(isFinished(status) ? { joined: source.joined } : {}),
-    availableActions: projectAvailableActions(source),
-    ...(failure ? { failure } : {}),
   };
+  if (status === "queued" || status === "running") {
+    return { ...base, status, availableActions };
+  }
+  if (status === "failed") {
+    const failure = projectFailure(source.runStatus, failureMode);
+    if (!failure) throw new Error("Failed subagent projection requires a failure message.");
+    return { ...base, status, joined: source.joined, availableActions, failure };
+  }
+  return { ...base, status, joined: source.joined, availableActions };
+}
+
+export function isFinishedSubagent(subagent: CanonicalLiveSubagent): subagent is CanonicalFinishedSubagent {
+  return isFinished(subagent.status);
 }
 
 function isFinished(status: SubagentStatus): boolean {

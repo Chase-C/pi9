@@ -30,7 +30,7 @@ export function formatProgressWidgetRow(conversation: ConversationSnapshot, run:
   const status = run.status.kind;
   if (status !== "queued" && status !== "running") throw new Error("Progress rows require an active run.");
   const identity = conversation.label;
-  const agent = conversation.label !== conversation.config.name ? ` · ${conversation.config.name}` : "";
+  const agent = conversation.label !== conversation.agent.name ? ` · ${conversation.agent.name}` : "";
   const timestamp = status === "queued" ? run.status.queuedAt : run.status.startedAt;
   const marker = status === "running" ? "●" : "○";
   return {

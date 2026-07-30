@@ -10,7 +10,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { AgentConfig } from "../agents.js";
+import type { AgentDefinition } from "../agents.js";
 import { effectiveStatus, type ConversationSnapshot, type RunSnapshot } from "../conversation.js";
 import type { RunId } from "../identifiers.js";
 import { formatElapsed, formatTokens, runElapsedMs, statusColor } from "../run-format.js";
@@ -31,7 +31,7 @@ const OVERLAY_CHROME_HEIGHT = 6;
 
 export interface OverlayOptions {
   initialPage: SubagentOverlayPage;
-  agents: readonly AgentConfig[];
+  agents: readonly AgentDefinition[];
   settings: SubagentSettings;
   notify(message: string, level?: string): void;
   onSettingsChange(change: SubagentSettingsChange): SubagentSettings | void;
@@ -169,7 +169,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private renderDetailTitle(width: number): string {
     const conversation = this.findConversation(this.detail!.conversationId);
     const run = conversation && this.findRun(conversation, this.detail!.runId);
-    const title = conversation ? `${conversation.config.name} · ${conversation.conversationId}${run ? ` · ${run.runId}` : ""}` : "Conversation unavailable";
+    const title = conversation ? `${conversation.agent.name} · ${conversation.conversationId}${run ? ` · ${run.runId}` : ""}` : "Conversation unavailable";
     return truncateToWidth(` ${this.accent("Subagents")}  ${title}`, width, "");
   }
 
@@ -251,9 +251,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const isSelected = index === selected;
       const firstPrefix = `${isSelected ? this.accent("┃ ") : "  "}${this.muted(row.treePrefix ?? "")}`;
       const continuationPrefix = `${isSelected ? this.accent("┃ ") : "  "}${this.muted(row.treeContinuation ?? "")}`;
-      const identity = conversation.label || conversation.config.name;
+      const identity = conversation.label || conversation.agent.name;
       const name = isSelected ? this.accent(identity) : identity;
-      const agent = conversation.label ? ` · ${conversation.config.name}` : "";
+      const agent = conversation.label ? ` · ${conversation.agent.name}` : "";
       const config = requestedConfigLabel(conversation);
       const title = `${name}${this.muted(`${agent}${config ? ` (${config})` : ""}`)}`;
       const status = run ? effectiveStatus(run.status) : "idle";
@@ -284,7 +284,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     return latest ? this.renderConversationChronology(conversation, latest, width) : [];
   }
 
-  private renderAgentInspector(agent: AgentConfig, width: number): string[] {
+  private renderAgentInspector(agent: AgentDefinition, width: number): string[] {
     const lines = [
       `${this.accent(agent.name)} ${this.muted(`· ${agent.source}`)}`,
       "",
@@ -307,10 +307,10 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const previousRuns = conversation.runs.slice(0, Math.max(0, runIndex));
     const status = effectiveStatus(run.status);
     const lines = [
-      `${this.accent(conversation.label || conversation.config.name)} ${this.muted(`· ${conversation.config.name} · ${status}`)}`,
+      `${this.accent(conversation.label || conversation.agent.name)} ${this.muted(`· ${conversation.agent.name} · ${status}`)}`,
       "",
       `${this.tag("conversation", conversation.conversationId)} ${this.muted("·")} ${this.tag("run", run.runId)}`,
-      `${this.tag("model", conversation.effectiveConfig?.model ?? conversation.config.model ?? "default")} ${this.muted("·")} ${this.tag("thinking", conversation.effectiveConfig?.thinking ?? conversation.config.thinking ?? "default")}`,
+      `${this.tag("model", conversation.effectiveConfig?.model ?? conversation.requestedConfig.model ?? "default")} ${this.muted("·")} ${this.tag("thinking", conversation.effectiveConfig?.thinking ?? conversation.requestedConfig.thinking ?? "default")}`,
       ...(conversation.effectiveConfig ? [this.tag("cwd", conversation.effectiveConfig.cwd)] : []),
       "",
     ];
@@ -374,8 +374,8 @@ export class SubagentOverlayComponent implements Component, Focusable {
       seen.add(child.conversationId);
       const last = index === siblings.length - 1;
       const childRun = child.runs[0];
-      const label = child.label || child.config.name;
-      const agent = child.label ? ` · ${child.config.name}` : "";
+      const label = child.label || child.agent.name;
+      const agent = child.label ? ` · ${child.agent.name}` : "";
       const status = childRun ? effectiveStatus(childRun.status) : "idle";
       const connector = `${prefix}${last ? "╰─" : "├─"}`;
       const content = `${this.muted(connector)} ${this.text(label)}${this.muted(agent)} ${this.muted("·")} ${childRun ? this.statusText(childRun, status) : this.muted(status)}`;

@@ -24,7 +24,8 @@ const snapshot = (status: any = { kind: "running", startedAt: 1 }): Conversation
     conversationId,
     label: "test subagent",
     createdAt: 1,
-    config: { name: "helper", source: undefined, model: undefined, thinking: undefined, tools: undefined },
+    agent: { name: "helper", description: "", source: "project" },
+    requestedConfig: {},
     runs: [run],
     ...(status.kind !== "done" ? { currentRun: run } : {}),
   };
@@ -40,7 +41,7 @@ const runtimeDefaults: ActionRuntime = {
   validateSubagentJoin: () => {},
   bindSubagentJoin: () => { throw new Error("Unexpected bindSubagentJoin call."); },
   onConversationUpdate: () => () => {},
-  removeConversations: async () => ({ removed: 0, conversationIds: [], removals: [], errors: [] }),
+  removeConversations: async () => [],
   conversation: () => { throw new Error("Unknown conversation."); },
   conversationDisplay: id => ({ conversationId: id, agentName: "helper", label: "test subagent" }),
   projectSubagent: id => ({
@@ -219,8 +220,8 @@ test("steer sends multiple messages in input order", async () => {
   assert.equal(response.action, "steer");
   assert.deepEqual(response.results.map((entry: any) => entry.subagentId), [conversationId, conversationId, conversationId]);
   assert.deepEqual(response.results.map((entry: any) => entry.steer.id), [1, 2, 3]);
-  assert.deepEqual((result.details as any).tasks.map((task: any) => task.kind), ["steer", "steer", "steer"]);
-  assert.deepEqual((result.details as any).tasks.map((task: any) => task.steer.id), [1, 2, 3]);
+  assert.deepEqual((result.details as any).view.tasks.map((task: any) => task.kind), ["steer", "steer", "steer"]);
+  assert.deepEqual((result.details as any).view.tasks.map((task: any) => task.steer.id), [1, 2, 3]);
 });
 
 test("steer isolates failures from sibling messages", async () => {
@@ -484,17 +485,22 @@ test("list filters public statuses and joined results", () => {
     projectSubagent: (id: any) => {
       const value = conversations.find(item => item.conversationId === id)!;
       const run = value.runs.at(-1);
-      const status = run.status.kind === "running" ? "running"
-        : run.status.outcome === "completed" ? "completed" : "failed";
-      return {
+      const identity = {
         ok: true as const,
         subagentId: id,
         label: value.label,
-        agent: value.config.name,
-        status: status as "running" | "completed" | "failed",
-        ...(run.status.kind === "done" ? { joined: run.joined } : {}),
-        availableActions: ["inspect", "join"] as any,
-        ...(status === "failed" ? { failure: "Subagent failed: provider failed" } : {}),
+        agent: value.agent.name,
+        availableActions: ["inspect", "join"] as const,
+      };
+      if (run.status.kind === "running") return { ...identity, status: "running" as const };
+      if (run.status.outcome === "completed") {
+        return { ...identity, status: "completed" as const, joined: run.joined };
+      }
+      return {
+        ...identity,
+        status: "failed" as const,
+        joined: run.joined,
+        failure: "Subagent failed: provider failed",
       };
     },
   };
@@ -514,17 +520,12 @@ test("list filters public statuses and joined results", () => {
 test("remove returns the identity and complete removed subtree", async () => {
   const childSubagentId = "quiet-otter" as any;
   let received: any;
-  const summary = {
-    removed: 2,
-    conversationIds: [childSubagentId, conversationId],
-    removals: [{
-      conversationId,
-      conversationIds: [childSubagentId, conversationId],
-      agentName: "helper",
-      label: "retained task",
-    }],
-    errors: [],
-  };
+  const summary = [{
+    ok: true as const,
+    conversationId,
+    label: "retained task",
+    removedIds: [childSubagentId, conversationId],
+  }];
   const result = await removeAction(deps({
     conversationDisplay: id => ({ conversationId: id, agentName: "helper", label: "retained task" }),
     removeConversations: async (ids: any) => {
@@ -555,16 +556,15 @@ test("remove preserves ordered malformed and runtime failures without hiding val
     },
     removeConversations: async (ids: any) => {
       received = ids;
-      return {
-        removed: 1,
-        conversationIds: [conversationId],
-        removals: [{ conversationId, conversationIds: [conversationId], agentName: "helper", label: "helper" }],
-        errors: [{
+      return [
+        { ok: true as const, conversationId, label: "helper", removedIds: [conversationId] },
+        {
+          ok: false as const,
           conversationId: unknownConversationId,
           error: `Subagent ${unknownConversationId} was not found.`,
           code: "SUBAGENT_NOT_FOUND" as const,
-        }],
-      };
+        },
+      ];
     },
   }), { action: "remove", subagentIds: [conversationId, malformed, unknownConversationId] });
 
@@ -660,7 +660,7 @@ test("join projects elapsed time, turns, and tokens for rendering", async () => 
 
   const result = await joinAction(deps(manager), { action: "join", subagentIds: [conversationId] }, undefined, undefined);
 
-  assert.deepEqual((result.details as any).runs[0], {
+  assert.deepEqual((result.details as any).view.runs[0], {
     subagentId: conversationId,
     status: "completed",
     agent: "helper",
@@ -873,7 +873,7 @@ test("join projection retains terminal descendant joins and final detached backg
   };
 
   const result = await joinAction(deps(manager), { action: "join", subagentIds: [conversationId] }, undefined, undefined);
-  const child = (result.details as any).runs[0].joins[0].targets[0];
+  const child = (result.details as any).view.runs[0].joins[0].targets[0];
   assert.equal(child.joins[0].targets[0].subagentId, "leaf-c");
   assert.equal(child.background[0].entries[0].detachedAtFinal, true);
   assert.doesNotMatch(JSON.stringify(result.details), new RegExp([childRunId, leafRunId, backgroundRunId].join("|")));

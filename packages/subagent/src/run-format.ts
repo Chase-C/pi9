@@ -1,6 +1,6 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { RunSnapshot } from "./conversation.js";
-import type { RunStatus, SubagentStatus } from "./schema.js";
+import type { RunSnapshot, RunStatus } from "./conversation.js";
+import type { SubagentStatus } from "./schema.js";
 
 export function runElapsedMs(run: RunSnapshot, now = Date.now()): number {
   const start = run.status.kind === "queued" ? run.status.queuedAt

@@ -7,7 +7,7 @@ function snapshot(outcome: "completed" | "error") {
   return {
     conversationId: "amber-acorn",
     label: "safe label",
-    config: { name: "helper" },
+    agent: { name: "helper" },
     runs: [{
       runId: "adapt-ably",
       kind: "spawn",
@@ -42,4 +42,19 @@ test.each(["completed", "error"] as const)("durable metadata excludes full conte
   expect(persisted).not.toContain("prompt:");
   expect(persisted).not.toContain("output:");
   expect(persisted).not.toContain("error:");
+});
+
+test("durable metadata omits optional label and timing for runs that never started", () => {
+  const value = snapshot("error");
+  delete value.label;
+  delete value.runs[0].status.startedAt;
+
+  expect(projectSubagentRunIndex(value)).toEqual({
+    version: 3,
+    subagentId: "amber-acorn",
+    agent: "helper",
+    kind: "spawn",
+    status: "error",
+    completedAt: 175,
+  });
 });

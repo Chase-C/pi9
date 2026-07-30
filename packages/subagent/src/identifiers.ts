@@ -20,6 +20,11 @@ export const isSubagentId = isConversationId;
 declare const runIdBrand: unique symbol;
 export type RunId = string & { readonly [runIdBrand]: true };
 
+export interface RunRef {
+  readonly conversationId: ConversationId;
+  readonly runId: RunId;
+}
+
 const RANDOM_RETRIES = 32;
 export type RandomIndex = (max: number) => number;
 

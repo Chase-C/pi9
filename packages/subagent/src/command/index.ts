@@ -91,8 +91,10 @@ export function registerSubagentsCommand(
             },
             onRemove: async conversationId => {
               const result = await runtime.removeConversation(conversationId);
-              if (result.removed) notify(ctx, `Removed ${result.removed} subagent${result.removed === 1 ? "" : "s"} rooted at ${conversationId}.`, "info");
-              else notify(ctx, result.errors[0]?.error ?? `Could not remove subagent ${conversationId}.`, "warning");
+              if (result.ok) {
+                const removed = result.removedIds.length;
+                notify(ctx, `Removed ${removed} subagent${removed === 1 ? "" : "s"} rooted at ${conversationId}.`, "info");
+              } else notify(ctx, result.error, "warning");
               updateSubagentWidget(ctx, runtime.listConversations(), settings);
             },
           },

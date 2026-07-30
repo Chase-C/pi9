@@ -1,23 +1,24 @@
-import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
+import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig, AgentRequestedConfig, AgentSource } from "./agents.js";
-import { resolveRequestedConfig } from "./agents.js";
+import type {
+  AgentDefinition,
+  AgentDefinitionSummary,
+  EffectiveExecutionConfig,
+  ExecutionOverrides,
+  RequestedExecutionConfig,
+} from "./agents.js";
+import { resolveRequestedConfig, summarizeAgentDefinition } from "./agents.js";
 import { RunActivity, type RunActivityListener } from "./activity.js";
 import type { ConversationId, RunId } from "./identifiers.js";
-import type { RunOutcomeStatus, RunStatus, SpawnRequest } from "./schema.js";
-
-export type { RunOutcomeStatus } from "./schema.js";
+import type { SpawnRequest } from "./schema.js";
 
 /** A run starts a conversation or resumes its existing SDK session. */
 export type RunKind = "spawn" | "resume";
 
-export type RunOutcome =
-  | { readonly status: "completed"; readonly output?: string; readonly error?: never }
-  | {
-      readonly status: Exclude<RunOutcomeStatus, "completed">;
-      readonly output?: string;
-      readonly error?: string;
-    };
+export const RUN_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
+export const RUN_STATUSES = ["queued", "running", ...RUN_OUTCOME_STATUSES] as const;
+export type RunOutcomeStatus = (typeof RUN_OUTCOME_STATUSES)[number];
+export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export class RunSteerError extends Error {
   constructor(readonly runId: RunId, readonly status: string) {
@@ -59,9 +60,6 @@ interface TrackedSteerReceipt {
 export type RunPhase = "starting" | "thinking" | "processing_steer" | "responding" | "executing_tool" | "settling";
 export interface RunToolUse { readonly id: string; readonly name: string; readonly startedAt: number; readonly completedAt?: number; readonly isError?: boolean; readonly inputSummary?: string }
 export interface RunActivitySnapshot { readonly phase: RunPhase; readonly messageSnippet?: string; readonly turns: number; readonly compactions: number; readonly toolHistory: readonly RunToolUse[] }
-export interface AgentViewConfig { readonly name: string; readonly description?: string; readonly source: AgentSource | undefined; readonly sourcePath?: string; readonly model: string | undefined; readonly thinking: ModelThinkingLevel | undefined; readonly tools: readonly string[] | undefined; readonly skills?: readonly string[] }
-export interface ConversationEffectiveConfig { readonly model?: string; readonly thinking?: ModelThinkingLevel; readonly cwd: string; readonly skills: readonly string[]; readonly tools: readonly string[] }
-export interface ConversationRequestedOverrides { readonly model?: string; readonly thinking?: ModelThinkingLevel }
 export type RunViewStatus =
   | { readonly kind: "queued"; readonly queuedAt: number }
   | { readonly kind: "running"; readonly startedAt: number }
@@ -101,24 +99,32 @@ export interface ConversationSnapshot {
   readonly spawnedByRunId?: RunId;
   readonly label: string;
   readonly createdAt: number;
-  readonly config: AgentViewConfig;
+  readonly agent: AgentDefinitionSummary;
+  readonly requestedConfig: RequestedExecutionConfig;
   readonly runs: readonly RunSnapshot[];
   readonly currentRun?: RunSnapshot;
   readonly isStopping?: true;
-  readonly effectiveConfig?: ConversationEffectiveConfig;
-  readonly requestedOverrides?: ConversationRequestedOverrides;
+  readonly effectiveConfig?: EffectiveExecutionConfig;
+  readonly requestedOverrides?: ExecutionOverrides;
 }
 
-export type AttemptState =
+export type RunState =
   | { readonly kind: "queued" }
   | { readonly kind: "running"; readonly session: AgentSession; readonly startedAt: number }
-  | { readonly kind: "done"; readonly result: RunOutcome; readonly startedAt?: number; readonly completedAt: number };
+  | {
+      readonly kind: "done";
+      readonly outcome: RunOutcomeStatus;
+      readonly startedAt?: number;
+      readonly completedAt: number;
+      readonly output?: string;
+      readonly error?: string;
+    };
 
 /** Mutable execution holder. Once terminal, its state and projected history entry never change. */
 export class Run {
   readonly createdAt = Date.now();
   readonly activity: RunActivity;
-  state: AttemptState = { kind: "queued" };
+  state: RunState = { kind: "queued" };
   observerCount = 0;
   joined = false;
   readonly nestedJoins: Array<{ toolCallId?: string; targets: NestedJoinTargetSnapshot[]; state: NestedJoinAttemptState; startedAt: number; completedAt?: number; error?: string }> = [];
@@ -178,21 +184,21 @@ export class Run {
     if (update.state && update.state !== "running") attempt.completedAt = Date.now();
   }
 
-  settle(result: RunOutcome): boolean {
+  settle(outcome: RunOutcomeStatus, details: { readonly output?: string; readonly error?: string } = {}): boolean {
     if (this.state.kind === "done") return false;
     for (const receipt of this.steers) {
       if (receipt.state === "queued" || receipt.state === "delivered") receipt.state = "discarded";
     }
     const startedAt = this.state.kind === "running" ? this.state.startedAt : undefined;
-    this.state = Object.freeze({ kind: "done", result: Object.freeze({ ...result }), startedAt, completedAt: Date.now() });
+    this.state = Object.freeze({ kind: "done", outcome, ...details, startedAt, completedAt: Date.now() });
     return true;
   }
 }
 
-export function completedRun(agent: Conversation, runId: RunId, output: string): RunSnapshot { return agent.settle(runId, { status: "completed", output }); }
-export function errorRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return agent.settle(runId, { status: "error", error }); }
-export function interruptedRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return agent.settle(runId, { status: "interrupted", error }); }
-export function skippedRun(agent: Conversation, runId: RunId): RunSnapshot { return agent.settle(runId, { status: "skipped", error: "Agent skipped." }); }
+export function completedRun(agent: Conversation, runId: RunId, output: string): RunSnapshot { return agent.settle(runId, "completed", { output }); }
+export function errorRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return agent.settle(runId, "error", { error }); }
+export function interruptedRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return agent.settle(runId, "interrupted", { error }); }
+export function skippedRun(agent: Conversation, runId: RunId): RunSnapshot { return agent.settle(runId, "skipped", { error: "Agent skipped." }); }
 
 export function effectiveStatus(status: RunViewStatus): RunStatus {
   return status.kind === "done" ? status.outcome : status.kind;
@@ -243,20 +249,20 @@ export class Conversation {
   readonly agentName: string;
   readonly parentConversationId?: ConversationId;
   readonly spawnedByRunId?: RunId;
-  readonly requestedConfig: AgentRequestedConfig;
-  readonly requestedOverrides?: ConversationRequestedOverrides;
+  readonly requestedConfig: RequestedExecutionConfig;
+  readonly requestedOverrides?: ExecutionOverrides;
   readonly label: string;
   private readonly runs: Run[] = [];
   private session?: AgentSession;
   private stopping?: { runId: RunId; abortSettled: boolean; executionSettled: boolean };
   private steerTail: Promise<void> = Promise.resolve();
   private unsubscribe?: () => void;
-  private effectiveConfig?: ConversationEffectiveConfig;
+  private effectiveConfig?: EffectiveExecutionConfig;
 
   constructor(
     readonly conversationId: ConversationId,
     initialRunId: RunId,
-    readonly config: AgentConfig,
+    readonly definition: AgentDefinition,
     spawn: SpawnRequest,
     readonly listener: ConversationUpdateListener,
     options: { parentConversationId?: ConversationId; spawnedByRunId?: RunId } = {},
@@ -265,7 +271,7 @@ export class Conversation {
     this.label = spawn.label ?? spawn.prompt;
     this.parentConversationId = options.parentConversationId;
     this.spawnedByRunId = options.spawnedByRunId;
-    this.requestedConfig = resolveRequestedConfig(config, spawn);
+    this.requestedConfig = resolveRequestedConfig(definition, spawn);
     if (spawn.model !== undefined || spawn.thinking !== undefined) {
       this.requestedOverrides = Object.freeze({
         ...(spawn.model !== undefined ? { model: spawn.model } : {}),
@@ -289,9 +295,9 @@ export class Conversation {
   get hasRetainedResumableSession(): boolean {
     const latest = this.latestRun();
     return latest.state.kind === "done" && this.session !== undefined
-      && (latest.state.result.status === "completed"
-        || latest.state.result.status === "interrupted"
-        || latest.state.result.status === "aborted");
+      && (latest.state.outcome === "completed"
+        || latest.state.outcome === "interrupted"
+        || latest.state.outcome === "aborted");
   }
   get isResumeAllowed(): boolean {
     const latest = this.latestRun();
@@ -337,7 +343,7 @@ export class Conversation {
       if (this.stopping) throw new RunSteerError(runId, "stopping");
       const run = this.requireRun(runId);
       if (run.state.kind !== "running") {
-        const status = run.state.kind === "queued" ? "queued" : run.state.result.status;
+        const status = run.state.kind === "queued" ? "queued" : run.state.outcome;
         throw new RunSteerError(runId, status);
       }
       const session = run.state.session;
@@ -371,11 +377,11 @@ export class Conversation {
     };
   }
 
-  settle(runId: RunId, outcome: RunOutcome): RunSnapshot {
+  settle(runId: RunId, outcome: RunOutcomeStatus, details: { readonly output?: string; readonly error?: string } = {}): RunSnapshot {
     const run = this.requireRun(runId);
     if (run !== this.latestRun()) return this.project(run);
     this.unsubscribe?.(); this.unsubscribe = undefined;
-    if (run.settle(outcome)) this.listener(this, "status");
+    if (run.settle(outcome, details)) this.listener(this, "status");
     return this.project(run);
   }
 
@@ -387,8 +393,7 @@ export class Conversation {
     const runningSession = run.state.kind === "running" ? run.state.session : undefined;
     clearSessionQueue(runningSession);
     const partialOutput = latestAssistantText(runningSession, run.sessionMessageStart);
-    this.settle(run.runId, {
-      status: "aborted",
+    this.settle(run.runId, "aborted", {
       error: reason,
       ...(partialOutput ? { output: partialOutput } : {}),
     });
@@ -435,7 +440,7 @@ export class Conversation {
     run.joined = true;
     this.listener(this, "joined");
   }
-  setEffectiveConfig(config: ConversationEffectiveConfig): void { this.effectiveConfig = config; }
+  setEffectiveConfig(config: EffectiveExecutionConfig): void { this.effectiveConfig = config; }
 
   snapshot(): ConversationSnapshot {
     const runs = this.runHistory;
@@ -446,7 +451,8 @@ export class Conversation {
       ...(this.spawnedByRunId ? { spawnedByRunId: this.spawnedByRunId } : {}),
       label: this.label,
       createdAt: this.createdAt,
-      config: { name: this.agentName, description: this.config.description, source: this.config.source, sourcePath: this.config.sourcePath, model: this.requestedConfig.model, thinking: this.requestedConfig.thinking, tools: this.requestedConfig.tools, ...(this.requestedConfig.skills !== undefined ? { skills: this.requestedConfig.skills } : {}) },
+      agent: summarizeAgentDefinition(this.definition),
+      requestedConfig: this.requestedConfig,
       runs,
       ...(currentRun ? { currentRun } : {}),
       ...(this.stopping ? { isStopping: true as const } : {}),
@@ -467,7 +473,7 @@ export class Conversation {
     const state = run.state;
     const status: RunViewStatus = state.kind === "queued" ? { kind: "queued", queuedAt: run.createdAt }
       : state.kind === "running" ? { kind: "running", startedAt: state.startedAt }
-      : { kind: "done", outcome: state.result.status, completedAt: state.completedAt, ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}), ...(state.result.output !== undefined ? { output: state.result.output } : {}), ...(state.result.error !== undefined ? { error: state.result.error } : {}) };
+      : { kind: "done", outcome: state.outcome, completedAt: state.completedAt, ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}), ...(state.output !== undefined ? { output: state.output } : {}), ...(state.error !== undefined ? { error: state.error } : {}) };
     const nestedJoins = run.nestedJoins.map(attempt => Object.freeze({
       ...(attempt.toolCallId ? { toolCallId: attempt.toolCallId } : {}),
       targets: Object.freeze(attempt.targets.map(target => Object.freeze({ ...target }))),

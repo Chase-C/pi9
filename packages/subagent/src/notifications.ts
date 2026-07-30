@@ -2,31 +2,25 @@ import { randomUUID } from "node:crypto";
 import type { ContextEvent, Theme } from "@earendil-works/pi-coding-agent";
 import type { Conversation, ConversationSnapshot, RunSnapshot } from "./conversation.js";
 import type { ConversationUpdateKind } from "./conversation.js";
+import { isFinishedSubagent, type CanonicalFinishedSubagent } from "./contract.js";
 import type { SubagentRuntime } from "./runtime.js";
-import type { SubagentAction, SubagentStatus } from "./schema.js";
+import type { SubagentStatus } from "./schema.js";
 import type { RunId } from "./identifiers.js";
 import { formatElapsed, runElapsedMs, statusColor, truncateText } from "./run-format.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisplaySettings } from "./settings.js";
 
-/** The current serializable completion summary shared by notification production and rendering. */
-export interface CompletionNotification {
-  ok: true;
-  /** Runtime-local correlation; optional when loading messages from older sessions. */
-  runId?: string;
-  subagentId: string;
-  label: string;
-  agent: string;
-  status: SubagentStatus;
-  joined: boolean;
-  availableActions: readonly SubagentAction[];
-  failure?: string;
-  completedAt: number;
-  elapsedMs: number;
-}
+type SerializableFinishedSubagent<T extends CanonicalFinishedSubagent = CanonicalFinishedSubagent> =
+  T extends CanonicalFinishedSubagent ? Omit<T, "subagentId"> & { readonly subagentId: string } : never;
 
-interface RuntimeCompletionNotification extends CompletionNotification {
-  runId: string;
-}
+/** The current serializable completion summary shared by notification production and rendering. */
+export type CompletionNotification = SerializableFinishedSubagent & {
+  /** Runtime-local correlation; optional when loading messages from older sessions. */
+  readonly runId?: string;
+  readonly completedAt: number;
+  readonly elapsedMs: number;
+};
+
+type RuntimeCompletionNotification = CompletionNotification & { readonly runId: string };
 
 interface CompletionCandidate {
   conversation: ConversationSnapshot;
@@ -113,20 +107,8 @@ function escapeXml(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function copyCompletionNotification(entry: CompletionNotification): CompletionNotification {
-  return {
-    ok: true,
-    ...(entry.runId ? { runId: entry.runId } : {}),
-    subagentId: entry.subagentId,
-    label: entry.label,
-    agent: entry.agent,
-    status: entry.status,
-    joined: entry.joined,
-    availableActions: [...entry.availableActions],
-    ...(entry.failure ? { failure: entry.failure } : {}),
-    completedAt: entry.completedAt,
-    elapsedMs: entry.elapsedMs,
-  };
+function copyCompletionNotification<T extends CompletionNotification>(entry: T): T {
+  return { ...entry, availableActions: [...entry.availableActions] };
 }
 
 function formatCompletionHeader(count: number): string {
@@ -384,10 +366,9 @@ export class CompletionNotifier {
 function projectCompletionNotification(manager: SubagentRuntime, value: CompletionCandidate): CompletionNotification | undefined {
   if (value.run.status.kind !== "done") return;
   const canonical = manager.projectSubagent(value.conversation.conversationId, undefined, { maxLength: 500 });
-  if (canonical.joined === undefined) return;
+  if (!isFinishedSubagent(canonical)) return;
   return {
     ...canonical,
-    joined: canonical.joined,
     completedAt: value.run.status.completedAt,
     elapsedMs: runElapsedMs(value.run),
   };
@@ -411,20 +392,26 @@ function completionDetails(message: CustomMessage): CompletionNotificationMessag
   const completions = (details as { completions?: unknown }).completions;
   if (notificationEpoch !== undefined && typeof notificationEpoch !== "string") return;
   if (!Array.isArray(completions)) return;
-  const valid = completions.filter((entry): entry is CompletionNotification => Boolean(
-    entry && typeof entry === "object" &&
-    (entry as CompletionNotification).ok === true &&
-    ((entry as CompletionNotification).runId === undefined || typeof (entry as CompletionNotification).runId === "string") &&
-    typeof (entry as CompletionNotification).subagentId === "string" &&
-    typeof (entry as CompletionNotification).label === "string" &&
-    typeof (entry as CompletionNotification).agent === "string" &&
-    FINISHED_SUBAGENT_STATUSES.has((entry as CompletionNotification).status) &&
-    typeof (entry as CompletionNotification).joined === "boolean" &&
-    Array.isArray((entry as CompletionNotification).availableActions) &&
-    typeof (entry as CompletionNotification).completedAt === "number" &&
-    typeof (entry as CompletionNotification).elapsedMs === "number",
-  ));
+  const valid = completions.filter(isCompletionNotification);
   return { ...(notificationEpoch ? { notificationEpoch } : {}), completions: valid };
+}
+
+function isCompletionNotification(entry: unknown): entry is CompletionNotification {
+  if (!entry || typeof entry !== "object") return false;
+  const value = entry as Record<string, unknown>;
+  if (
+    value.ok !== true
+    || (value.runId !== undefined && typeof value.runId !== "string")
+    || typeof value.subagentId !== "string"
+    || typeof value.label !== "string"
+    || typeof value.agent !== "string"
+    || typeof value.joined !== "boolean"
+    || !Array.isArray(value.availableActions)
+    || typeof value.completedAt !== "number"
+    || typeof value.elapsedMs !== "number"
+  ) return false;
+  if (value.status === "failed") return typeof value.failure === "string";
+  return (value.status === "completed" || value.status === "cancelled") && value.failure === undefined;
 }
 
 function toolAction(event: unknown): unknown {
@@ -455,7 +442,10 @@ function observedTerminalSubagentIds(action: unknown, result: unknown): string[]
   if ((action !== "inspect" && action !== "cancel") || !result || typeof result !== "object") return [];
   const details = (result as { details?: unknown }).details;
   if (!details || typeof details !== "object") return [];
-  const runs = (details as { runs?: unknown }).runs;
+  const response = (details as { response?: unknown }).response;
+  const runs = response && typeof response === "object"
+    ? (response as { results?: unknown }).results
+    : (details as { runs?: unknown }).runs;
   if (!Array.isArray(runs)) return [];
   return runs.flatMap(value => {
     if (!value || typeof value !== "object" || "error" in value) return [];
