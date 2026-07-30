@@ -13,7 +13,7 @@ test("spawn publishes queued after manager conversation and run indexes exist", 
   const manager = new SubagentRuntime(registry, 1, (async () => { await gate; return { status: "completed" }; }) as any);
   const emitted: Array<{ event: string; data: any }> = [];
   const unsubscribe = registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, manager);
-  const started = manager.startRun({ cwd: "/tmp" } as any, [{ kind: "spawn", agent: "worker", prompt: "work" }] as any);
+  const started = manager.startRun({ cwd: "/tmp" } as any, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any);
   const identity = started.starts[0] as any;
   const queued = emitted.find(value => value.event === "subagent:queued")!;
   expect(queued.data).toMatchObject({ ok: true, subagentId: identity.conversationId, status: "queued" });

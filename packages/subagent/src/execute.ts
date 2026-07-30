@@ -107,11 +107,15 @@ export async function executeRun(
   const agentDir = dependencies.getAgentDir();
 
   const requestedSkills = requestedConfig.skills ?? [];
-  const skillResolution = resolveRequestedSkills(cwd, requestedSkills, dependencies);
-  if (!skillResolution.ok) return errorRun(agent, run.runId, skillResolution.error);
+  let skillBlocks = agent.resolvedSkillBlocks;
+  if (skillBlocks === undefined) {
+    const skillResolution = resolveRequestedSkills(cwd, requestedSkills, dependencies);
+    if (!skillResolution.ok) return errorRun(agent, run.runId, skillResolution.error);
+    skillBlocks = skillResolution.value;
+  }
   let systemPrompt = agent.definition.systemPrompt;
-  if (skillResolution.value.length > 0) {
-    systemPrompt = `${systemPrompt}\n\n${skillResolution.value.join("\n\n")}`;
+  if (skillBlocks.length > 0) {
+    systemPrompt = `${systemPrompt}\n\n${skillBlocks.join("\n\n")}`;
   }
 
   const inheritedExtensionPaths = await dependencies.loadExtensionPaths(cwd, agentDir);

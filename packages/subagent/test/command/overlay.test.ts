@@ -4,12 +4,19 @@ import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/settings.js";
 import { fakeAgent } from "../helpers/fake-agent.js";
 
 function overlayFixture(initial = fakeAgent()) {
-  let conversation = initial;
+  let conversation = {
+    ...initial,
+    resumeAllowed: initial.resumeAllowed ?? initial.runs.at(-1)?.joined === true,
+  };
   let listener = () => {};
   const notify = vi.fn();
   const onCollect = vi.fn(async () => {
     const latest = conversation.runs.at(-1)!;
-    conversation = { ...conversation, runs: [...conversation.runs.slice(0, -1), { ...latest, joined: true }] };
+    conversation = {
+      ...conversation,
+      resumeAllowed: true,
+      runs: [...conversation.runs.slice(0, -1), { ...latest, joined: true }],
+    };
     listener();
   });
   const onResume = vi.fn();
@@ -51,6 +58,14 @@ test("completed results must be collected before the overlay enables resume", as
   component.handleInput("r");
   (component as any).submitPrompt("follow up");
   expect(onResume).toHaveBeenCalledWith("c1", "follow up");
+});
+
+test("the overlay trusts the snapshot resume capability", () => {
+  const { component, onResume } = overlayFixture({ ...fakeAgent({ resumable: true }), resumeAllowed: false });
+
+  expect(component.render(100).join("\n")).not.toContain("enter inspect · r resume · x remove");
+  component.handleInput("r");
+  expect(onResume).not.toHaveBeenCalled();
 });
 
 test("the overlay does not collect active or already joined results", async () => {

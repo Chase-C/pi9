@@ -215,7 +215,7 @@ test("removal rejects an entire subtree when a descendant is active", async () =
   await childStart.completion;
 });
 
-test("overlapping removal targets collapse into one subtree operation", async () => {
+test("overlapping removal targets attribute each removed id to the shallowest target", async () => {
   const manager = new SubagentRuntime(registry, 2, runner);
   const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
   await rootStart.completion;
@@ -225,10 +225,41 @@ test("overlapping removal targets collapse into one subtree operation", async ()
   await childStart.completion;
   const child = childStart.starts[0] as any;
 
-  await expect(manager.removeConversations([root.conversationId, child.conversationId])).resolves.toEqual([
+  const outcomes = await manager.removeConversations([root.conversationId, child.conversationId]);
+  expect(outcomes).toEqual([
     { ok: true, conversationId: root.conversationId, label: "root", removedIds: [child.conversationId, root.conversationId] },
-    { ok: false, conversationId: child.conversationId, error: `Subagent ${child.conversationId} is not directly owned by the root agent.` },
+    { ok: true, conversationId: child.conversationId, label: "child", removedIds: [] },
   ]);
+  const removedIds = outcomes.flatMap(outcome => outcome.ok ? outcome.removedIds : []);
+  expect(new Set(removedIds)).toEqual(new Set([root.conversationId, child.conversationId]));
+  expect(removedIds).toHaveLength(new Set(removedIds).size);
+});
+
+test("removal attribution holds when an unrelated target interleaves descendant and ancestor", async () => {
+  const manager = new SubagentRuntime(registry, 3, runner);
+  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(root.conversationId, root.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const unrelatedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated", label: "unrelated" }] as any);
+  await unrelatedStart.completion;
+  const unrelated = unrelatedStart.starts[0] as any;
+
+  const outcomes = await manager.removeConversations([
+    child.conversationId,
+    unrelated.conversationId,
+    root.conversationId,
+  ]);
+  expect(outcomes).toEqual([
+    { ok: true, conversationId: child.conversationId, label: "child", removedIds: [] },
+    { ok: true, conversationId: unrelated.conversationId, label: "unrelated", removedIds: [unrelated.conversationId] },
+    { ok: true, conversationId: root.conversationId, label: "root", removedIds: [child.conversationId, root.conversationId] },
+  ]);
+  const removedIds = outcomes.flatMap(outcome => outcome.ok ? outcome.removedIds : []);
+  expect(removedIds).toHaveLength(new Set(removedIds).size);
 });
 
 test("child callers cannot resume or remove conversations outside their subtree", async () => {
@@ -466,7 +497,7 @@ test("spawn validation is ordered, isolated, and does not allocate or consume ca
     { kind: "spawn", agent: "worker", prompt: "unknown model", model: "missing" },
     { kind: "spawn", agent: "worker", prompt: "invalid cwd", cwd: "missing-directory" },
     { kind: "spawn", agent: "bad-definition", prompt: "invalid definition model" },
-    { kind: "spawn", agent: "bad-definition", prompt: "override wins", model: "test/known" },
+    { kind: "spawn", agent: "bad-definition", prompt: "override wins", label: "override wins", model: "test/known" },
   ] as any);
 
   expect(batch.starts.map(start => start.inputIndex)).toEqual([0, 1, 2, 3, 4, 5, 6]);
@@ -532,6 +563,7 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
     kind: "spawn",
     agent: "worker",
     prompt: "old",
+    label: "old",
   }] as any);
   await initial.completion;
   const first = initial.starts[0] as any;
@@ -567,6 +599,7 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
     kind: "spawn",
     agent: "worker",
     prompt: "replacement",
+    label: "replacement",
   }] as any);
   expect(replacement.starts[0]).toMatchObject({ ok: true });
   await replacement.completion;
@@ -695,7 +728,7 @@ test("cancellation waits for in-flight steering and retains its discarded receip
   await started.completion;
 });
 
-test("wedged cancellation is forcibly abandoned and releases scheduler capacity", async () => {
+test("wedged cancellation resolves unsettled and releases scheduler capacity", async () => {
   const never = new Promise<void>(() => {});
   const executed: string[] = [];
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -709,7 +742,11 @@ test("wedged cancellation is forcibly abandoned and releases scheduler capacity"
   const identity = wedged.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
-  await expect(manager.cancelSubagent(identity.conversationId)).resolves.toMatchObject({ conversationId: identity.conversationId, runId: identity.runId });
+  await expect(manager.cancelSubagent(identity.conversationId)).resolves.toEqual({
+    conversationId: identity.conversationId,
+    runId: identity.runId,
+    settled: false,
+  });
   expect(manager.projectSubagent(identity.conversationId)).toMatchObject({ status: "cancelled", joined: false });
   const joined = manager.bindSubagentJoin([identity.conversationId]);
   await joined.completion;
@@ -998,12 +1035,14 @@ test("terminal action errors use only public lifecycle statuses", async () => {
       `Subagent ${started.conversationId} is ${publicStatus} and cannot be steered.`,
     );
     await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(
-      `Subagent ${started.conversationId} is ${publicStatus} and cannot be cancelled.`,
+      publicStatus === "cancelled"
+        ? `Subagent ${started.conversationId} is already cancelled.`
+        : `Subagent ${started.conversationId} is ${publicStatus} and cannot be cancelled.`,
     );
   }
 });
 
-test("cancelling an active run retains its conversation and exact outcome", async () => {
+test("normal cancellation resolves settled and retains its conversation and exact outcome", async () => {
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -1028,15 +1067,16 @@ test("cancelling an active run retains its conversation and exact outcome", asyn
     `Subagent ${started.conversationId} is cancelled and cannot be steered.`,
   );
   await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(
-    `Subagent ${started.conversationId} is cancelled and cannot be cancelled.`,
+    `Subagent ${started.conversationId} is already cancelled.`,
   );
   release();
   await expect(cancelling).resolves.toEqual({
     conversationId: started.conversationId,
     runId: started.runId,
+    settled: true,
   });
   expect(manager.listConversations().map(value => value.conversationId)).toContain(started.conversationId);
-  await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(`Subagent ${started.conversationId} is cancelled and cannot be cancelled.`);
+  await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(`Subagent ${started.conversationId} is already cancelled.`);
 
   const join = manager.bindSubagentJoin([started.conversationId]);
   await join.completion;
@@ -1071,6 +1111,7 @@ test("queued cancellation settles immediately without dispatching the executor",
   await expect(cancelling!).resolves.toEqual({
     conversationId: target.conversationId,
     runId: target.runId,
+    settled: true,
   });
   await expect(queued.completion).resolves.toEqual(queued.starts);
   await join.completion;

@@ -143,6 +143,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
       skills: config.skills,
     },
     runs,
+    resumeAllowed: options.resumable ?? false,
     ...(latest.status.kind !== "done" ? { currentRun: latest } : {}),
     ...(options.isStopping ? { isStopping: true as const } : {}),
     ...(options.requestedOverrides ? { requestedOverrides: options.requestedOverrides } : {}),

@@ -544,10 +544,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       && latest?.status.kind === "done" && !latest.joined && latest.observerCount === 0;
   }
   private isResumeAvailable(conversation: ConversationSnapshot): boolean {
-    const latest = conversation.runs.at(-1);
-    return !conversation.parentConversationId && !conversation.isStopping
-      && latest?.status.kind === "done" && latest.joined && latest.observerCount === 0
-      && (latest.status.outcome === "completed" || latest.status.outcome === "interrupted" || latest.status.outcome === "aborted");
+    return !conversation.parentConversationId && conversation.resumeAllowed;
   }
   private setFocus(region: FocusRegion): void { this.focusRegion = region; this.syncFocus(); this.requestRender(); }
   private syncFocus(): void {

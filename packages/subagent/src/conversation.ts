@@ -103,6 +103,7 @@ export interface ConversationSnapshot {
   readonly requestedConfig: RequestedExecutionConfig;
   readonly runs: readonly RunSnapshot[];
   readonly currentRun?: RunSnapshot;
+  readonly resumeAllowed: boolean;
   readonly isStopping?: true;
   readonly effectiveConfig?: EffectiveExecutionConfig;
   readonly requestedOverrides?: ExecutionOverrides;
@@ -249,6 +250,7 @@ export class Conversation {
   readonly agentName: string;
   readonly parentConversationId?: ConversationId;
   readonly spawnedByRunId?: RunId;
+  readonly resolvedSkillBlocks?: readonly string[];
   readonly requestedConfig: RequestedExecutionConfig;
   readonly requestedOverrides?: ExecutionOverrides;
   readonly label: string;
@@ -265,12 +267,13 @@ export class Conversation {
     readonly definition: AgentDefinition,
     spawn: SpawnRequest,
     readonly listener: ConversationUpdateListener,
-    options: { parentConversationId?: ConversationId; spawnedByRunId?: RunId } = {},
+    options: { parentConversationId?: ConversationId; spawnedByRunId?: RunId; resolvedSkillBlocks?: readonly string[] } = {},
   ) {
     this.agentName = spawn.agent;
-    this.label = spawn.label ?? spawn.prompt;
+    this.label = spawn.label;
     this.parentConversationId = options.parentConversationId;
     this.spawnedByRunId = options.spawnedByRunId;
+    this.resolvedSkillBlocks = options.resolvedSkillBlocks;
     this.requestedConfig = resolveRequestedConfig(definition, spawn);
     if (spawn.model !== undefined || spawn.thinking !== undefined) {
       this.requestedOverrides = Object.freeze({
@@ -455,6 +458,7 @@ export class Conversation {
       requestedConfig: this.requestedConfig,
       runs,
       ...(currentRun ? { currentRun } : {}),
+      resumeAllowed: this.isResumeAllowed,
       ...(this.stopping ? { isStopping: true as const } : {}),
       ...(this.effectiveConfig ? { effectiveConfig: this.effectiveConfig } : {}),
       ...(this.requestedOverrides ? { requestedOverrides: this.requestedOverrides } : {}),

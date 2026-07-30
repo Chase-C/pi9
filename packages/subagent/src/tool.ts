@@ -38,6 +38,7 @@ export type ActionRuntime = Pick<SubagentRuntime,
   | "conversation"
   | "conversationDisplay"
   | "projectSubagent"
+  | "subagentStatus"
   | "runSnapshot"
   | "unjoinedDirectChildren"
 > & { scheduler: Pick<RunScheduler, "suspendAgentSlotDuring"> };
@@ -51,6 +52,7 @@ export interface ActionDeps {
 export interface ActionResult {
   content: Array<{ type: "text"; text: string }>;
   details: SubagentToolDetails;
+  isError?: boolean;
 }
 
 type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { action: A }>;
@@ -142,6 +144,7 @@ export function errorResult(message: string, requestedAction?: SubagentAction): 
   return {
     content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
     details: { response: envelope },
+    isError: true,
   };
 }
 
@@ -176,7 +179,7 @@ export function listAction(
         subagentId: item.conversationId,
         label: item.label,
         agent: item.agent.name,
-        status: deps.runtime.projectSubagent(item.conversationId, callerOf(deps)).status,
+        status: deps.runtime.subagentStatus(item.conversationId),
         ...(children.length ? { descendants: children } : {}),
       };
     });
@@ -278,7 +281,13 @@ export async function cancelAction(
     if (typeof target !== "string") return { ok: false as const, subagentId: target.subagentId, error: target.error };
     try {
       const result = await deps.runtime.cancelSubagent(target as SubagentId, owner);
-      return canonicalSubagent(deps, result.conversationId);
+      return {
+        ...canonicalSubagent(deps, result.conversationId),
+        settled: result.settled,
+        ...(result.settled === false
+          ? { note: "Cancellation was not confirmed within the settlement window; the subagent's execution may still be finishing in the background." }
+          : {}),
+      };
     } catch (error) {
       return targetFailure(deps, target, error);
     }

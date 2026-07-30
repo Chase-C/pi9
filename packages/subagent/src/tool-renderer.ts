@@ -201,7 +201,11 @@ export function renderSubagentResult(
 ): Component {
   const details = result.details;
   if (!details) return new Text(fallbackText(result), 0, 0);
-  if ("error" in details.response) return new Text(paint(theme, "error", details.response.error), 0, 0);
+  const partialDetails: Partial<SubagentToolDetails> = details;
+  if (!("response" in partialDetails) || typeof partialDetails.response !== "object" || partialDetails.response === null) {
+    return new Text(fallbackText(result), 0, 0);
+  }
+  if ("error" in partialDetails.response) return new Text(paint(theme, "error", partialDetails.response.error), 0, 0);
   const resultDetails = details as SubagentResultDetails;
 
   const lines = options.expanded
@@ -385,12 +389,7 @@ function joinRuns(details: SubagentResultDetails): readonly JoinedRunRenderItem[
 }
 
 function removedSubagentIds(items: readonly RemoveRenderItem[]): ConversationId[] {
-  const successes = items.filter((item): item is Extract<RemoveRenderItem, { ok: true }> => item.ok);
-  const roots = successes.filter(item => !successes.some(other =>
-    other !== item
-    && item.removedIds.every(id => other.removedIds.includes(id))
-  ));
-  return roots.flatMap(item => item.removedIds);
+  return items.flatMap(item => item.ok ? item.removedIds : []);
 }
 
 function joinLines(runs: readonly JoinedRunRenderItem[], expanded: boolean, partial: boolean, theme?: ThemeLike): string[] {

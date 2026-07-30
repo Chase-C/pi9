@@ -57,7 +57,7 @@ test("tool prepares settings, applies task limits, and renders simple typed cont
   assert.match(tool.renderCall({ action: "spawn", spawns: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
 });
 
-test("unknown actions return a structured global error envelope", async () => {
+test("unknown actions return a structured global error envelope marked as an error", async () => {
   const tool: any = defineSubagentTool({
     runtime,
     agentRegistry: registry,
@@ -66,6 +66,7 @@ test("unknown actions return a structured global error envelope", async () => {
 
   const result = await tool.execute("call", { action: "bogus" }, undefined, undefined, {});
 
+  assert.equal(result.isError, true);
   assert.deepEqual(JSON.parse(result.content[0].text), {
     action: "unknown",
     error: 'Unknown action: bogus. Use "agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", or "remove".',

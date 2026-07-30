@@ -4,7 +4,8 @@ import { Conversation, RunSteerError, effectiveStatus, type ConversationSnapshot
 import { resolveModel, resolveRequestedSkills, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, RunIdAllocator, type ConversationId, type RunId, type RunRef, type SubagentId } from "./identifiers.js";
 import { RunScheduler, type RunExecutor } from "./scheduler.js";
-import { projectLiveSubagent, projectSubagentRunStatus, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
+import { projectLiveSubagent, projectSubagentRunStatus, projectSubagentStatus, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
+import type { SubagentStatus } from "./schema.js";
 import type { SpawnRequest, ResumeRequest } from "./schema.js";
 
 export type { ConversationUpdateListener } from "./conversation.js";
@@ -84,6 +85,9 @@ export class SubagentRuntime {
     return depth;
   }
   conversation(conversationId: string): ConversationSnapshot { return this.requireConversation(conversationId).snapshot(); }
+  subagentStatus(conversationId: string): SubagentStatus {
+    return projectSubagentStatus(this.requireConversation(conversationId).runHistory.at(-1)!.status);
+  }
   projectSubagent(
     conversationId: string,
     caller?: SubagentCaller,
@@ -158,8 +162,10 @@ export class SubagentRuntime {
     const conversationId = this.conversationIds.allocate();
     const runId = this.runIds.allocate();
     if (!conversationId || !runId) return { error: "Conversation or run ID space exhausted." };
-    const agent = new Conversation(conversationId, runId, config, task, (a, k) => this.updated(a, k),
-      caller ? { parentConversationId: caller.conversationId, spawnedByRunId: caller.runId } : {});
+    const agent = new Conversation(conversationId, runId, config, task, (a, k) => this.updated(a, k), {
+      ...(caller ? { parentConversationId: caller.conversationId, spawnedByRunId: caller.runId } : {}),
+      resolvedSkillBlocks: skills.value,
+    });
     this.conversations.set(conversationId, agent);
     return { agent, runId };
   }
@@ -204,12 +210,15 @@ export class SubagentRuntime {
     }
   }
 
-  async cancelSubagent(subagentId: SubagentId, caller?: SubagentCaller): Promise<RunRef> {
+  async cancelSubagent(subagentId: SubagentId, caller?: SubagentCaller): Promise<RunRef & { settled: boolean }> {
     const record = this.latestSubagentRecord(subagentId);
     this.assertDirectOwner(record.agent, caller, "cancel");
     const run = this.runSnapshot(record.runId);
     if (run.status.kind === "done") {
-      throw new Error(`Subagent ${subagentId} is ${projectSubagentRunStatus(run.status.outcome)} and cannot be cancelled.`);
+      const status = projectSubagentRunStatus(run.status.outcome);
+      throw new Error(status === "cancelled"
+        ? `Subagent ${subagentId} is already cancelled.`
+        : `Subagent ${subagentId} is ${status} and cannot be cancelled.`);
     }
     const wasQueued = run.status.kind === "queued";
     void record.agent.abort("Run cancelled.");
@@ -222,7 +231,7 @@ export class SubagentRuntime {
       const cancelled = record.agent.forceAbandonCancellation(record.runId);
       this._scheduler.abandon(record.runId, cancelled);
     }
-    return { conversationId: record.conversationId, runId: record.runId };
+    return { conversationId: record.conversationId, runId: record.runId, settled };
   }
 
   inspectSubagents(subagentIds: readonly SubagentId[], caller?: SubagentCaller): Array<{ readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }> {
@@ -372,6 +381,7 @@ export class SubagentRuntime {
     const unique = [...new Set(ids)];
     const failures = new Map<string, Extract<RemoveOutcome, { ok: false }>>();
     const candidates: Conversation[] = [];
+    const requestedIds = new Set(unique);
     for (const id of unique) {
       const conversation = this.conversations.get(id as ConversationId);
       if (!conversation) {
@@ -382,7 +392,21 @@ export class SubagentRuntime {
         this.assertDirectOwner(conversation, caller, "remove");
         candidates.push(conversation);
       } catch (error) {
-        failures.set(id, { ok: false, conversationId: id, error: error instanceof Error ? error.message : String(error) });
+        let ancestorId = conversation.parentConversationId;
+        let coveredByRequestedAncestor = false;
+        while (ancestorId) {
+          if (requestedIds.has(ancestorId)) {
+            const ancestor = this.conversations.get(ancestorId)!;
+            try {
+              this.assertDirectOwner(ancestor, caller, "remove");
+              coveredByRequestedAncestor = true;
+              break;
+            } catch {}
+          }
+          ancestorId = this.conversations.get(ancestorId)?.parentConversationId;
+        }
+        if (coveredByRequestedAncestor) candidates.push(conversation);
+        else failures.set(id, { ok: false, conversationId: id, error: error instanceof Error ? error.message : String(error) });
       }
     }
     const candidateSubtrees = new Map(candidates.map(conversation => [
@@ -422,17 +446,27 @@ export class SubagentRuntime {
         try { listener(conversation, "removed"); } catch {}
       }
     }
+    const claimed = new Set<ConversationId>();
+    const attributed = new Map<ConversationId, ConversationId[]>();
+    // Larger subtree first: an ancestor's subtree strictly contains its descendants',
+    // so subtree size is a total order that puts every ancestor before its descendants.
+    for (const conversation of [...candidates].sort((a, b) =>
+      candidateSubtrees.get(b.conversationId)!.length - candidateSubtrees.get(a.conversationId)!.length)) {
+      const removedIds = candidateSubtrees.get(conversation.conversationId)!
+        .map(item => item.conversationId)
+        .filter(itemId => removed.has(itemId) && !claimed.has(itemId))
+        .reverse();
+      for (const removedId of removedIds) claimed.add(removedId);
+      attributed.set(conversation.conversationId, removedIds);
+    }
     return unique.map(id => {
       const failure = failures.get(id);
       if (failure) return failure;
       const conversation = candidates.find(item => item.conversationId === id)!;
-      const removedIds = candidateSubtrees.get(conversation.conversationId)!
-        .map(item => item.conversationId)
-        .filter(itemId => removed.has(itemId))
-        .reverse();
-      return removedIds.length
-        ? { ok: true as const, conversationId: conversation.conversationId, label: conversation.label, removedIds }
-        : { ok: false as const, conversationId: id, error: `Subagent ${id} was not removed.` };
+      if (!removed.has(conversation.conversationId)) {
+        return { ok: false as const, conversationId: id, error: `Subagent ${id} was not removed.` };
+      }
+      return { ok: true as const, conversationId: conversation.conversationId, label: conversation.label, removedIds: attributed.get(conversation.conversationId)! };
     });
   }
   private conversationSubtree(rootId: ConversationId): Conversation[] {

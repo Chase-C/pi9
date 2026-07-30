@@ -212,7 +212,7 @@ function subagentIdError(value: unknown): string {
 }
 
 function duplicateSubagentId(value: SubagentId): string {
-  return `Duplicate subagentId ${value} in this request; the first occurrence was processed.`;
+  return `Duplicate subagentId ${value} in this request; only the first occurrence was attempted.`;
 }
 
 function rejectDuplicateRequests(requests: ParsedResumeRequest[]): ParsedResumeRequest[];
