@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-30
+
 ### Breaking
 
 - Replace the public lifecycle vocabulary with `queued`, `running`, `completed`, `failed`, and `cancelled` statuses plus the orthogonal finished-result `joined` flag.
@@ -295,7 +297,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.9.2...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.0...HEAD
+[0.10.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.9.2...subagent-v0.10.0
 [0.9.2]: https://github.com/Chase-C/pi9/compare/subagent-v0.9.1...subagent-v0.9.2
 [0.9.1]: https://github.com/Chase-C/pi9/compare/subagent-v0.9.0...subagent-v0.9.1
 [0.9.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.8.2...subagent-v0.9.0
