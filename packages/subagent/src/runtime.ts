@@ -395,37 +395,17 @@ export class SubagentRuntime {
     const records = subagentIds.map(subagentId => this.latestSubagentRecord(subagentId));
     for (const record of records) this.assertDirectOwner(record.agent, caller, "join");
     const runIds = records.map(record => record.runId);
-    return caller ? this.bindNestedJoin(caller, runIds, toolCallId) : this.bindJoin(runIds);
+    return caller ? this.bindNestedJoin(caller, runIds, toolCallId) : this.bindExactRuns(runIds);
   }
 
-  async steerRun(runId: RunId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
-    const record = this.requireRunRecord(runId);
-    this.assertCallerAccess(record.conversationId, caller, "steer");
-    return this.steerRecord(record, prompt, `Run ${runId}`);
-  }
-
-  async cancelRun(runId: RunId, caller?: SubagentCaller): Promise<CancelResult> {
-    const record = this.requireRunRecord(runId);
-    this.assertCallerAccess(record.conversationId, caller, "cancel");
-    return this.cancelRecord(record, `Run ${runId}`);
-  }
-
-  inspectRuns(runIds: readonly RunId[], caller?: SubagentCaller): InspectedRun[] {
-    return runIds.map(runId => {
-      const record = this.requireRunRecord(runId);
-      this.assertCallerAccess(record.conversationId, caller, "inspect");
-      return { conversationId: record.conversationId, snapshot: this.runSnapshot(runId) };
-    });
-  }
-
-  /** Binds only the requested runs. Resolution and observer attachment are all-or-nothing. */
-  bindJoin(runIds: readonly RunId[]): JoinBinding {
+  /** Binds only the requested private executions. Resolution and observer attachment are all-or-nothing. */
+  private bindExactRuns(runIds: readonly RunId[]): JoinBinding {
     const records = runIds.map(id => { const record = this.runs.get(id); if (!record) throw new Error(`Unknown run: ${id}.`); return record; });
     return this.withDeferredUpdates(() => this.bindRecords(records));
   }
 
   /** Records and binds one nested join attempt on the exact caller run. */
-  bindNestedJoin(caller: SubagentCaller, runIds: readonly RunId[], toolCallId?: string): NestedJoinBinding {
+  private bindNestedJoin(caller: SubagentCaller, runIds: readonly RunId[], toolCallId?: string): NestedJoinBinding {
     return this.withDeferredUpdates(() => this.bindNestedJoinNow(caller, runIds, toolCallId));
   }
 
@@ -616,7 +596,7 @@ export class SubagentRuntime {
     });
     for (const root of roots) {
       const subtree = this.conversationSubtree(root.conversationId);
-      const active = subtree.filter(conversation => conversation.hasCurrentRun || conversation.isStopping);
+      const active = subtree.filter(conversation => conversation.lifecycleState === "active");
       if (active.length) {
         const error = `Subagent subtree ${root.conversationId} has active subagents: ${active.map(conversation => conversation.conversationId).join(", ")}. Cancel them before removal.`;
         for (const target of candidates) {
@@ -658,7 +638,7 @@ export class SubagentRuntime {
     }
     return `Subagent ${agent.conversationId} cannot be resumed.`;
   }
-  private capacityError(): string { const removable = [...this.conversations.values()].filter(a => !a.hasCurrentRun).map(a => a.conversationId); return `Subagent capacity (${this.maxConversations}) reached. Remove terminal subagents${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
+  private capacityError(): string { const removable = [...this.conversations.values()].filter(a => a.lifecycleState !== "active").map(a => a.conversationId); return `Subagent capacity (${this.maxConversations}) reached. Remove terminal subagents${removable.length ? `: ${removable.join(", ")}` : " before spawning more"}.`; }
   private withDeferredUpdates<T>(operation: () => T): T {
     this.updateDeferralDepth++;
     try {

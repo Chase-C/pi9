@@ -4,9 +4,11 @@ import type { AgentConfig, AgentRequestedConfig, AgentSource } from "./agents.js
 import { resolveRequestedConfig } from "./agents.js";
 import { RunActivity, type RunActivityListener } from "./activity.js";
 import type { ConversationId, RunId } from "./identifiers.js";
+import type { ConversationLifecycleState } from "./lifecycle.js";
 import type { RunOutcomeStatus, SpawnRequest } from "./schema.js";
 
 export type { RunOutcomeStatus } from "./schema.js";
+export type { ConversationLifecycleState } from "./lifecycle.js";
 
 /** A run starts a conversation or resumes its existing SDK session. */
 export type RunKind = "spawn" | "resume";
@@ -107,6 +109,7 @@ export interface ConversationSnapshot {
   readonly isStopping?: true;
   readonly effectiveConfig?: ConversationEffectiveConfig;
   readonly requestedOverrides?: ConversationRequestedOverrides;
+  readonly state: ConversationLifecycleState;
   readonly canResume: boolean;
 }
 
@@ -267,14 +270,18 @@ export class Conversation {
   get runHistory(): readonly RunSnapshot[] { return this.runs.map(run => this.project(run)); }
   get latestRunId(): RunId { return this.latestRun().runId; }
   get status(): RunViewStatus { return this.project(this.latestRun()).status; }
-  get canResume(): boolean {
+  get lifecycleState(): ConversationLifecycleState {
     const latest = this.latestRun();
-    return !this.stopping && !!this.session && latest.state.kind === "done" &&
-      latest.acknowledged && latest.observerCount === 0 &&
+    if (this.stopping || latest.state.kind !== "done") return "active";
+    if (!latest.acknowledged) return "awaiting_join";
+    return this.session && latest.observerCount === 0 &&
       (latest.state.result.status === "completed"
         || latest.state.result.status === "interrupted"
-        || latest.state.result.status === "aborted");
+        || latest.state.result.status === "aborted")
+      ? "resumable"
+      : "terminal";
   }
+  get canResume(): boolean { return this.lifecycleState === "resumable"; }
 
   private newRun(runId: RunId, kind: "spawn" | "resume", prompt: string): Run {
     return new Run(runId, kind, prompt, update => this.listener(this, update));
@@ -412,7 +419,8 @@ export class Conversation {
       ...(this.stopping ? { isStopping: true as const } : {}),
       ...(this.effectiveConfig ? { effectiveConfig: this.effectiveConfig } : {}),
       ...(this.requestedOverrides ? { requestedOverrides: this.requestedOverrides } : {}),
-      canResume: this.canResume,
+      state: this.lifecycleState,
+      canResume: this.lifecycleState === "resumable",
     });
   }
 

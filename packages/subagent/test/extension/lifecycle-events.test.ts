@@ -18,7 +18,7 @@ test("spawn publishes queued after manager conversation and run indexes exist", 
   const queued = emitted.find(value => value.event === "subagent:queued")!;
   expect(queued.data).toMatchObject({ subagentId: identity.conversationId, snapshot: { subagentId: identity.conversationId } });
   expect(manager.conversation(identity.conversationId).runs.some(run => run.runId === identity.runId)).toBe(true);
-  expect(() => manager.bindJoin([identity.runId])).not.toThrow();
+  expect(() => manager.bindSubagentJoin([identity.conversationId])).not.toThrow();
   release(); await started.completion; unsubscribe();
 });
 

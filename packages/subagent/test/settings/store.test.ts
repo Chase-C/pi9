@@ -63,6 +63,29 @@ test("invalid redesigned runtime values warn and use defaults", () => {
   assert.match(result.warning!, /completionNotify/);
 });
 
+test("legacy inert display keys load silently and are omitted on save", async () => {
+  const root = await mkdtemp(join(tmpdir(), "subagent-settings-legacy-display-"));
+  const path = join(root, "subagent", "settings.json");
+  await mkdir(join(root, "subagent"), { recursive: true });
+  await writeFile(path, JSON.stringify({
+    display: {
+      promptPreviewLength: 999,
+      outputSnippetLength: 999,
+      toolCallLabelMaxLength: 72,
+      widgetMaxRowsPerSection: 9,
+    },
+  }));
+  const store = new SubagentSettingsStore(path);
+  const result = await store.load();
+
+  assert.equal(result.warning, undefined);
+  assert.deepEqual(result.settings.display, { toolCallLabelMaxLength: 72, widgetMaxRowsPerSection: 9 });
+
+  await store.save(result.settings);
+  const saved = await readFile(path, "utf8");
+  assert.doesNotMatch(saved, /promptPreviewLength|outputSnippetLength/);
+});
+
 test("save and reload preserves complete settings", async () => {
   const root = await mkdtemp(join(tmpdir(), "subagent-settings-save-"));
   const path = join(root, "subagent", "settings.json");

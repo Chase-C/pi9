@@ -3,8 +3,8 @@ import type { Conversation, ConversationSnapshot, NestedJoinAttemptSnapshot, Run
 import { listAgentDefinitions, type AgentRegistry } from "./agents.js";
 import type { ConversationId, RunId, SubagentId } from "./identifiers.js";
 import { runElapsedMs } from "./run-format.js";
-import type { JoinBinding, NestedJoinBinding, SubagentRuntime } from "./runtime.js";
-import { parseSubagentInvocation, SubagentParams, type ConversationState, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
+import type { JoinBinding, NestedJoinBinding, RunScheduler, SubagentRuntime } from "./runtime.js";
+import { parseSubagentInvocation, SubagentParams, type RunRequest, type RunStatus, type SteerRequest, type SubagentAction, type SubagentInvocation, type SubagentInvocationParseError } from "./schema.js";
 import type { SubagentSettings } from "./settings.js";
 import {
   renderSubagentCall,
@@ -17,8 +17,27 @@ import {
   type SubagentToolDetails,
 } from "./tool-renderer.js";
 
+export interface ActionRuntime {
+  queryConversations: SubagentRuntime["queryConversations"];
+  conversationDepth: SubagentRuntime["conversationDepth"];
+  listConversations: SubagentRuntime["listConversations"];
+  startRun: SubagentRuntime["startRun"];
+  steerSubagent: SubagentRuntime["steerSubagent"];
+  cancelSubagent: SubagentRuntime["cancelSubagent"];
+  inspectSubagents: SubagentRuntime["inspectSubagents"];
+  validateSubagentJoin: SubagentRuntime["validateSubagentJoin"];
+  bindSubagentJoin: SubagentRuntime["bindSubagentJoin"];
+  onConversationUpdate: SubagentRuntime["onConversationUpdate"];
+  removeConversations: SubagentRuntime["removeConversations"];
+  conversation: SubagentRuntime["conversation"];
+  conversationDisplay: SubagentRuntime["conversationDisplay"];
+  runSnapshot: SubagentRuntime["runSnapshot"];
+  unjoinedDirectChildren: SubagentRuntime["unjoinedDirectChildren"];
+  scheduler: Pick<RunScheduler, "suspendAgentSlotDuring">;
+}
+
 export interface ActionDeps {
-  runtime: SubagentRuntime;
+  runtime: ActionRuntime;
   agentRegistry: AgentRegistry;
   parent?: { conversationId: ConversationId; runId: () => RunId };
 }
@@ -26,7 +45,6 @@ export interface ActionDeps {
 export interface ActionResult {
   content: Array<{ type: "text"; text: string }>;
   details: SubagentToolDetails;
-  isError?: boolean;
 }
 
 export interface SubagentResultsEnvelope<A extends SubagentAction = SubagentAction, T = unknown> {
@@ -64,7 +82,6 @@ function jsonResult(json: unknown, details: SubagentToolDetails): ActionResult {
   return {
     content: [{ type: "text", text: JSON.stringify(json, null, 2) }],
     details,
-    isError: false,
   };
 }
 
@@ -84,7 +101,6 @@ export function errorResult(message: string, requestedAction?: SubagentAction): 
   return {
     content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
     details: { action: "error", ...(requestedAction ? { requestedAction } : {}), message },
-    isError: true,
   };
 }
 
@@ -112,11 +128,6 @@ export function listAction(
 ): ActionResult {
   const callerConversationId = deps.parent?.conversationId;
   const conversations = deps.runtime.queryConversations(callerConversationId, invocation.scope).map(conversation => {
-    const latest = conversation.runs.at(-1);
-    const state: ConversationState = conversation.currentRun || conversation.isStopping
-      ? "active"
-      : latest && !latest.acknowledged ? "awaiting_join"
-      : conversation.canResume ? "resumable" : "terminal";
     return {
       subagentId: conversation.conversationId,
       ...(conversation.parentConversationId ? { parentSubagentId: conversation.parentConversationId } : {}),
@@ -124,7 +135,7 @@ export function listAction(
       agent: conversation.config.name,
       ...(conversation.label ? { label: conversation.label } : {}),
       createdAt: conversation.createdAt,
-      state,
+      state: conversation.state,
       canResume: conversation.canResume,
       runs: conversation.runs.map(run => ({
         kind: run.kind,
@@ -162,16 +173,19 @@ async function startTasks(
     ? { conversationId: deps.parent.conversationId, runId: deps.parent.runId() }
     : undefined;
   const outcomes: OrderedDispatchOutcome[] = [];
+  const validTasks: RunRequest[] = [];
+  const validIndexes: number[] = [];
 
   for (let inputIndex = 0; inputIndex < tasks.length; inputIndex++) {
     const task = tasks[inputIndex];
-    if ("error" in task) {
-      outcomes.push({ ok: false, inputIndex, error: task.error });
-      continue;
-    }
-    const handle = deps.runtime.startRun(ctx, [task], owner ? { caller: owner } : {});
-    outcomes.push({ ...handle.starts[0], inputIndex });
+    if ("error" in task) outcomes.push({ ok: false, inputIndex, error: task.error });
+    else { validTasks.push(task); validIndexes.push(inputIndex); }
   }
+  if (validTasks.length) {
+    const handle = deps.runtime.startRun(ctx, validTasks, owner ? { caller: owner } : {});
+    for (const start of handle.starts) outcomes.push({ ...start, inputIndex: validIndexes[start.inputIndex] });
+  }
+  outcomes.sort((left, right) => left.inputIndex - right.inputIndex);
 
   const conversations = conversationSnapshots(deps.runtime);
   const receipts = outcomes.map((outcome, index) => projectRunReceipt(tasks[index], outcome, conversations));
@@ -444,7 +458,7 @@ function renderDispatchItems(
 }
 
 function projectInspection(
-  runtime: SubagentRuntime,
+  runtime: ActionRuntime,
   conversationId: ConversationId,
   run: RunSnapshot,
   callerConversationId?: ConversationId,
@@ -454,26 +468,26 @@ function projectInspection(
   const start = run.status.kind === "queued" ? run.status.queuedAt
     : run.status.kind === "running" ? run.status.startedAt
     : run.status.startedAt ?? run.createdAt;
-  let display: { agentName?: string; label?: string } = {};
   let config: Pick<ConversationSnapshot, "requestedOverrides" | "effectiveConfig"> & {
+    agent?: string;
+    label?: string;
     parentSubagentId?: ConversationId;
     depth?: number;
   } = {};
-  try { display = runtime.conversationDisplay(conversationId); } catch {}
   try {
     const conversation = runtime.conversation(conversationId);
     config = {
+      agent: conversation.config.name,
+      ...(conversation.label ? { label: conversation.label } : {}),
       ...(conversation.parentConversationId ? { parentSubagentId: conversation.parentConversationId } : {}),
       ...(conversation.requestedOverrides ? { requestedOverrides: conversation.requestedOverrides } : {}),
       ...(conversation.effectiveConfig ? { effectiveConfig: conversation.effectiveConfig } : {}),
+      depth: runtime.conversationDepth(conversationId, callerConversationId),
     };
-    try { config.depth = runtime.conversationDepth(conversationId, callerConversationId); } catch {}
   } catch {}
   return {
     subagentId: conversationId,
     ...config,
-    ...(display.agentName ? { agent: display.agentName } : {}),
-    ...(display.label ? { label: display.label } : {}),
     status,
     ...(status === "running" ? { phase: run.activity.phase } : {}),
     elapsedMs: Math.max(0, end - start),
@@ -502,9 +516,8 @@ function truncateInspectionText(value: string, limit: number): string {
   return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
 }
 
-function conversationSnapshots(runtime: SubagentRuntime): ConversationSnapshot[] {
-  const source = runtime as SubagentRuntime & { listConversations?: () => ConversationSnapshot[] };
-  return typeof source.listConversations === "function" ? source.listConversations() : [];
+function conversationSnapshots(runtime: ActionRuntime): ConversationSnapshot[] {
+  return runtime.listConversations();
 }
 
 type JoinedOutput = {
@@ -525,14 +538,14 @@ function projectJoinResults(output: readonly JoinOutput[]): ItemResult<Omit<Join
 
 function renderJoinedRuns(
   output: readonly JoinOutput[],
-  runtime: SubagentRuntime,
+  runtime: ActionRuntime,
   final: boolean,
 ): JoinedRunRenderItem[] {
   const conversations = conversationSnapshots(runtime);
   const byRun = new Map(conversations.flatMap(conversation => conversation.runs.map(run =>
     [run.runId, { conversation, run }] as const)));
   const snapshot = (runId: RunId): RunSnapshot | undefined => {
-    try { return runtime.runSnapshot?.(runId) ?? byRun.get(runId)?.run; } catch { return byRun.get(runId)?.run; }
+    try { return runtime.runSnapshot(runId); } catch { return byRun.get(runId)?.run; }
   };
   const display = (conversationId: ConversationId | undefined) => {
     if (!conversationId) return {};

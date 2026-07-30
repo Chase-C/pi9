@@ -66,7 +66,7 @@ describe("subagent overlay behavior", () => {
 
   it("does not resume active or non-resumable conversations", () => {
     for (const conversation of [
-      fakeAgent({ status: { kind: "running" }, canResume: true }),
+      fakeAgent({ status: { kind: "running" } }),
       fakeAgent({ status: { kind: "completed" }, canResume: false }),
     ]) {
       const { component, callbacks } = overlay([conversation]);

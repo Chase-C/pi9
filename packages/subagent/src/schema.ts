@@ -2,6 +2,7 @@ import { StringEnum, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 import { isSubagentId, type SubagentId } from "./identifiers.js";
+import { CONVERSATION_LIFECYCLE_STATES, type ConversationLifecycleState } from "./lifecycle.js";
 
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 
@@ -32,7 +33,7 @@ const STEER_MESSAGE_KEYS = new Set(Object.keys(SteerMessageSchema.properties));
 export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
 export const RUN_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
 export const RUN_STATUSES = ["queued", "running", ...RUN_OUTCOME_STATUSES] as const;
-export const CONVERSATION_STATES = ["active", "awaiting_join", "resumable", "terminal"] as const;
+export const CONVERSATION_STATES = CONVERSATION_LIFECYCLE_STATES;
 export const LIST_SCOPES = ["children", "descendants"] as const;
 
 export const SubagentParams = Type.Object({
@@ -49,7 +50,7 @@ export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 export type RunOutcomeStatus = (typeof RUN_OUTCOME_STATUSES)[number];
 export type RunStatus = (typeof RUN_STATUSES)[number];
-export type ConversationState = (typeof CONVERSATION_STATES)[number];
+export type ConversationState = ConversationLifecycleState;
 export type ListScope = (typeof LIST_SCOPES)[number];
 
 export const isConversationState = (value: unknown): value is ConversationState =>

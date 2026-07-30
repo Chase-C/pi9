@@ -12,6 +12,14 @@ test("declining runtime teardown cancels switching when a run is active", async 
   expect(confirm.mock.calls[0][1]).toContain("tear down this extension runtime");
 });
 
+test("a stopping cancelled subagent blocks teardown", async () => {
+  const confirm = vi.fn().mockResolvedValue(false);
+  const stopping = fakeAgent({ status: { kind: "aborted" }, isStopping: true });
+
+  await expect(confirmWithActiveSubagents({ hasUI: true, ui: { confirm } }, manager([stopping]))).resolves.toEqual({ cancel: true });
+  expect(confirm).toHaveBeenCalledWith("Active subagents", expect.stringContaining("helper: stopping"));
+});
+
 test("completed work or unavailable UI does not block teardown", async () => {
   const confirm = vi.fn();
   await expect(confirmWithActiveSubagents({ hasUI: true, ui: { confirm } }, manager([fakeAgent()]))).resolves.toBeUndefined();

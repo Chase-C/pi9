@@ -36,14 +36,7 @@ export interface SubagentAgentDiscoverySettings {
 }
 
 export interface SubagentDisplaySettings {
-  promptPreviewLength: number;
-  messageSnippetLength: number;
-  outputSnippetLength: number;
-  outputSnippetMaxLines: number;
   toolCallLabelMaxLength: number;
-  toolInputSummaryLength: number;
-  collapsedAgentListLimit: number;
-  collapsedDescriptionLength: number;
   /** Max rows per widget section before a +N more overflow line. */
   widgetMaxRowsPerSection: number;
 }
@@ -77,14 +70,7 @@ export function createDefaultSubagentSettings(): SubagentSettings {
       warnOnInvalidAgents: false,
     },
     display: {
-      promptPreviewLength: 120,
-      messageSnippetLength: 200,
-      outputSnippetLength: 400,
-      outputSnippetMaxLines: 8,
       toolCallLabelMaxLength: 60,
-      toolInputSummaryLength: 80,
-      collapsedAgentListLimit: 8,
-      collapsedDescriptionLength: 100,
       widgetMaxRowsPerSection: 6,
     },
   };
@@ -178,14 +164,7 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
 
   const display = objectValue(record.display);
   if (display) {
-    assignPositiveInt(display, "promptPreviewLength", value => { settings.display.promptPreviewLength = value; }, warnings);
-    assignPositiveInt(display, "messageSnippetLength", value => { settings.display.messageSnippetLength = value; }, warnings);
-    assignPositiveInt(display, "outputSnippetLength", value => { settings.display.outputSnippetLength = value; }, warnings);
-    assignPositiveInt(display, "outputSnippetMaxLines", value => { settings.display.outputSnippetMaxLines = value; }, warnings);
     assignPositiveInt(display, "toolCallLabelMaxLength", value => { settings.display.toolCallLabelMaxLength = value; }, warnings);
-    assignPositiveInt(display, "toolInputSummaryLength", value => { settings.display.toolInputSummaryLength = value; }, warnings);
-    assignPositiveInt(display, "collapsedAgentListLimit", value => { settings.display.collapsedAgentListLimit = value; }, warnings);
-    assignPositiveInt(display, "collapsedDescriptionLength", value => { settings.display.collapsedDescriptionLength = value; }, warnings);
     assignPositiveInt(display, "widgetMaxRowsPerSection", value => { settings.display.widgetMaxRowsPerSection = value; }, warnings);
   }
 

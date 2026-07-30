@@ -61,6 +61,7 @@ export interface FakeAgentOptions {
   usage?: Usage;
   totalUsage?: Usage;
   canResume?: boolean;
+  isStopping?: boolean;
   requestedOverrides?: ConversationSnapshot["requestedOverrides"];
   previousRuns?: RunSnapshot[];
   runs?: RunSnapshot[];
@@ -97,6 +98,8 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
       startedAt: 1,
     }))
     ?? [];
+  const isActive = status.kind === "queued" || status.kind === "running";
+  if (isActive && options.canResume) throw new Error("An active fake conversation cannot be resumable.");
   const run: RunSnapshot = {
     runId: (options.runId ?? "r1") as RunSnapshot["runId"],
     kind: options.kind ?? "spawn",
@@ -112,10 +115,16 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
     },
     usage: options.totalUsage ?? options.usage ?? ZERO_USAGE,
     observerCount: 0,
-    acknowledged: false,
+    acknowledged: options.canResume ?? false,
     steers: [],
   };
   const runs = options.runs ?? [...(options.previousRuns ?? []), run];
+  const latest = runs.at(-1)!;
+  const state = options.isStopping || latest.status.kind !== "done"
+    ? "active"
+    : !latest.acknowledged
+      ? "awaiting_join"
+      : options.canResume ? "resumable" : "terminal";
   return {
     conversationId: (options.conversationId ?? "c1") as ConversationSnapshot["conversationId"],
     ...(options.parentConversationId
@@ -137,9 +146,11 @@ export function fakeAgent(options: FakeAgentOptions = {}): ConversationSnapshot 
       skills: config.skills,
     },
     runs,
-    currentRun: runs.at(-1),
+    ...(latest.status.kind !== "done" ? { currentRun: latest } : {}),
+    ...(options.isStopping ? { isStopping: true as const } : {}),
     ...(options.requestedOverrides ? { requestedOverrides: options.requestedOverrides } : {}),
-    canResume: options.canResume ?? false,
+    state,
+    canResume: state === "resumable",
   };
 }
 

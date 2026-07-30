@@ -1,18 +1,9 @@
-import { matchesKey, truncateToWidth, visibleWidth, type KeybindingsManager } from "@earendil-works/pi-tui";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { matchesKey, type KeybindingsManager } from "@earendil-works/pi-tui";
 
 export type SubagentKeybindings = Pick<KeybindingsManager, "matches"> | undefined;
 
-export function fitLinesToWidth(lines: string[], width: number) {
-  return lines.map(line => visibleWidth(line) > width ? truncateToWidth(line, width) : line);
-}
-
 export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-export function accent(theme: Theme, text: string) {
-  return theme.fg?.("accent", theme.bold?.(text) ?? text) ?? text;
 }
 
 function keybindingsMatch(

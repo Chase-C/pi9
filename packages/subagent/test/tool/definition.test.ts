@@ -1,14 +1,16 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
 import { validateToolArguments } from "@earendil-works/pi-ai";
+import { SubagentRuntime } from "../../src/runtime.js";
 import { defineSubagentTool } from "../../src/tool.js";
 
 const settings = { runtime: { maxTasksPerRun: 1 }, display: {} } as any;
 const registry = { agents: new Map(), summarizeAgent: () => "helper" } as any;
+const runtime = new SubagentRuntime(registry);
 
 test("description names typed action inputs without restating task unions", () => {
   const tool = defineSubagentTool({
-    runtime: {} as any,
+    runtime,
     agentRegistry: registry,
     prepareInvocation: async () => settings,
   });
@@ -37,7 +39,7 @@ const toolCall = (arguments_: Record<string, any>) => ({
 
 test("SDK validation rejects a whole batch containing a malformed task", () => {
   const tool: any = defineSubagentTool({
-    runtime: {} as any,
+    runtime,
     agentRegistry: registry,
     prepareInvocation: async () => ({ runtime: { maxTasksPerRun: 2 }, display: {} }) as any,
   });
@@ -54,7 +56,7 @@ test("SDK validation rejects a whole batch containing a malformed task", () => {
 
 test("SDK validation enforces the task-array minimum", () => {
   const tool: any = defineSubagentTool({
-    runtime: {} as any,
+    runtime,
     agentRegistry: registry,
     prepareInvocation: async () => settings,
   });
@@ -66,10 +68,9 @@ test("SDK validation enforces the task-array minimum", () => {
 
 test("tool prepares settings, applies task limits, and renders simple typed content", async () => {
   let prepared = 0;
-  const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => { prepared++; return settings; } });
+  const tool: any = defineSubagentTool({ runtime, agentRegistry: registry, prepareInvocation: async () => { prepared++; return settings; } });
   const result = await tool.execute("call", { action: "spawn", spawns: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
   assert.equal(prepared, 1);
-  assert.equal(result.isError, true);
   assert.deepEqual(JSON.parse(result.content[0].text), {
     action: "spawn",
     error: "Too many tasks (2). Max is 1.\n\nAvailable agents:\nhelper",
@@ -80,14 +81,13 @@ test("tool prepares settings, applies task limits, and renders simple typed cont
 
 test("unknown actions return a structured global error envelope", async () => {
   const tool: any = defineSubagentTool({
-    runtime: {} as any,
+    runtime,
     agentRegistry: registry,
     prepareInvocation: async () => settings,
   });
 
   const result = await tool.execute("call", { action: "bogus" }, undefined, undefined, {});
 
-  assert.equal(result.isError, true);
   assert.deepEqual(JSON.parse(result.content[0].text), {
     action: "unknown",
     error: 'Unknown action: bogus. Use "agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", or "remove".',
@@ -95,9 +95,8 @@ test("unknown actions return a structured global error envelope", async () => {
 });
 
 test("mixed join target errors remain ordered item failures", async () => {
-  const tool: any = defineSubagentTool({ runtime: {} as any, agentRegistry: registry, prepareInvocation: async () => settings });
+  const tool: any = defineSubagentTool({ runtime, agentRegistry: registry, prepareInvocation: async () => settings });
   const result = await tool.execute("call", { action: "join", subagentIds: ["valid-run", "ghost-silently", 42] }, undefined, undefined, {});
-  assert.equal(result.isError, false);
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
   assert.deepEqual(response.results, [

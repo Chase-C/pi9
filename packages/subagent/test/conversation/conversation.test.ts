@@ -125,11 +125,14 @@ test("resume capability requires the latest resumable outcome to be joined", () 
   agent.settle(r1, { status: "completed", output: "ok" });
 
   assert.equal(agent.canResume, false);
+  assert.equal(agent.snapshot().state, "awaiting_join");
   const binding = agent.bindRun(r1);
   binding.acknowledge();
   assert.equal(agent.canResume, false, "an accepted join must release before resume");
+  assert.equal(agent.snapshot().state, "terminal");
   binding.release();
   assert.equal(agent.canResume, true);
+  assert.equal(agent.snapshot().state, "resumable");
 });
 
 test("logical abort terminalizes before best-effort SDK abort resolves", async () => {
@@ -145,6 +148,7 @@ test("logical abort terminalizes before best-effort SDK abort resolves", async (
   assert.equal(status.kind === "done" && status.error, "stopped");
   assert.equal(agent.canResume, false);
   assert.equal(agent.snapshot().isStopping, true);
+  assert.equal(agent.snapshot().state, "active");
 
   agent.executionSettled(r1);
   assert.equal(agent.canResume, false);
@@ -155,6 +159,7 @@ test("logical abort terminalizes before best-effort SDK abort resolves", async (
   agent.acknowledge(r1);
   assert.equal(agent.canResume, true);
   assert.equal(agent.snapshot().isStopping, undefined);
+  assert.equal(agent.snapshot().state, "resumable");
 });
 
 test("steer receipts become delivered when the queued user message enters the turn", async () => {

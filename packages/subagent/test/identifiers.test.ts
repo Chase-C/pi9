@@ -8,22 +8,18 @@ import {
   RUN_ID_ADVERBS,
   RUN_ID_VERBS,
 } from "../src/identifier-word-lists.js";
-import { isRunId } from "../src/identifiers.js";
 import { ConversationIdAllocator } from "../src/identifiers.js";
 import { RunIdAllocator } from "../src/identifiers.js";
 
-test("allocates distinct recognizable ID shapes", () => {
+test("allocates distinct ID shapes", () => {
   const conversationId = new ConversationIdAllocator(() => 0).allocate();
   const runId = new RunIdAllocator(() => 0).allocate();
 
   assert.equal(conversationId, "airy-acorn");
   assert.equal(runId, "adapt-ably");
   assert.equal(isConversationId(conversationId), true);
-  assert.equal(isRunId(conversationId), false);
-  assert.equal(isRunId(runId), true);
   assert.equal(isConversationId(runId), false);
   assert.equal(isConversationId("amber-ably"), false);
-  assert.equal(isRunId("adapt-acorn"), false);
 });
 
 test("word lists are globally disjoint", () => {
