@@ -1,7 +1,6 @@
 import { Check } from "typebox/value";
 import { describe, expect, it } from "vitest";
 
-import { MAX_TIMEOUT_MS } from "../src/deadline.js";
 import {
   AskAnswerSchema,
   AskAnsweredDetailsSchema,
@@ -27,17 +26,15 @@ describe("AskParamsSchema", () => {
       options: [{ label: "A", description: "First", preview: "  const a = 1;\n" }],
       allowMultiple: true,
       allowFreeform: false,
-      timeout: 2500,
+      timeout: true,
     })).toBe(true);
     expect(Check(AskParamsSchema, { question: "Choose" })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", answered: true })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", unknown: true })).toBe(false);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: 0 })).toBe(false);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: -1 })).toBe(false);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: 1.5 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: true })).toBe(true);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: false })).toBe(true);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: 0 })).toBe(false);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: MAX_TIMEOUT_MS })).toBe(true);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: MAX_TIMEOUT_MS + 1 })).toBe(false);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: 2500 })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A", unknown: true }] })).toBe(false);
   });
 });
@@ -82,7 +79,7 @@ describe("normalizeAsk", () => {
         { label: "Keep", preview: "\n  indented text  \n" },
         { label: "Drop", preview: " \n\t " },
       ],
-      timeout: 0,
+      timeout: false,
     })).toEqual({
       question: "Preview?",
       options: [
@@ -91,7 +88,7 @@ describe("normalizeAsk", () => {
       ],
       allowMultiple: false,
       allowFreeform: true,
-      timeout: 0,
+      timeout: false,
     });
   });
 

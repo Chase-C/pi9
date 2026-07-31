@@ -38,16 +38,8 @@ function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): 
 
   const optionCount = args.options.length;
   const mode = args.allowMultiple === true ? "multi · " : "";
-  const timeout = args.timeout !== undefined && args.timeout > 0
-    ? ` · timeout:${formatTimeout(args.timeout)}`
-    : "";
+  const timeout = args.timeout === true ? " · timeout" : "";
   return `${title}\n${theme.fg("muted", `╰ ${mode}options:${optionCount}${timeout}`)}`;
-}
-
-function formatTimeout(timeoutMs: number): string {
-  if (timeoutMs < 1000) return `${timeoutMs}ms`;
-  const seconds = timeoutMs / 1000;
-  return `${Number.isInteger(seconds) ? seconds : Number(seconds.toFixed(2))}s`;
 }
 
 class AnsweredOptions implements Component {
@@ -173,11 +165,11 @@ export default function askExtension(pi: ExtensionAPI) {
     name: "ask",
     label: "Ask",
     description: "Ask the user one focused question with selectable options. Blocks until answered, cancelled, or timed out.",
-    promptSnippet: "Ask the user a focused question with selectable options when user input is required",
+    promptSnippet: "Ask the user a focused question with selectable options when input is required",
     promptGuidelines: [
-      "Use ask only when you can offer a short list of useful options; put open-ended questions in your normal response instead.",
-      "An ask_response is a completed ask whose tool call was removed from the context; treat its answer as final and do not re-ask.",
-      "Decide up front whether an ask benefits from previews; if so, give every option a complete one — all or none, never partial.",
+      "Use ask only when you can offer useful options; open-ended questions go in your normal response.",
+      "An ask_response records an ask exchange you already completed (the call was pruned); treat the answer as final and do not re-ask.",
+      "Ask previews are all or none: if any option gets one, every option needs a complete one.",
     ],
     parameters: AskParamsSchema,
     executionMode: "sequential",

@@ -11,25 +11,16 @@ afterEach(() => {
 });
 
 describe("resolveTimeoutMs", () => {
-  it("gives an explicit per-call timeout precedence over the environment", () => {
-    expect(resolveTimeoutMs(1250, { PI9_ASK_TIMEOUT_MS: "9000" })).toBe(1250);
-    expect(resolveTimeoutMs(0, { PI9_ASK_TIMEOUT_MS: "9000" })).toBeUndefined();
-    expect(resolveTimeoutMs(-1, { PI9_ASK_TIMEOUT_MS: "9000" })).toBeUndefined();
-    expect(resolveTimeoutMs(1.5, { PI9_ASK_TIMEOUT_MS: "9000" })).toBeUndefined();
-    expect(resolveTimeoutMs(Number.POSITIVE_INFINITY, { PI9_ASK_TIMEOUT_MS: "9000" })).toBeUndefined();
-  });
-
-  it("accepts the maximum per-call timeout and rejects larger values", () => {
-    expect(resolveTimeoutMs(MAX_TIMEOUT_MS, { PI9_ASK_TIMEOUT_MS: "9000" })).toBe(MAX_TIMEOUT_MS);
-    expect(resolveTimeoutMs(MAX_TIMEOUT_MS + 1, { PI9_ASK_TIMEOUT_MS: "9000" })).toBeUndefined();
+  it.each([undefined, false])("disables the configured timeout when the flag is %s", (enabled) => {
+    expect(resolveTimeoutMs(enabled, { PI9_ASK_TIMEOUT_MS: "9000" })).toBeUndefined();
   });
 
   it.each([
     ["1", 1],
     ["2500", 2500],
     [String(MAX_TIMEOUT_MS), MAX_TIMEOUT_MS],
-  ])("accepts a positive integer decimal environment value %s", (value, expected) => {
-    expect(resolveTimeoutMs(undefined, { PI9_ASK_TIMEOUT_MS: value })).toBe(expected);
+  ])("accepts a positive integer decimal environment value %s when enabled", (value, expected) => {
+    expect(resolveTimeoutMs(true, { PI9_ASK_TIMEOUT_MS: value })).toBe(expected);
   });
 
   it.each([
@@ -44,7 +35,7 @@ describe("resolveTimeoutMs", () => {
     "Infinity",
     String(MAX_TIMEOUT_MS + 1),
   ])("disables timeout for invalid environment value %s", (value) => {
-    expect(resolveTimeoutMs(undefined, { PI9_ASK_TIMEOUT_MS: value })).toBeUndefined();
+    expect(resolveTimeoutMs(true, { PI9_ASK_TIMEOUT_MS: value })).toBeUndefined();
   });
 });
 
@@ -63,7 +54,7 @@ describe("createDeadlineSignal", () => {
     parent.abort(reason);
 
     vi.useFakeTimers();
-    const deadline = createDeadlineSignal(parent.signal, 1000);
+    const deadline = createDeadlineSignal(parent.signal, true, { PI9_ASK_TIMEOUT_MS: "1000" });
 
     expect(deadline.signal?.aborted).toBe(true);
     expect(deadline.signal?.reason).toBe(reason);
@@ -90,7 +81,7 @@ describe("createDeadlineSignal", () => {
 
   it("aborts exactly once when a positive timeout expires", () => {
     vi.useFakeTimers();
-    const deadline = createDeadlineSignal(undefined, 50);
+    const deadline = createDeadlineSignal(undefined, true, { PI9_ASK_TIMEOUT_MS: "50" });
     const onAbort = vi.fn();
     deadline.signal?.addEventListener("abort", onAbort);
 
@@ -107,10 +98,10 @@ describe("createDeadlineSignal", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([undefined, 0])("does not create a timer for timeout %s", (timeoutMs) => {
+  it.each([undefined, false])("does not create a timer when the flag is %s", (enabled) => {
     vi.useFakeTimers();
     const parent = new AbortController();
-    const deadline = createDeadlineSignal(parent.signal, timeoutMs);
+    const deadline = createDeadlineSignal(parent.signal, enabled, { PI9_ASK_TIMEOUT_MS: "50" });
 
     expect(deadline.signal).toBeDefined();
     expect(vi.getTimerCount()).toBe(0);
@@ -120,7 +111,7 @@ describe("createDeadlineSignal", () => {
   it("disposes the timer and parent listener, preventing later abort", () => {
     vi.useFakeTimers();
     const parent = new AbortController();
-    const deadline = createDeadlineSignal(parent.signal, 100);
+    const deadline = createDeadlineSignal(parent.signal, true, { PI9_ASK_TIMEOUT_MS: "100" });
     const onAbort = vi.fn();
     deadline.signal?.addEventListener("abort", onAbort);
 

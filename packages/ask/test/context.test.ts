@@ -76,19 +76,26 @@ describe("rewriteAskContext", () => {
     expect(messages).toEqual(snapshot);
   });
 
-  it("keeps presentation data in the source call and out of stored answers", () => {
-    const preview = "CONTEXT_PREVIEW_SENTINEL";
+  it("projects previews for selected options only", () => {
+    const selectedPreview = "SELECTED_PREVIEW_SENTINEL";
+    const rejectedPreview = "REJECTED_PREVIEW_SENTINEL";
     const messages = [
-      call({ question: "Choose", options: [{ label: "A", description: "First", preview }] }),
+      call({
+        question: "Choose",
+        options: [
+          { label: "A", description: "First", preview: selectedPreview },
+          { label: "B", description: "Second", preview: rejectedPreview },
+        ],
+      }),
       result({ selections: [{ option: 0 }] }),
     ];
     const rewritten = rewrite(messages) as any[];
 
-    expect(JSON.stringify(messages[1])).not.toContain(preview);
+    expect(JSON.stringify(messages[1])).not.toContain(selectedPreview);
     expect(JSON.parse(rewritten[0].content).answer).toEqual({
-      selections: [{ label: "A", description: "First" }],
+      selections: [{ label: "A", description: "First", preview: selectedPreview }],
     });
-    expect(JSON.stringify(rewritten)).not.toContain(preview);
+    expect(JSON.stringify(rewritten)).not.toContain(rejectedPreview);
   });
 
   it("uses single mode and omits absent optional payload fields", () => {

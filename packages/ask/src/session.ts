@@ -42,7 +42,7 @@ type AskSummaryPayload = {
   context?: string;
   selectionMode: "single" | "multi";
   answer: {
-    selections: Array<{ label: string; description?: string; comment?: string }>;
+    selections: Array<{ label: string; description?: string; preview?: string; comment?: string }>;
     freeform?: string;
   };
 };
@@ -231,6 +231,7 @@ function makeSummary(call: AskCall, answer: AskAnswer, timestamp: number): Agent
         return {
           label: option.label,
           ...(option.description !== undefined ? { description: option.description } : {}),
+          ...(option.preview !== undefined ? { preview: option.preview } : {}),
           ...(selection.comment !== undefined ? { comment: selection.comment } : {}),
         };
       }),
