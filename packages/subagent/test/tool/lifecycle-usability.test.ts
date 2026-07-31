@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
-import { completedGeneration } from "../../src/conversation.js";
+import { completedGeneration, Conversation } from "../../src/conversation.js";
 import { SubagentRuntime, type SubagentCaller } from "../../src/runtime.js";
-import { cancelAction, inspectAction, joinAction, listAction, removeAction, resumeAction, steerAction } from "../../src/tool.js";
+import { cancelAction, defineSubagentTool, inspectAction, joinAction, listAction, removeAction, resumeAction, steerAction } from "../../src/tool.js";
 
 const knownModel = { provider: "test", id: "known" } as any;
 const config = {
@@ -126,6 +126,65 @@ test("inspect separates current generation metrics from prior generation history
   expect(inspected.totalMetrics.elapsedMs).toBe(
     inspected.history[0].elapsedMs + inspected.metrics.elapsedMs,
   );
+});
+
+test("cancelling a parent does not crash its in-flight nested join update", async () => {
+  const parent = new Conversation("calm-parent" as any, config, {
+    kind: "spawn",
+    agent: "worker",
+    label: "parent",
+    prompt: "delegate",
+  }, () => {});
+  let update: (() => void) | undefined;
+  let subscribed!: () => void;
+  const subscription = new Promise<void>(resolve => { subscribed = resolve; });
+  let completeJoin!: () => void;
+  const joinCompletion = new Promise<void>(resolve => { completeJoin = resolve; });
+  const binding = {
+    owner: { conversationId: parent.conversationId, generation: 1 },
+    attemptIndex: 0,
+    targets: [{ conversationId: "calm-river", generation: 1 }],
+    completion: joinCompletion,
+    project: () => [{ conversationId: "calm-river", generation: 1, status: { kind: "running", startedAt: Date.now() } }],
+    markJoined() {},
+    release() {},
+    interrupt() { completeJoin(); },
+  };
+  const runtime = {
+    scheduler: { suspendConversationSlotDuring: (_parent: Conversation, wait: () => Promise<void>) => wait() },
+    validateSubagentJoin() {},
+    bindSubagentJoin: () => binding,
+    onConversationUpdate(listener: () => void) { update = listener; subscribed(); return () => {}; },
+    listConversations: () => [],
+    generationSnapshot: () => { throw new Error("unavailable"); },
+    conversationDisplay: () => ({ agentName: "worker", label: "child" }),
+    unjoinedDirectChildGenerations: () => [],
+    projectSubagent: (_id: string, caller: SubagentCaller) => ({
+      ok: true,
+      subagentId: "calm-river",
+      agent: "worker",
+      label: "child",
+      status: "running",
+      joined: false,
+      actionHints: ["inspect", "join"],
+      callerGeneration: caller.generation.number,
+    }),
+  } as any;
+  const tool = defineSubagentTool({
+    runtime,
+    agentRegistry: registry,
+    parent,
+    prepareInvocation: async () => ({ runtime: { maxTasksPerCall: 8 } }) as any,
+  });
+  const controller = new AbortController();
+  const execution = tool.execute("join-call", { action: "join", subagentIds: ["calm-river"] }, controller.signal, () => {}, ctx);
+  await subscription;
+
+  parent.settle(parent.latestGeneration, "aborted", { error: "Generation cancelled." });
+  expect(() => update?.()).not.toThrow();
+
+  controller.abort();
+  await execution;
 });
 
 test("cancel details correlate the exact generation without exposing it in public JSON", async () => {

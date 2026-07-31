@@ -47,6 +47,7 @@ export interface ActionDeps {
   runtime: ActionRuntime;
   agentRegistry: AgentRegistry;
   parent?: Conversation;
+  caller?: SubagentCaller;
 }
 
 export interface ActionResult {
@@ -58,9 +59,9 @@ export interface ActionResult {
 type InvocationFor<A extends SubagentAction> = Extract<SubagentInvocation, { action: A }>;
 type OrderedDispatchOutcome = OrderedStartOutcome;
 function callerOf(deps: ActionDeps): SubagentCaller | undefined {
-  return deps.parent
+  return deps.caller ?? (deps.parent
     ? { conversation: deps.parent, generation: deps.parent.requireCurrentGeneration() }
-    : undefined;
+    : undefined);
 }
 
 type DescendantSummary = {
@@ -752,20 +753,23 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     },
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const invocationDeps: ActionDeps = parent
+        ? { ...actionDeps, caller: { conversation: parent, generation: parent.requireCurrentGeneration() } }
+        : actionDeps;
       const settings = await prepareInvocation(ctx);
       const invocation = parseSubagentInvocation(params, { maxTasks: settings.runtime.maxTasksPerCall });
-      if ("error" in invocation) return invocationErrorResult(actionDeps, invocation);
+      if ("error" in invocation) return invocationErrorResult(invocationDeps, invocation);
 
       switch (invocation.action) {
-        case "agents": return agentsAction(actionDeps, invocation);
-        case "list": return listAction(actionDeps, invocation);
-        case "spawn": return spawnAction(actionDeps, invocation, ctx);
-        case "resume": return resumeAction(actionDeps, invocation, ctx);
-        case "steer": return steerAction(actionDeps, invocation);
-        case "cancel": return cancelAction(actionDeps, invocation);
-        case "inspect": return inspectAction(actionDeps, invocation);
-        case "join": return joinAction(actionDeps, invocation, signal, onUpdate, toolCallId);
-        case "remove": return removeAction(actionDeps, invocation);
+        case "agents": return agentsAction(invocationDeps, invocation);
+        case "list": return listAction(invocationDeps, invocation);
+        case "spawn": return spawnAction(invocationDeps, invocation, ctx);
+        case "resume": return resumeAction(invocationDeps, invocation, ctx);
+        case "steer": return steerAction(invocationDeps, invocation);
+        case "cancel": return cancelAction(invocationDeps, invocation);
+        case "inspect": return inspectAction(invocationDeps, invocation);
+        case "join": return joinAction(invocationDeps, invocation, signal, onUpdate, toolCallId);
+        case "remove": return removeAction(invocationDeps, invocation);
       }
     },
   });
