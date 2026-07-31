@@ -7,6 +7,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 ### Changed
 
 - Replace per-call timeout durations with an opt-in boolean that uses the user-configured `PI9_ASK_TIMEOUT_MS` duration.
+- Retain each selected option's Markdown preview in the compact `ask_response` while continuing to omit unselected options and their previews.
+- Simplify the model-facing Ask schema descriptions and prompt guidance.
 
 ## [0.3.3] - 2026-07-31
 

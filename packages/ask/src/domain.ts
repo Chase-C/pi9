@@ -2,18 +2,18 @@ import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
 export const AskOptionSchema = Type.Object({
-  label: Type.String({ description: "Short, distinct name for this choice." }),
-  description: Type.Optional(Type.String({ description: "Concise differentiator, tradeoff, or consequence of choosing this option." })),
-  preview: Type.Optional(Type.String({ description: "Markdown showing details for the user to inspect before choosing." })),
+  label: Type.String({ description: "Short title for this choice." }),
+  description: Type.Optional(Type.String({ description: "Brief elaboration on the label." })),
+  preview: Type.Optional(Type.String({ description: "Markdown for details that don't fit in short prose." })),
 }, { additionalProperties: false });
 
 export const AskParamsSchema = Type.Object({
-  question: Type.String({ description: "One focused decision for the user to answer." }),
-  context: Type.Optional(Type.String({ description: "Background needed to make the decision; do not restate the options or question." })),
-  options: Type.Array(AskOptionSchema, { description: "Distinct candidate answers to the question." }),
-  allowMultiple: Type.Optional(Type.Boolean({ default: false, description: "Allow the user to select more than one option." })),
-  allowFreeform: Type.Optional(Type.Boolean({ default: true, description: "Allow the user to provide an answer not listed in options." })),
-  timeout: Type.Optional(Type.Boolean({ default: false, description: "Use the configured response deadline when the answer will become stale." })),
+  question: Type.String({ description: "One focused question for the user to answer." }),
+  context: Type.Optional(Type.String({ description: "Background needed to make the decision." })),
+  options: Type.Array(AskOptionSchema, { description: "Distinct candidate answers." }),
+  allowMultiple: Type.Optional(Type.Boolean({ default: false })),
+  allowFreeform: Type.Optional(Type.Boolean({ default: true })),
+  timeout: Type.Optional(Type.Boolean({ default: false, description: "Return unanswered after the configured timeout." })),
 }, { additionalProperties: false });
 
 export const AskSelectionSchema = Type.Object({

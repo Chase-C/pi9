@@ -64,9 +64,9 @@ Comments let you qualify a selection without writing a separate message. When a 
 
 ### Tool-call rewriting
 
-Ask rewrites answered standalone exchanges before they are sent back to the model, replacing the Ask call and its answer record with a compact `ask_response` message. The replacement keeps the question, optional background, single- or multi-select mode, selected option labels and descriptions, comments, and any freeform response. It leaves out unselected options and all Markdown previews.
+Ask rewrites answered standalone exchanges before they are sent back to the model, replacing the Ask call and its answer record with a compact `ask_response` message. The replacement keeps the question, optional background, single- or multi-select mode, selected option labels, descriptions, previews, and comments, plus any freeform response. It leaves out unselected options and their Markdown previews.
 
-The main purpose is to keep proposed alternatives from being mistaken for decisions. Once you choose an answer, the model sees only what you selected and the context attached to that selection—not every option it originally offered. As a secondary benefit, dropping unused answers, previews, and the surrounding tool-call protocol reduces the amount of context carried into later turns.
+The main purpose is to keep proposed alternatives from being mistaken for decisions. Once you choose an answer, the model sees only what you selected and the context attached to that selection—not every option it originally offered. As a secondary benefit, dropping unselected answers and previews along with the surrounding tool-call protocol reduces the amount of context carried into later turns.
 
 The answer can come from either a successful native tool result or a valid revision submitted from `/tree`. A revision becomes the authoritative answer, replacing the earlier result in model context even if that result is absent or unsuccessful.
 
