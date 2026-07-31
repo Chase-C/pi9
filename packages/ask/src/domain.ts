@@ -4,32 +4,32 @@ import { Check } from "typebox/value";
 import { MAX_TIMEOUT_MS } from "./deadline.js";
 
 export const AskOptionSchema = Type.Object({
-  label: Type.String({ minLength: 1, description: "Short option title; keep distinct across options." }),
-  description: Type.Optional(Type.String({ description: "Brief explanation when the label alone is ambiguous." })),
-  preview: Type.Optional(Type.String({ description: "Markdown shown to the user, e.g. code, plans, or comparisons; not returned in the answer." })),
+  label: Type.String({ description: "Short, distinct name for this choice." }),
+  description: Type.Optional(Type.String({ description: "Concise differentiator, tradeoff, or consequence of choosing this option." })),
+  preview: Type.Optional(Type.String({ description: "Markdown showing details for the user to inspect before choosing." })),
 }, { additionalProperties: false });
 
 export const AskParamsSchema = Type.Object({
-  question: Type.String({ minLength: 1 }),
-  context: Type.Optional(Type.String({ description: "Optional background shown above the question, e.g. what prompted the ask." })),
-  options: Type.Array(AskOptionSchema, { minItems: 1, description: "Suggested answers." }),
-  allowMultiple: Type.Optional(Type.Boolean({ default: false, description: "Allow selecting multiple options. Defaults to false." })),
-  allowFreeform: Type.Optional(Type.Boolean({ default: true, description: "Allow a typed response. Defaults to true." })),
-  timeout: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_TIMEOUT_MS, description: "Timeout in ms for answers that would go stale; the call returns unanswered on expiry. Zero disables any default." })),
+  question: Type.String({ description: "One focused decision for the user to answer." }),
+  context: Type.Optional(Type.String({ description: "Background needed to make the decision; do not restate the options or question." })),
+  options: Type.Array(AskOptionSchema, { description: "Distinct candidate answers to the question." }),
+  allowMultiple: Type.Optional(Type.Boolean({ default: false, description: "Allow the user to select more than one option." })),
+  allowFreeform: Type.Optional(Type.Boolean({ default: true, description: "Allow the user to provide an answer not listed in options." })),
+  timeout: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS, description: "Response deadline in milliseconds. Use only when the answer will become stale." })),
 }, { additionalProperties: false });
 
 export const AskSelectionSchema = Type.Object({
   option: Type.Integer({ minimum: 0 }),
-  comment: Type.Optional(Type.String({ minLength: 1 })),
+  comment: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 export const AskAnswerSchema = Type.Object({
   selections: Type.Array(AskSelectionSchema),
-  freeform: Type.Optional(Type.String({ minLength: 1 })),
+  freeform: Type.Optional(Type.String()),
 }, { additionalProperties: false });
 
 export const AskReplayDetailsSchema = Type.Object({
-  toolCallId: Type.String({ minLength: 1 }),
+  toolCallId: Type.String(),
   answer: AskAnswerSchema,
 }, { additionalProperties: false });
 
