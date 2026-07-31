@@ -290,13 +290,7 @@ export async function cancelAction(
     const observed = { conversationId: result.conversationId, generation: result.generation };
     try {
       return {
-        entry: {
-          ...canonicalSubagent(deps, result.conversationId),
-          settled: result.settled,
-          ...(result.settled === false
-            ? { note: "Cancellation was not confirmed within the settlement window; the subagent's execution may still be finishing in the background." }
-            : {}),
-        },
+        entry: canonicalSubagent(deps, result.conversationId),
         observed,
       };
     } catch (error) {
@@ -441,7 +435,7 @@ function projectJoinedEntry(entry: ReturnType<JoinBinding["project"]>[number]): 
     conversationId: entry.conversationId,
     generation: entry.generation,
     status: entry.status,
-    ...(entry.status.kind === "done" && entry.status.output !== undefined ? { output: entry.status.output } : {}),
+    ...(entry.status.kind === "done" ? { output: entry.status.output ?? null } : {}),
     ...(entry.status.kind === "done" && entry.status.error !== undefined ? { error: entry.status.error } : {}),
   };
 }
@@ -590,7 +584,7 @@ function generationMetrics(generation: GenerationSnapshot, now: number): Generat
 type JoinedOutput = GenerationRef & {
   readonly ok: true;
   readonly status: GenerationViewStatus;
-  readonly output?: string;
+  readonly output?: string | null;
   readonly error?: string;
 };
 type JoinOutput = JoinedOutput | TargetFailure;
@@ -603,6 +597,7 @@ function projectJoinResults(
     if (value.ok) {
       return {
         ...canonicalSubagent(deps, value.conversationId),
+        generation: value.generation,
         ...(value.output !== undefined ? { output: value.output } : {}),
       };
     }
@@ -672,7 +667,7 @@ function renderJoinedGenerations(
     const projected = {
       subagentId: value.conversationId,
       status: generation ? status(generation) : projectSubagentStatus(value.status),
-      ...(value.output !== undefined ? { output: value.output } : {}),
+      ...(typeof value.output === "string" ? { output: value.output } : {}),
       ...(value.error !== undefined ? { error: value.error } : {}),
     };
     if (!generation) return projected;
@@ -723,6 +718,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     label: "Subagent",
     description: [
       "Delegate work asynchronously through persistent, context-isolated subagents. Subagents share the working filesystem.",
+      "Result generation, status, and joined fields describe the latest generation.",
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(statuses?, joined?): List child subagents with descendant summaries.",
@@ -731,7 +727,7 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "  steer(messages): Send messages to running subagents.",
       "  inspect(subagentIds): Check descendant status and progress without waiting.",
       "  join(subagentIds): Wait for and collect subagent results; blocks while running, idempotent after.",
-      "  cancel(subagentIds): Cancel active generations; retain subagents, context, and results.",
+      "  cancel(subagentIds): Idempotently cancel generations; retain subagents, context, and results.",
       "  remove(subagentIds): Permanently discard inactive subagent subtrees, including unjoined results.",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",

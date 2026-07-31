@@ -83,6 +83,7 @@ function formatNotificationContent(entries: readonly CompletionNotification[]): 
   const lines = entries.map(entry => {
     const attributes = [
       `subagentId="${escapeXml(entry.subagentId)}"`,
+      `generation="${entry.generation}"`,
       `status="${escapeXml(entry.status)}"`,
       `agent="${escapeXml(entry.agent)}"`,
       `label="${escapeXml(entry.label)}"`,

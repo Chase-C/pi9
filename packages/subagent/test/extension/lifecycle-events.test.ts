@@ -25,7 +25,7 @@ test("spawn publishes queued after manager conversation and generation indexes e
   const started = manager.startTasks(context, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any);
   const identity = started.starts[0] as any;
   const queued = emitted.find(value => value.event === "subagent:queued")!;
-  expect(queued.data).toMatchObject({ ok: true, subagentId: identity.conversationId, status: "queued" });
+  expect(queued.data).toMatchObject({ ok: true, subagentId: identity.conversationId, generation: 1, status: "queued" });
   expect(manager.conversation(identity.conversationId).generations.some(generation => generation.generation === identity.generation)).toBe(true);
   expect(() => manager.bindSubagentJoin([identity.conversationId])).not.toThrow();
   release(); await started.completion; unsubscribe();
@@ -50,6 +50,7 @@ test("finished events use the root-relative canonical block", async () => {
         subagentId,
         label: "work",
         agent: "worker",
+        generation: 1,
         status: "queued",
         joined: false,
         actionHints: ["cancel", "inspect", "join"],
@@ -62,6 +63,7 @@ test("finished events use the root-relative canonical block", async () => {
         subagentId,
         label: "work",
         agent: "worker",
+        generation: 1,
         status: "running",
         joined: false,
         actionHints: ["steer", "cancel", "inspect", "join"],
@@ -74,6 +76,7 @@ test("finished events use the root-relative canonical block", async () => {
         subagentId,
         label: "work",
         agent: "worker",
+        generation: 1,
         status: "completed",
         joined: false,
         actionHints: ["inspect", "join", "remove"],
@@ -100,6 +103,7 @@ test("failed lifecycle events include the canonical failure text", async () => {
       subagentId: (started.starts[0] as any).conversationId,
       label: "failed work",
       agent: "worker",
+      generation: 1,
       status: "failed",
       joined: false,
       actionHints: ["inspect", "join", "remove"],
@@ -114,7 +118,7 @@ test("successive generations with equal timestamps publish distinct lifecycle ev
   let listener: ((agent: Conversation, kind: any) => void) | undefined;
   const source = {
     onConversationUpdate: (next: typeof listener) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", status: "completed" as const, joined: false as const, actionHints: [] }),
+    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, status: "completed" as const, joined: false as const, actionHints: [] }),
   };
   const emitted: Array<{ event: string; data: any }> = [];
   registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, source);
@@ -173,7 +177,7 @@ test("non-status changes do not publish public lifecycle events", () => {
   let listener: ((agent: Conversation, kind: any) => void) | undefined;
   const source = {
     onConversationUpdate: (next: typeof listener) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", status: "running" as const, joined: false as const, actionHints: [] }),
+    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, status: "running" as const, joined: false as const, actionHints: [] }),
   };
   const emitted: Array<{ event: string; data: any }> = [];
   registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, source);

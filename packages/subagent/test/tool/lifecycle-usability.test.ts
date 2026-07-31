@@ -51,6 +51,7 @@ test("list joined=false includes active subagents and projects joined explicitly
   expect(listed.results).toMatchObject([{
     ok: true,
     subagentId: identity.conversationId,
+    generation: 1,
     status: "running",
     joined: false,
   }]);
@@ -164,6 +165,7 @@ test("cancelling a parent does not crash its in-flight nested join update", asyn
       subagentId: "calm-river",
       agent: "worker",
       label: "child",
+      generation: 1,
       status: "running",
       joined: false,
       actionHints: ["inspect", "join"],
@@ -190,12 +192,13 @@ test("cancelling a parent does not crash its in-flight nested join update", asyn
 test("cancel details correlate the exact generation without exposing it in public JSON", async () => {
   const actionDeps = {
     runtime: {
-      cancelSubagent: async () => ({ conversationId: "calm-river", generation: 2, settled: true }),
+      cancelSubagent: async () => ({ conversationId: "calm-river", generation: 2 }),
       projectSubagent: () => ({
         ok: true,
         subagentId: "calm-river",
         agent: "worker",
         label: "cancelled task",
+        generation: 2,
         status: "cancelled",
         joined: false,
         actionHints: ["inspect", "remove"],
@@ -209,7 +212,98 @@ test("cancel details correlate the exact generation without exposing it in publi
   expect(result.details).toMatchObject({
     observedGenerations: [{ conversationId: "calm-river", generation: 2 }],
   });
-  expect(JSON.parse(result.content[0].text)).not.toHaveProperty("observedGenerations");
+  const publicResult = JSON.parse(result.content[0].text);
+  expect(publicResult).not.toHaveProperty("observedGenerations");
+  expect(publicResult.results[0]).not.toHaveProperty("settled");
+  expect(publicResult.results[0]).not.toHaveProperty("alreadyCancelled");
+  expect(publicResult.results[0]).not.toHaveProperty("note");
+});
+
+test("cancel is idempotent and returns only canonical lifecycle state", async () => {
+  let finish!: () => void;
+  const gate = new Promise<void>(done => { finish = done; });
+  let abortCalls = 0;
+  const runtime = new SubagentRuntime(registry, 1, async (_ctx, conversation, generation) => {
+    conversation.bindSession(generation, { ...session(), abort() { abortCalls++; finish(); } });
+    await gate;
+    return completedGeneration(conversation, generation, "ignored after cancellation");
+  });
+  const start = runtime.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "wait", label: "cancel me" }]);
+  const identity = start.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  const first = response(await cancelAction(deps(runtime), { action: "cancel", subagentIds: [identity.conversationId] }));
+  const repeated = response(await cancelAction(deps(runtime), { action: "cancel", subagentIds: [identity.conversationId] }));
+
+  for (const result of [first, repeated]) {
+    expect(result.summary).toEqual({ requested: 1, succeeded: 1, failed: 0 });
+    expect(result.results[0]).toMatchObject({
+      ok: true,
+      subagentId: identity.conversationId,
+      generation: 1,
+      status: "cancelled",
+    });
+    expect(result.results[0]).not.toHaveProperty("settled");
+    expect(result.results[0]).not.toHaveProperty("alreadyCancelled");
+    expect(result.results[0]).not.toHaveProperty("note");
+  }
+  expect(abortCalls).toBe(1);
+  await start.completion;
+});
+
+test("final joins use null when terminal generations have no output", async () => {
+  const runtime = new SubagentRuntime(registry, 4, async (_ctx, conversation, generation) => {
+    conversation.bindSession(generation, session());
+    if (generation.prompt === "completed") return completedGeneration(conversation, generation, "answer");
+    if (generation.prompt === "partial") return conversation.settle(generation, "aborted", { error: "Generation cancelled.", output: "partial answer" });
+    if (generation.prompt === "cancelled") return conversation.settle(generation, "aborted", { error: "Generation cancelled." });
+    return conversation.settle(generation, "error", { error: "provider failed" });
+  });
+  const prompts = ["completed", "partial", "cancelled", "failed"];
+  const start = runtime.startTasks(ctx, prompts.map(prompt => ({ kind: "spawn", agent: "worker", prompt, label: prompt })));
+  await start.completion;
+  const ids = start.starts.map(item => (item as any).conversationId);
+
+  const joined = response(await joinAction(deps(runtime), { action: "join", subagentIds: ids }, undefined, undefined));
+
+  expect(joined.results.map((result: any) => ({ generation: result.generation, status: result.status, output: result.output }))).toEqual([
+    { generation: 1, status: "completed", output: "answer" },
+    { generation: 1, status: "cancelled", output: "partial answer" },
+    { generation: 1, status: "cancelled", output: null },
+    { generation: 1, status: "failed", output: null },
+  ]);
+  expect(joined.results[3]).toMatchObject({ failure: "Subagent failed: provider failed" });
+
+  const repeated = response(await joinAction(deps(runtime), { action: "join", subagentIds: [ids[2]] }, undefined, undefined));
+  expect(repeated.results[0]).toMatchObject({ generation: 1, status: "cancelled", joined: true, output: null });
+});
+
+test("running join updates omit output until the final result", async () => {
+  let finish!: () => void;
+  const gate = new Promise<void>(done => { finish = done; });
+  const runtime = new SubagentRuntime(registry, 1, async (_ctx, conversation, generation) => {
+    conversation.bindSession(generation, session());
+    await gate;
+    return completedGeneration(conversation, generation, "done");
+  });
+  const start = runtime.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "wait", label: "wait" }]);
+  const identity = start.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+  const updates: any[] = [];
+
+  const joining = joinAction(
+    deps(runtime),
+    { action: "join", subagentIds: [identity.conversationId] },
+    undefined,
+    update => updates.push(response(update)),
+  );
+  expect(updates[0].results[0]).toMatchObject({ generation: 1, status: "running" });
+  expect(updates[0].results[0]).not.toHaveProperty("output");
+
+  finish();
+  const final = response(await joining);
+  expect(final.results[0]).toMatchObject({ generation: 1, status: "completed", output: "done" });
+  await start.completion;
 });
 
 test("join rendering reports an unjoined resumed child from a historical owner generation", async () => {

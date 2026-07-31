@@ -38,6 +38,14 @@ describe("subagent result renderer", () => {
     { subagentId: id, agent: "helper", label: "Worker", status: "completed", output: "done" },
   ] } }, "Worker.*completed", "subagent airy-acorn"));
 
+  it("does not render nullable join output as text", () => {
+    const details = {
+      response: { action: "join", results: [{ subagentId: id, status: "cancelled", output: null }] },
+      view: { entries: [{ subagentId: id, agent: "helper", label: "Worker", status: "cancelled" }] },
+    };
+    assert.doesNotMatch(output(details, true), /null/);
+  });
+
   it("renders remove", () => expectViews({ response: { action: "remove", results: [
     { ok: true, removedIds: [id] },
   ] } }, "Removed 1 subagent", "airy-acorn.*removed"));
