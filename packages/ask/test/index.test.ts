@@ -206,18 +206,18 @@ describe("ask extension integration", () => {
     expect(lines[firstFreeformLine + 1]).toMatch(new RegExp(`^ {${textColumn}}\\S`));
   });
 
-  it("renders an explicitly supplied positive timeout in pending metadata", () => {
+  it("renders an enabled timeout in pending metadata", () => {
     const { tool } = register();
     const styledTheme = {
       fg: (_color: string, text: string) => text,
       bg: (_color: string, text: string) => text,
       bold: (text: string) => text,
     } as any;
-    const timeoutContext = { state: {}, args: { question: "Choose?", options: [{ label: "Yes" }], timeout: 1500 }, lastComponent: undefined };
-    expect(tool.renderCall(timeoutContext.args, styledTheme, timeoutContext).render(80).join("\n")).toContain("timeout:1.5s");
+    const timeoutContext = { state: {}, args: { question: "Choose?", options: [{ label: "Yes" }], timeout: true }, lastComponent: undefined };
+    expect(tool.renderCall(timeoutContext.args, styledTheme, timeoutContext).render(80).join("\n")).toContain(" · timeout");
 
-    const zeroContext = { state: {}, args: { question: "Choose?", options: [{ label: "Yes" }], timeout: 0 }, lastComponent: undefined };
-    expect(tool.renderCall(zeroContext.args, styledTheme, zeroContext).render(80).join("\\n")).not.toContain("timeout:");
+    const disabledContext = { state: {}, args: { question: "Choose?", options: [{ label: "Yes" }], timeout: false }, lastComponent: undefined };
+    expect(tool.renderCall(disabledContext.args, styledTheme, disabledContext).render(80).join("\\n")).not.toContain("timeout");
   });
 
   it("normalizes without mutating the questionnaire and uses custom TUI", async () => {
@@ -237,25 +237,27 @@ describe("ask extension integration", () => {
     expect(emit).toHaveBeenCalledWith("ask:answered", result.details);
   });
 
-  it("returns unanswered when a TUI questionnaire timeout expires", async () => {
+  it("returns unanswered when an enabled TUI timeout expires", async () => {
     vi.useFakeTimers();
     try {
-      const { tool, emit } = register();
-      const custom = pendingTui();
-      const execution = tool.execute(
-        "id",
-        { question: "Continue?", options: [{ label: "Yes" }], allowFreeform: false, timeout: 25 },
-        undefined,
-        undefined,
-        { mode: "tui", hasUI: true, ui: { custom } },
-      );
+      await withTimeoutEnv("25", async () => {
+        const { tool, emit } = register();
+        const custom = pendingTui();
+        const execution = tool.execute(
+          "id",
+          { question: "Continue?", options: [{ label: "Yes" }], allowFreeform: false, timeout: true },
+          undefined,
+          undefined,
+          { mode: "tui", hasUI: true, ui: { custom } },
+        );
 
-      await vi.advanceTimersByTimeAsync(25);
-      const result = await execution;
-      expect(result.details).toEqual({ status: "unanswered" });
-      expect(emit).toHaveBeenCalledWith("ask:unanswered", result.details);
-      expect(emit).not.toHaveBeenCalledWith("ask:cancelled", expect.anything());
-      expect(vi.getTimerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(25);
+        const result = await execution;
+        expect(result.details).toEqual({ status: "unanswered" });
+        expect(emit).toHaveBeenCalledWith("ask:unanswered", result.details);
+        expect(emit).not.toHaveBeenCalledWith("ask:cancelled", expect.anything());
+        expect(vi.getTimerCount()).toBe(0);
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -264,22 +266,24 @@ describe("ask extension integration", () => {
   it.each(["answer", "cancel"])("disposes the complete-path timeout after %s", async action => {
     vi.useFakeTimers();
     try {
-      const { tool } = register();
-      const custom = vi.fn(async (factory: any) => {
-        let completed: unknown;
-        const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { completed = value; });
-        component.handleInput(action === "answer" ? "\r" : "\x1b");
-        return completed;
+      await withTimeoutEnv("100", async () => {
+        const { tool } = register();
+        const custom = vi.fn(async (factory: any) => {
+          let completed: unknown;
+          const component = factory({ requestRender: vi.fn() }, theme(), keybindings(), (value: unknown) => { completed = value; });
+          component.handleInput(action === "answer" ? "\r" : "\x1b");
+          return completed;
+        });
+        const result = await tool.execute(
+          "id",
+          { question: "Continue?", options: [{ label: "Yes" }], allowFreeform: false, timeout: true },
+          undefined,
+          undefined,
+          { mode: "tui", hasUI: true, ui: { custom } },
+        );
+        expect(result.details.status).toBe(action === "answer" ? "answered" : "cancelled");
+        expect(vi.getTimerCount()).toBe(0);
       });
-      const result = await tool.execute(
-        "id",
-        { question: "Continue?", options: [{ label: "Yes" }], allowFreeform: false, timeout: 100 },
-        undefined,
-        undefined,
-        { mode: "tui", hasUI: true, ui: { custom } },
-      );
-      expect(result.details.status).toBe(action === "answer" ? "answered" : "cancelled");
-      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -299,7 +303,7 @@ describe("ask extension integration", () => {
         });
         const execution = tool.execute(
           "id",
-          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true },
+          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true, timeout: true },
           undefined,
           undefined,
           { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
@@ -317,36 +321,7 @@ describe("ask extension integration", () => {
     }
   });
 
-  it("lets an explicit timeout override the environment default", async () => {
-    vi.useFakeTimers();
-    try {
-      await withTimeoutEnv("40", async () => {
-        const { tool } = register();
-        const input = vi.fn().mockImplementation((_title: string, _placeholder: string | undefined, options?: { signal?: AbortSignal }) =>
-          new Promise<string | undefined>(resolve => options?.signal?.addEventListener("abort", () => resolve(undefined), { once: true })));
-        const execution = tool.execute(
-          "id",
-          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true, timeout: 100 },
-          undefined,
-          undefined,
-          { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        let settled = false;
-        void execution.then(() => { settled = true; });
-
-        await vi.advanceTimersByTimeAsync(40);
-        expect(settled).toBe(false);
-        await vi.advanceTimersByTimeAsync(60);
-        await expect(execution).resolves.toMatchObject({ details: { status: "unanswered" } });
-        expect(vi.getTimerCount()).toBe(0);
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("uses explicit zero to disable the environment timeout", async () => {
+  it("does not use the configured timeout when the flag is omitted", async () => {
     vi.useFakeTimers();
     try {
       await withTimeoutEnv("10", async () => {
@@ -355,7 +330,36 @@ describe("ask extension integration", () => {
         const input = vi.fn().mockImplementation(() => new Promise<string | undefined>(resolve => { finish = resolve; }));
         const execution = tool.execute(
           "id",
-          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true, timeout: 0 },
+          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true },
+          undefined,
+          undefined,
+          { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        let settled = false;
+        void execution.then(() => { settled = true; });
+
+        await vi.advanceTimersByTimeAsync(10);
+        expect(settled).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+        finish(undefined);
+        await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses false to disable the configured timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTimeoutEnv("10", async () => {
+        const { tool } = register();
+        let finish!: (value: string | undefined) => void;
+        const input = vi.fn().mockImplementation(() => new Promise<string | undefined>(resolve => { finish = resolve; }));
+        const execution = tool.execute(
+          "id",
+          { question: "Continue?", options: [{ label: "Yes" }], allowMultiple: true, timeout: false },
           undefined,
           undefined,
           { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
@@ -381,7 +385,7 @@ describe("ask extension integration", () => {
       const { tool } = register();
       await expect(tool.execute(
         "id",
-        { question: "Continue?", options: [{ label: "Yes" }], timeout: 25 },
+        { question: "Continue?", options: [{ label: "Yes" }], timeout: true },
         undefined,
         undefined,
         { mode: "print", hasUI: false, ui: {} },
@@ -395,28 +399,30 @@ describe("ask extension integration", () => {
   it("times out RPC comment collection with one shared deadline signal", async () => {
     vi.useFakeTimers();
     try {
-      const { tool } = register();
-      const signals: AbortSignal[] = [];
-      let inputCalls = 0;
-      const input = vi.fn().mockImplementation((_title: string, _placeholder: string | undefined, options?: { signal?: AbortSignal }) => {
-        if (options?.signal) signals.push(options.signal);
-        inputCalls += 1;
-        if (inputCalls === 1) return Promise.resolve("1");
-        return new Promise<string | undefined>(resolve => options?.signal?.addEventListener("abort", () => resolve(undefined), { once: true }));
-      });
-      const execution = tool.execute(
-        "id",
-        { question: "Choose?", options: [{ label: "Yes" }], allowMultiple: true, allowFreeform: false, timeout: 30 },
-        undefined,
-        undefined,
-        { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
-      );
+      await withTimeoutEnv("30", async () => {
+        const { tool } = register();
+        const signals: AbortSignal[] = [];
+        let inputCalls = 0;
+        const input = vi.fn().mockImplementation((_title: string, _placeholder: string | undefined, options?: { signal?: AbortSignal }) => {
+          if (options?.signal) signals.push(options.signal);
+          inputCalls += 1;
+          if (inputCalls === 1) return Promise.resolve("1");
+          return new Promise<string | undefined>(resolve => options?.signal?.addEventListener("abort", () => resolve(undefined), { once: true }));
+        });
+        const execution = tool.execute(
+          "id",
+          { question: "Choose?", options: [{ label: "Yes" }], allowMultiple: true, allowFreeform: false, timeout: true },
+          undefined,
+          undefined,
+          { mode: "rpc", hasUI: true, ui: { select: vi.fn(), input } },
+        );
 
-      await vi.advanceTimersByTimeAsync(30);
-      await expect(execution).resolves.toMatchObject({ details: { status: "unanswered" } });
-      expect(inputCalls).toBe(2);
-      expect(new Set(signals).size).toBe(1);
-      expect(vi.getTimerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(30);
+        await expect(execution).resolves.toMatchObject({ details: { status: "unanswered" } });
+        expect(inputCalls).toBe(2);
+        expect(new Set(signals).size).toBe(1);
+        expect(vi.getTimerCount()).toBe(0);
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -631,17 +637,15 @@ describe("ask extension integration", () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["stored timeout", { question: "Choose?", options: [{ label: "Yes" }], allowFreeform: false, timeout: 25 }, "100"],
-    ["environment timeout", { question: "Choose?", options: [{ label: "Yes" }], allowFreeform: false }, "25"],
-  ] as const)("applies the %s when re-answering from /tree and disposes it", async (_label, arguments_, envTimeout) => {
+  it("applies an enabled configured timeout when re-answering from /tree and disposes it", async () => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv(envTimeout, async () => {
+      await withTimeoutEnv("25", async () => {
         const { handlers, sendMessage } = register();
         const custom = vi.fn((factory: any) => new Promise(resolve => {
           factory({ requestRender: vi.fn() }, theme(), keybindings(), resolve);
         }));
+        const arguments_ = { question: "Choose?", options: [{ label: "Yes" }], allowFreeform: false, timeout: true };
         const ctx = replayContext([assistantEntry("ask-entry", [{ name: "ask", arguments: arguments_ }])], custom);
         const replay = handlers.get("session_tree")({ newLeafId: "ask-entry" }, ctx);
 

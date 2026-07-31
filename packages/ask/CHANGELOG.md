@@ -4,6 +4,10 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Replace per-call timeout durations with an opt-in boolean that uses the user-configured `PI9_ASK_TIMEOUT_MS` duration.
+
 ## [0.3.3] - 2026-07-31
 
 ### Changed

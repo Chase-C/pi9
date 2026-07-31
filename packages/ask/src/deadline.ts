@@ -11,14 +11,10 @@ export interface DeadlineSignal {
 }
 
 export function resolveTimeoutMs(
-  perCallTimeout: number | undefined,
+  enabled: boolean | undefined,
   env: AskEnvironment,
 ): number | undefined {
-  if (perCallTimeout !== undefined) {
-    return Number.isInteger(perCallTimeout) && perCallTimeout > 0 && perCallTimeout <= MAX_TIMEOUT_MS
-      ? perCallTimeout
-      : undefined;
-  }
+  if (enabled !== true) return undefined;
 
   const envTimeout = env.PI9_ASK_TIMEOUT_MS;
   if (envTimeout === undefined || !/^\d+$/.test(envTimeout)) return undefined;
@@ -31,10 +27,10 @@ export function resolveTimeoutMs(
 
 export function createDeadlineSignal(
   parent: AbortSignal | undefined,
-  perCallTimeout: number | undefined,
+  enabled: boolean | undefined,
   env: AskEnvironment = {},
 ): DeadlineSignal {
-  const timeoutMs = resolveTimeoutMs(perCallTimeout, env);
+  const timeoutMs = resolveTimeoutMs(enabled, env);
   const hasTimeout = timeoutMs !== undefined;
 
   if (parent === undefined && !hasTimeout) {

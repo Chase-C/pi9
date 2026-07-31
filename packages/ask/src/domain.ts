@@ -1,8 +1,6 @@
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
-import { MAX_TIMEOUT_MS } from "./deadline.js";
-
 export const AskOptionSchema = Type.Object({
   label: Type.String({ description: "Short, distinct name for this choice." }),
   description: Type.Optional(Type.String({ description: "Concise differentiator, tradeoff, or consequence of choosing this option." })),
@@ -15,7 +13,7 @@ export const AskParamsSchema = Type.Object({
   options: Type.Array(AskOptionSchema, { description: "Distinct candidate answers to the question." }),
   allowMultiple: Type.Optional(Type.Boolean({ default: false, description: "Allow the user to select more than one option." })),
   allowFreeform: Type.Optional(Type.Boolean({ default: true, description: "Allow the user to provide an answer not listed in options." })),
-  timeout: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS, description: "Response deadline in milliseconds. Use only when the answer will become stale." })),
+  timeout: Type.Optional(Type.Boolean({ default: false, description: "Use the configured response deadline when the answer will become stale." })),
 }, { additionalProperties: false });
 
 export const AskSelectionSchema = Type.Object({

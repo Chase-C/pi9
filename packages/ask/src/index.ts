@@ -38,16 +38,8 @@ function renderAskCall(args: AskParams, theme: Theme, state: AskRendererState): 
 
   const optionCount = args.options.length;
   const mode = args.allowMultiple === true ? "multi · " : "";
-  const timeout = args.timeout !== undefined && args.timeout > 0
-    ? ` · timeout:${formatTimeout(args.timeout)}`
-    : "";
+  const timeout = args.timeout === true ? " · timeout" : "";
   return `${title}\n${theme.fg("muted", `╰ ${mode}options:${optionCount}${timeout}`)}`;
-}
-
-function formatTimeout(timeoutMs: number): string {
-  if (timeoutMs < 1000) return `${timeoutMs}ms`;
-  const seconds = timeoutMs / 1000;
-  return `${Number.isInteger(seconds) ? seconds : Number(seconds.toFixed(2))}s`;
 }
 
 class AnsweredOptions implements Component {
