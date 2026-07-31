@@ -71,7 +71,7 @@ Subagents are context-isolated Pi conversations created from reusable agent defi
 
 Delegated work starts asynchronously, allowing Pi to launch several focused tasks and continue working while they run. Each task streams its own progress and recent activity. When a result is needed, Pi joins that specific subagent and waits for its current work to finish.
 
-![Two parallel subagents](media/live-parallel-runs.png)
+![Two parallel subagents](media/live-parallel-subagents.png)
 
 ### Follow-up work
 
@@ -95,7 +95,7 @@ Joining collects a finished result and is safe to repeat. Removal is a separate,
 
 Concurrency is shared across the recursive tree. `maxConversations` defaults to `100`; new spawns are rejected at capacity until subagents are removed. Existing subagents can still be inspected, joined, resumed when eligible, or removed.
 
-Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. `/subagents` opens the inventory, agent browser, and settings UI. The overlay retains a **Previous runs** section, while `inspect` exposes prior-generation history without outputs or internal run IDs.
+Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. `/subagents` opens the inventory, agent browser, and settings UI. The overlay retains a **Previous generations** section, while `inspect` exposes the same generation-native history with bounded metadata and without outputs.
 
 The widget defaults to summary mode. Progress mode shows queued/running rows up to the configured limit.
 

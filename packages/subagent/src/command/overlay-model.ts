@@ -98,7 +98,7 @@ function conversationMatches(conversation: ConversationSnapshot, query: string):
     conversation.requestedConfig.model,
     conversation.requestedConfig.thinking,
     conversation.parentConversationId,
-    conversation.spawnedByRunId,
+    conversation.spawnedInGeneration?.toString(),
     conversation.effectiveConfig?.model,
     conversation.effectiveConfig?.thinking,
     conversation.effectiveConfig?.cwd,
@@ -107,14 +107,14 @@ function conversationMatches(conversation: ConversationSnapshot, query: string):
     ...(conversation.effectiveConfig?.tools ?? []),
     ...(conversation.effectiveConfig?.skills ?? []),
   ];
-  for (const run of conversation.runs) {
+  for (const generation of conversation.generations) {
     values.push(
-      run.runId,
-      run.kind,
-      run.prompt,
-      effectiveStatus(run.status),
-      run.activity.messageSnippet,
-      ...run.activity.toolHistory.flatMap(tool => [tool.name, tool.inputSummary]),
+      generation.generation.toString(),
+      generation.kind,
+      generation.prompt,
+      effectiveStatus(generation.status),
+      generation.activity.messageSnippet,
+      ...generation.activity.toolHistory.flatMap(tool => [tool.name, tool.inputSummary]),
     );
   }
   return values.some(value => value?.toLowerCase().includes(normalized));

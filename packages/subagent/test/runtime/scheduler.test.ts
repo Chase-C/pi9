@@ -1,65 +1,65 @@
 import { expect, test, vi } from "vitest";
-import { Conversation } from "../../src/conversation.js";
-import { completedRun } from "../../src/conversation.js";
-import { RunScheduler } from "../../src/scheduler.js";
+import { Conversation, completedGeneration } from "../../src/conversation.js";
+import { GenerationScheduler } from "../../src/scheduler.js";
 
 const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
-const makeAgent = (conversationId: string, runId: string) => new Conversation(conversationId as any, runId as any, config, { kind: "spawn", agent: "worker", prompt: runId, label: runId }, () => {});
+const makeAgent = (conversationId: string, prompt: string) => new Conversation(conversationId as any, config, { kind: "spawn", agent: "worker", prompt, label: prompt }, () => {});
 const session = () => ({ messages: [], subscribe: () => () => {}, abort() {} }) as any;
 
-test("queue leases enforce concurrency and dispatch the next run after completion", async () => {
+test("queue leases enforce concurrency and dispatch the next generation after completion", async () => {
   const releases: Array<() => void> = [];
   const started: string[] = [];
-  const executor = new RunScheduler({ maxRunning: 1, executor: async (_ctx, agent, run) => {
-    started.push(agent.conversationId);
-    agent.bindSession(session());
+  const scheduler = new GenerationScheduler({ maxExecuting: 1, executor: async (_ctx, conversation, generation) => {
+    started.push(conversation.conversationId);
+    conversation.bindSession(generation, session());
     await new Promise<void>(resolve => releases.push(resolve));
-    return completedRun(agent, run.runId, run.prompt);
+    return completedGeneration(conversation, generation, generation.prompt);
   }});
-  const first = makeAgent("amber-acorn", "adapt-ably");
-  const second = makeAgent("brisk-birch", "balance-boldly");
-  const p1 = executor.run({} as any, undefined, first, first.requireCurrentRun());
-  const p2 = executor.run({} as any, undefined, second, second.requireCurrentRun());
+  const first = makeAgent("amber-acorn", "first");
+  const second = makeAgent("brisk-birch", "second");
+  const p1 = scheduler.schedule({} as any, undefined, first, first.latestGeneration);
+  const p2 = scheduler.schedule({} as any, undefined, second, second.latestGeneration);
   await vi.waitFor(() => expect(started).toEqual(["amber-acorn"]));
   releases.shift()!(); await p1;
   await vi.waitFor(() => expect(started).toEqual(["amber-acorn", "brisk-birch"]));
   releases.shift()!(); await expect(p2).resolves.toMatchObject({ status: { kind: "done", outcome: "completed" } });
 });
 
-test("an executor failure resolves the resumed run snapshot", async () => {
-  const scheduler = new RunScheduler({ maxRunning: 1, executor: async (_ctx, agent, run) => {
-    if (run.kind === "resume") throw new Error("resume failed");
-    agent.bindSession(session());
-    return completedRun(agent, run.runId, "spawned");
+test("an executor failure resolves the resumed generation snapshot", async () => {
+  const scheduler = new GenerationScheduler({ maxExecuting: 1, executor: async (_ctx, conversation, generation) => {
+    if (generation.kind === "resume") throw new Error("resume failed");
+    conversation.bindSession(generation, session());
+    return completedGeneration(conversation, generation, "spawned");
   }});
-  const agent = makeAgent("amber-acorn", "adapt-ably");
-  const spawn = agent.requireCurrentRun();
-  await scheduler.run({} as any, undefined, agent, spawn);
-  agent.markJoined(spawn.runId);
-  const resume = agent.beginResume("balance-boldly" as any, "continue");
+  const conversation = makeAgent("amber-acorn", "first");
+  const spawn = conversation.latestGeneration;
+  await scheduler.schedule({} as any, undefined, conversation, spawn);
+  conversation.markJoined(spawn);
+  const resume = conversation.beginResume("continue");
 
-  await expect(scheduler.run({} as any, undefined, agent, resume)).resolves.toMatchObject({
-    runId: "balance-boldly",
+  await expect(scheduler.schedule({} as any, undefined, conversation, resume)).resolves.toMatchObject({
+    generation: 2,
     kind: "resume",
     status: { kind: "done", outcome: "error" },
   });
 });
 
-test("suspending an active lease lets queued descendant work run before reacquisition", async () => {
+test("suspending an active lease lets queued descendant work execute before reacquisition", async () => {
   let releaseParent!: () => void;
   const parentMayFinish = new Promise<void>(resolve => { releaseParent = resolve; });
   const started: string[] = [];
-  const executor = new RunScheduler({ maxRunning: 1, executor: async (_ctx, agent, run) => {
-    started.push(agent.conversationId); agent.bindSession(session());
-    if (agent.conversationId === "amber-acorn") await parentMayFinish;
-    return completedRun(agent, run.runId, "done");
+  const scheduler = new GenerationScheduler({ maxExecuting: 1, executor: async (_ctx, conversation, generation) => {
+    started.push(conversation.conversationId);
+    conversation.bindSession(generation, session());
+    if (conversation.conversationId === "amber-acorn") await parentMayFinish;
+    return completedGeneration(conversation, generation, "done");
   }});
-  const parent = makeAgent("amber-acorn", "adapt-ably");
-  const child = makeAgent("brisk-birch", "balance-boldly");
-  const parentRun = executor.run({} as any, undefined, parent, parent.requireCurrentRun());
+  const parent = makeAgent("amber-acorn", "parent");
+  const child = makeAgent("brisk-birch", "child");
+  const parentCompletion = scheduler.schedule({} as any, undefined, parent, parent.latestGeneration);
   await vi.waitFor(() => expect(started).toEqual(["amber-acorn"]));
-  const childRun = executor.run({} as any, undefined, child, child.requireCurrentRun());
-  await executor.suspendAgentSlotDuring(parent.conversationId, async () => { await childRun; });
+  const childCompletion = scheduler.schedule({} as any, undefined, child, child.latestGeneration);
+  await scheduler.suspendConversationSlotDuring(parent, async () => { await childCompletion; });
   expect(started).toEqual(["amber-acorn", "brisk-birch"]);
-  releaseParent(); await parentRun;
+  releaseParent(); await parentCompletion;
 });

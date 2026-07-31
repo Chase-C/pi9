@@ -1,57 +1,57 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
-import type { ConversationSnapshot, ConversationUpdateKind, RunSnapshot } from "./conversation.js";
-import { formatElapsed } from "./run-format.js";
+import type { ConversationSnapshot, ConversationUpdateKind, GenerationSnapshot } from "./conversation.js";
+import { formatElapsed } from "./generation-format.js";
 import { DEFAULT_SUBAGENT_UI_SETTINGS, type SubagentDisplaySettings, type SubagentSettings, type SubagentUiSettings, type WidgetMode } from "./settings.js";
 
 export interface ProgressWidgetRow {
   conversation: ConversationSnapshot;
-  run: RunSnapshot;
+  generation: GenerationSnapshot;
   status: "queued" | "running";
   text: string;
 }
 
-function activeRun(conversation: ConversationSnapshot): RunSnapshot | undefined {
-  const run = conversation.currentRun;
-  return run?.status.kind === "queued" || run?.status.kind === "running" ? run : undefined;
+function activeGeneration(conversation: ConversationSnapshot): GenerationSnapshot | undefined {
+  const generation = conversation.currentGeneration;
+  return generation?.status.kind === "queued" || generation?.status.kind === "running" ? generation : undefined;
 }
 
-function latestActivity(run: RunSnapshot): string {
-  const tool = [...run.activity.toolHistory].reverse().find(candidate => candidate.completedAt === undefined);
+function latestActivity(generation: GenerationSnapshot): string {
+  const tool = [...generation.activity.toolHistory].reverse().find(candidate => candidate.completedAt === undefined);
   if (tool) return `${tool.name}${tool.inputSummary ? ` ${tool.inputSummary}` : ""}`;
-  if (run.activity.messageSnippet?.trim()) return run.activity.messageSnippet.replace(/\s+/g, " ").trim();
-  const completedTool = [...run.activity.toolHistory].reverse().find(candidate => candidate.completedAt !== undefined);
+  if (generation.activity.messageSnippet?.trim()) return generation.activity.messageSnippet.replace(/\s+/g, " ").trim();
+  const completedTool = [...generation.activity.toolHistory].reverse().find(candidate => candidate.completedAt !== undefined);
   if (completedTool) return `${completedTool.name}${completedTool.inputSummary ? ` ${completedTool.inputSummary}` : ""}`;
   return "starting…";
 }
 
-export function formatProgressWidgetRow(conversation: ConversationSnapshot, run: RunSnapshot, now = Date.now()): ProgressWidgetRow {
-  const status = run.status.kind;
-  if (status !== "queued" && status !== "running") throw new Error("Progress rows require an active run.");
+export function formatProgressWidgetRow(conversation: ConversationSnapshot, generation: GenerationSnapshot, now = Date.now()): ProgressWidgetRow {
+  const status = generation.status.kind;
+  if (status !== "queued" && status !== "running") throw new Error("Progress rows require an active generation.");
   const identity = conversation.label;
   const agent = conversation.label !== conversation.agent.name ? ` · ${conversation.agent.name}` : "";
-  const timestamp = status === "queued" ? run.status.queuedAt : run.status.startedAt;
+  const timestamp = status === "queued" ? generation.status.queuedAt : generation.status.startedAt;
   const marker = status === "running" ? "●" : "○";
   return {
     conversation,
-    run,
+    generation,
     status,
-    text: `${marker} ${identity}${agent} · ${status} ${formatElapsed(Math.max(0, now - timestamp))} · ${latestActivity(run)}`,
+    text: `${marker} ${identity}${agent} · ${status} ${formatElapsed(Math.max(0, now - timestamp))} · ${latestActivity(generation)}`,
   };
 }
 
 export function buildProgressWidgetRows(conversations: readonly ConversationSnapshot[], now = Date.now()): ProgressWidgetRow[] {
   return conversations.flatMap(conversation => {
-    const run = activeRun(conversation);
-    return run ? [formatProgressWidgetRow(conversation, run, now)] : [];
+    const generation = activeGeneration(conversation);
+    return generation ? [formatProgressWidgetRow(conversation, generation, now)] : [];
   });
 }
 
 export function formatSummaryWidgetLines(conversations: readonly ConversationSnapshot[]): string[] {
   if (!conversations.length) return [];
-  const running = conversations.filter(conversation => conversation.currentRun?.status.kind === "running").length;
-  const queued = conversations.filter(conversation => conversation.currentRun?.status.kind === "queued").length;
+  const running = conversations.filter(conversation => conversation.currentGeneration?.status.kind === "running").length;
+  const queued = conversations.filter(conversation => conversation.currentGeneration?.status.kind === "queued").length;
   const counts = [
     ...(running ? [`${running} running`] : []),
     ...(queued ? [`${queued} queued`] : []),

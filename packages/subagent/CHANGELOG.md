@@ -4,6 +4,16 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Replace private run records and random `runId` values with append-only, one-based generations scoped to each subagent.
+- Rename `maxTasksPerRun` to `maxTasksPerCall` and `subagent-run-index` metadata to version 4 `subagent-generation-index` entries.
+
+### Changed
+
+- Correlate joins, recursive lineage, completion notifications, cancellation, and resumed work by exact subagent generation.
+- Show generation history and provenance throughout `/subagents` without exposing private execution identifiers.
+
 ## [0.10.1] - 2026-07-31
 
 ### Breaking

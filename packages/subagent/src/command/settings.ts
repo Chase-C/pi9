@@ -9,7 +9,7 @@ export type SubagentSettingsChange =
   | { kind: "widgetMode"; value: WidgetMode }
   | { kind: "completionNotify"; value: CompletionNotifyMode }
   | { kind: "maxConcurrentSubagents"; value: number }
-  | { kind: "maxTasksPerRun"; value: number }
+  | { kind: "maxTasksPerCall"; value: number }
   | { kind: "maxConversations"; value: number }
   | { kind: "widgetMaxRowsPerSection"; value: number };
 
@@ -26,8 +26,8 @@ export function applySubagentSettingsChange(
       return { ...settings, runtime: { ...settings.runtime, completionNotify: change.value } };
     case "maxConcurrentSubagents":
       return { ...settings, runtime: { ...settings.runtime, maxConcurrentSubagents: change.value } };
-    case "maxTasksPerRun":
-      return { ...settings, runtime: { ...settings.runtime, maxTasksPerRun: change.value } };
+    case "maxTasksPerCall":
+      return { ...settings, runtime: { ...settings.runtime, maxTasksPerCall: change.value } };
     case "maxConversations":
       return { ...settings, runtime: { ...settings.runtime, maxConversations: change.value } };
     case "widgetMaxRowsPerSection":
@@ -172,7 +172,7 @@ export class SubagentSettingsComponent implements Component, Focusable {
       const shown = Math.min(value, 6);
       return [this.success(`${"● ".repeat(shown).trim()}${value > shown ? `  +${value - shown}` : ""}`), this.muted(`${value} tree-wide running slots; additional work queues.`)];
     }
-    if (item.id === "maxTasksPerRun") return [this.success(`spawn/resume/steer (up to ${item.currentValue} items)`), this.muted("Larger batches are rejected before work starts.")];
+    if (item.id === "maxTasksPerCall") return [this.success(`spawn/resume/steer (up to ${item.currentValue} items)`), this.muted("Larger batches are rejected before work starts.")];
     if (item.id === "maxConversations") {
       const value = positiveInt(item.currentValue);
       return [this.success(`${Math.max(0, value - 1)} / ${value} retained`), this.muted("One spawn remains before capacity is reached."), this.success("remove → frees capacity")];
@@ -268,11 +268,11 @@ export class SubagentSettingsComponent implements Component, Focusable {
 function createSettingDefinitions(settings: SubagentSettings): SettingDefinition[] {
   return [
     { id: "widgetPlacement", section: "Interface", label: "Widget placement", currentValue: settings.widgetPlacement, values: ["belowEditor", "aboveEditor", "off"], description: "Place live subagent activity relative to the editor." },
-    { id: "widgetMode", section: "Interface", label: "Widget mode", currentValue: settings.widgetMode, values: ["summary", "progress"], description: "Show a retained-conversation summary or individual active runs." },
+    { id: "widgetMode", section: "Interface", label: "Widget mode", currentValue: settings.widgetMode, values: ["summary", "progress"], description: "Show a retained-conversation summary or individual active subagents." },
     { id: "widgetMaxRowsPerSection", section: "Interface", label: "Progress rows", currentValue: String(settings.display.widgetMaxRowsPerSection), description: "Maximum visible active progress rows before an overflow line appears." },
-    { id: "completionNotify", section: "Notifications", label: "Completion notify", currentValue: settings.runtime.completionNotify, values: ["auto", "steer", "none"], description: "Choose how completed child runs notify the parent conversation." },
+    { id: "completionNotify", section: "Notifications", label: "Completion notify", currentValue: settings.runtime.completionNotify, values: ["auto", "steer", "none"], description: "Choose how completed child generations notify the parent conversation." },
     { id: "maxConcurrentSubagents", section: "Runtime", label: "Max running", currentValue: String(settings.runtime.maxConcurrentSubagents), description: "Maximum concurrently running subagents across the recursive delegation tree." },
-    { id: "maxTasksPerRun", section: "Runtime", label: "Max batch size", currentValue: String(settings.runtime.maxTasksPerRun), description: "Maximum items accepted by one subagent spawn, resume, or steer call." },
+    { id: "maxTasksPerCall", section: "Runtime", label: "Max batch size", currentValue: String(settings.runtime.maxTasksPerCall), description: "Maximum items accepted by one subagent spawn, resume, or steer call." },
     { id: "maxConversations", section: "Runtime", label: "Max conversations", currentValue: String(settings.runtime.maxConversations), description: "Maximum number of conversations retained by the runtime." },
   ];
 }

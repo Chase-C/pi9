@@ -15,7 +15,7 @@ export function registerSubagentsCommand(
   onSettingsUpdated?: (settings: SubagentSettings) => void,
 ) {
   pi.registerCommand?.("subagents", {
-    description: "Manage subagent conversations and runs",
+    description: "Manage subagent conversations and generations",
     getArgumentCompletions,
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       if (!ctx.hasUI || !ctx.ui?.custom) return;
@@ -49,7 +49,7 @@ export function registerSubagentsCommand(
             onSettingsChange: change => {
               settings = applySubagentSettingsChange(settings, change);
               runtime.configure({
-                maxRunning: settings.runtime.maxConcurrentSubagents,
+                maxExecuting: settings.runtime.maxConcurrentSubagents,
                 maxConversations: settings.runtime.maxConversations,
               });
               if (change.kind === "widgetPlacement" || change.kind === "widgetMode" || change.kind === "widgetMaxRowsPerSection") {
@@ -63,21 +63,21 @@ export function registerSubagentsCommand(
               return settings;
             },
             onStart: (agent, prompt) => {
-              const start = runtime.startRun(ctx, [{ kind: "spawn", agent, prompt, label: prompt }]).starts[0];
+              const start = runtime.startTasks(ctx, [{ kind: "spawn", agent, prompt, label: prompt }]).starts[0];
               if (!start?.ok) {
-                notify(ctx, start?.error ?? "Could not start run.", "warning");
+                notify(ctx, start?.error ?? "Could not start generation.", "warning");
                 return undefined;
               }
               updateSubagentWidget(ctx, runtime.listConversations(), settings);
-              notify(ctx, `Started ${agent} (${start.conversationId}).`, "info");
+              notify(ctx, `Started ${agent} (${start.conversationId}, generation ${start.generation}).`, "info");
               return start.conversationId;
             },
             onResume: (conversationId, prompt) => {
-              const start = runtime.startRun(ctx, [{ kind: "resume", subagentId: conversationId as SubagentId, prompt }]).starts[0];
+              const start = runtime.startTasks(ctx, [{ kind: "resume", subagentId: conversationId as SubagentId, prompt }]).starts[0];
               if (!start?.ok) notify(ctx, start?.error ?? `Could not resume conversation ${conversationId}.`, "warning");
               else {
                 updateSubagentWidget(ctx, runtime.listConversations(), settings);
-                notify(ctx, `Resumed subagent ${conversationId}.`, "info");
+                notify(ctx, `Resumed subagent ${conversationId} with generation ${start.generation}.`, "info");
               }
             },
             onCollect: async subagentId => {
@@ -123,7 +123,7 @@ export function registerSubagentsCommand(
 
 function getArgumentCompletions(prefix: string) {
   const values = [
-    { value: "conversations", label: "conversations", description: "Open conversations and runs" },
+    { value: "conversations", label: "conversations", description: "Open conversations and generations" },
     { value: "agents", label: "agents", description: "Browse agents" },
     { value: "settings", label: "settings", description: "Open settings" },
   ];

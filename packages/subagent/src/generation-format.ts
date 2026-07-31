@@ -1,12 +1,12 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { RunSnapshot, RunStatus } from "./conversation.js";
+import type { GenerationSnapshot, GenerationStatus } from "./conversation.js";
 import type { SubagentStatus } from "./schema.js";
 
-export function runElapsedMs(run: RunSnapshot, now = Date.now()): number {
-  const start = run.status.kind === "queued" ? run.status.queuedAt
-    : run.status.kind === "running" ? run.status.startedAt
-    : run.status.startedAt ?? run.createdAt;
-  const end = run.status.kind === "done" ? run.status.completedAt : now;
+export function generationElapsedMs(generation: GenerationSnapshot, now = Date.now()): number {
+  const start = generation.status.kind === "queued" ? generation.status.queuedAt
+    : generation.status.kind === "running" ? generation.status.startedAt
+    : generation.status.startedAt ?? generation.createdAt;
+  const end = generation.status.kind === "done" ? generation.status.completedAt : now;
   return Math.max(0, end - start);
 }
 
@@ -26,8 +26,8 @@ export function truncateText(value: string, limit: number, trimEnd = false): str
   return `${trimEnd ? truncated.trimEnd() : truncated}…`;
 }
 
-/** The shared status palette for every run-status surface. */
-export function statusColor(status: RunStatus | SubagentStatus): ThemeColor {
+/** The shared status palette for every generation-status surface. */
+export function statusColor(status: GenerationStatus | SubagentStatus): ThemeColor {
   if (status === "completed") return "success";
   if (status === "error" || status === "failed") return "error";
   if (status === "skipped") return "dim";
