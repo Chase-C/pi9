@@ -4,6 +4,7 @@ import {
   Conversation,
   GenerationSteerError,
   effectiveStatus,
+  generationKey,
   type ConversationSnapshot,
   type ConversationUpdateKind,
   type ConversationUpdateListener,
@@ -18,7 +19,7 @@ import {
 import { resolveModel, resolveRequestedSkills, resolveTaskCwd } from "./execute.js";
 import { ConversationIdAllocator, type ConversationId, type SubagentId } from "./identifiers.js";
 import { GenerationScheduler, type GenerationExecutor } from "./scheduler.js";
-import { projectLiveSubagent, projectSubagentStatus, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
+import { projectLiveSubagent, projectSubagentGenerationStatus, projectSubagentStatus, type CanonicalLiveSubagent, type FailureProjectionMode } from "./contract.js";
 import type { SubagentStatus, SpawnRequest, ResumeRequest } from "./schema.js";
 
 export type { ConversationUpdateListener } from "./conversation.js";
@@ -186,7 +187,7 @@ export class SubagentRuntime {
       return { conversationId: record.conversation.conversationId, generation: record.generation.number, steer };
     } catch (error) {
       if (error instanceof GenerationSteerError) {
-        const status = error.status === "stopping" ? "cancelled" : publicLifecycleStatus(error.status);
+        const status = error.status === "stopping" ? "cancelled" : projectSubagentGenerationStatus(error.status);
         throw new Error(`Subagent ${subagentId} is ${status} and cannot be steered.`);
       }
       throw error;
@@ -198,7 +199,7 @@ export class SubagentRuntime {
     this.assertDirectOwner(record.conversation, caller, "cancel");
     const snapshot = record.conversation.generationSnapshot(record.generation);
     if (snapshot.status.kind === "done") {
-      const status = publicLifecycleStatus(snapshot.status.outcome);
+      const status = projectSubagentGenerationStatus(snapshot.status.outcome);
       throw new Error(status === "cancelled" ? `Subagent ${subagentId} is already cancelled.` : `Subagent ${subagentId} is ${status} and cannot be cancelled.`);
     }
     const wasQueued = snapshot.status.kind === "queued";
@@ -283,8 +284,8 @@ export class SubagentRuntime {
   }
   unjoinedDirectChildGenerations(owner: GenerationRef): readonly GenerationRef[] {
     const ownerSnapshot = this.generationSnapshot(owner);
-    const mentioned = new Set((ownerSnapshot.nestedJoins ?? []).flatMap(attempt => attempt.targets.map(target => `${target.conversationId}:${target.generation}`)));
-    return this.directChildGenerations(owner).filter(child => !mentioned.has(`${child.conversationId}:${child.generation}`));
+    const mentioned = new Set((ownerSnapshot.nestedJoins ?? []).flatMap(attempt => attempt.targets.map(generationKey)));
+    return this.directChildGenerations(owner).filter(child => !mentioned.has(generationKey(child)));
   }
 
   private bindRecords(records: readonly GenerationRecord[]): JoinBinding {
@@ -317,7 +318,6 @@ export class SubagentRuntime {
   }
   private isCurrentCaller(caller: SubagentCaller): boolean {
     return this.conversations.get(caller.conversation.conversationId) === caller.conversation
-      && caller.conversation.ownsGeneration(caller.generation)
       && caller.conversation.latestGeneration === caller.generation;
   }
   private assertDirectOwner(target: Conversation, caller: SubagentCaller | undefined, action: string): void {
@@ -477,8 +477,3 @@ export class SubagentRuntime {
 function generationRef(record: GenerationRecord): GenerationRef { return { conversationId: record.conversation.conversationId, generation: record.generation.number }; }
 function callerRef(caller: SubagentCaller): GenerationRef { return { conversationId: caller.conversation.conversationId, generation: caller.generation.number }; }
 function capitalize(value: string): string { return value[0].toUpperCase() + value.slice(1); }
-function publicLifecycleStatus(status: string): string {
-  if (status === "aborted") return "cancelled";
-  if (status === "error" || status === "interrupted" || status === "skipped") return "failed";
-  return status;
-}

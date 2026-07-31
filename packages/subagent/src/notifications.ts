@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ContextEvent, Theme } from "@earendil-works/pi-coding-agent";
-import type { Conversation, ConversationSnapshot, GenerationRef, GenerationSnapshot } from "./conversation.js";
+import { generationKey, parseGenerationKey, type Conversation, type ConversationSnapshot, type GenerationRef, type GenerationSnapshot } from "./conversation.js";
 import type { ConversationUpdateKind } from "./conversation.js";
 import { isFinishedSubagent, type CanonicalFinishedSubagent } from "./contract.js";
 import type { SubagentRuntime } from "./runtime.js";
@@ -366,15 +366,6 @@ export class CompletionNotifier {
       return generation?.status.kind === "done" ? [{ conversation, generation }] : [];
     });
   }
-}
-
-function generationKey(reference: GenerationRef): string {
-  return JSON.stringify([reference.conversationId, reference.generation]);
-}
-
-function parseGenerationKey(key: string): GenerationRef {
-  const [conversationId, generation] = JSON.parse(key) as [GenerationRef["conversationId"], number];
-  return { conversationId, generation };
 }
 
 function generationConversationId(key: string): string {

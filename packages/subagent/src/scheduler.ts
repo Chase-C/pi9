@@ -102,7 +102,7 @@ export class GenerationScheduler {
   private readonly executor: GenerationExecutor;
   private readonly queued = new Map<Generation, ExecutionQueueTask<GenerationSnapshot>>();
   private isTracked: (conversation: Conversation) => boolean;
-  private childTool?: (conversation: Conversation, generation: Generation) => ToolDefinition;
+  private childTool?: (conversation: Conversation) => ToolDefinition;
   private childSessionEvent?: (conversation: Conversation, generation: Generation, event: AgentSessionEvent) => void;
 
   constructor(options: GenerationSchedulerOptions) {
@@ -115,7 +115,7 @@ export class GenerationScheduler {
     }));
   }
 
-  setChildTool(fn: (conversation: Conversation, generation: Generation) => ToolDefinition): void { this.childTool = fn; }
+  setChildTool(fn: (conversation: Conversation) => ToolDefinition): void { this.childTool = fn; }
   setChildSessionEvent(fn: (conversation: Conversation, generation: Generation, event: AgentSessionEvent) => void): void { this.childSessionEvent = fn; }
   configure(options: { maxExecuting?: number }): void {
     if (options.maxExecuting !== undefined) this.queue.maxExecuting = options.maxExecuting;

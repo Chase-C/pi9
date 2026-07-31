@@ -62,6 +62,16 @@ export interface GenerationRef {
   readonly generation: number;
 }
 
+/** The canonical scalar encoding of a GenerationRef for use as a map or set key. */
+export function generationKey(reference: GenerationRef): string {
+  return JSON.stringify([reference.conversationId, reference.generation]);
+}
+
+export function parseGenerationKey(key: string): GenerationRef {
+  const [conversationId, generation] = JSON.parse(key) as [ConversationId, number];
+  return { conversationId, generation };
+}
+
 export type NestedJoinAttemptState = "running" | "completed" | "failed" | "interrupted";
 export interface NestedJoinTargetSnapshot extends GenerationRef {
   readonly status?: GenerationStatus;

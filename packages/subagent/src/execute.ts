@@ -62,7 +62,7 @@ export interface ExecuteGenerationDependencies {
   loadSkills: typeof loadSkills;
   readSkillFile: typeof readFileSync;
   loadExtensionPaths: (cwd: string, agentDir: string) => Promise<string[]>;
-  childToolFor?: (agent: Conversation, generation: Generation) => ToolDefinition;
+  childToolFor?: (agent: Conversation) => ToolDefinition;
   childSessionEvent?: (agent: Conversation, generation: Generation, event: AgentSessionEvent) => void;
 }
 
@@ -119,7 +119,7 @@ export async function executeGeneration(
   }
 
   const inheritedExtensionPaths = await dependencies.loadExtensionPaths(cwd, agentDir);
-  const childTool = dependencies.childToolFor?.(agent, generation);
+  const childTool = dependencies.childToolFor?.(agent);
 
   const resourceLoader = new dependencies.ResourceLoader({
     cwd,

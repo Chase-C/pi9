@@ -2,7 +2,7 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { Text } from "@earendil-works/pi-tui";
 
 import { AgentRegistry } from "./agents.js";
-import { type Conversation, type ConversationSnapshot, type ConversationUpdateKind } from "./conversation.js";
+import { generationKey, type Conversation, type ConversationSnapshot, type ConversationUpdateKind } from "./conversation.js";
 import { SubagentRuntime } from "./runtime.js";
 import {
   CompletionNotifier,
@@ -132,7 +132,7 @@ export function registerSubagentMetadataPersistence(pi: MetadataPi, source: Meta
     if (kind !== "status") return;
     const snapshot = agent.snapshot();
     const generation = snapshot.generations.at(-1);
-    const key = generation ? JSON.stringify([snapshot.conversationId, generation.generation]) : undefined;
+    const key = generation ? generationKey({ conversationId: snapshot.conversationId, generation: generation.generation }) : undefined;
     if (!generation || generation.status.kind !== "done" || !key || persisted.has(key)) return;
     persisted.add(key);
     pi.appendEntry!("subagent-generation-index", projectSubagentGenerationIndex(snapshot));
