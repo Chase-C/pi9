@@ -7,8 +7,8 @@ describe("subagents command registration", () => {
   it("applies settings before starting work and persists them", async () => {
     let handler: any;
     const configure = vi.fn();
-    const startRun = vi.fn(() => ({ starts: [{ ok: true, conversationId: "c2", runId: "r2" }] }));
-    const manager = { configure, startRun, listConversations: () => [], onConversationUpdate: () => () => {}, removeConversation: vi.fn() };
+    const startTasks = vi.fn(() => ({ starts: [{ ok: true, conversationId: "c2", generation: 1 }] }));
+    const manager = { configure, startTasks, listConversations: () => [], onConversationUpdate: () => () => {}, removeConversation: vi.fn() };
     const save = vi.fn(async () => {});
     registerSubagentsCommand(
       { registerCommand: (_name: string, registration: any) => { handler = registration.handler; } } as any,
@@ -28,8 +28,8 @@ describe("subagents command registration", () => {
 
     await handler("settings", ctx);
 
-    expect(configure).toHaveBeenLastCalledWith({ maxRunning: 8, maxConversations: 100 });
-    expect(configure.mock.invocationCallOrder.at(-1)).toBeLessThan(startRun.mock.invocationCallOrder[0]);
+    expect(configure).toHaveBeenLastCalledWith({ maxExecuting: 8, maxConversations: 100 });
+    expect(configure.mock.invocationCallOrder.at(-1)).toBeLessThan(startTasks.mock.invocationCallOrder[0]);
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ runtime: expect.objectContaining({ maxConcurrentSubagents: 8 }) }));
   });
 
@@ -79,7 +79,7 @@ describe("subagents command registration", () => {
         },
       },
     );
-    const run = handler("settings", {
+    const handling = handler("settings", {
       hasUI: true,
       ui: {
         custom: async (factory: any) => {
@@ -92,7 +92,7 @@ describe("subagents command registration", () => {
 
     await vi.waitFor(() => expect(saved).toEqual([8]));
     releaseFirst?.();
-    await run;
+    await handling;
     expect(saved).toEqual([8, 16]);
   });
 

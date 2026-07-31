@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { test, expect } from "vitest";
 import { SubagentRuntime } from "../../src/runtime.js";
-import { completedRun, errorRun } from "../../src/conversation.js";
+import { completedGeneration, errorGeneration, Generation } from "../../src/conversation.js";
 
 const knownModel = { provider: "test", id: "known" } as any;
 const config = {
@@ -30,12 +30,13 @@ const session = () => ({
   getSteeringMessages() { return []; },
   getFollowUpMessages() { return []; },
 }) as any;
-const runner = async (_ctx: any, agent: any, attempt: any) => {
-  agent.bindSession(session());
-  return completedRun(agent, attempt.runId, attempt.prompt);
+const executor = async (_ctx: any, agent: any, attempt: any) => {
+  const activeSession = attempt.kind === "resume" ? agent.sessionForResume() : session();
+  agent.bindSession(attempt, activeSession);
+  return completedGeneration(agent, attempt, attempt.prompt);
 };
-const parent = (conversationId: any, runId: any) => ({ caller: { conversationId, runId } });
-const caller = (conversationId: any, runId: any) => ({ caller: { conversationId, runId } });
+const parent = (manager: SubagentRuntime, reference: any) => ({ caller: manager.generationCaller(reference) });
+const caller = (manager: SubagentRuntime, reference: any) => ({ caller: manager.generationCaller(reference) });
 const output = (entry: any) =>
   entry.status.kind === "done" ? entry.status.output : undefined;
 const joinLatest = (manager: SubagentRuntime, subagentId: any, owner?: any) => {
@@ -44,55 +45,88 @@ const joinLatest = (manager: SubagentRuntime, subagentId: any, owner?: any) => {
   binding.release();
 };
 
-test("spawn records stable conversation ownership and exact run provenance", async () => {
-  const manager = new SubagentRuntime(registry, 2, runner);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+test("spawn records stable conversation ownership and exact generation provenance", async () => {
+  const manager = new SubagentRuntime(registry, 2, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
   await ownerStart.completion;
   const owner = ownerStart.starts[0] as any;
 
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(owner.conversationId, owner.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, owner));
   await childStart.completion;
   const child = childStart.starts[0] as any;
 
   expect(manager.conversation(child.conversationId)).toMatchObject({
     parentConversationId: owner.conversationId,
-    spawnedByRunId: owner.runId,
+    spawnedInGeneration: owner.generation,
+    generations: [{ startedInParentGeneration: owner.generation }],
   });
 });
 
-test("resume preserves conversation ownership and spawn provenance", async () => {
-  const manager = new SubagentRuntime(registry, 2, runner);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+test("resume preserves conversation ownership and records exact generation provenance", async () => {
+  const manager = new SubagentRuntime(registry, 2, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
   await ownerStart.completion;
   const owner = ownerStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(owner.conversationId, owner.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, owner));
   await childStart.completion;
   const child = childStart.starts[0] as any;
 
-  const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
+  const ownerCaller = manager.generationCaller(owner);
   joinLatest(manager, child.conversationId, ownerCaller);
-  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: child.conversationId, prompt: "again" }] as any, { caller: ownerCaller });
+  const resumed = manager.startTasks(ctx, [{ kind: "resume", subagentId: child.conversationId, prompt: "again" }] as any, { caller: ownerCaller });
   await resumed.completion;
 
   expect(manager.conversation(child.conversationId)).toMatchObject({
     parentConversationId: owner.conversationId,
-    spawnedByRunId: owner.runId,
+    spawnedInGeneration: owner.generation,
+    generations: [
+      { generation: 1, startedInParentGeneration: owner.generation },
+      { generation: 2, startedInParentGeneration: owner.generation },
+    ],
   });
 });
 
-test("conversation queries return direct children only", async () => {
-  const manager = new SubagentRuntime(registry, 3, runner);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
-  await rootStart.completion;
-  const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(root.conversationId, root.runId));
+test("generation lineage finds resumed children and remains readable for historical owners", async () => {
+  const manager = new SubagentRuntime(registry, 2, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const ownerCaller = manager.generationCaller(owner);
+
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any, { caller: ownerCaller });
   await childStart.completion;
   const child = childStart.starts[0] as any;
-  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand", label: "grand" }] as any,
-    caller(child.conversationId, child.runId));
+  const childJoin = manager.bindSubagentJoin([child.conversationId], ownerCaller);
+  await childJoin.completion;
+  childJoin.markJoined();
+  childJoin.release();
+
+  const childResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: child.conversationId, prompt: "again" }] as any, { caller: ownerCaller });
+  await childResume.completion;
+  const resumedChild = childResume.starts[0] as any;
+
+  expect(manager.directChildGenerations(owner)).toEqual([child, resumedChild].map(({ conversationId, generation }) => ({ conversationId, generation })));
+  expect(manager.unjoinedDirectChildGenerations(owner)).toEqual([{ conversationId: child.conversationId, generation: 2 }]);
+
+  joinLatest(manager, owner.conversationId);
+  const ownerResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: owner.conversationId, prompt: "owner again" }] as any);
+  await ownerResume.completion;
+  expect(manager.unjoinedDirectChildGenerations(owner)).toEqual([{ conversationId: child.conversationId, generation: 2 }]);
+});
+
+test("conversation queries return direct children only", async () => {
+  const manager = new SubagentRuntime(registry, 3, executor);
+  const rootStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
+  await rootStart.completion;
+  const root = rootStart.starts[0] as any;
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, root));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const grandStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand", label: "grand" }] as any,
+    caller(manager, child));
   await grandStart.completion;
 
   const grand = grandStart.starts[0] as any;
@@ -102,43 +136,43 @@ test("conversation queries return direct children only", async () => {
 });
 
 test("conversation authorization survives resume and rejects unrelated conversations", async () => {
-  const manager = new SubagentRuntime(registry, 4, runner);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+  const manager = new SubagentRuntime(registry, 4, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
   await ownerStart.completion;
   const owner = ownerStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(owner.conversationId, owner.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, owner));
   await childStart.completion;
   const child = childStart.starts[0] as any;
-  const unrelatedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated", label: "unrelated" }] as any);
+  const unrelatedStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated", label: "unrelated" }] as any);
   await unrelatedStart.completion;
   const unrelated = unrelatedStart.starts[0] as any;
   joinLatest(manager, owner.conversationId);
-  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: owner.conversationId, prompt: "again" }] as any);
+  const resumed = manager.startTasks(ctx, [{ kind: "resume", subagentId: owner.conversationId, prompt: "again" }] as any);
   await resumed.completion;
-  const resumedOwner = { conversationId: owner.conversationId, runId: (resumed.starts[0] as any).runId };
+  const resumedOwner = manager.generationCaller(resumed.starts[0] as any);
 
-  expect(manager.inspectSubagents([child.conversationId], resumedOwner)[0].snapshot.runId).toBe(child.runId);
+  expect(manager.inspectSubagents([child.conversationId], resumedOwner)[0].snapshot.generation).toBe(child.generation);
   expect(() => manager.inspectSubagents([unrelated.conversationId], resumedOwner)).toThrow(
     `Subagent ${unrelated.conversationId} is not a descendant of caller subagent ${owner.conversationId}.`,
   );
 });
 
 test("removing a conversation deletes its complete terminal subtree", async () => {
-  const manager = new SubagentRuntime(registry, 3, runner);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
+  const manager = new SubagentRuntime(registry, 3, executor);
+  const rootStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
   await rootStart.completion;
   const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(root.conversationId, root.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, root));
   await childStart.completion;
   const child = childStart.starts[0] as any;
-  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand", label: "grand" }] as any,
-    caller(child.conversationId, child.runId));
+  const grandStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand", label: "grand" }] as any,
+    caller(manager, child));
   await grandStart.completion;
   const grand = grandStart.starts[0] as any;
 
-  await expect(manager.removeConversation(child.conversationId, { conversationId: root.conversationId, runId: root.runId })).resolves.toEqual({
+  await expect(manager.removeConversation(child.conversationId, manager.generationCaller(root))).resolves.toEqual({
     ok: true,
     conversationId: child.conversationId,
     label: "child",
@@ -150,16 +184,16 @@ test("removing a conversation deletes its complete terminal subtree", async () =
 });
 
 test("removal completes before notifying listeners and isolates listener failures", async () => {
-  const manager = new SubagentRuntime(registry, 3, runner);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
+  const manager = new SubagentRuntime(registry, 3, executor);
+  const rootStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
   await rootStart.completion;
   const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(root.conversationId, root.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, root));
   await childStart.completion;
   const child = childStart.starts[0] as any;
-  const grandStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand", label: "grand" }] as any,
-    caller(child.conversationId, child.runId));
+  const grandStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "grand", label: "grand" }] as any,
+    caller(manager, child));
   await grandStart.completion;
   const grand = grandStart.starts[0] as any;
   const updates: string[] = [];
@@ -183,7 +217,7 @@ test("removal completes before notifying listeners and isolates listener failure
   ]);
   for (const identity of [root, child, grand]) {
     expect(() => manager.conversation(identity.conversationId)).toThrow(`Subagent ${identity.conversationId} was not found.`);
-    expect(() => manager.runSnapshot(identity.runId)).toThrow(`Unknown run: ${identity.runId}.`);
+    expect(() => manager.generationSnapshot(identity)).toThrow(`Subagent ${identity.conversationId} was not found.`);
   }
 });
 
@@ -191,23 +225,23 @@ test("removal rejects an entire subtree when a descendant is active", async () =
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
+    agent.bindSession(attempt, session());
     if (attempt.prompt === "child") await gate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 2, controlled);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
+  const rootStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
   await rootStart.completion;
   const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(root.conversationId, root.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, root));
   const child = childStart.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
   const result = await manager.removeConversation(root.conversationId);
   expect(result).toMatchObject({ ok: false, conversationId: root.conversationId });
   expect(result.ok ? "" : result.error).toContain(child.conversationId);
-  expect(result.ok ? "" : result.error).not.toContain(child.runId);
+  expect(result.ok ? "" : result.error).not.toContain("generation");
   expect(manager.conversation(root.conversationId).conversationId).toBe(root.conversationId);
   expect(manager.conversation(child.conversationId).conversationId).toBe(child.conversationId);
 
@@ -216,12 +250,12 @@ test("removal rejects an entire subtree when a descendant is active", async () =
 });
 
 test("overlapping removal targets attribute each removed id to the shallowest target", async () => {
-  const manager = new SubagentRuntime(registry, 2, runner);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
+  const manager = new SubagentRuntime(registry, 2, executor);
+  const rootStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
   await rootStart.completion;
   const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(root.conversationId, root.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, root));
   await childStart.completion;
   const child = childStart.starts[0] as any;
 
@@ -236,15 +270,15 @@ test("overlapping removal targets attribute each removed id to the shallowest ta
 });
 
 test("removal attribution holds when an unrelated target interleaves descendant and ancestor", async () => {
-  const manager = new SubagentRuntime(registry, 3, runner);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
+  const manager = new SubagentRuntime(registry, 3, executor);
+  const rootStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
   await rootStart.completion;
   const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(root.conversationId, root.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, root));
   await childStart.completion;
   const child = childStart.starts[0] as any;
-  const unrelatedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated", label: "unrelated" }] as any);
+  const unrelatedStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated", label: "unrelated" }] as any);
   await unrelatedStart.completion;
   const unrelated = unrelatedStart.starts[0] as any;
 
@@ -263,15 +297,15 @@ test("removal attribution holds when an unrelated target interleaves descendant 
 });
 
 test("child callers cannot resume or remove conversations outside their subtree", async () => {
-  const manager = new SubagentRuntime(registry, 3, runner);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
-  const unrelatedStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated", label: "unrelated" }] as any);
+  const manager = new SubagentRuntime(registry, 3, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+  const unrelatedStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "unrelated", label: "unrelated" }] as any);
   await Promise.all([ownerStart.completion, unrelatedStart.completion]);
   const owner = ownerStart.starts[0] as any;
   const unrelated = unrelatedStart.starts[0] as any;
-  const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
+  const ownerCaller = manager.generationCaller(owner);
 
-  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: unrelated.conversationId, prompt: "again" }] as any,
+  expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: unrelated.conversationId, prompt: "again" }] as any,
     { caller: ownerCaller }).starts[0]).toMatchObject({
       ok: false,
       error: `Subagent ${unrelated.conversationId} is not directly owned by caller subagent ${owner.conversationId}.`,
@@ -282,10 +316,13 @@ test("child callers cannot resume or remove conversations outside their subtree"
   });
 });
 
-test("spawning rejects a caller whose run does not belong to its conversation", () => {
-  const manager = new SubagentRuntime(registry, 1, runner);
-  const result = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any, {
-    caller: { conversationId: "amber-acorn" as any, runId: "adapt-ably" as any },
+test("spawning rejects a generation that does not belong to its caller conversation", async () => {
+  const manager = new SubagentRuntime(registry, 1, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+  await ownerStart.completion;
+  const ownerCaller = manager.generationCaller(ownerStart.starts[0] as any);
+  const result = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any, {
+    caller: { conversation: ownerCaller.conversation, generation: new Generation(1, "foreign", () => {}) },
   });
 
   expect(result.starts[0]).toEqual({
@@ -296,8 +333,8 @@ test("spawning rejects a caller whose run does not belong to its conversation", 
 });
 
 test("ordered starts reserve capacity and resumes work at capacity", async () => {
-  const manager = new SubagentRuntime(registry, 2, runner, 1);
-  const batch = manager.startRun(ctx, [
+  const manager = new SubagentRuntime(registry, 2, executor, 1);
+  const batch = manager.startTasks(ctx, [
     { kind: "spawn", agent: "worker", prompt: "one", label: "one" },
     { kind: "spawn", agent: "worker", prompt: "two", label: "two" },
   ] as any);
@@ -307,7 +344,7 @@ test("ordered starts reserve capacity and resumes work at capacity", async () =>
   await batch.completion;
   const first = batch.starts[0] as any;
   joinLatest(manager, first.conversationId);
-  const resumed = manager.startRun(ctx, [{
+  const resumed = manager.startTasks(ctx, [{
     kind: "resume",
     subagentId: first.conversationId,
     prompt: "again",
@@ -315,28 +352,26 @@ test("ordered starts reserve capacity and resumes work at capacity", async () =>
   await resumed.completion;
 
   expect((resumed.starts[0] as any).conversationId).toBe(first.conversationId);
-  expect((resumed.starts[0] as any).runId).not.toBe(first.runId);
-  expect(manager.conversation(first.conversationId).runs.map(run => run.runId)).toEqual([
-    first.runId,
-    (resumed.starts[0] as any).runId,
-  ]);
+  expect(first.generation).toBe(1);
+  expect((resumed.starts[0] as any).generation).toBe(2);
+  expect(manager.conversation(first.conversationId).generations.map(generation => generation.generation)).toEqual([1, 2]);
 });
 
-test("resume identifies the queued run blocking a conversation", async () => {
+test("resume identifies the queued generation blocking a conversation", async () => {
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
+    agent.bindSession(attempt, session());
     if (attempt.prompt === "blocker") await gate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, controlled);
-  const blocker = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocker", label: "blocker" }] as any);
+  const blocker = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocker", label: "blocker" }] as any);
   await new Promise(done => setImmediate(done));
-  const queued = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "queued", label: "queued" }] as any);
+  const queued = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "queued", label: "queued" }] as any);
   const active = queued.starts[0] as any;
 
-  const resumed = manager.startRun(ctx, [{
+  const resumed = manager.startTasks(ctx, [{
     kind: "resume",
     subagentId: active.conversationId,
     prompt: "continue",
@@ -356,20 +391,20 @@ test("active resume failures remain isolated from resumable siblings", async () 
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
+    agent.bindSession(attempt, session());
     if (attempt.prompt === "busy") await gate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 2, controlled);
-  const completed = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "completed", label: "completed" }] as any);
+  const completed = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "completed", label: "completed" }] as any);
   await completed.completion;
   const resumable = completed.starts[0] as any;
   joinLatest(manager, resumable.conversationId);
-  const busyStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "busy", label: "busy" }] as any);
+  const busyStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "busy", label: "busy" }] as any);
   const busy = busyStart.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
-  const batch = manager.startRun(ctx, [
+  const batch = manager.startTasks(ctx, [
     { kind: "resume", subagentId: busy.conversationId, prompt: "blocked" },
     { kind: "resume", subagentId: resumable.conversationId, prompt: "continue" },
   ] as any);
@@ -387,15 +422,15 @@ test("active resume failures remain isolated from resumable siblings", async () 
 
 test("terminal non-resumable conversations retain the generic resume error", async () => {
   const failing = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
-    return errorRun(agent, attempt.runId, "failed");
+    agent.bindSession(attempt, session());
+    return errorGeneration(agent, attempt, "failed");
   };
   const manager = new SubagentRuntime(registry, 1, failing);
-  const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "fail", label: "fail" }] as any);
+  const start = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "fail", label: "fail" }] as any);
   await start.completion;
   const terminal = start.starts[0] as any;
 
-  const resumed = manager.startRun(ctx, [{
+  const resumed = manager.startTasks(ctx, [{
     kind: "resume",
     subagentId: terminal.conversationId,
     prompt: "continue",
@@ -428,24 +463,24 @@ test("aborted conversations resume only after abort and execution settle", async
     const execution = executions++;
     activeExecutions++;
     maxActiveExecutions = Math.max(maxActiveExecutions, activeExecutions);
-    agent.bindSession(retainedSession);
+    agent.bindSession(attempt, retainedSession);
     try {
       await (execution === 0 ? executionGate : resumeGate);
-      return completedRun(agent, attempt.runId, attempt.prompt);
+      return completedGeneration(agent, attempt, attempt.prompt);
     } finally {
       activeExecutions--;
     }
   };
   const manager = new SubagentRuntime(registry, 2, controlled, 1);
-  const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "stop", label: "stop" }] as any);
+  const start = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "stop", label: "stop" }] as any);
   const aborted = start.starts[0] as any;
   await new Promise(done => setImmediate(done));
   const cancelling = manager.cancelSubagent(aborted.conversationId);
   const settlingError = `Subagent ${aborted.conversationId} is still settling a cancelled execution. Wait for it to finish before resuming.`;
 
-  expect(manager.runSnapshot(aborted.runId).status).toMatchObject({ kind: "done", outcome: "aborted" });
+  expect(manager.generationSnapshot(aborted).status).toMatchObject({ kind: "done", outcome: "aborted" });
   expect(manager.conversation(aborted.conversationId)).toMatchObject({ isStopping: true });
-  const capacityFailure = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocked", label: "blocked" }] as any).starts[0] as any;
+  const capacityFailure = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocked", label: "blocked" }] as any).starts[0] as any;
   expect(capacityFailure.error).not.toContain(aborted.conversationId);
   await expect(manager.removeConversation(aborted.conversationId)).resolves.toMatchObject({
     ok: false,
@@ -453,7 +488,7 @@ test("aborted conversations resume only after abort and execution settle", async
     error: expect.stringContaining("has active subagents"),
   });
   expect(manager.projectSubagent(aborted.conversationId).actionHints).not.toContain("resume");
-  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "too-early" }] as any).starts[0])
+  expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "too-early" }] as any).starts[0])
     .toMatchObject({ ok: false, error: settlingError });
 
   releaseAbort();
@@ -469,15 +504,15 @@ test("aborted conversations resume only after abort and execution settle", async
   joinLatest(manager, aborted.conversationId);
   expect(manager.projectSubagent(aborted.conversationId).actionHints).toContain("resume");
 
-  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "continue" }] as any);
-  const resumedRun = resumed.starts[0] as any;
+  const resumed = manager.startTasks(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "continue" }] as any);
+  const resumedGeneration = resumed.starts[0] as any;
   await new Promise(done => setImmediate(done));
-  await manager.steerSubagent(resumedRun.conversationId, "redirect");
+  await manager.steerSubagent(resumedGeneration.conversationId, "redirect");
   releaseResume();
   await resumed.completion;
 
-  expect(resumedRun).toMatchObject({ ok: true, conversationId: aborted.conversationId });
-  expect(output(manager.runSnapshot(resumedRun.runId))).toBe("continue");
+  expect(resumedGeneration).toMatchObject({ ok: true, conversationId: aborted.conversationId });
+  expect(output(manager.generationSnapshot(resumedGeneration))).toBe("continue");
   expect(steers).toEqual(["redirect"]);
   expect(maxActiveExecutions).toBe(1);
 });
@@ -485,12 +520,12 @@ test("aborted conversations resume only after abort and execution settle", async
 test("spawn validation is ordered, isolated, and does not allocate or consume capacity", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "agent-manager-validation-"));
   const prompts: string[] = [];
-  const countedRunner = async (runCtx: any, agent: any, attempt: any) => {
+  const countedExecutor = async (executionCtx: any, agent: any, attempt: any) => {
     prompts.push(attempt.prompt);
-    return runner(runCtx, agent, attempt);
+    return executor(executionCtx, agent, attempt);
   };
-  const manager = new SubagentRuntime(registry, 2, countedRunner, 2);
-  const batch = manager.startRun({ ...ctx, cwd: root }, [
+  const manager = new SubagentRuntime(registry, 2, countedExecutor, 2);
+  const batch = manager.startTasks({ ...ctx, cwd: root }, [
     { kind: "spawn", agent: "worker", prompt: "inherits parent", label: "inherits parent" },
     { kind: "spawn", agent: "missing", prompt: "unknown agent" },
     { kind: "spawn", agent: "worker", prompt: "malformed model", model: "test//known" },
@@ -509,7 +544,7 @@ test("spawn validation is ordered, isolated, and does not allocate or consume ca
   expect(batch.starts[5]).toMatchObject({ error: "Unknown model: missing" });
   for (const start of batch.starts.filter(start => !start.ok)) {
     expect(start).not.toHaveProperty("conversationId");
-    expect(start).not.toHaveProperty("runId");
+    expect(start).not.toHaveProperty("generation");
   }
 
   await batch.completion;
@@ -521,8 +556,8 @@ test("spawn rejects unknown requested skills before allocating conversations", a
   const skillRegistry = { agents: new Map([
     ["invalid-skill", { ...config, name: "invalid-skill", skills: ["definitely-missing-subagent-test-skill"] }],
   ]) } as any;
-  const manager = new SubagentRuntime(skillRegistry, 2, runner);
-  const batch = manager.startRun(ctx, [
+  const manager = new SubagentRuntime(skillRegistry, 2, executor);
+  const batch = manager.startTasks(ctx, [
     { kind: "spawn", agent: "invalid-skill", prompt: "invalid", label: "invalid" },
     { kind: "spawn", agent: "invalid-skill", prompt: "override", label: "override", skills: [] },
   ] as any);
@@ -538,8 +573,8 @@ test("spawn rejects unknown requested skills before allocating conversations", a
 });
 
 test("joining marks the latest result joined and unlocks resume", async () => {
-  const manager = new SubagentRuntime(registry, 1, runner);
-  const initial = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "old", label: "old" }] as any);
+  const manager = new SubagentRuntime(registry, 1, executor);
+  const initial = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "old", label: "old" }] as any);
   await initial.completion;
   const first = initial.starts[0] as any;
 
@@ -548,18 +583,18 @@ test("joining marks the latest result joined and unlocks resume", async () => {
   await join.completion;
   expect(join.project()[0].status).toMatchObject({ kind: "done", outcome: "completed", output: "old" });
   join.markJoined();
-  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "blocked" }] as any).starts[0]).toMatchObject({ ok: false });
+  expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "blocked" }] as any).starts[0]).toMatchObject({ ok: false });
   join.release();
   expect(manager.projectSubagent(first.conversationId).actionHints).toContain("resume");
 
-  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any);
+  const resumed = manager.startTasks(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any);
   expect(resumed.starts[0]).toMatchObject({ ok: true, conversationId: first.conversationId });
   await resumed.completion;
 });
 
-test("completed removal deletes exact runs, prevents resume, and reclaims capacity", async () => {
-  const manager = new SubagentRuntime(registry, 1, runner, 1);
-  const initial = manager.startRun(ctx, [{
+test("completed removal deletes exact generations, prevents resume, and reclaims capacity", async () => {
+  const manager = new SubagentRuntime(registry, 1, executor, 1);
+  const initial = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "old",
@@ -568,7 +603,7 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
   await initial.completion;
   const first = initial.starts[0] as any;
   joinLatest(manager, first.conversationId);
-  const resumed = manager.startRun(ctx, [{
+  const resumed = manager.startTasks(ctx, [{
     kind: "resume",
     subagentId: first.conversationId,
     prompt: "new",
@@ -584,7 +619,7 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
   });
   expect(manager.listConversations()).toEqual([]);
   expect(() => manager.conversation(first.conversationId)).toThrow(`Subagent ${first.conversationId} was not found.`);
-  expect(manager.startRun(ctx, [{
+  expect(manager.startTasks(ctx, [{
     kind: "resume",
     subagentId: first.conversationId,
     prompt: "again",
@@ -595,7 +630,7 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
   expect(() => manager.inspectSubagents([first.conversationId])).toThrow(`Subagent ${first.conversationId} was not found.`);
   expect(() => manager.bindSubagentJoin([second.conversationId])).toThrow(`Subagent ${second.conversationId} was not found.`);
 
-  const replacement = manager.startRun(ctx, [{
+  const replacement = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "replacement",
@@ -606,8 +641,8 @@ test("completed removal deletes exact runs, prevents resume, and reclaims capaci
 });
 
 test("removal publishes once while stale join bindings remain silent", async () => {
-  const manager = new SubagentRuntime(registry, 1, runner);
-  const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "done", label: "done" }] as any);
+  const manager = new SubagentRuntime(registry, 1, executor);
+  const start = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "done", label: "done" }] as any);
   await start.completion;
   const identity = start.starts[0] as any;
   const binding = manager.bindSubagentJoin([identity.conversationId]);
@@ -623,16 +658,16 @@ test("removal publishes once while stale join bindings remain silent", async () 
   unsubscribe();
 });
 
-test("removal rejects active conversations without changing their runs", async () => {
+test("removal rejects active conversations without changing their generations", async () => {
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
   const slow = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
+    agent.bindSession(attempt, session());
     await gate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, slow);
-  const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any);
+  const start = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any);
   const active = start.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
@@ -641,8 +676,8 @@ test("removal rejects active conversations without changing their runs", async (
     conversationId: active.conversationId,
     error: `Subagent subtree ${active.conversationId} has active subagents: ${active.conversationId}. Cancel them before removal.`,
   });
-  expect(manager.conversation(active.conversationId).runs[0].status.kind).toBe("running");
-  expect(manager.inspectSubagents([active.conversationId])[0].snapshot.runId).toBe(active.runId);
+  expect(manager.conversation(active.conversationId).generations[0].status.kind).toBe("running");
+  expect(manager.inspectSubagents([active.conversationId])[0].snapshot.generation).toBe(active.generation);
 
   release();
   await start.completion;
@@ -652,15 +687,15 @@ test("batch removal isolates terminal, active, and unknown conversations", async
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
+    agent.bindSession(attempt, session());
     if (attempt.prompt === "active") await gate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 2, controlled);
-  const terminalStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "terminal", label: "terminal" }] as any);
+  const terminalStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "terminal", label: "terminal" }] as any);
   await terminalStart.completion;
   const terminal = terminalStart.starts[0] as any;
-  const activeStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "active", label: "active" }] as any);
+  const activeStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "active", label: "active" }] as any);
   const active = activeStart.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
@@ -673,7 +708,7 @@ test("batch removal isolates terminal, active, and unknown conversations", async
     },
     { ok: false, conversationId: "amber-acorn", error: "Subagent amber-acorn was not found." },
   ]);
-  expect(() => manager.runSnapshot(terminal.runId)).toThrow(`Unknown run: ${terminal.runId}.`);
+  expect(() => manager.generationSnapshot(terminal)).toThrow(`Subagent ${terminal.conversationId} was not found.`);
   expect(manager.inspectSubagents([active.conversationId])[0].snapshot.status.kind).toBe("running");
 
   release();
@@ -682,15 +717,15 @@ test("batch removal isolates terminal, active, and unknown conversations", async
 
 test("cancellation waits for in-flight steering and retains its discarded receipt", async () => {
   let releaseSteer!: () => void;
-  let releaseRun!: () => void;
+  let releaseGeneration!: () => void;
   let steerQueued!: () => void;
   const steerGate = new Promise<void>(done => { releaseSteer = done; });
-  const runGate = new Promise<void>(done => { releaseRun = done; });
+  const generationGate = new Promise<void>(done => { releaseGeneration = done; });
   const queued = new Promise<void>(done => { steerQueued = done; });
   const steering: string[] = [];
   let clears = 0;
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession({
+    agent.bindSession(attempt, {
       ...session(),
       async steer(prompt: string) {
         steering.push(prompt);
@@ -704,11 +739,11 @@ test("cancellation waits for in-flight steering and retains its discarded receip
         return { steering: removed, followUp: [] };
       },
     });
-    await runGate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    await generationGate;
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, controlled);
-  const started = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any);
+  const started = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any);
   const identity = started.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
@@ -718,12 +753,12 @@ test("cancellation waits for in-flight steering and retains its discarded receip
   releaseSteer();
 
   await expect(steer).resolves.toMatchObject({ steer: { state: "discarded" } });
-  releaseRun();
-  await expect(cancelling).resolves.toMatchObject({ conversationId: identity.conversationId, runId: identity.runId });
+  releaseGeneration();
+  await expect(cancelling).resolves.toMatchObject({ conversationId: identity.conversationId, generation: identity.generation });
   expect(clears).toBeGreaterThan(0);
   expect(steering).toEqual([]);
-  expect(manager.runSnapshot(identity.runId).steers).toMatchObject([{ id: 1, state: "discarded" }]);
-  expect(manager.conversation(identity.conversationId).runs).toHaveLength(1);
+  expect(manager.generationSnapshot(identity).steers).toMatchObject([{ id: 1, state: "discarded" }]);
+  expect(manager.conversation(identity.conversationId).generations).toHaveLength(1);
 
   await started.completion;
 });
@@ -733,18 +768,18 @@ test("wedged cancellation resolves unsettled and releases scheduler capacity", a
   const executed: string[] = [];
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
     executed.push(attempt.prompt);
-    agent.bindSession({ ...session(), abort: () => never });
+    agent.bindSession(attempt, { ...session(), abort: () => never });
     if (attempt.prompt === "wedged") await never;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, controlled, 2, 5);
-  const wedged = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "wedged", label: "wedged" }]);
+  const wedged = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "wedged", label: "wedged" }]);
   const identity = wedged.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
   await expect(manager.cancelSubagent(identity.conversationId)).resolves.toEqual({
     conversationId: identity.conversationId,
-    runId: identity.runId,
+    generation: identity.generation,
     settled: false,
   });
   expect(manager.projectSubagent(identity.conversationId)).toMatchObject({ status: "cancelled", joined: false });
@@ -754,7 +789,7 @@ test("wedged cancellation resolves unsettled and releases scheduler capacity", a
   joined.release();
   expect(manager.projectSubagent(identity.conversationId).actionHints).not.toContain("resume");
 
-  const replacement = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "replacement", label: "replacement" }]);
+  const replacement = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "replacement", label: "replacement" }]);
   await replacement.completion;
   expect(executed).toEqual(["wedged", "replacement"]);
 });
@@ -762,12 +797,12 @@ test("wedged cancellation resolves unsettled and releases scheduler capacity", a
 test("root join remains exact when descendants spawn later", async () => {
   const gates = new Map<string, () => void>();
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
+    agent.bindSession(attempt, session());
     await new Promise<void>(done => gates.set(attempt.prompt, done));
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 8, controlled);
-  const rootStart = manager.startRun(ctx, [{
+  const rootStart = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "root",
@@ -776,18 +811,18 @@ test("root join remains exact when descendants spawn later", async () => {
   await new Promise(done => setImmediate(done));
   const join = manager.bindSubagentJoin([root.conversationId]);
 
-  const childStart = manager.startRun(ctx, [{
+  const childStart = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "child",
-  }] as any, parent(root.conversationId, root.runId));
+  }] as any, parent(manager, root));
   const child = childStart.starts[0] as any;
   await new Promise(done => setImmediate(done));
-  const grandStart = manager.startRun(ctx, [{
+  const grandStart = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "grand",
-  }] as any, parent(child.conversationId, child.runId));
+  }] as any, parent(manager, child));
   await new Promise(done => setImmediate(done));
 
   gates.get("root")!();
@@ -796,34 +831,34 @@ test("root join remains exact when descendants spawn later", async () => {
   void join.completion.then(() => { finished = true; });
   await new Promise(done => setImmediate(done));
   expect(finished).toBe(true);
-  expect(join.project().map(entry => [entry.runId, entry.conversationId])).toEqual([[root.runId, root.conversationId]]);
+  expect(join.project().map(entry => [entry.generation, entry.conversationId])).toEqual([[root.generation, root.conversationId]]);
   expect(join.project().map(output)).toEqual(["root"]);
   gates.get("grand")!(); gates.get("child")!();
   await Promise.all([grandStart.completion, childStart.completion]);
   join.release();
 });
 
-test("removed conversation runs cannot be joined", async () => {
-  const manager = new SubagentRuntime(registry, 4, runner);
-  const rootStart = manager.startRun(ctx, [{
+test("removed conversation generations cannot be joined", async () => {
+  const manager = new SubagentRuntime(registry, 4, executor);
+  const rootStart = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "root",
   }] as any);
   await rootStart.completion;
   const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{
+  const childStart = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "child",
-  }] as any, parent(root.conversationId, root.runId));
+  }] as any, parent(manager, root));
   await childStart.completion;
   const child = childStart.starts[0] as any;
-  const grandStart = manager.startRun(ctx, [{
+  const grandStart = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "grand",
-  }] as any, parent(child.conversationId, child.runId));
+  }] as any, parent(manager, child));
   await grandStart.completion;
   const grand = grandStart.starts[0] as any;
 
@@ -832,47 +867,47 @@ test("removed conversation runs cannot be joined", async () => {
   await manager.removeConversation(grand.conversationId);
   expect(() => manager.bindSubagentJoin([root.conversationId])).toThrow(`Subagent ${root.conversationId} was not found.`);
   expect(() => manager.inspectSubagents([child.conversationId])).toThrow(`Subagent ${child.conversationId} was not found.`);
-  expect(() => manager.runSnapshot(grand.runId)).toThrow(`Unknown run: ${grand.runId}.`);
+  expect(() => manager.generationSnapshot(grand)).toThrow(`Subagent ${grand.conversationId} was not found.`);
 });
 
 test("exact join does not bind an unrequested descendant", async () => {
   let releaseRoot!: () => void;
   const rootGate = new Promise<void>(done => { releaseRoot = done; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
+    agent.bindSession(attempt, session());
     if (attempt.prompt === "root") await rootGate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 4, controlled);
-  const rootStart = manager.startRun(ctx, [{
+  const rootStart = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "root",
   }] as any);
   const root = rootStart.starts[0] as any;
   await new Promise(done => setImmediate(done));
-  const childStart = manager.startRun(ctx, [{
+  const childStart = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "child",
-  }] as any, parent(root.conversationId, root.runId));
+  }] as any, parent(manager, root));
   const child = childStart.starts[0] as any;
   await childStart.completion;
   const join = manager.bindSubagentJoin([root.conversationId]);
-  expect(join.project().map(entry => entry.runId)).toEqual([root.runId]);
+  expect(join.project().map(entry => entry.generation)).toEqual([root.generation]);
 
   await manager.removeConversation(child.conversationId);
   releaseRoot();
   await rootStart.completion;
   await join.completion;
-  expect(join.project().map(entry => entry.runId)).toEqual([root.runId]);
+  expect(join.project().map(entry => entry.generation)).toEqual([root.generation]);
   expect(join.project().map(output)).toEqual(["root"]);
   join.release();
 });
 
 test("duplicate concurrent joins each receive the settled result", async () => {
-  const manager = new SubagentRuntime(registry, 1, runner);
-  const start = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "done", label: "done" }]);
+  const manager = new SubagentRuntime(registry, 1, executor);
+  const start = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "done", label: "done" }]);
   await start.completion;
   const identity = start.starts[0] as any;
 
@@ -886,8 +921,8 @@ test("duplicate concurrent joins each receive the settled result", async () => {
 });
 
 test("multi-target join reserves every latest execution before publishing observer updates", async () => {
-  const manager = new SubagentRuntime(registry, 2, runner);
-  const starts = manager.startRun(ctx, [
+  const manager = new SubagentRuntime(registry, 2, executor);
+  const starts = manager.startTasks(ctx, [
     { kind: "spawn", agent: "worker", prompt: "first", label: "first" },
     { kind: "spawn", agent: "worker", prompt: "second", label: "second" },
   ] as any);
@@ -899,24 +934,27 @@ test("multi-target join reserves every latest execution before publishing observ
   let resume: any;
   const unsubscribe = manager.onConversationUpdate((conversation, kind) => {
     if (!resume && kind === "observer" && conversation.conversationId === first.conversationId) {
-      resume = manager.startRun(ctx, [{ kind: "resume", subagentId: second.conversationId, prompt: "raced" }] as any).starts[0];
+      resume = manager.startTasks(ctx, [{ kind: "resume", subagentId: second.conversationId, prompt: "raced" }] as any).starts[0];
     }
   });
   const binding = manager.bindSubagentJoin([first.conversationId, second.conversationId]);
   unsubscribe();
 
   expect(resume).toMatchObject({ ok: false });
-  expect(binding.runIds).toEqual([first.runId, second.runId]);
+  expect(binding.targets).toEqual([
+    { conversationId: first.conversationId, generation: first.generation },
+    { conversationId: second.conversationId, generation: second.generation },
+  ]);
   binding.release();
 });
 
 test("nested join reserves targets before publishing its attempt", async () => {
-  const manager = new SubagentRuntime(registry, 3, runner);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+  const manager = new SubagentRuntime(registry, 3, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
   await ownerStart.completion;
   const owner = ownerStart.starts[0] as any;
-  const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
-  const children = manager.startRun(ctx, [
+  const ownerCaller = manager.generationCaller(owner);
+  const children = manager.startTasks(ctx, [
     { kind: "spawn", agent: "worker", prompt: "first", label: "first" },
     { kind: "spawn", agent: "worker", prompt: "second", label: "second" },
   ] as any, { caller: ownerCaller });
@@ -928,20 +966,23 @@ test("nested join reserves targets before publishing its attempt", async () => {
   let resume: any;
   const unsubscribe = manager.onConversationUpdate((conversation, kind) => {
     if (!resume && kind === "nestedJoin" && conversation.conversationId === owner.conversationId) {
-      resume = manager.startRun(ctx, [{ kind: "resume", subagentId: second.conversationId, prompt: "raced" }] as any, { caller: ownerCaller }).starts[0];
+      resume = manager.startTasks(ctx, [{ kind: "resume", subagentId: second.conversationId, prompt: "raced" }] as any, { caller: ownerCaller }).starts[0];
     }
   });
   const binding = manager.bindSubagentJoin([first.conversationId, second.conversationId], ownerCaller);
   unsubscribe();
 
   expect(resume).toMatchObject({ ok: false });
-  expect(binding.runIds).toEqual([first.runId, second.runId]);
+  expect(binding.targets).toEqual([
+    { conversationId: first.conversationId, generation: first.generation },
+    { conversationId: second.conversationId, generation: second.generation },
+  ]);
   binding.release();
 });
 
 test("resume remains blocked until every accepted join releases", async () => {
-  const manager = new SubagentRuntime(registry, 1, runner);
-  const firstStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "old", label: "old" }] as any);
+  const manager = new SubagentRuntime(registry, 1, executor);
+  const firstStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "old", label: "old" }] as any);
   await firstStart.completion;
   const first = firstStart.starts[0] as any;
   const firstJoin = manager.bindSubagentJoin([first.conversationId]);
@@ -950,20 +991,20 @@ test("resume remains blocked until every accepted join releases", async () => {
   firstJoin.markJoined();
 
   expect(manager.projectSubagent(first.conversationId).actionHints).not.toContain("resume");
-  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
+  expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
     .toMatchObject({ ok: false });
   firstJoin.release();
   expect(manager.projectSubagent(first.conversationId).actionHints).not.toContain("resume");
   secondJoin.release();
   expect(manager.projectSubagent(first.conversationId).actionHints).toContain("resume");
-  expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
+  expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
     .toMatchObject({ ok: true });
 });
 
 test("spawn execution is independent of caller cancellation", async () => {
-  const manager = new SubagentRuntime(registry, 1, runner);
+  const manager = new SubagentRuntime(registry, 1, executor);
   const controller = new AbortController();
-  const batch = manager.startRun(ctx, [{
+  const batch = manager.startTasks(ctx, [{
     kind: "spawn",
     agent: "worker",
     prompt: "ok",
@@ -971,40 +1012,40 @@ test("spawn execution is independent of caller cancellation", async () => {
   controller.abort();
   await batch.completion;
   const started = batch.starts[0] as any;
-  expect(manager.conversation(started.conversationId).runs[0].status).toMatchObject({
+  expect(manager.conversation(started.conversationId).generations[0].status).toMatchObject({
     kind: "done",
     outcome: "completed",
   });
 });
 
-test("steering targets an exact running run without creating history", async () => {
+test("steering targets an exact running generation without creating history", async () => {
   let finish!: () => void;
   const prompts: string[] = [];
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession({
+    agent.bindSession(attempt, {
       ...session(),
       steer(prompt: string) { prompts.push(prompt); },
     });
     await new Promise<void>(done => { finish = done; });
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, controlled);
-  const batch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }]);
+  const batch = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }]);
   const started = batch.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
   await expect(manager.steerSubagent(started.conversationId, "focus on tests")).resolves.toMatchObject({
     conversationId: started.conversationId,
-    runId: started.runId,
+    generation: started.generation,
     steer: { id: 1, state: "queued", acceptedAt: expect.any(Number) },
   });
   await expect(manager.steerSubagent(started.conversationId, "focus on docs")).resolves.toMatchObject({
     conversationId: started.conversationId,
-    runId: started.runId,
+    generation: started.generation,
     steer: { id: 2, state: "queued", acceptedAt: expect.any(Number) },
   });
   expect(prompts).toEqual(["focus on tests", "focus on docs"]);
-  expect(manager.conversation(started.conversationId).runs).toHaveLength(1);
+  expect(manager.conversation(started.conversationId).generations).toHaveLength(1);
 
   finish();
   await batch.completion;
@@ -1021,14 +1062,14 @@ test("terminal action errors use only public lifecycle statuses", async () => {
     ["interrupted", "failed"],
     ["skipped", "failed"],
   ] as const;
-  const runner = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession(session());
-    return agent.settle(attempt.runId, attempt.prompt, { error: "internal detail" });
+  const executor = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(attempt, session());
+    return agent.settle(attempt, attempt.prompt, { error: "internal detail" });
   };
-  const manager = new SubagentRuntime(registry, 1, runner);
+  const manager = new SubagentRuntime(registry, 1, executor);
 
   for (const [outcome, publicStatus] of outcomes) {
-    const batch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: outcome, label: outcome }]);
+    const batch = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: outcome, label: outcome }]);
     const started = batch.starts[0] as any;
     await batch.completion;
     await expect(manager.steerSubagent(started.conversationId, "too late")).rejects.toThrow(
@@ -1047,13 +1088,13 @@ test("normal cancellation resolves settled and retains its conversation and exac
   const gate = new Promise<void>(done => { release = done; });
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
     const activeSession = { ...session(), abort: () => gate };
-    agent.bindSession(activeSession);
+    agent.bindSession(attempt, activeSession);
     activeSession.messages.push({ role: "assistant", content: [{ type: "text", text: "partial answer" }] });
     await gate;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, controlled);
-  const batch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }]);
+  const batch = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }]);
   const started = batch.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
@@ -1061,7 +1102,7 @@ test("normal cancellation resolves settled and retains its conversation and exac
   expect(manager.inspectSubagents([started.conversationId])[0].snapshot.status).toMatchObject({
     kind: "done",
     outcome: "aborted",
-    error: "Run cancelled.",
+    error: "Generation cancelled.",
   });
   await expect(manager.steerSubagent(started.conversationId, "too late")).rejects.toThrow(
     `Subagent ${started.conversationId} is cancelled and cannot be steered.`,
@@ -1072,7 +1113,7 @@ test("normal cancellation resolves settled and retains its conversation and exac
   release();
   await expect(cancelling).resolves.toEqual({
     conversationId: started.conversationId,
-    runId: started.runId,
+    generation: started.generation,
     settled: true,
   });
   expect(manager.listConversations().map(value => value.conversationId)).toContain(started.conversationId);
@@ -1091,26 +1132,26 @@ test("queued cancellation settles immediately without dispatching the executor",
   const executed: string[] = [];
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
     executed.push(attempt.prompt);
-    agent.bindSession(session());
+    agent.bindSession(attempt, session());
     if (attempt.prompt === "blocker") await blockerPending;
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, controlled);
-  const blocker = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocker", label: "blocker" }]);
+  const blocker = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "blocker", label: "blocker" }]);
   await new Promise(done => setImmediate(done));
   let cancelling: Promise<any> | undefined;
   manager.onConversationUpdate(agent => {
-    const run = agent.snapshot().currentRun;
-    if (run?.prompt === "queued" && run.status.kind === "queued") cancelling ??= manager.cancelSubagent(agent.conversationId);
+    const generation = agent.snapshot().currentGeneration;
+    if (generation?.prompt === "queued" && generation.status.kind === "queued") cancelling ??= manager.cancelSubagent(agent.conversationId);
   });
-  const queued = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "queued", label: "queued" }]);
+  const queued = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "queued", label: "queued" }]);
   const target = queued.starts[0] as any;
   const join = manager.bindSubagentJoin([target.conversationId]);
 
   expect(cancelling).toBeDefined();
   await expect(cancelling!).resolves.toEqual({
     conversationId: target.conversationId,
-    runId: target.runId,
+    generation: target.generation,
     settled: true,
   });
   await expect(queued.completion).resolves.toEqual(queued.starts);
@@ -1119,7 +1160,7 @@ test("queued cancellation settles immediately without dispatching the executor",
   join.markJoined();
   join.release();
   expect(executed).toEqual(["blocker"]);
-  const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: target.conversationId, prompt: "continue" }]);
+  const resumed = manager.startTasks(ctx, [{ kind: "resume", subagentId: target.conversationId, prompt: "continue" }]);
   expect(resumed.starts[0]).toMatchObject({
     ok: false,
     error: `Subagent ${target.conversationId} cannot be resumed.`,
@@ -1138,67 +1179,67 @@ test("queued cancellation settles immediately without dispatching the executor",
 test("steering rejects queued, terminal, and SDK-rejected targets", async () => {
   let finishFirst!: () => void;
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession({
+    agent.bindSession(attempt, {
       ...session(),
       steer() { throw new Error("queue rejected"); },
     });
     if (attempt.prompt === "first") await new Promise<void>(done => { finishFirst = done; });
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 1, controlled);
-  const first = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "first", label: "first" }]);
-  const second = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "second", label: "second" }]);
-  const firstRun = first.starts[0] as any;
-  const secondRun = second.starts[0] as any;
+  const first = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "first", label: "first" }]);
+  const second = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "second", label: "second" }]);
+  const firstGeneration = first.starts[0] as any;
+  const secondGeneration = second.starts[0] as any;
   await new Promise(done => setImmediate(done));
 
-  await expect(manager.steerSubagent(secondRun.conversationId, "queued")).rejects.toThrow("queued");
-  await expect(manager.cancelSubagent(secondRun.conversationId)).resolves.toMatchObject({ runId: secondRun.runId });
-  await expect(manager.steerSubagent(firstRun.conversationId, "running")).rejects.toThrow("queue rejected");
+  await expect(manager.steerSubagent(secondGeneration.conversationId, "queued")).rejects.toThrow("queued");
+  await expect(manager.cancelSubagent(secondGeneration.conversationId)).resolves.toMatchObject({ generation: secondGeneration.generation });
+  await expect(manager.steerSubagent(firstGeneration.conversationId, "running")).rejects.toThrow("queue rejected");
   finishFirst();
   await Promise.all([first.completion, second.completion]);
-  await expect(manager.steerSubagent(firstRun.conversationId, "late")).rejects.toThrow("completed");
+  await expect(manager.steerSubagent(firstGeneration.conversationId, "late")).rejects.toThrow("completed");
 });
 
 test("inspection is ordered and leaves observation state unchanged", async () => {
-  const manager = new SubagentRuntime(registry, 1, runner);
-  const batch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "done", label: "done" }]);
+  const manager = new SubagentRuntime(registry, 1, executor);
+  const batch = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "done", label: "done" }]);
   await batch.completion;
   const started = batch.starts[0] as any;
-  const before = manager.runSnapshot(started.runId);
+  const before = manager.generationSnapshot(started);
 
   const inspected = manager.inspectSubagents([started.conversationId, started.conversationId]);
 
-  expect(inspected.map(item => item.snapshot.runId)).toEqual([started.runId, started.runId]);
-  expect(manager.runSnapshot(started.runId)).toMatchObject({
+  expect(inspected.map(item => item.snapshot.generation)).toEqual([started.generation, started.generation]);
+  expect(manager.generationSnapshot(started)).toMatchObject({
     observerCount: before.observerCount,
     joined: before.joined,
   });
 });
 
 test("ancestors may inspect indirect descendants without changing lifecycle state", async () => {
-  const manager = new SubagentRuntime(registry, 4, runner);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
-  const siblingStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "sibling", label: "sibling" }] as any);
+  const manager = new SubagentRuntime(registry, 4, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+  const siblingStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "sibling", label: "sibling" }] as any);
   await Promise.all([ownerStart.completion, siblingStart.completion]);
   const owner = ownerStart.starts[0] as any;
   const sibling = siblingStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    caller(owner.conversationId, owner.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(manager, owner));
   await childStart.completion;
   const child = childStart.starts[0] as any;
-  const leafStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "leaf", label: "leaf" }] as any,
-    caller(child.conversationId, child.runId));
+  const leafStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "leaf", label: "leaf" }] as any,
+    caller(manager, child));
   await leafStart.completion;
   const leaf = leafStart.starts[0] as any;
-  const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
-  const before = manager.runSnapshot(leaf.runId);
+  const ownerCaller = manager.generationCaller(owner);
+  const before = manager.generationSnapshot(leaf);
 
-  expect(manager.inspectSubagents([leaf.conversationId], ownerCaller)[0].snapshot.runId).toBe(leaf.runId);
-  expect(manager.inspectSubagents([leaf.conversationId])[0].snapshot.runId).toBe(leaf.runId);
+  expect(manager.inspectSubagents([leaf.conversationId], ownerCaller)[0].snapshot.generation).toBe(leaf.generation);
+  expect(manager.inspectSubagents([leaf.conversationId])[0].snapshot.generation).toBe(leaf.generation);
   expect(manager.projectSubagent(leaf.conversationId, ownerCaller).actionHints).toEqual(["inspect"]);
   expect(manager.projectSubagent(leaf.conversationId).actionHints).toEqual(["inspect"]);
-  expect(manager.runSnapshot(leaf.runId)).toMatchObject({
+  expect(manager.generationSnapshot(leaf)).toMatchObject({
     observerCount: before.observerCount,
     joined: false,
   });
@@ -1211,88 +1252,89 @@ test("nested callers may inspect, steer, and cancel direct children only", async
   const releases = new Map<string, () => void>();
   const messages: string[] = [];
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    agent.bindSession({ ...session(), steer(prompt: string) { messages.push(prompt); } });
+    agent.bindSession(attempt, { ...session(), steer(prompt: string) { messages.push(prompt); } });
     await new Promise<void>(done => releases.set(attempt.prompt, done));
-    return completedRun(agent, attempt.runId, attempt.prompt);
+    return completedGeneration(agent, attempt, attempt.prompt);
   };
   const manager = new SubagentRuntime(registry, 2, controlled);
-  const ownerBatch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }]);
+  const ownerBatch = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }]);
   const owner = ownerBatch.starts[0] as any;
   await new Promise(done => setImmediate(done));
-  const childBatch = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }], parent(owner.conversationId, owner.runId));
+  const childBatch = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }], parent(manager, owner));
   const child = childBatch.starts[0] as any;
   await new Promise(done => setImmediate(done));
-  const caller = { conversationId: owner.conversationId, runId: owner.runId };
+  const caller = manager.generationCaller(owner);
 
-  expect(manager.inspectSubagents([child.conversationId], caller)[0].snapshot.runId).toBe(child.runId);
-  await expect(manager.steerSubagent(child.conversationId, "redirect", caller)).resolves.toMatchObject({ runId: child.runId });
+  expect(manager.inspectSubagents([child.conversationId], caller)[0].snapshot.generation).toBe(child.generation);
+  await expect(manager.steerSubagent(child.conversationId, "redirect", caller)).resolves.toMatchObject({ generation: child.generation });
   expect(messages).toEqual(["redirect"]);
   expect(() => manager.inspectSubagents([owner.conversationId], caller)).toThrow("not a descendant");
   await expect(manager.steerSubagent(owner.conversationId, "self", caller)).rejects.toThrow("not directly owned");
   await expect(manager.cancelSubagent(owner.conversationId, caller)).rejects.toThrow("not directly owned");
   const cancelling = manager.cancelSubagent(child.conversationId, caller);
   releases.get("child")!();
-  await expect(cancelling).resolves.toMatchObject({ runId: child.runId });
+  await expect(cancelling).resolves.toMatchObject({ generation: child.generation });
 
   releases.get("owner")!();
   await Promise.all([childBatch.completion, ownerBatch.completion]);
 });
 
 test("only a subagent's direct owner may join it by stable ID", async () => {
-  const manager = new SubagentRuntime(registry, 4, runner);
-  const rootStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
+  const manager = new SubagentRuntime(registry, 4, executor);
+  const rootStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "root", label: "root" }] as any);
   await rootStart.completion;
   const root = rootStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
-    parent(root.conversationId, root.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    parent(manager, root));
   await childStart.completion;
   const child = childStart.starts[0] as any;
-  const leafStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "leaf", label: "leaf" }] as any,
-    parent(child.conversationId, child.runId));
+  const leafStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "leaf", label: "leaf" }] as any,
+    parent(manager, child));
   await leafStart.completion;
   const leaf = leafStart.starts[0] as any;
 
-  const childJoin = manager.bindSubagentJoin([child.conversationId], { conversationId: root.conversationId, runId: root.runId });
+  const rootCaller = manager.generationCaller(root);
+  const childJoin = manager.bindSubagentJoin([child.conversationId], rootCaller);
   childJoin.release();
-  expect(() => manager.bindSubagentJoin([leaf.conversationId], { conversationId: root.conversationId, runId: root.runId })).toThrow("not directly owned");
+  expect(() => manager.bindSubagentJoin([leaf.conversationId], rootCaller)).toThrow("not directly owned");
   expect(() => manager.bindSubagentJoin([child.conversationId])).toThrow("not directly owned");
 
-  const leafJoin = manager.bindSubagentJoin([leaf.conversationId], { conversationId: child.conversationId, runId: child.runId });
+  const leafJoin = manager.bindSubagentJoin([leaf.conversationId], manager.generationCaller(child));
   leafJoin.markJoined();
   leafJoin.release();
-  const unauthorizedResume = manager.startRun(ctx, [{ kind: "resume", subagentId: leaf.conversationId, prompt: "again" }],
-    parent(root.conversationId, root.runId));
+  const unauthorizedResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: leaf.conversationId, prompt: "again" }],
+    parent(manager, root));
   expect(unauthorizedResume.starts[0]).toMatchObject({ ok: false, error: expect.stringContaining("not directly owned") });
 });
 
 test("nested joins validate descendants and preserve ordered attempts without target output", async () => {
-  const manager = new SubagentRuntime(registry, 4, runner);
-  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+  const manager = new SubagentRuntime(registry, 4, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
   await ownerStart.completion;
   const owner = ownerStart.starts[0] as any;
-  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "secret", label: "secret" }] as any,
-    parent(owner.conversationId, owner.runId));
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "secret", label: "secret" }] as any,
+    parent(manager, owner));
   await childStart.completion;
   const child = childStart.starts[0] as any;
 
   const nested = manager.bindSubagentJoin(
     [child.conversationId, child.conversationId],
-    { conversationId: owner.conversationId, runId: owner.runId },
+    manager.generationCaller(owner),
     "tool-1",
   ) as any;
   await nested.completion;
   nested.markJoined();
   nested.release();
 
-  const snapshot = manager.runSnapshot(owner.runId);
+  const snapshot = manager.generationSnapshot(owner);
   expect(snapshot.nestedJoins).toHaveLength(1);
   expect(snapshot.nestedJoins?.[0]).toMatchObject({ state: "completed", toolCallId: "tool-1" });
-  expect(snapshot.nestedJoins?.[0].targets.map(target => target.runId)).toEqual([child.runId, child.runId]);
+  expect(snapshot.nestedJoins?.[0].targets.map(target => target.generation)).toEqual([child.generation, child.generation]);
   expect(snapshot.nestedJoins?.[0].targets[0]).not.toHaveProperty("output");
-  expect(manager.unjoinedDirectChildren(owner.runId)).toEqual([]);
+  expect(manager.unjoinedDirectChildGenerations(owner)).toEqual([]);
 
-  expect(() => manager.bindSubagentJoin([owner.conversationId], { conversationId: owner.conversationId, runId: owner.runId }))
+  expect(() => manager.bindSubagentJoin([owner.conversationId], manager.generationCaller(owner)))
     .toThrow("not directly owned");
-  expect(manager.runSnapshot(owner.runId).nestedJoins).toHaveLength(1);
-  expect(manager.runSnapshot(owner.runId).observerCount).toBe(0);
+  expect(manager.generationSnapshot(owner).nestedJoins).toHaveLength(1);
+  expect(manager.generationSnapshot(owner).observerCount).toBe(0);
 });

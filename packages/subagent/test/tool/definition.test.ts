@@ -4,7 +4,7 @@ import { validateToolArguments } from "@earendil-works/pi-ai";
 import { SubagentRuntime } from "../../src/runtime.js";
 import { defineSubagentTool } from "../../src/tool.js";
 
-const settings = { runtime: { maxTasksPerRun: 1 }, display: {} } as any;
+const settings = { runtime: { maxTasksPerCall: 1 }, display: {} } as any;
 const registry = { agents: new Map(), summarizeAgent: () => "helper" } as any;
 const runtime = new SubagentRuntime(registry);
 
@@ -19,7 +19,7 @@ test("SDK validation rejects a whole batch containing a malformed task", () => {
   const tool: any = defineSubagentTool({
     runtime,
     agentRegistry: registry,
-    prepareInvocation: async () => ({ runtime: { maxTasksPerRun: 2 }, display: {} }) as any,
+    prepareInvocation: async () => ({ runtime: { maxTasksPerCall: 2 }, display: {} }) as any,
   });
   const raw = {
     action: "spawn",
@@ -47,7 +47,10 @@ test("SDK validation enforces the task-array minimum", () => {
 test("tool prepares settings, applies task limits, and renders simple typed content", async () => {
   let prepared = 0;
   const tool: any = defineSubagentTool({ runtime, agentRegistry: registry, prepareInvocation: async () => { prepared++; return settings; } });
-  const result = await tool.execute("call", { action: "spawn", spawns: [{ agent: "a", prompt: "1" }, { agent: "a", prompt: "2" }] }, undefined, undefined, {});
+  const result = await tool.execute("call", { action: "spawn", spawns: [
+    { agent: "a", prompt: "1", label: "One" },
+    { agent: "a", prompt: "2", label: "Two" },
+  ] }, undefined, undefined, {});
   assert.equal(prepared, 1);
   assert.deepEqual(JSON.parse(result.content[0].text), {
     action: "spawn",
@@ -75,12 +78,12 @@ test("unknown actions return a structured global error envelope marked as an err
 
 test("plausible unknown join IDs use not-found wording while malformed IDs remain invalid", async () => {
   const tool: any = defineSubagentTool({ runtime, agentRegistry: registry, prepareInvocation: async () => settings });
-  const result = await tool.execute("call", { action: "join", subagentIds: ["valid-run", "ghost-silently", 42] }, undefined, undefined, {});
+  const result = await tool.execute("call", { action: "join", subagentIds: ["plausible-target", "ghost-silently", 42] }, undefined, undefined, {});
   const response = JSON.parse(result.content[0].text);
   assert.equal(response.action, "join");
   assert.deepEqual(response.summary, { requested: 3, succeeded: 0, failed: 3 });
   assert.deepEqual(response.results, [
-    { ok: false, subagentId: "valid-run", error: "Subagent valid-run was not found." },
+    { ok: false, subagentId: "plausible-target", error: "Subagent plausible-target was not found." },
     { ok: false, subagentId: "ghost-silently", error: "Subagent ghost-silently was not found." },
     { ok: false, subagentId: "42", error: "Invalid subagentId format: 42." },
   ]);
@@ -88,7 +91,7 @@ test("plausible unknown join IDs use not-found wording while malformed IDs remai
 
 test("settings preparation failures propagate without starting manager work", async () => {
   let started = false;
-  const tool: any = defineSubagentTool({ runtime: { startRun: () => { started = true; } } as any, agentRegistry: registry, prepareInvocation: async () => { throw new Error("settings unavailable"); } });
+  const tool: any = defineSubagentTool({ runtime: { startTasks: () => { started = true; } } as any, agentRegistry: registry, prepareInvocation: async () => { throw new Error("settings unavailable"); } });
   await assert.rejects(() => tool.execute("call", { action: "agents" }, undefined, undefined, {}), /settings unavailable/);
   assert.equal(started, false);
 });

@@ -1,34 +1,34 @@
 import { Usage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { ConversationUpdateKind, RunActivitySnapshot, RunPhase, RunToolUse } from "./conversation.js";
+import type { ConversationUpdateKind, GenerationActivitySnapshot, GenerationPhase, GenerationToolUse } from "./conversation.js";
 
 const DefaultUsage: Usage = {
   input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
 }
 
-export type RunActivityListener = (kind: ConversationUpdateKind) => void;
+export type GenerationActivityListener = (kind: ConversationUpdateKind) => void;
 
-export class RunActivity {
+export class GenerationActivity {
 
   private _message: string = "";
-  private _phase: RunPhase = "starting";
+  private _phase: GenerationPhase = "starting";
   private _turns: number = 0;
-  private _toolHistory = new Array<RunToolUse>();
+  private _toolHistory = new Array<GenerationToolUse>();
   private _compactions: number = 0;
   private _latestUsage: Usage = DefaultUsage;
   private _nextSyntheticToolId = 0;
 
   constructor(
-    private readonly onChange: RunActivityListener,
-    private readonly onSessionEvent?: (event: AgentSessionEvent) => RunPhase | undefined,
+    private readonly onChange: GenerationActivityListener,
+    private readonly onSessionEvent?: (event: AgentSessionEvent) => GenerationPhase | undefined,
   ) {}
 
   get message() { return this._message }
 
   get usage(): Usage { return this._latestUsage }
 
-  snapshot(): RunActivitySnapshot {
+  snapshot(): GenerationActivitySnapshot {
     return {
       phase: this._phase,
       messageSnippet: this._message || undefined,
@@ -56,7 +56,7 @@ export class RunActivity {
         // Each assistant message carries the usage for that single API call, where the
         // input/cache fields already cover the whole conversation re-sent that call. Summing
         // across calls would re-count the growing context every round, so we take the latest
-        // call's usage as the run's current context size rather than accumulating.
+        // call's usage as the generation's current context size rather than accumulating.
         this._latestUsage = event.message.usage;
         this.onChange("usage");
       }
@@ -81,7 +81,7 @@ export class RunActivity {
     });
   }
 
-  private _setPhase(phase: RunPhase): void {
+  private _setPhase(phase: GenerationPhase): void {
     if (phase === this._phase) return;
     this._phase = phase;
     this.onChange("phase");

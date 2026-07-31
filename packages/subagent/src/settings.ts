@@ -14,7 +14,7 @@ export interface SubagentUiSettings {
 }
 
 export interface SubagentRuntimeSettings {
-  maxTasksPerRun: number;
+  maxTasksPerCall: number;
   /**
    * Tree-wide cap on concurrently running subagents. A single shared task queue spans every
    * parent/child level within one Pi process, so this value bounds the total in-flight count
@@ -56,7 +56,7 @@ export function createDefaultSubagentSettings(): SubagentSettings {
   return {
     ...DEFAULT_SUBAGENT_UI_SETTINGS,
     runtime: {
-      maxTasksPerRun: 8,
+      maxTasksPerCall: 8,
       maxConcurrentSubagents: 4,
       maxConversations: 100,
       completionNotify: "auto",
@@ -139,7 +139,7 @@ export function normalizeSettings(value: unknown): SubagentSettingsLoadResult {
 
   const runtime = objectValue(record.runtime);
   if (runtime) {
-    assignPositiveInt(runtime, "maxTasksPerRun", value => { settings.runtime.maxTasksPerRun = value; }, warnings);
+    assignPositiveInt(runtime, "maxTasksPerCall", value => { settings.runtime.maxTasksPerCall = value; }, warnings);
     assignPositiveInt(runtime, "maxConcurrentSubagents", value => { settings.runtime.maxConcurrentSubagents = value; }, warnings);
     assignPositiveInt(runtime, "maxConversations", value => { settings.runtime.maxConversations = value; }, warnings);
     assignEnum(runtime, "completionNotify", COMPLETION_NOTIFY_MODES, value => { settings.runtime.completionNotify = value; }, warnings);
@@ -232,7 +232,7 @@ export interface PrepareSubagentRuntimeContext extends SubagentSettingsLoadConte
 }
 
 export interface PrepareSubagentRuntimeTarget {
-  configure?(options: { maxRunning?: number; maxConversations?: number }): void;
+  configure?(options: { maxExecuting?: number; maxConversations?: number }): void;
 }
 
 export interface PrepareSubagentRuntimeAgentRegistry {
@@ -257,7 +257,7 @@ export async function prepareSubagentRuntime({
 }: PrepareSubagentRuntimeOptions): Promise<SubagentSettings> {
   const settings = await loadSubagentSettings(ctx, settingsStore);
   runtime.configure?.({
-    maxRunning: settings.runtime.maxConcurrentSubagents,
+    maxExecuting: settings.runtime.maxConcurrentSubagents,
     maxConversations: settings.runtime.maxConversations,
   });
   if (agentRegistry) {

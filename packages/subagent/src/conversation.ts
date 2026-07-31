@@ -8,21 +8,20 @@ import type {
   RequestedExecutionConfig,
 } from "./agents.js";
 import { resolveRequestedConfig, summarizeAgentDefinition } from "./agents.js";
-import { RunActivity, type RunActivityListener } from "./activity.js";
-import type { ConversationId, RunId } from "./identifiers.js";
+import { GenerationActivity, type GenerationActivityListener } from "./activity.js";
+import type { ConversationId } from "./identifiers.js";
 import type { SpawnRequest } from "./schema.js";
 
-/** A run starts a conversation or resumes its existing SDK session. */
-export type RunKind = "spawn" | "resume";
+export type GenerationKind = "spawn" | "resume";
 
-export const RUN_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
-export const RUN_STATUSES = ["queued", "running", ...RUN_OUTCOME_STATUSES] as const;
-export type RunOutcomeStatus = (typeof RUN_OUTCOME_STATUSES)[number];
-export type RunStatus = (typeof RUN_STATUSES)[number];
+export const GENERATION_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
+export const GENERATION_STATUSES = ["queued", "running", ...GENERATION_OUTCOME_STATUSES] as const;
+export type GenerationOutcomeStatus = (typeof GENERATION_OUTCOME_STATUSES)[number];
+export type GenerationStatus = (typeof GENERATION_STATUSES)[number];
 
-export class RunSteerError extends Error {
-  constructor(readonly runId: RunId, readonly status: RunStatus | "stopping") {
-    super(`Run ${runId} is ${status} and cannot be steered.`);
+export class GenerationSteerError extends Error {
+  constructor(readonly generation: number, readonly status: GenerationStatus | "stopping") {
+    super(`Generation ${generation} is ${status} and cannot be steered.`);
   }
 }
 
@@ -48,28 +47,24 @@ export interface SteerReceipt {
   readonly deliveredAt?: number;
   readonly processedAt?: number;
 }
-interface TrackedSteerReceipt {
-  id: number;
-  state: SteerState;
-  acceptedAt: number;
-  deliveredAt?: number;
-  processedAt?: number;
-  deliveryText: string;
-}
+interface TrackedSteerReceipt extends SteerReceipt { deliveryText: string; state: SteerState; deliveredAt?: number; processedAt?: number }
 
-export type RunPhase = "starting" | "thinking" | "processing_steer" | "responding" | "executing_tool" | "settling";
-export interface RunToolUse { readonly id: string; readonly name: string; readonly startedAt: number; readonly completedAt?: number; readonly isError?: boolean; readonly inputSummary?: string }
-export interface RunActivitySnapshot { readonly phase: RunPhase; readonly messageSnippet?: string; readonly turns: number; readonly compactions: number; readonly toolHistory: readonly RunToolUse[] }
-export type RunViewStatus =
+export type GenerationPhase = "starting" | "thinking" | "processing_steer" | "responding" | "executing_tool" | "settling";
+export interface GenerationToolUse { readonly id: string; readonly name: string; readonly startedAt: number; readonly completedAt?: number; readonly isError?: boolean; readonly inputSummary?: string }
+export interface GenerationActivitySnapshot { readonly phase: GenerationPhase; readonly messageSnippet?: string; readonly turns: number; readonly compactions: number; readonly toolHistory: readonly GenerationToolUse[] }
+export type GenerationViewStatus =
   | { readonly kind: "queued"; readonly queuedAt: number }
   | { readonly kind: "running"; readonly startedAt: number }
-  | { readonly kind: "done"; readonly outcome: RunOutcomeStatus; readonly completedAt: number; readonly startedAt?: number; readonly output?: string; readonly error?: string };
+  | { readonly kind: "done"; readonly outcome: GenerationOutcomeStatus; readonly completedAt: number; readonly startedAt?: number; readonly output?: string; readonly error?: string };
+
+export interface GenerationRef {
+  readonly conversationId: ConversationId;
+  readonly generation: number;
+}
 
 export type NestedJoinAttemptState = "running" | "completed" | "failed" | "interrupted";
-export interface NestedJoinTargetSnapshot {
-  readonly runId: RunId;
-  readonly conversationId?: ConversationId;
-  readonly status?: RunOutcomeStatus | "queued" | "running";
+export interface NestedJoinTargetSnapshot extends GenerationRef {
+  readonly status?: GenerationStatus;
 }
 export interface NestedJoinAttemptSnapshot {
   readonly toolCallId?: string;
@@ -80,13 +75,14 @@ export interface NestedJoinAttemptSnapshot {
   readonly error?: string;
 }
 
-export interface RunSnapshot {
-  readonly runId: RunId;
-  readonly kind: RunKind;
+export interface GenerationSnapshot {
+  readonly generation: number;
+  readonly kind: GenerationKind;
+  readonly startedInParentGeneration?: number;
   readonly prompt: string;
   readonly createdAt: number;
-  readonly status: RunViewStatus;
-  readonly activity: RunActivitySnapshot;
+  readonly status: GenerationViewStatus;
+  readonly activity: GenerationActivitySnapshot;
   readonly usage: Usage;
   readonly observerCount: number;
   readonly joined: boolean;
@@ -96,47 +92,52 @@ export interface RunSnapshot {
 export interface ConversationSnapshot {
   readonly conversationId: ConversationId;
   readonly parentConversationId?: ConversationId;
-  readonly spawnedByRunId?: RunId;
+  readonly spawnedInGeneration?: number;
   readonly label: string;
   readonly createdAt: number;
   readonly agent: AgentDefinitionSummary;
   readonly requestedConfig: RequestedExecutionConfig;
-  readonly runs: readonly RunSnapshot[];
-  readonly currentRun?: RunSnapshot;
+  readonly generations: readonly GenerationSnapshot[];
+  readonly currentGeneration?: GenerationSnapshot;
   readonly resumeAllowed: boolean;
   readonly isStopping?: true;
   readonly effectiveConfig?: EffectiveExecutionConfig;
   readonly requestedOverrides?: ExecutionOverrides;
 }
 
-export type RunState =
+export type GenerationState =
   | { readonly kind: "queued" }
   | { readonly kind: "running"; readonly session: AgentSession; readonly startedAt: number }
-  | {
-      readonly kind: "done";
-      readonly outcome: RunOutcomeStatus;
-      readonly startedAt?: number;
-      readonly completedAt: number;
-      readonly output?: string;
-      readonly error?: string;
-    };
+  | { readonly kind: "done"; readonly outcome: GenerationOutcomeStatus; readonly startedAt?: number; readonly completedAt: number; readonly output?: string; readonly error?: string };
 
-/** Mutable execution holder. Once terminal, its state and projected history entry never change. */
-export class Run {
+/** One append-only execution generation within a conversation. Object identity is its exact internal key. */
+export class Generation {
   readonly createdAt = Date.now();
-  readonly activity: RunActivity;
-  state: RunState = { kind: "queued" };
+  readonly activity: GenerationActivity;
+  state: GenerationState = { kind: "queued" };
   observerCount = 0;
   joined = false;
   readonly nestedJoins: Array<{ toolCallId?: string; targets: NestedJoinTargetSnapshot[]; state: NestedJoinAttemptState; startedAt: number; completedAt?: number; error?: string }> = [];
   readonly steers: TrackedSteerReceipt[] = [];
   sessionMessageStart = 0;
-  constructor(readonly runId: RunId, readonly kind: RunKind, readonly prompt: string, private readonly onChange: RunActivityListener) {
-    this.activity = new RunActivity(onChange, event => this.handleSessionEvent(event));
+
+  constructor(
+    readonly number: number,
+    readonly prompt: string,
+    private readonly onChange: GenerationActivityListener,
+    readonly startedInParentGeneration?: number,
+  ) {
+    if (!Number.isSafeInteger(number) || number < 1) throw new Error(`Invalid generation number: ${number}.`);
+    if (startedInParentGeneration !== undefined && (!Number.isSafeInteger(startedInParentGeneration) || startedInParentGeneration < 1)) {
+      throw new Error(`Invalid parent generation number: ${startedInParentGeneration}.`);
+    }
+    this.activity = new GenerationActivity(onChange, event => this.handleSessionEvent(event));
   }
 
+  get kind(): GenerationKind { return this.number === 1 ? "spawn" : "resume"; }
+
   attach(session: AgentSession): void {
-    if (this.state.kind !== "queued") throw new Error(`Cannot attach a session to a run that is ${this.state.kind}.`);
+    if (this.state.kind !== "queued") throw new Error(`Cannot attach a session to a generation that is ${this.state.kind}.`);
     this.sessionMessageStart = Array.isArray(session.messages) ? session.messages.length : 0;
     this.state = { kind: "running", session, startedAt: Date.now() };
   }
@@ -148,7 +149,7 @@ export class Run {
     return projectSteer(receipt);
   }
 
-  private handleSessionEvent(event: AgentSessionEvent): RunPhase | undefined {
+  private handleSessionEvent(event: AgentSessionEvent): GenerationPhase | undefined {
     if (event.type !== "message_start") return;
     if (event.message.role === "user") {
       const text = messageText(event.message.content);
@@ -163,16 +164,13 @@ export class Run {
     const delivered = this.steers.filter(steer => steer.state === "delivered");
     if (!delivered.length) return;
     const processedAt = Date.now();
-    for (const receipt of delivered) {
-      receipt.state = "processed";
-      receipt.processedAt = processedAt;
-    }
+    for (const receipt of delivered) { receipt.state = "processed"; receipt.processedAt = processedAt; }
     this.onChange("steer");
     return "responding";
   }
 
-  beginNestedJoin(runIds: readonly RunId[], toolCallId?: string): number {
-    this.nestedJoins.push({ ...(toolCallId ? { toolCallId } : {}), targets: runIds.map(runId => ({ runId })), state: "running", startedAt: Date.now() });
+  beginNestedJoin(targets: readonly GenerationRef[], toolCallId?: string): number {
+    this.nestedJoins.push({ ...(toolCallId ? { toolCallId } : {}), targets: targets.map(target => ({ ...target })), state: "running", startedAt: Date.now() });
     return this.nestedJoins.length - 1;
   }
 
@@ -185,50 +183,34 @@ export class Run {
     if (update.state && update.state !== "running") attempt.completedAt = Date.now();
   }
 
-  settle(outcome: RunOutcomeStatus, details: { readonly output?: string; readonly error?: string } = {}): boolean {
+  settle(outcome: GenerationOutcomeStatus, details: { readonly output?: string; readonly error?: string } = {}): boolean {
     if (this.state.kind === "done") return false;
-    for (const receipt of this.steers) {
-      if (receipt.state === "queued" || receipt.state === "delivered") receipt.state = "discarded";
-    }
+    for (const receipt of this.steers) if (receipt.state === "queued" || receipt.state === "delivered") receipt.state = "discarded";
     const startedAt = this.state.kind === "running" ? this.state.startedAt : undefined;
     this.state = Object.freeze({ kind: "done", outcome, ...details, startedAt, completedAt: Date.now() });
     return true;
   }
 }
 
-export function completedRun(agent: Conversation, runId: RunId, output: string): RunSnapshot { return agent.settle(runId, "completed", { output }); }
-export function errorRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return agent.settle(runId, "error", { error }); }
-export function interruptedRun(agent: Conversation, runId: RunId, error: string): RunSnapshot { return agent.settle(runId, "interrupted", { error }); }
-export function skippedRun(agent: Conversation, runId: RunId): RunSnapshot { return agent.settle(runId, "skipped", { error: "Agent skipped." }); }
+export function completedGeneration(conversation: Conversation, generation: Generation, output: string): GenerationSnapshot { return conversation.settle(generation, "completed", { output }); }
+export function errorGeneration(conversation: Conversation, generation: Generation, error: string): GenerationSnapshot { return conversation.settle(generation, "error", { error }); }
+export function interruptedGeneration(conversation: Conversation, generation: Generation, error: string): GenerationSnapshot { return conversation.settle(generation, "interrupted", { error }); }
+export function skippedGeneration(conversation: Conversation, generation: Generation): GenerationSnapshot { return conversation.settle(generation, "skipped", { error: "Agent skipped." }); }
 
-export function effectiveStatus(status: RunViewStatus): RunStatus {
-  return status.kind === "done" ? status.outcome : status.kind;
-}
+export function effectiveStatus(status: GenerationViewStatus): GenerationStatus { return status.kind === "done" ? status.outcome : status.kind; }
 
 function projectSteer(steer: TrackedSteerReceipt): SteerReceipt {
-  return Object.freeze({
-    id: steer.id,
-    state: steer.state,
-    acceptedAt: steer.acceptedAt,
+  return Object.freeze({ id: steer.id, state: steer.state, acceptedAt: steer.acceptedAt,
     ...(steer.deliveredAt !== undefined ? { deliveredAt: steer.deliveredAt } : {}),
-    ...(steer.processedAt !== undefined ? { processedAt: steer.processedAt } : {}),
-  });
+    ...(steer.processedAt !== undefined ? { processedAt: steer.processedAt } : {}) });
 }
 
-function clearSessionQueue(session: AgentSession | undefined): void {
-  try { session?.clearQueue?.(); } catch {}
-}
-
+function clearSessionQueue(session: AgentSession | undefined): void { try { session?.clearQueue?.(); } catch {} }
 function messageText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return content
-    .filter((part): part is { type: "text"; text: string } =>
-      !!part && typeof part === "object" && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string")
-    .map(part => part.text)
-    .join("\n");
+  return content.filter((part): part is { type: "text"; text: string } => !!part && typeof part === "object" && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string").map(part => part.text).join("\n");
 }
-
 function latestAssistantText(session: AgentSession | undefined, startIndex: number): string | undefined {
   const messages = session?.messages;
   if (!Array.isArray(messages)) return;
@@ -238,122 +220,111 @@ function latestAssistantText(session: AgentSession | undefined, startIndex: numb
     const text = messageText(message.content).trim();
     if (text) return text;
   }
-  return;
 }
 
-export type ConversationUpdateListener = (agent: Conversation, kind: ConversationUpdateKind) => void;
-export interface RunBinding { readonly runId: RunId; snapshot(): RunSnapshot; markJoined(): void; release(): void }
+export type ConversationUpdateListener = (conversation: Conversation, kind: ConversationUpdateKind) => void;
+export interface GenerationBinding { readonly generation: Generation; snapshot(): GenerationSnapshot; markJoined(): void; release(): void }
 
-/** One persistent conversation containing an append-only, exact-run history. */
+/** One persistent conversation containing append-only, one-based generations. */
 export class Conversation {
   readonly createdAt = Date.now();
   readonly agentName: string;
   readonly parentConversationId?: ConversationId;
-  readonly spawnedByRunId?: RunId;
   readonly resolvedSkillBlocks?: readonly string[];
   readonly requestedConfig: RequestedExecutionConfig;
   readonly requestedOverrides?: ExecutionOverrides;
   readonly label: string;
-  private readonly runs: Run[] = [];
+  private readonly generations: Generation[] = [];
   private session?: AgentSession;
-  private stopping?: { runId: RunId; abortSettled: boolean; executionSettled: boolean };
+  private stopping?: { generation: Generation; abortSettled: boolean; executionSettled: boolean };
   private steerTail: Promise<void> = Promise.resolve();
   private unsubscribe?: () => void;
   private effectiveConfig?: EffectiveExecutionConfig;
 
   constructor(
     readonly conversationId: ConversationId,
-    initialRunId: RunId,
     readonly definition: AgentDefinition,
     spawn: SpawnRequest,
     readonly listener: ConversationUpdateListener,
-    options: { parentConversationId?: ConversationId; spawnedByRunId?: RunId; resolvedSkillBlocks?: readonly string[] } = {},
+    options: { parentConversationId?: ConversationId; startedInParentGeneration?: number; resolvedSkillBlocks?: readonly string[] } = {},
   ) {
     this.agentName = spawn.agent;
     this.label = spawn.label;
     this.parentConversationId = options.parentConversationId;
-    this.spawnedByRunId = options.spawnedByRunId;
     this.resolvedSkillBlocks = options.resolvedSkillBlocks;
     this.requestedConfig = resolveRequestedConfig(definition, spawn);
-    if (spawn.model !== undefined || spawn.thinking !== undefined) {
-      this.requestedOverrides = Object.freeze({
-        ...(spawn.model !== undefined ? { model: spawn.model } : {}),
-        ...(spawn.thinking !== undefined ? { thinking: spawn.thinking } : {}),
-      });
-    }
-    this.runs.push(this.newRun(initialRunId, "spawn", spawn.prompt));
+    if (spawn.model !== undefined || spawn.thinking !== undefined) this.requestedOverrides = Object.freeze({
+      ...(spawn.model !== undefined ? { model: spawn.model } : {}),
+      ...(spawn.thinking !== undefined ? { thinking: spawn.thinking } : {}),
+    });
+    this.generations.push(this.newGeneration(1, spawn.prompt, options.startedInParentGeneration));
   }
 
-  get hasCurrentRun(): boolean { return this.latestRun().state.kind !== "done"; }
-  get runHistory(): readonly RunSnapshot[] { return this.runs.map(run => this.project(run)); }
-  get latestRunId(): RunId { return this.latestRun().runId; }
-  get status(): RunViewStatus { return this.project(this.latestRun()).status; }
-  get hasActiveExecution(): boolean {
-    return this.stopping !== undefined || this.latestRun().state.kind !== "done";
-  }
-  get latestResultJoined(): boolean {
-    const latest = this.latestRun();
-    return latest.state.kind === "done" && latest.joined;
-  }
+  get spawnedInGeneration(): number | undefined { return this.generations[0]?.startedInParentGeneration; }
+  get hasCurrentGeneration(): boolean { return this.latestGeneration.state.kind !== "done"; }
+  get generationHistory(): readonly GenerationSnapshot[] { return this.generations.map(generation => this.project(generation)); }
+  get latestGeneration(): Generation { return this.generations[this.generations.length - 1]; }
+  get status(): GenerationViewStatus { return this.project(this.latestGeneration).status; }
+  get hasActiveExecution(): boolean { return this.stopping !== undefined || this.latestGeneration.state.kind !== "done"; }
+  get latestResultJoined(): boolean { return this.latestGeneration.state.kind === "done" && this.latestGeneration.joined; }
   get hasRetainedResumableSession(): boolean {
-    const latest = this.latestRun();
-    return latest.state.kind === "done" && this.session !== undefined
-      && (latest.state.outcome === "completed"
-        || latest.state.outcome === "interrupted"
-        || latest.state.outcome === "aborted");
+    const latest = this.latestGeneration;
+    return latest.state.kind === "done" && this.session !== undefined && ["completed", "interrupted", "aborted"].includes(latest.state.outcome);
   }
   get isResumeAllowed(): boolean {
-    const latest = this.latestRun();
-    return !this.stopping && latest.state.kind === "done" && latest.observerCount === 0
-      && latest.joined && this.hasRetainedResumableSession;
+    const latest = this.latestGeneration;
+    return !this.stopping && latest.state.kind === "done" && latest.observerCount === 0 && latest.joined && this.hasRetainedResumableSession;
+  }
+  get isStopping(): boolean { return this.stopping !== undefined; }
+
+  private newGeneration(number: number, prompt: string, startedInParentGeneration?: number): Generation {
+    return new Generation(number, prompt, update => this.listener(this, update), startedInParentGeneration);
   }
 
-  private newRun(runId: RunId, kind: "spawn" | "resume", prompt: string): Run {
-    return new Run(runId, kind, prompt, update => this.listener(this, update));
-  }
-
-  beginResume(runId: RunId, prompt: string): Run {
+  beginResume(prompt: string, startedInParentGeneration?: number): Generation {
     if (!this.isResumeAllowed) throw new Error(`Conversation ${this.conversationId} cannot be resumed.`);
-    if (this.runs.some(run => run.runId === runId)) throw new Error(`Run ${runId} already exists.`);
-    const run = this.newRun(runId, "resume", prompt);
-    this.runs.push(run);
-    return run;
+    const generation = this.newGeneration(this.generations.length + 1, prompt, startedInParentGeneration);
+    this.generations.push(generation);
+    return generation;
   }
 
-  requireCurrentRun(): Run {
-    const run = this.latestRun();
-    if (run.state.kind === "done") throw new Error(`Conversation ${this.conversationId} has no active run.`);
-    return run;
+  requireCurrentGeneration(): Generation {
+    const generation = this.latestGeneration;
+    if (generation.state.kind === "done") throw new Error(`Conversation ${this.conversationId} has no active generation.`);
+    return generation;
   }
 
-  bindSession(session: AgentSession): void {
-    const run = this.requireCurrentRun();
-    run.attach(session);
+  bindSession(generation: Generation, session: AgentSession): void {
+    if (generation !== this.requireCurrentGeneration()) throw new Error(`Generation ${generation.number} is no longer current.`);
+    if (generation.kind === "resume" && session !== this.session) {
+      throw new Error(`Generation ${generation.number} must reuse its conversation session.`);
+    }
+    generation.attach(session);
     this.session = session;
-    this.unsubscribe = run.activity.subscribe(session);
+    this.unsubscribe = generation.activity.subscribe(session);
     this.listener(this, "status");
   }
   sessionForResume(): AgentSession | undefined { return this.session; }
-  get isStopping(): boolean { return this.stopping !== undefined; }
-  executionSettled(runId: RunId): void {
-    if (this.stopping?.runId !== runId) return;
+
+  executionSettled(generation: Generation): void {
+    if (this.stopping?.generation !== generation) return;
     this.stopping.executionSettled = true;
-    this.finishStopping(runId);
+    this.finishStopping(generation);
   }
 
-  steer(runId: RunId, prompt: string): Promise<SteerReceipt> {
+  steer(generation: Generation, prompt: string): Promise<SteerReceipt> {
     const pending = this.steerTail.then(async () => {
-      if (this.stopping) throw new RunSteerError(runId, "stopping");
-      const run = this.requireRun(runId);
-      if (run.state.kind !== "running") {
-        const status = run.state.kind === "queued" ? "queued" : run.state.outcome;
-        throw new RunSteerError(runId, status);
+      if (this.stopping) throw new GenerationSteerError(generation.number, "stopping");
+      this.requireGeneration(generation);
+      if (generation !== this.latestGeneration || generation.state.kind !== "running") {
+        const status = generation.state.kind === "queued" ? "queued" : generation.state.kind === "done" ? generation.state.outcome : "running";
+        throw new GenerationSteerError(generation.number, status);
       }
-      const session = run.state.session;
+      const session = generation.state.session;
       await session.steer(prompt);
       const deliveryText = session.getSteeringMessages?.().at(-1) ?? prompt;
       if (this.stopping) clearSessionQueue(session);
-      const receipt = run.acceptSteer(deliveryText);
+      const receipt = generation.acceptSteer(deliveryText);
       this.listener(this, "steer");
       return receipt;
     });
@@ -361,103 +332,86 @@ export class Conversation {
     return pending;
   }
 
-  /** Stable exact-run observation retained independently of catalog removal. */
-  bindRun(runId: RunId): RunBinding {
-    const run = this.requireRun(runId);
-    run.observerCount++;
+  bindGeneration(generation: Generation): GenerationBinding {
+    this.requireGeneration(generation);
+    generation.observerCount++;
     this.listener(this, "observer");
     let released = false;
     return {
-      runId,
-      snapshot: () => this.project(run),
-      markJoined: () => this.markJoined(runId),
-      release: () => {
-        if (released) return;
-        released = true;
-        run.observerCount--;
-        this.listener(this, "observer");
-      },
+      generation,
+      snapshot: () => this.project(generation),
+      markJoined: () => this.markJoined(generation),
+      release: () => { if (released) return; released = true; generation.observerCount--; this.listener(this, "observer"); },
     };
   }
 
-  settle(runId: RunId, outcome: RunOutcomeStatus, details: { readonly output?: string; readonly error?: string } = {}): RunSnapshot {
-    const run = this.requireRun(runId);
-    if (run !== this.latestRun()) return this.project(run);
+  settle(generation: Generation, outcome: GenerationOutcomeStatus, details: { readonly output?: string; readonly error?: string } = {}): GenerationSnapshot {
+    this.requireGeneration(generation);
+    if (generation !== this.latestGeneration) return this.project(generation);
     this.unsubscribe?.(); this.unsubscribe = undefined;
-    if (run.settle(outcome, details)) this.listener(this, "status");
-    return this.project(run);
+    if (generation.settle(outcome, details)) this.listener(this, "status");
+    return this.project(generation);
   }
 
-  /** Terminalizes immediately, then finalizes in-flight steering before cancellation completes. */
   async abort(reason = "Agent aborted."): Promise<void> {
-    if (!this.hasCurrentRun) return;
-    const run = this.latestRun();
-    this.stopping = { runId: run.runId, abortSettled: false, executionSettled: false };
-    const runningSession = run.state.kind === "running" ? run.state.session : undefined;
+    if (!this.hasCurrentGeneration) return;
+    const generation = this.latestGeneration;
+    this.stopping = { generation, abortSettled: false, executionSettled: false };
+    const runningSession = generation.state.kind === "running" ? generation.state.session : undefined;
     clearSessionQueue(runningSession);
-    const partialOutput = latestAssistantText(runningSession, run.sessionMessageStart);
-    this.settle(run.runId, "aborted", {
-      error: reason,
-      ...(partialOutput ? { output: partialOutput } : {}),
-    });
+    const partialOutput = latestAssistantText(runningSession, generation.sessionMessageStart);
+    this.settle(generation, "aborted", { error: reason, ...(partialOutput ? { output: partialOutput } : {}) });
     const aborting = Promise.resolve(runningSession?.abort()).catch(() => undefined);
     await this.steerTail;
     clearSessionQueue(runningSession);
     await aborting;
-    if (this.stopping?.runId === run.runId) {
-      this.stopping.abortSettled = true;
-      this.finishStopping(run.runId);
-    }
+    if (this.stopping?.generation === generation) { this.stopping.abortSettled = true; this.finishStopping(generation); }
   }
 
-  private finishStopping(runId: RunId): void {
-    if (this.stopping?.runId !== runId || !this.stopping.abortSettled || !this.stopping.executionSettled) return;
+  private finishStopping(generation: Generation): void {
+    if (this.stopping?.generation !== generation || !this.stopping.abortSettled || !this.stopping.executionSettled) return;
     this.stopping = undefined;
     this.listener(this, "status");
   }
 
-  forceAbandonCancellation(runId: RunId): RunSnapshot {
-    const run = this.requireRun(runId);
-    if (this.stopping?.runId === runId) {
-      this.unsubscribe?.();
-      this.unsubscribe = undefined;
-      this.session = undefined;
-      this.stopping = undefined;
+  forceAbandonCancellation(generation: Generation): GenerationSnapshot {
+    this.requireGeneration(generation);
+    if (this.stopping?.generation === generation) {
+      this.unsubscribe?.(); this.unsubscribe = undefined; this.session = undefined; this.stopping = undefined;
       this.listener(this, "status");
     }
-    return this.project(run);
+    return this.project(generation);
   }
 
-  beginNestedJoin(runId: RunId, targets: readonly RunId[], toolCallId?: string): number {
-    const index = this.requireRun(runId).beginNestedJoin(targets, toolCallId);
+  beginNestedJoin(generation: Generation, targets: readonly GenerationRef[], toolCallId?: string): number {
+    this.requireGeneration(generation);
+    const index = generation.beginNestedJoin(targets, toolCallId);
     this.listener(this, "nestedJoin");
     return index;
   }
-  updateNestedJoin(runId: RunId, index: number, update: { targets?: readonly NestedJoinTargetSnapshot[]; state?: NestedJoinAttemptState; error?: string }): void {
-    this.requireRun(runId).updateNestedJoin(index, update);
+  updateNestedJoin(generation: Generation, index: number, update: { targets?: readonly NestedJoinTargetSnapshot[]; state?: NestedJoinAttemptState; error?: string }): void {
+    this.requireGeneration(generation);
+    generation.updateNestedJoin(index, update);
     this.listener(this, "nestedJoin");
   }
-
-  markJoined(runId: RunId): void {
-    const run = this.requireRun(runId);
-    run.joined = true;
-    this.listener(this, "joined");
-  }
+  markJoined(generation: Generation): void { this.requireGeneration(generation); generation.joined = true; this.listener(this, "joined"); }
   setEffectiveConfig(config: EffectiveExecutionConfig): void { this.effectiveConfig = config; }
 
+  generationSnapshot(generation: Generation): GenerationSnapshot { this.requireGeneration(generation); return this.project(generation); }
+
   snapshot(): ConversationSnapshot {
-    const runs = this.runHistory;
-    const currentRun = this.hasCurrentRun ? runs.at(-1) : undefined;
+    const generations = this.generationHistory;
+    const currentGeneration = this.hasCurrentGeneration ? generations.at(-1) : undefined;
     return Object.freeze({
       conversationId: this.conversationId,
       ...(this.parentConversationId ? { parentConversationId: this.parentConversationId } : {}),
-      ...(this.spawnedByRunId ? { spawnedByRunId: this.spawnedByRunId } : {}),
+      ...(this.spawnedInGeneration !== undefined ? { spawnedInGeneration: this.spawnedInGeneration } : {}),
       label: this.label,
       createdAt: this.createdAt,
       agent: summarizeAgentDefinition(this.definition),
       requestedConfig: this.requestedConfig,
-      runs,
-      ...(currentRun ? { currentRun } : {}),
+      generations,
+      ...(currentGeneration ? { currentGeneration } : {}),
       resumeAllowed: this.isResumeAllowed,
       ...(this.stopping ? { isStopping: true as const } : {}),
       ...(this.effectiveConfig ? { effectiveConfig: this.effectiveConfig } : {}),
@@ -465,20 +419,17 @@ export class Conversation {
     });
   }
 
-  private latestRun(): Run {
-    return this.runs[this.runs.length - 1];
+  ownsGeneration(generation: Generation): boolean { return this.generations[generation.number - 1] === generation; }
+  generation(number: number): Generation | undefined { return this.generations[number - 1]; }
+  private requireGeneration(generation: Generation): void {
+    if (!this.ownsGeneration(generation)) throw new Error(`Unknown generation ${generation.number} in conversation ${this.conversationId}.`);
   }
-  private requireRun(runId: RunId): Run {
-    const run = this.runs.find(candidate => candidate.runId === runId);
-    if (!run) throw new Error(`Unknown run ${runId} in conversation ${this.conversationId}.`);
-    return run;
-  }
-  private project(run: Run): RunSnapshot {
-    const state = run.state;
-    const status: RunViewStatus = state.kind === "queued" ? { kind: "queued", queuedAt: run.createdAt }
+  private project(generation: Generation): GenerationSnapshot {
+    const state = generation.state;
+    const status: GenerationViewStatus = state.kind === "queued" ? { kind: "queued", queuedAt: generation.createdAt }
       : state.kind === "running" ? { kind: "running", startedAt: state.startedAt }
       : { kind: "done", outcome: state.outcome, completedAt: state.completedAt, ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}), ...(state.output !== undefined ? { output: state.output } : {}), ...(state.error !== undefined ? { error: state.error } : {}) };
-    const nestedJoins = run.nestedJoins.map(attempt => Object.freeze({
+    const nestedJoins = generation.nestedJoins.map(attempt => Object.freeze({
       ...(attempt.toolCallId ? { toolCallId: attempt.toolCallId } : {}),
       targets: Object.freeze(attempt.targets.map(target => Object.freeze({ ...target }))),
       state: attempt.state,
@@ -486,6 +437,6 @@ export class Conversation {
       ...(attempt.completedAt !== undefined ? { completedAt: attempt.completedAt } : {}),
       ...(attempt.error !== undefined ? { error: attempt.error } : {}),
     }));
-    return Object.freeze({ runId: run.runId, kind: run.kind, prompt: run.prompt, createdAt: run.createdAt, status: Object.freeze(status), activity: Object.freeze(run.activity.snapshot()), usage: run.activity.usage, observerCount: run.observerCount, joined: run.joined, nestedJoins: Object.freeze(nestedJoins), steers: Object.freeze(run.steers.map(projectSteer)) });
+    return Object.freeze({ generation: generation.number, kind: generation.kind, ...(generation.startedInParentGeneration !== undefined ? { startedInParentGeneration: generation.startedInParentGeneration } : {}), prompt: generation.prompt, createdAt: generation.createdAt, status: Object.freeze(status), activity: Object.freeze(generation.activity.snapshot()), usage: generation.activity.usage, observerCount: generation.observerCount, joined: generation.joined, nestedJoins: Object.freeze(nestedJoins), steers: Object.freeze(generation.steers.map(projectSteer)) });
   }
 }

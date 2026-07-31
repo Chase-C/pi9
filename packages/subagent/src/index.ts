@@ -9,7 +9,7 @@ import {
   formatCompletionNotificationMessage,
   type CompletionNotificationMessageDetails,
 } from "./notifications.js";
-import { runElapsedMs } from "./run-format.js";
+import { generationElapsedMs } from "./generation-format.js";
 import { timingAsync } from "./timing.js";
 import { defineSubagentTool, makeChildSubagentTool } from "./tool.js";
 import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, prepareSubagentRuntime, type SubagentSettings } from "./settings.js";
@@ -49,8 +49,8 @@ export default function subagentExtension(pi: ExtensionAPI, dependencies: Subage
   runtime.scheduler.setChildTool(parent =>
     makeChildSubagentTool({ runtime, agentRegistry, parent, getCurrentSettings })
   );
-  runtime.scheduler.setChildSessionEvent((_parent, run, event) =>
-    completionNotifier.handleToolEvent(`child:${run.runId}`, event)
+  runtime.scheduler.setChildSessionEvent((parent, generation, event) =>
+    completionNotifier.handleToolEvent(`child:${parent.conversationId}:${generation.number}`, event)
   );
 
   registerSubagentLifecycleEvents(pi.events, runtime);
@@ -94,13 +94,13 @@ export function registerSubagentLifecycleEvents(events: SubagentEventBus | undef
   const seen = new Set<string>();
   return source.onConversationUpdate((agent, kind) => {
     if (kind !== "status") return;
-    const internal = agent.snapshot().runs.at(-1);
-    if (!internal) return;
+    const generation = agent.snapshot().generations.at(-1);
+    if (!generation) return;
     const snapshot = source.projectSubagent(agent.conversationId);
-    const timestamp = internal.status.kind === "queued" ? internal.status.queuedAt
-      : internal.status.kind === "running" ? internal.status.startedAt
-      : internal.status.completedAt;
-    const key = `${internal.runId}:${snapshot.status}:${timestamp}`;
+    const timestamp = generation.status.kind === "queued" ? generation.status.queuedAt
+      : generation.status.kind === "running" ? generation.status.startedAt
+      : generation.status.completedAt;
+    const key = JSON.stringify([agent.conversationId, generation.generation, snapshot.status, timestamp]);
     if (seen.has(key)) return;
     seen.add(key);
     const event = snapshot.status === "queued" ? "subagent:queued"
@@ -115,9 +115,9 @@ interface GuardContext { hasUI?: boolean; ui?: { confirm?(title: string, message
 interface GuardManager { listConversations(): ConversationSnapshot[] }
 export function registerSubagentSessionGuards(pi: GuardPi, manager: GuardManager): void { const guard = (_: unknown, ctx: GuardContext) => confirmWithActiveSubagents(ctx, manager); pi.on?.("session_before_switch", guard); pi.on?.("session_before_fork", guard); }
 export async function confirmWithActiveSubagents(ctx: GuardContext, manager: GuardManager): Promise<{ cancel: true } | undefined> {
-  const active = manager.listConversations().filter(item => item.currentRun !== undefined || item.isStopping);
+  const active = manager.listConversations().filter(item => item.currentGeneration !== undefined || item.isStopping);
   if (!active.length || !ctx.hasUI || !ctx.ui?.confirm) return;
-  const lines = active.slice(0, 6).map(item => `- ${item.agent.name}${item.label !== item.agent.name ? ` (${item.label})` : ""}: ${item.currentRun?.status.kind ?? "stopping"}`);
+  const lines = active.slice(0, 6).map(item => `- ${item.agent.name}${item.label !== item.agent.name ? ` (${item.label})` : ""}: ${item.currentGeneration?.status.kind ?? "stopping"}`);
   if (active.length > 6) lines.push(`- ... and ${active.length - 6} more`);
   const ok = await ctx.ui.confirm("Active subagents", `${active.length} subagent${active.length === 1 ? " is" : "s are"} still active:\n${lines.join("\n")}\n\nChanging sessions will tear down this extension runtime. Continue anyway?`);
   return ok ? undefined : { cancel: true };
@@ -129,12 +129,30 @@ export function registerSubagentMetadataPersistence(pi: MetadataPi, source: Meta
   if (!pi.appendEntry || !source.onConversationUpdate) return () => {};
   const persisted = new Set<string>();
   return source.onConversationUpdate((agent, kind) => {
-    if (kind !== "status") return; const snapshot = agent.snapshot(); const run = snapshot.runs.at(-1);
-    if (!run || run.status.kind !== "done" || persisted.has(run.runId)) return; persisted.add(run.runId);
-    pi.appendEntry!("subagent-run-index", projectSubagentRunIndex(snapshot));
+    if (kind !== "status") return;
+    const snapshot = agent.snapshot();
+    const generation = snapshot.generations.at(-1);
+    const key = generation ? JSON.stringify([snapshot.conversationId, generation.generation]) : undefined;
+    if (!generation || generation.status.kind !== "done" || !key || persisted.has(key)) return;
+    persisted.add(key);
+    pi.appendEntry!("subagent-generation-index", projectSubagentGenerationIndex(snapshot));
   });
 }
-export function projectSubagentRunIndex(snapshot: ReturnType<Conversation["snapshot"]>) {
-  const run = snapshot.runs.at(-1); if (!run || run.status.kind !== "done") throw new Error("Cannot persist a non-terminal run.");
-  return { version: 3, subagentId: snapshot.conversationId, agent: snapshot.agent.name, ...(snapshot.label ? { label: snapshot.label } : {}), kind: run.kind, status: run.status.outcome, completedAt: run.status.completedAt, ...(run.status.startedAt !== undefined ? { startedAt: run.status.startedAt, elapsedMs: runElapsedMs(run) } : {}) };
+export function projectSubagentGenerationIndex(snapshot: ReturnType<Conversation["snapshot"]>) {
+  const generation = snapshot.generations.at(-1);
+  if (!generation || generation.status.kind !== "done") throw new Error("Cannot persist a non-terminal generation.");
+  return {
+    version: 4,
+    subagentId: snapshot.conversationId,
+    generation: generation.generation,
+    agent: snapshot.agent.name,
+    ...(snapshot.label ? { label: snapshot.label } : {}),
+    kind: generation.kind,
+    status: generation.status.outcome,
+    completedAt: generation.status.completedAt,
+    ...(generation.status.startedAt !== undefined ? {
+      startedAt: generation.status.startedAt,
+      elapsedMs: generationElapsedMs(generation),
+    } : {}),
+  };
 }

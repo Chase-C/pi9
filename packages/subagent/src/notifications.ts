@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { ContextEvent, Theme } from "@earendil-works/pi-coding-agent";
-import type { Conversation, ConversationSnapshot, RunSnapshot } from "./conversation.js";
+import type { Conversation, ConversationSnapshot, GenerationRef, GenerationSnapshot } from "./conversation.js";
 import type { ConversationUpdateKind } from "./conversation.js";
 import { isFinishedSubagent, type CanonicalFinishedSubagent } from "./contract.js";
 import type { SubagentRuntime } from "./runtime.js";
 import type { SubagentStatus } from "./schema.js";
-import type { RunId } from "./identifiers.js";
-import { formatElapsed, runElapsedMs, statusColor, truncateText } from "./run-format.js";
+import { formatElapsed, generationElapsedMs, statusColor, truncateText } from "./generation-format.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type CompletionNotifyMode, type SubagentDisplaySettings } from "./settings.js";
 
 type SerializableFinishedSubagent<T extends CanonicalFinishedSubagent = CanonicalFinishedSubagent> =
@@ -14,21 +13,19 @@ type SerializableFinishedSubagent<T extends CanonicalFinishedSubagent = Canonica
 
 /** The current serializable completion summary shared by notification production and rendering. */
 export type CompletionNotification = SerializableFinishedSubagent & {
-  /** Runtime-local correlation; optional when loading messages from older sessions. */
-  readonly runId?: string;
+  /** Exact one-based execution generation within the stable subagent conversation. */
+  readonly generation: number;
   readonly completedAt: number;
   readonly elapsedMs: number;
 };
 
-type RuntimeCompletionNotification = CompletionNotification & { readonly runId: string };
-
 interface CompletionCandidate {
   conversation: ConversationSnapshot;
-  run: RunSnapshot;
+  generation: GenerationSnapshot;
 }
 
 export interface CompletionNotificationMessageDetails {
-  /** Runtime-local correlation only; never rendered or accepted by lifecycle actions. */
+  /** Process-local epoch correlation only; never rendered or accepted by lifecycle actions. */
   notificationEpoch?: string;
   completions: CompletionNotification[];
 }
@@ -39,14 +36,13 @@ export interface CompletionNotificationMessage {
 }
 
 const COMPLETION_GRACE_MS = 500;
-const FINISHED_SUBAGENT_STATUSES = new Set<unknown>(["completed", "failed", "cancelled"]);
 const RESULTS_INSTRUCTION = "Use `subagent join` when you need to collect these results.";
 
 type AgentMessage = ContextEvent["messages"][number];
 type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
 
 /**
- * Creates the complete custom message sent for a batch of run completions.
+ * Creates the complete custom message sent for a batch of generation completions.
  *
  * The notification text and details are projected from the same copied entries so the producer
  * and renderer cannot drift on the payload shape. The renderer intentionally applies its own
@@ -164,8 +160,8 @@ export class CompletionNotifier {
   private readonly uiNotified = new Set<string>();
   private readonly observed = new Set<string>();
   private readonly gracePending = new Set<string>();
-  private readonly claimsByToolCall = new Map<string, { action: unknown; runIds: Set<string> }>();
-  private readonly claimCountByRun = new Map<string, number>();
+  private readonly claimsByInvocation = new Map<string, { action: unknown; generationKeys: Set<string> }>();
+  private readonly claimCountByGeneration = new Map<string, number>();
   private readonly notificationEpoch = randomUUID();
   private readonly unsubscribeAgent: () => void;
 
@@ -187,7 +183,7 @@ export class CompletionNotifier {
       if (!details) return [message];
       if (details.notificationEpoch !== this.notificationEpoch) return [];
       const visible = details.completions.flatMap(entry => {
-        const current = entry.runId ? this.currentNotificationEntry(entry.subagentId, entry.runId) : undefined;
+        const current = Number.isSafeInteger(entry.generation) ? this.currentNotificationEntry(entry.subagentId, entry.generation) : undefined;
         return current ? [current] : [];
       });
       if (!visible.length) return [];
@@ -195,40 +191,45 @@ export class CompletionNotifier {
     });
   }
 
-  private currentNotificationEntry(subagentId: string, runId: string): RuntimeCompletionNotification | undefined {
+  private currentNotificationEntry(subagentId: string, generation: number): CompletionNotification | undefined {
     const value = this.catalog().find(candidate =>
       candidate.conversation.conversationId === subagentId
-      && candidate.run.runId === runId);
-    if (!value || this.observed.has(value.run.runId) || this.claimCountByRun.has(value.run.runId)) return;
-    if (value.run.joined || value.run.observerCount > 0) return;
+      && candidate.generation.generation === generation);
+    if (!value || this.observed.has(generationKey({ conversationId: value.conversation.conversationId, generation: value.generation.generation })) || this.claimCountByGeneration.has(generationKey({ conversationId: value.conversation.conversationId, generation: value.generation.generation }))) return;
+    if (value.generation.joined || value.generation.observerCount > 0) return;
     const projected = projectCompletionNotification(this.deps.manager, value);
-    return projected ? { runId: value.run.runId, ...projected } : undefined;
+    return projected;
   }
 
   beginTool(scope: string, toolCallId: string, params: unknown): void {
     const target = claimTarget(params);
-    const runIds = new Set([...target.subagentIds].flatMap(subagentId => {
-      const runId = this.currentRunId(subagentId);
-      return runId ? [runId] : [];
+    const generationKeys = new Set([...target.subagentIds].flatMap(subagentId => {
+      const generationKeyValue = this.currentGenerationKey(subagentId);
+      return generationKeyValue ? [generationKeyValue] : [];
     }));
-    if (!runIds.size) return;
+    if (!generationKeys.size) return;
     const key = `${scope}:${toolCallId}`;
     this.releaseToolClaim(key);
-    for (const runId of runIds) this.claimCountByRun.set(runId, (this.claimCountByRun.get(runId) ?? 0) + 1);
-    this.claimsByToolCall.set(key, { action: target.action, runIds });
+    for (const keyValue of generationKeys) this.claimCountByGeneration.set(keyValue, (this.claimCountByGeneration.get(keyValue) ?? 0) + 1);
+    this.claimsByInvocation.set(key, { action: target.action, generationKeys });
   }
 
   completeTool(scope: string, toolCallId: string, result?: unknown): void {
     const key = `${scope}:${toolCallId}`;
-    const claim = this.claimsByToolCall.get(key);
+    const claim = this.claimsByInvocation.get(key);
     if (!claim) return;
-    for (const subagentId of observedTerminalSubagentIds(claim.action, result)) {
-      const runId = this.currentRunId(subagentId);
-      if (runId && claim.runIds.has(runId)) this.observed.add(runId);
-    }
-    for (const id of claim.runIds) {
+    const claimedConversationIds = new Set([...claim.generationKeys].map(generationConversationId));
+    for (const reference of observedGenerationRefs(claim.action, result)) {
+      if (!claimedConversationIds.has(reference.conversationId)) continue;
       try {
-        if (this.deps.manager.runSnapshot(id as RunId).joined) this.delivered.add(id);
+        if (this.deps.manager.generationSnapshot(reference).status.kind === "done") {
+          this.observed.add(generationKey(reference));
+        }
+      } catch {}
+    }
+    for (const keyValue of claim.generationKeys) {
+      try {
+        if (this.deps.manager.generationSnapshot(parseGenerationKey(keyValue)).joined) this.delivered.add(keyValue);
       } catch {}
     }
     this.releaseToolClaim(key);
@@ -248,13 +249,13 @@ export class CompletionNotifier {
 
   private onUpdate = (agent: Conversation, kind: ConversationUpdateKind): void => {
     if (kind === "status") {
-      const run = agent.snapshot().runs.at(-1);
-      if (run?.status.kind === "done" && !this.delivered.has(run.runId) && !this.observed.has(run.runId)) {
-        this.gracePending.add(run.runId);
+      const generation = agent.snapshot().generations.at(-1);
+      if (generation?.status.kind === "done" && !this.delivered.has(generationKey({ conversationId: agent.conversationId, generation: generation.generation })) && !this.observed.has(generationKey({ conversationId: agent.conversationId, generation: generation.generation }))) {
+        this.gracePending.add(generationKey({ conversationId: agent.conversationId, generation: generation.generation }));
         this.armGrace();
       }
     }
-    // A short grace window lets inspect, cancel, or join claim a run before completion delivery.
+    // A short grace window lets inspect, cancel, or join claim a generation before completion delivery.
     if (kind === "status" || kind === "observer" || kind === "joined" || kind === "removed") this.arm(0);
   };
   private opportunity(ctx?: NotifierContext): void { if (ctx) this.ctx = ctx; this.flush(); }
@@ -263,7 +264,7 @@ export class CompletionNotifier {
     const call = toolEvent(event);
     if (call?.toolName === "subagent") this.beginTool("root", call.toolCallId, call.args);
     const claimed = call?.toolName === "subagent" && claimTarget(call.args).subagentIds.size > 0;
-    // Defer delivery until synchronous tool preflight finishes so later joins can claim runs.
+    // Defer delivery until synchronous tool preflight finishes so later joins can claim generations.
     // list is deliberately not a delivery opportunity; a join starts by claiming.
     if (!claimed && toolAction(event) !== "list") this.arm(0, true);
   }
@@ -294,36 +295,36 @@ export class CompletionNotifier {
   }
   private cancelGrace(): void { this.cancelGraceTimer?.(); this.cancelGraceTimer = undefined; }
   private releaseToolClaim(key: string): void {
-    const claim = this.claimsByToolCall.get(key);
+    const claim = this.claimsByInvocation.get(key);
     if (!claim) return;
-    this.claimsByToolCall.delete(key);
-    for (const runId of claim.runIds) {
-      const remaining = (this.claimCountByRun.get(runId) ?? 1) - 1;
-      if (remaining > 0) this.claimCountByRun.set(runId, remaining);
-      else this.claimCountByRun.delete(runId);
+    this.claimsByInvocation.delete(key);
+    for (const keyValue of claim.generationKeys) {
+      const remaining = (this.claimCountByGeneration.get(keyValue) ?? 1) - 1;
+      if (remaining > 0) this.claimCountByGeneration.set(keyValue, remaining);
+      else this.claimCountByGeneration.delete(keyValue);
     }
   }
   private clearClaims(): void {
-    for (const key of [...this.claimsByToolCall.keys()]) this.releaseToolClaim(key);
+    for (const key of [...this.claimsByInvocation.keys()]) this.releaseToolClaim(key);
   }
 
   private flush(toolOpportunity = false): void {
     const mode = this.deps.getMode();
     if (mode === "none") { this.cancel(); return; }
-    const eligible = this.catalog().filter(({ run }) => !this.delivered.has(run.runId) && !this.observed.has(run.runId) && !this.gracePending.has(run.runId) && !this.claimCountByRun.has(run.runId) && !run.joined && run.observerCount === 0);
+    const eligible = this.catalog().filter(candidate => { const keyValue = candidateKey(candidate); const generation = candidate.generation; return !this.delivered.has(keyValue) && !this.observed.has(keyValue) && !this.gracePending.has(keyValue) && !this.claimCountByGeneration.has(keyValue) && !generation.joined && generation.observerCount === 0; });
     if (!eligible.length) return;
     if (!this.ctx) return;
     if (mode === "auto" && !this.ctx.isIdle()) { this.arm(500); return; }
     if (mode === "steer" && !toolOpportunity && !this.ctx.isIdle()) return;
 
     // Catalog, observer, and joined state are projected again immediately before send.
-    const live = new Map(this.catalog().map(value => [value.run.runId, value]));
-    const entries: RuntimeCompletionNotification[] = [];
+    const live = new Map(this.catalog().map(value => [candidateKey(value), value]));
+    const entries: CompletionNotification[] = [];
     for (const candidate of eligible) {
-      const value = live.get(candidate.run.runId);
-      if (!value || value.run.joined || value.run.observerCount || this.claimCountByRun.has(value.run.runId)) continue;
+      const value = live.get(candidateKey(candidate));
+      if (!value || value.generation.joined || value.generation.observerCount || this.claimCountByGeneration.has(candidateKey(value))) continue;
       const projected = projectCompletionNotification(this.deps.manager, value);
-      if (projected) entries.push({ runId: value.run.runId, ...projected });
+      if (projected) entries.push(projected);
     }
     if (!entries.length || !this.deps.pi.sendMessage) return;
     const message = createCompletionNotificationMessage(entries, this.notificationEpoch);
@@ -331,46 +332,78 @@ export class CompletionNotifier {
     try {
       const sent = this.deps.pi.sendMessage({ customType: "subagent-completion", display: false, ...message }, mode === "steer" && active ? { deliverAs: "steer" } : { triggerTurn: true });
       this.notifyUi(entries);
-      for (const entry of entries) this.delivered.add(entry.runId);
+      for (const entry of entries) this.delivered.add(notificationKey(entry));
       void Promise.resolve(sent).catch(() => {
-        for (const entry of entries) this.delivered.delete(entry.runId);
+        for (const entry of entries) this.delivered.delete(notificationKey(entry));
         this.arm(500, mode === "steer" && active);
       });
     } catch {
-      for (const entry of entries) this.delivered.delete(entry.runId);
+      for (const entry of entries) this.delivered.delete(notificationKey(entry));
       this.arm(500, mode === "steer" && active);
     }
   }
-  private notifyUi(entries: readonly RuntimeCompletionNotification[]): void {
+  private notifyUi(entries: readonly CompletionNotification[]): void {
     if (!this.ctx?.hasUI || !this.ctx.ui?.notify) return;
-    const pending = entries.filter(entry => !this.uiNotified.has(entry.runId));
+    const pending = entries.filter(entry => !this.uiNotified.has(notificationKey(entry)));
     if (!pending.length) return;
     try {
       this.ctx.ui.notify(formatUiNotification(pending), completionNotificationLevel(pending));
-      for (const entry of pending) this.uiNotified.add(entry.runId);
+      for (const entry of pending) this.uiNotified.add(notificationKey(entry));
     } catch {}
   }
 
-  private currentRunId(subagentId: string): string | undefined {
-    try { return this.deps.manager.conversation(subagentId).runs.at(-1)?.runId; } catch { return; }
+  private currentGenerationKey(subagentId: string): string | undefined {
+    try {
+      const snapshot = this.deps.manager.conversation(subagentId);
+      const generation = snapshot.generations.at(-1);
+      return generation ? generationKey({ conversationId: snapshot.conversationId, generation: generation.generation }) : undefined;
+    } catch { return; }
   }
 
   private catalog(): CompletionCandidate[] {
     return this.deps.manager.listConversations().flatMap(conversation => {
-      const run = conversation.runs.at(-1);
-      return run?.status.kind === "done" ? [{ conversation, run }] : [];
+      const generation = conversation.generations.at(-1);
+      return generation?.status.kind === "done" ? [{ conversation, generation }] : [];
     });
   }
 }
 
+function generationKey(reference: GenerationRef): string {
+  return JSON.stringify([reference.conversationId, reference.generation]);
+}
+
+function parseGenerationKey(key: string): GenerationRef {
+  const [conversationId, generation] = JSON.parse(key) as [GenerationRef["conversationId"], number];
+  return { conversationId, generation };
+}
+
+function generationConversationId(key: string): string {
+  return parseGenerationKey(key).conversationId;
+}
+
+function candidateKey(candidate: CompletionCandidate): string {
+  return generationKey({
+    conversationId: candidate.conversation.conversationId,
+    generation: candidate.generation.generation,
+  });
+}
+
+function notificationKey(notification: Pick<CompletionNotification, "subagentId" | "generation">): string {
+  return generationKey({
+    conversationId: notification.subagentId as GenerationRef["conversationId"],
+    generation: notification.generation,
+  });
+}
+
 function projectCompletionNotification(manager: SubagentRuntime, value: CompletionCandidate): CompletionNotification | undefined {
-  if (value.run.status.kind !== "done") return;
+  if (value.generation.status.kind !== "done") return;
   const canonical = manager.projectSubagent(value.conversation.conversationId, undefined, { maxLength: 500 });
   if (!isFinishedSubagent(canonical)) return;
   return {
     ...canonical,
-    completedAt: value.run.status.completedAt,
-    elapsedMs: runElapsedMs(value.run),
+    generation: value.generation.generation,
+    completedAt: value.generation.status.completedAt,
+    elapsedMs: generationElapsedMs(value.generation),
   };
 }
 
@@ -401,7 +434,7 @@ function isCompletionNotification(entry: unknown): entry is CompletionNotificati
   const value = entry as Record<string, unknown>;
   if (
     value.ok !== true
-    || (value.runId !== undefined && typeof value.runId !== "string")
+    || (!Number.isSafeInteger(value.generation) || (value.generation as number) < 1)
     || typeof value.subagentId !== "string"
     || typeof value.label !== "string"
     || typeof value.agent !== "string"
@@ -438,19 +471,21 @@ function toolEndEvent(event: unknown): { toolCallId: string; toolName: unknown; 
   if (typeof value.toolCallId !== "string") return;
   return { toolCallId: value.toolCallId, toolName: value.toolName, result: value.result };
 }
-function observedTerminalSubagentIds(action: unknown, result: unknown): string[] {
+function observedGenerationRefs(action: unknown, result: unknown): GenerationRef[] {
   if ((action !== "inspect" && action !== "cancel") || !result || typeof result !== "object") return [];
   const details = (result as { details?: unknown }).details;
   if (!details || typeof details !== "object") return [];
   const response = (details as { response?: unknown }).response;
-  const runs = response && typeof response === "object"
-    ? (response as { results?: unknown }).results
-    : (details as { runs?: unknown }).runs;
-  if (!Array.isArray(runs)) return [];
-  return runs.flatMap(value => {
-    if (!value || typeof value !== "object" || "error" in value) return [];
-    const run = value as { subagentId?: unknown; status?: unknown };
-    if (typeof run.subagentId !== "string" || !FINISHED_SUBAGENT_STATUSES.has(run.status)) return [];
-    return [run.subagentId];
-  });
+  if (!response || typeof response !== "object" || (response as { action?: unknown }).action !== action) return [];
+  const observedGenerations = (details as { observedGenerations?: unknown }).observedGenerations;
+  if (!Array.isArray(observedGenerations) || !observedGenerations.every(isGenerationRef)) return [];
+  return observedGenerations;
+}
+
+function isGenerationRef(value: unknown): value is GenerationRef {
+  if (!value || typeof value !== "object") return false;
+  const reference = value as { conversationId?: unknown; generation?: unknown };
+  return typeof reference.conversationId === "string"
+    && Number.isSafeInteger(reference.generation)
+    && (reference.generation as number) >= 1;
 }

@@ -4,22 +4,22 @@ import path from "node:path";
 
 import { expect, test, vi } from "vitest";
 import { Conversation } from "../../src/conversation.js";
-import { completedRun } from "../../src/conversation.js";
-import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, resolveModel, resolveRequestedSkills, resolveTaskCwd, executeRun } from "../../src/execute.js";
+import { completedGeneration } from "../../src/conversation.js";
+import { DEFAULT_EXECUTE_GENERATION_DEPENDENCIES, resolveModel, resolveRequestedSkills, resolveTaskCwd, executeGeneration } from "../../src/execute.js";
 
 const config = { name: "worker", description: "", systemPrompt: "", source: "project" } as any;
 function resumable(messages: any[], prompt: () => Promise<void>, abort = vi.fn()) {
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
+  const agent = new Conversation("amber-acorn" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
   const session = { messages, subscribe: () => () => {}, prompt, abort } as any;
-  agent.bindSession(session); completedRun(agent, "adapt-ably" as any, "first");
-  agent.markJoined("adapt-ably" as any);
-  const attempt = agent.beginResume("balance-boldly" as any, "continue");
+  agent.bindSession(agent.latestGeneration, session); completedGeneration(agent, agent.latestGeneration, "first");
+  agent.markJoined(agent.latestGeneration);
+  const attempt = agent.beginResume("continue");
   return { agent, attempt, session, abort };
 }
 
 test("resume completes with the final assistant text", async () => {
   const f = resumable([{ role: "assistant", content: [{ type: "text", text: "finished" }] }], async () => {});
-  await expect(executeRun({} as any, f.agent, f.attempt)).resolves.toMatchObject({ status: { kind: "done", outcome: "completed", output: "finished" } });
+  await expect(executeGeneration({} as any, f.agent, f.attempt)).resolves.toMatchObject({ status: { kind: "done", outcome: "completed", output: "finished" } });
 });
 
 test("child session lifecycle observers span finalized tool execution events", async () => {
@@ -29,39 +29,49 @@ test("child session lifecycle observers span finalized tool execution events", a
     subscribe(listener: (event: any) => void) { listeners.push(listener); return () => { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); }; },
     async prompt() {
       const start = { type: "tool_execution_start", toolCallId: "child-call", toolName: "subagent", args: { action: "inspect", subagentIds: ["amber-acorn"] } };
-      const end = { type: "tool_execution_end", toolCallId: "child-call", toolName: "subagent", result: { details: { action: "inspect", runs: [{ subagentId: "amber-acorn", status: "completed" }] } } };
+      const end = {
+        type: "tool_execution_end",
+        toolCallId: "child-call",
+        toolName: "subagent",
+        result: {
+          details: {
+            response: { action: "inspect", results: [{ subagentId: "amber-acorn", status: "completed" }] },
+            observedGenerations: [{ conversationId: "amber-acorn", generation: 1 }],
+          },
+        },
+      };
       for (const listener of [...listeners]) listener(start);
       for (const listener of [...listeners]) listener(end);
     },
     abort: vi.fn(),
   } as any;
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
-  agent.bindSession(session); completedRun(agent, "adapt-ably" as any, "first");
-  agent.markJoined("adapt-ably" as any);
-  const attempt = agent.beginResume("balance-boldly" as any, "continue");
+  const agent = new Conversation("amber-acorn" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
+  agent.bindSession(agent.latestGeneration, session); completedGeneration(agent, agent.latestGeneration, "first");
+  agent.markJoined(agent.latestGeneration);
+  const attempt = agent.beginResume("continue");
   const observed: any[] = [];
 
-  await executeRun({} as any, agent, attempt, undefined, {
-    ...DEFAULT_EXECUTE_RUN_DEPENDENCIES,
-    childSessionEvent: (_agent: any, _run: any, event: any) => observed.push(event),
+  await executeGeneration({} as any, agent, attempt, undefined, {
+    ...DEFAULT_EXECUTE_GENERATION_DEPENDENCIES,
+    childSessionEvent: (_agent: any, _generation: any, event: any) => observed.push(event),
   } as any);
 
   expect(observed.map(event => event.type)).toEqual(["tool_execution_start", "tool_execution_end"]);
   expect(listeners).toHaveLength(0);
 });
 
-test("assistant errors and prompt failures terminalize the run as errors", async () => {
+test("assistant errors and prompt failures terminalize the generation as errors", async () => {
   const modelError = resumable([{ role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "error", errorMessage: "model failed" }], async () => {});
-  await expect(executeRun({} as any, modelError.agent, modelError.attempt)).resolves.toMatchObject({ status: { kind: "done", outcome: "error", error: "model failed" } });
+  await expect(executeGeneration({} as any, modelError.agent, modelError.attempt)).resolves.toMatchObject({ status: { kind: "done", outcome: "error", error: "model failed" } });
   const thrown = resumable([], async () => { throw new Error("transport failed"); });
-  await expect(executeRun({} as any, thrown.agent, thrown.attempt)).resolves.toMatchObject({ status: { kind: "done", outcome: "error", error: "transport failed" } });
+  await expect(executeGeneration({} as any, thrown.agent, thrown.attempt)).resolves.toMatchObject({ status: { kind: "done", outcome: "error", error: "transport failed" } });
 });
 
 test("cancellation aborts the SDK session and records interruption", async () => {
   let reject!: (error: Error) => void;
   const f = resumable([], () => new Promise<void>((_, r) => { reject = r; }));
   const controller = new AbortController();
-  const result = executeRun({} as any, f.agent, f.attempt, controller.signal);
+  const result = executeGeneration({} as any, f.agent, f.attempt, controller.signal);
   await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
   controller.abort(); reject(new Error("cancelled"));
   await expect(result).resolves.toMatchObject({ status: { kind: "done", outcome: "interrupted", error: "cancelled" } });
@@ -159,12 +169,12 @@ test("does not reinterpret an unknown qualified reference as a different bare mo
   });
 });
 
-test("RunAttempt terminalizes an invalid requested model before session allocation", async () => {
+test("Generation terminalizes an invalid requested model before session allocation", async () => {
   const parent = model("parent-provider", "parent-model");
   const invalidConfig = { ...config, model: "missing" };
-  const agent = new Conversation("amber-acorn" as any, "adapt-ably" as any, invalidConfig, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
+  const agent = new Conversation("amber-acorn" as any, invalidConfig, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
 
-  await expect(executeRun({ cwd: "/unvalidated-parent", model: parent, modelRegistry: registry(parent) } as any, agent, agent.requireCurrentRun())).resolves.toMatchObject({
+  await expect(executeGeneration({ cwd: "/unvalidated-parent", model: parent, modelRegistry: registry(parent) } as any, agent, agent.requireCurrentGeneration())).resolves.toMatchObject({
     status: { kind: "done", outcome: "error", error: "Unknown model: missing" },
   });
 });
@@ -196,7 +206,7 @@ test("resolves requested skills and reports discovery and read failures", () => 
 });
 
 test("resolves and validates relative and absolute requested working directories", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "run-agent-cwd-"));
+  const root = await mkdtemp(path.join(tmpdir(), "generation-cwd-"));
   const relative = path.join("nested", "task");
   const absolute = path.join(root, "absolute");
   await mkdir(path.join(root, relative), { recursive: true });
@@ -207,12 +217,12 @@ test("resolves and validates relative and absolute requested working directories
 });
 
 test("does not revalidate the inherited parent working directory", () => {
-  const parentCwd = path.join(tmpdir(), "run-agent-parent-does-not-need-to-exist");
+  const parentCwd = path.join(tmpdir(), "generation-parent-does-not-need-to-exist");
   expect(resolveTaskCwd(parentCwd, undefined)).toEqual({ ok: true, value: parentCwd });
 });
 
 test("rejects missing working directories and files", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "run-agent-invalid-cwd-"));
+  const root = await mkdtemp(path.join(tmpdir(), "generation-invalid-cwd-"));
   const missing = path.join(root, "missing");
   const file = path.join(root, "file.txt");
   await writeFile(file, "not a directory");

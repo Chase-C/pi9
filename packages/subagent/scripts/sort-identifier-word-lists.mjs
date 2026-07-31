@@ -4,8 +4,6 @@ const file = new URL("../src/identifier-word-lists.ts", import.meta.url);
 const listNames = [
   "CONVERSATION_ID_ADJECTIVES",
   "CONVERSATION_ID_NOUNS",
-  "RUN_ID_VERBS",
-  "RUN_ID_ADVERBS",
 ];
 
 const original = await readFile(file, "utf8");

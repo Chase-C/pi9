@@ -34,7 +34,7 @@ describe("subagent result renderer", () => {
       totalMetrics: { elapsedMs: 2, turns: 1, compactions: 0, tokens: 3 }, history: [], recentTools: [], steers: [] },
   ] } }, "Inspected 1 subagent", "generation 1"));
 
-  it("renders join", () => expectViews({ response: { action: "join", results: [{}] }, view: { runs: [
+  it("renders join", () => expectViews({ response: { action: "join", results: [{}] }, view: { entries: [
     { subagentId: id, agent: "helper", label: "Worker", status: "completed", output: "done" },
   ] } }, "Worker.*completed", "subagent airy-acorn"));
 

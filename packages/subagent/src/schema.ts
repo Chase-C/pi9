@@ -56,9 +56,9 @@ export type SpawnRequest = SpawnInput & { kind: "spawn" };
 export type ResumeRequest = Omit<ResumeInput, "subagentId"> & { kind: "resume"; subagentId: SubagentId };
 export type SteerRequest = Omit<SteerInput, "subagentId"> & { kind: "steer"; subagentId: SubagentId };
 
-export type RunRequest = SpawnRequest | ResumeRequest;
+export type TaskRequest = SpawnRequest | ResumeRequest;
 export type SubagentTarget = SubagentId | { subagentId: string; error: string };
-export type DispatchTaskKind = RunRequest["kind"] | SteerRequest["kind"];
+export type DispatchTaskKind = TaskRequest["kind"] | SteerRequest["kind"];
 export type ParsedSpawnRequest = SpawnRequest | { error: string; agent?: string; label?: string };
 export type ParsedResumeRequest = ResumeRequest | { error: string; subagentId?: string };
 export type ParsedSteerRequest = SteerRequest | { error: string; subagentId?: string };

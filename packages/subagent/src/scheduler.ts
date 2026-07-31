@@ -1,36 +1,23 @@
 import type { AgentSessionEvent, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Conversation, effectiveStatus, errorRun, interruptedRun, skippedRun, type Run, type RunSnapshot } from "./conversation.js";
-import { DEFAULT_EXECUTE_RUN_DEPENDENCIES, executeRun } from "./execute.js";
-import type { RunId } from "./identifiers.js";
+import { Conversation, effectiveStatus, errorGeneration, interruptedGeneration, skippedGeneration, type Generation, type GenerationSnapshot } from "./conversation.js";
+import { DEFAULT_EXECUTE_GENERATION_DEPENDENCIES, executeGeneration } from "./execute.js";
 import { timingStart } from "./timing.js";
 
-/**
- * Lets a queued task voluntarily yield its slot while awaiting work that itself
- * needs queue capacity — e.g. a parent subagent awaiting a child's batch. Without
- * this, a recursive tree deeper than maxRunning deadlocks.
- */
-export interface RunQueueLease {
-  suspendDuring<T>(fn: () => Promise<T>): Promise<T>;
-}
+/** Lets an executing task yield its capacity while awaiting queued descendant work. */
+export interface ExecutionQueueLease { suspendDuring<T>(fn: () => Promise<T>): Promise<T> }
+export interface ExecutionQueueTask<T> { readonly completion: Promise<T>; cancel(result: T): boolean; abandon(result: T): boolean }
 
-export interface RunQueueTask<T> {
-  readonly completion: Promise<T>;
-  cancel(result: T): boolean;
-  abandon(result: T): boolean;
-}
+export class ExecutionQueue {
+  private readonly pending: Array<() => void> = [];
+  private executing = 0;
 
-export class RunQueue {
+  constructor(public maxExecuting: number) {}
 
-  private _pending = new Array<() => void>();
-  private _running = 0;
-
-  constructor(public maxRunning: number) { }
-
-  enqueue<T>(task: (lease: RunQueueLease) => Promise<T>, timingData: Record<string, unknown> = {}): Promise<T> {
+  enqueue<T>(task: (lease: ExecutionQueueLease) => Promise<T>, timingData: Record<string, unknown> = {}): Promise<T> {
     return this.enqueueCancellable(task, timingData).completion;
   }
 
-  enqueueCancellable<T>(task: (lease: RunQueueLease) => Promise<T>, timingData: Record<string, unknown> = {}): RunQueueTask<T> {
+  enqueueCancellable<T>(task: (lease: ExecutionQueueLease) => Promise<T>, timingData: Record<string, unknown> = {}): ExecutionQueueTask<T> {
     let resolveTask!: (value: T) => void;
     let rejectTask!: (reason?: unknown) => void;
     let pending = true;
@@ -40,26 +27,20 @@ export class RunQueue {
     const queuedAt = Date.now();
     const start = () => {
       pending = false;
-      this._running++;
+      this.executing++;
       occupyingSlot = true;
-      const lease: RunQueueLease = {
+      const lease: ExecutionQueueLease = {
         suspendDuring: async <R>(fn: () => Promise<R>): Promise<R> => {
           if (!occupyingSlot || abandoned) return fn();
           occupyingSlot = false;
-          this._running--;
-          this._flush();
-          try {
-            return await fn();
-          } finally {
+          this.executing--;
+          this.flush();
+          try { return await fn(); }
+          finally {
             if (!abandoned) {
-              await this._acquire();
-              // abandon() may run while the reacquisition is queued.
-              if (abandoned) {
-                this._running--;
-                this._flush();
-              } else {
-                occupyingSlot = true;
-              }
+              await this.acquire();
+              if (abandoned) { this.executing--; this.flush(); }
+              else occupyingSlot = true;
             }
           }
         },
@@ -67,25 +48,20 @@ export class RunQueue {
       const waitMs = Date.now() - queuedAt;
       setImmediate(() => {
         const end = timingStart("queue.task", { ...timingData, waitMs });
-        task(lease)
-          .then(resolveTask, rejectTask)
-          .finally(() => {
-            if (occupyingSlot) {
-              occupyingSlot = false;
-              this._running--;
-            }
-            end({ running: this._running, pending: this._pending.length });
-            this._flush();
-          });
+        task(lease).then(resolveTask, rejectTask).finally(() => {
+          if (occupyingSlot) { occupyingSlot = false; this.executing--; }
+          end({ executing: this.executing, pending: this.pending.length });
+          this.flush();
+        });
       });
     };
-    this._pending.push(start);
-    this._flush();
+    this.pending.push(start);
+    this.flush();
     const cancel = (result: T): boolean => {
       if (!pending) return false;
-      const index = this._pending.indexOf(start);
+      const index = this.pending.indexOf(start);
       if (index < 0) return false;
-      this._pending.splice(index, 1);
+      this.pending.splice(index, 1);
       pending = false;
       resolveTask(result);
       return true;
@@ -97,155 +73,98 @@ export class RunQueue {
         if (cancel(result)) return true;
         if (abandoned) return false;
         abandoned = true;
-        if (occupyingSlot) {
-          occupyingSlot = false;
-          this._running--;
-          this._flush();
-        }
+        if (occupyingSlot) { occupyingSlot = false; this.executing--; this.flush(); }
         resolveTask(result);
         return true;
       },
     };
   }
 
-  private _acquire(): Promise<void> {
+  private acquire(): Promise<void> {
     return new Promise(resolve => {
-      this._pending.push(() => {
-        this._running++;
-        resolve();
-      });
-      this._flush();
+      this.pending.push(() => { this.executing++; resolve(); });
+      this.flush();
     });
   }
-
-  private _flush() {
-    while (this._running < this.maxRunning && this._pending.length > 0) {
-      this._pending.shift()!();
-    }
-  }
+  private flush(): void { while (this.executing < this.maxExecuting && this.pending.length) this.pending.shift()!(); }
 }
 
-export type RunExecutor = (
-  ctx: ExtensionContext,
-  agent: Conversation,
-  run: Run,
-  signal?: AbortSignal,
-) => Promise<RunSnapshot>;
-
-export interface RunSchedulerOptions {
-  maxRunning: number;
-  /** Override child execution. Used by tests to inject a fake executor. */
-  executor?: RunExecutor;
-  /** Returns false once the conversation has been removed from the catalog, signalling the queued
-   *  run should be skipped rather than dispatched. Defaults to always-true. */
-  isTracked?: (conversationId: string) => boolean;
+export type GenerationExecutor = (ctx: ExtensionContext, conversation: Conversation, generation: Generation, signal?: AbortSignal) => Promise<GenerationSnapshot>;
+export interface GenerationSchedulerOptions {
+  maxExecuting: number;
+  executor?: GenerationExecutor;
+  isTracked?: (conversation: Conversation) => boolean;
 }
 
-export class RunScheduler {
+export class GenerationScheduler {
+  private readonly queue: ExecutionQueue;
+  private readonly leases = new Map<Conversation, ExecutionQueueLease>();
+  private readonly executor: GenerationExecutor;
+  private readonly queued = new Map<Generation, ExecutionQueueTask<GenerationSnapshot>>();
+  private isTracked: (conversation: Conversation) => boolean;
+  private childTool?: (conversation: Conversation, generation: Generation) => ToolDefinition;
+  private childSessionEvent?: (conversation: Conversation, generation: Generation, event: AgentSessionEvent) => void;
 
-  private readonly _queue: RunQueue;
-  private readonly _leases = new Map<string, RunQueueLease>();
-  private readonly _executor: RunExecutor;
-  private readonly _queued = new Map<RunId, RunQueueTask<RunSnapshot>>();
-  private _isTracked: (conversationId: string) => boolean;
-  private _childTool?: (agent: Conversation) => ToolDefinition;
-  private _childSessionEvent?: (agent: Conversation, run: Run, event: AgentSessionEvent) => void;
-
-  constructor(opts: RunSchedulerOptions) {
-    this._queue = new RunQueue(opts.maxRunning);
-    this._isTracked = opts.isTracked ?? (() => true);
-    this._executor = opts.executor ?? ((ctx, agent, run, signal) =>
-      executeRun(ctx, agent, run, signal, {
-        ...DEFAULT_EXECUTE_RUN_DEPENDENCIES,
-        ...(this._childTool ? { childToolFor: this._childTool } : {}),
-        ...(this._childSessionEvent ? { childSessionEvent: this._childSessionEvent } : {}),
-      }));
+  constructor(options: GenerationSchedulerOptions) {
+    this.queue = new ExecutionQueue(options.maxExecuting);
+    this.isTracked = options.isTracked ?? (() => true);
+    this.executor = options.executor ?? ((ctx, conversation, generation, signal) => executeGeneration(ctx, conversation, generation, signal, {
+      ...DEFAULT_EXECUTE_GENERATION_DEPENDENCIES,
+      ...(this.childTool ? { childToolFor: this.childTool } : {}),
+      ...(this.childSessionEvent ? { childSessionEvent: this.childSessionEvent } : {}),
+    }));
   }
 
-  setChildTool(fn: (agent: Conversation) => ToolDefinition): void {
-    this._childTool = fn;
+  setChildTool(fn: (conversation: Conversation, generation: Generation) => ToolDefinition): void { this.childTool = fn; }
+  setChildSessionEvent(fn: (conversation: Conversation, generation: Generation, event: AgentSessionEvent) => void): void { this.childSessionEvent = fn; }
+  configure(options: { maxExecuting?: number }): void {
+    if (options.maxExecuting !== undefined) this.queue.maxExecuting = options.maxExecuting;
   }
 
-  setChildSessionEvent(fn: (agent: Conversation, run: Run, event: AgentSessionEvent) => void): void {
-    this._childSessionEvent = fn;
-  }
-
-  configure(opts: { maxRunning?: number }): void {
-    if (opts.maxRunning !== undefined) this._queue.maxRunning = opts.maxRunning;
-  }
-
-  /**
-   * Releases the named agent's queue slot while `fn` runs, then re-acquires it before returning.
-   * Used by the child subagent tool so a parent awaiting `batch.completion` doesn't pin the
-   * only queue slot a recursive descendant needs to start — without this, a tree deeper than
-   * maxRunning deadlocks. No-op when the conversation has no active lease.
-   */
-  async suspendAgentSlotDuring<T>(conversationId: string, fn: () => Promise<T>): Promise<T> {
-    const lease = this._leases.get(conversationId);
+  async suspendConversationSlotDuring<T>(conversation: Conversation, fn: () => Promise<T>): Promise<T> {
+    const lease = this.leases.get(conversation);
     if (!lease) return fn();
-    const end = timingStart("manager.suspendAgentSlot", { conversationId });
-    try {
-      return await lease.suspendDuring(fn);
-    } finally {
-      end({});
-    }
+    const end = timingStart("manager.suspendConversationSlot", { conversationId: conversation.conversationId });
+    try { return await lease.suspendDuring(fn); }
+    finally { end({}); }
   }
 
-  run(
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    agent: Conversation,
-    run: Run,
-  ): Promise<RunSnapshot> {
-    const kind = run.kind;
-    const historySnapshot = () => agent.runHistory.find(item => item.runId === run.runId)!;
-    const scheduled = this._queue.enqueueCancellable(async lease => {
-      const end = timingStart(`manager.${kind}Task`, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId });
-      let result: RunSnapshot;
+  schedule(ctx: ExtensionContext, signal: AbortSignal | undefined, conversation: Conversation, generation: Generation): Promise<GenerationSnapshot> {
+    const kind = generation.kind;
+    const snapshot = () => conversation.generationSnapshot(generation);
+    const scheduled = this.queue.enqueueCancellable(async lease => {
+      const end = timingStart(`manager.${kind}Task`, { agent: conversation.agentName, conversationId: conversation.conversationId, parentConversationId: conversation.parentConversationId });
+      let result: GenerationSnapshot;
       let error: string | undefined;
-
-      if (run.state.kind === "done") {
-        result = historySnapshot();
-      } else if (signal?.aborted || !this._isTracked(agent.conversationId)) {
-        result = skippedRun(agent, run.runId);
-      } else if (!agent.hasCurrentRun) {
-        result = historySnapshot();
-      } else {
-        this._leases.set(agent.conversationId, lease);
-        try {
-          result = await this._executor(ctx, agent, run, signal);
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          if (!agent.hasCurrentRun) {
-            result = historySnapshot();
-          } else {
+      if (generation.state.kind === "done") result = snapshot();
+      else if (signal?.aborted || !this.isTracked(conversation)) result = skippedGeneration(conversation, generation);
+      else if (generation !== conversation.latestGeneration || !conversation.hasCurrentGeneration) result = snapshot();
+      else {
+        this.leases.set(conversation, lease);
+        try { result = await this.executor(ctx, conversation, generation, signal); }
+        catch (cause) {
+          const message = cause instanceof Error ? cause.message : String(cause);
+          const currentSnapshot = snapshot();
+          if (currentSnapshot.status.kind === "done" || generation !== conversation.latestGeneration) result = currentSnapshot;
+          else {
             error = message;
             if (signal?.aborted) {
-              if (run.state.kind === "queued") skippedRun(agent, run.runId);
-              else interruptedRun(agent, run.runId, message);
-            } else errorRun(agent, run.runId, message);
-            result = historySnapshot();
+              if (currentSnapshot.status.kind === "queued") skippedGeneration(conversation, generation);
+              else interruptedGeneration(conversation, generation, message);
+            } else errorGeneration(conversation, generation, message);
+            result = snapshot();
           }
-        } finally {
-          this._leases.delete(agent.conversationId);
-        }
+        } finally { if (this.leases.get(conversation) === lease) this.leases.delete(conversation); }
       }
-
-      const status = result.status;
-      end({ status: effectiveStatus(status), error });
+      end({ status: effectiveStatus(result.status), error });
       return result;
-    }, { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId, kind });
-    this._queued.set(run.runId, scheduled);
-    const cleanup = () => { if (this._queued.get(run.runId) === scheduled) this._queued.delete(run.runId); };
+    }, { agent: conversation.agentName, conversationId: conversation.conversationId, parentConversationId: conversation.parentConversationId, kind });
+    this.queued.set(generation, scheduled);
+    const cleanup = () => { if (this.queued.get(generation) === scheduled) this.queued.delete(generation); };
     void scheduled.completion.then(cleanup, cleanup);
     return scheduled.completion;
   }
 
-  cancelQueued(runId: RunId, result: RunSnapshot): boolean {
-    return this._queued.get(runId)?.cancel(result) ?? false;
-  }
-
-  abandon(runId: RunId, result: RunSnapshot): boolean {
-    return this._queued.get(runId)?.abandon(result) ?? false;
-  }
+  cancelQueued(generation: Generation, result: GenerationSnapshot): boolean { return this.queued.get(generation)?.cancel(result) ?? false; }
+  abandon(generation: Generation, result: GenerationSnapshot): boolean { return this.queued.get(generation)?.abandon(result) ?? false; }
 }

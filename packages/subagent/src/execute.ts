@@ -19,7 +19,7 @@ import {
   type Skill,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Conversation, type Run, type RunSnapshot, completedRun, errorRun, interruptedRun, skippedRun } from "./conversation.js";
+import { Conversation, type Generation, type GenerationSnapshot, completedGeneration, errorGeneration, interruptedGeneration, skippedGeneration } from "./conversation.js";
 import { timingAsync } from "./timing.js";
 
 const ownExtensionPath = fileURLToPath(new URL("./index.ts", import.meta.url));
@@ -53,7 +53,7 @@ async function canonicalPath(file: string): Promise<string> {
   }
 }
 
-export interface ExecuteRunDependencies {
+export interface ExecuteGenerationDependencies {
   ResourceLoader: typeof DefaultResourceLoader;
   getAgentDir: typeof getAgentDir;
   createAgentSession: typeof createAgentSession;
@@ -62,11 +62,11 @@ export interface ExecuteRunDependencies {
   loadSkills: typeof loadSkills;
   readSkillFile: typeof readFileSync;
   loadExtensionPaths: (cwd: string, agentDir: string) => Promise<string[]>;
-  childToolFor?: (agent: Conversation) => ToolDefinition;
-  childSessionEvent?: (agent: Conversation, run: Run, event: AgentSessionEvent) => void;
+  childToolFor?: (agent: Conversation, generation: Generation) => ToolDefinition;
+  childSessionEvent?: (agent: Conversation, generation: Generation, event: AgentSessionEvent) => void;
 }
 
-export const DEFAULT_EXECUTE_RUN_DEPENDENCIES: ExecuteRunDependencies = {
+export const DEFAULT_EXECUTE_GENERATION_DEPENDENCIES: ExecuteGenerationDependencies = {
   ResourceLoader: DefaultResourceLoader,
   getAgentDir,
   createAgentSession,
@@ -77,30 +77,30 @@ export const DEFAULT_EXECUTE_RUN_DEPENDENCIES: ExecuteRunDependencies = {
   loadExtensionPaths: discoverInheritedExtensionPaths,
 };
 
-export async function executeRun(
+export async function executeGeneration(
   ctx: ExtensionContext,
   agent: Conversation,
-  run: Run,
+  generation: Generation,
   signal?: AbortSignal,
-  dependencies: ExecuteRunDependencies = DEFAULT_EXECUTE_RUN_DEPENDENCIES,
-): Promise<RunSnapshot> {
-  if (run.kind === "resume") {
+  dependencies: ExecuteGenerationDependencies = DEFAULT_EXECUTE_GENERATION_DEPENDENCIES,
+): Promise<GenerationSnapshot> {
+  if (generation.kind === "resume") {
     const session = agent.sessionForResume();
     if (!session) {
       throw new Error(`Cannot resume an agent without a conversation session.`);
     }
-    agent.bindSession(session);
-    return PromptAgent(session, agent, run, signal, dependencies.childSessionEvent);
+    agent.bindSession(generation, session);
+    return promptAgent(session, agent, generation, signal, dependencies.childSessionEvent);
   }
 
-  if (signal?.aborted) return skippedRun(agent, run.runId);
+  if (signal?.aborted) return skippedGeneration(agent, generation);
 
-  const runData = { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId, spawnedByRunId: agent.spawnedByRunId };
+  const generationData = { agent: agent.agentName, conversationId: agent.conversationId, parentConversationId: agent.parentConversationId, spawnedInGeneration: agent.spawnedInGeneration };
   const requestedConfig = agent.requestedConfig;
   const cwdResolution = resolveTaskCwd(ctx.cwd, requestedConfig.cwd);
-  if (!cwdResolution.ok) return errorRun(agent, run.runId, cwdResolution.error);
+  if (!cwdResolution.ok) return errorGeneration(agent, generation, cwdResolution.error);
   const modelResolution = resolveModel(requestedConfig.model, ctx.model, ctx.modelRegistry);
-  if (!modelResolution.ok) return errorRun(agent, run.runId, modelResolution.error);
+  if (!modelResolution.ok) return errorGeneration(agent, generation, modelResolution.error);
 
   const cwd = cwdResolution.value;
   const selectedModel = modelResolution.value;
@@ -110,7 +110,7 @@ export async function executeRun(
   let skillBlocks = agent.resolvedSkillBlocks;
   if (skillBlocks === undefined) {
     const skillResolution = resolveRequestedSkills(cwd, requestedSkills, dependencies);
-    if (!skillResolution.ok) return errorRun(agent, run.runId, skillResolution.error);
+    if (!skillResolution.ok) return errorGeneration(agent, generation, skillResolution.error);
     skillBlocks = skillResolution.value;
   }
   let systemPrompt = agent.definition.systemPrompt;
@@ -119,7 +119,7 @@ export async function executeRun(
   }
 
   const inheritedExtensionPaths = await dependencies.loadExtensionPaths(cwd, agentDir);
-  const childTool = dependencies.childToolFor?.(agent);
+  const childTool = dependencies.childToolFor?.(agent, generation);
 
   const resourceLoader = new dependencies.ResourceLoader({
     cwd,
@@ -134,13 +134,13 @@ export async function executeRun(
     appendSystemPromptOverride: () => [],
   });
 
-  await timingAsync("runAgent.resourceLoader.reload", { ...runData, cwd }, () => resourceLoader.reload());
-  if (signal?.aborted) return skippedRun(agent, run.runId);
+  await timingAsync("generation.resourceLoader.reload", { ...generationData, cwd }, () => resourceLoader.reload());
+  if (signal?.aborted) return skippedGeneration(agent, generation);
 
   const requestedThinking = requestedConfig.thinking;
   const sessionManager = dependencies.sessionManager(cwd);
   const settingsManager = dependencies.settingsManager(cwd, agentDir);
-  const { session } = await timingAsync("runAgent.createAgentSession", { ...runData, cwd, model: selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : undefined }, () => dependencies.createAgentSession({
+  const { session } = await timingAsync("generation.createAgentSession", { ...generationData, cwd, model: selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : undefined }, () => dependencies.createAgentSession({
     cwd,
     agentDir,
     resourceLoader,
@@ -167,47 +167,47 @@ export async function executeRun(
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return skippedRun(agent, run.runId);
+    return skippedGeneration(agent, generation);
   }
 
-  agent.bindSession(session);
-  return PromptAgent(session, agent, run, signal, dependencies.childSessionEvent);
+  agent.bindSession(generation, session);
+  return promptAgent(session, agent, generation, signal, dependencies.childSessionEvent);
 }
 
-async function PromptAgent(
+async function promptAgent(
   session: AgentSession,
   agent: Conversation,
-  run: Run,
+  generation: Generation,
   signal?: AbortSignal,
-  onSessionEvent?: (agent: Conversation, run: Run, event: AgentSessionEvent) => void,
-): Promise<RunSnapshot> {
-  const prompt = run.prompt;
+  onSessionEvent?: (agent: Conversation, generation: Generation, event: AgentSessionEvent) => void,
+): Promise<GenerationSnapshot> {
+  const prompt = generation.prompt;
   const onAbort = () => { void AbortSession(session); }
 
   if (signal?.aborted) {
     await AbortSession(session);
-    return interruptedRun(agent, run.runId, "Agent interrupted.");
+    return interruptedGeneration(agent, generation, "Agent interrupted.");
   }
 
   signal?.addEventListener("abort", onAbort, { once: true });
-  const unsubscribe = onSessionEvent ? session.subscribe(event => onSessionEvent(agent, run, event)) : undefined;
+  const unsubscribe = onSessionEvent ? session.subscribe(event => onSessionEvent(agent, generation, event)) : undefined;
 
   try {
-    await timingAsync("runAgent.session.prompt", { agent: agent.agentName, conversationId: agent.conversationId, promptLength: prompt.length }, () => session.prompt(prompt));
+    await timingAsync("generation.session.prompt", { agent: agent.agentName, conversationId: agent.conversationId, promptLength: prompt.length }, () => session.prompt(prompt));
     const finalMessage = GetFinalAssistantMessage(session);
     if (finalMessage.stopReason === "aborted") {
-      return interruptedRun(agent, run.runId, finalMessage.errorMessage || "Agent interrupted.");
+      return interruptedGeneration(agent, generation, finalMessage.errorMessage || "Agent interrupted.");
     }
     if (finalMessage.stopReason === "error") {
-      return errorRun(agent, run.runId, finalMessage.errorMessage || finalMessage.response || "Agent failed.");
+      return errorGeneration(agent, generation, finalMessage.errorMessage || finalMessage.response || "Agent failed.");
     }
 
-    return completedRun(agent, run.runId, finalMessage.response);
+    return completedGeneration(agent, generation, finalMessage.response);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return signal?.aborted
-      ? interruptedRun(agent, run.runId, message)
-      : errorRun(agent, run.runId, message);
+      ? interruptedGeneration(agent, generation, message)
+      : errorGeneration(agent, generation, message);
   } finally {
     unsubscribe?.();
     signal?.removeEventListener("abort", onAbort);
@@ -218,20 +218,20 @@ async function AbortSession(session: AgentSession) {
   await Promise.resolve(session.abort()).catch(() => undefined);
 }
 
-export type RunAgentResolution<T> =
+export type GenerationExecutionResolution<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: string };
 
 type SkillResolutionDependencies = Pick<
-  ExecuteRunDependencies,
+  ExecuteGenerationDependencies,
   "getAgentDir" | "loadSkills" | "readSkillFile"
 >;
 
 export function resolveRequestedSkills(
   cwd: string,
   requestedSkills: readonly string[],
-  dependencies: SkillResolutionDependencies = DEFAULT_EXECUTE_RUN_DEPENDENCIES,
-): RunAgentResolution<readonly string[]> {
+  dependencies: SkillResolutionDependencies = DEFAULT_EXECUTE_GENERATION_DEPENDENCIES,
+): GenerationExecutionResolution<readonly string[]> {
   if (requestedSkills.length === 0) return { ok: true, value: [] };
 
   let available: Skill[];
@@ -268,7 +268,7 @@ export function resolveRequestedSkills(
 export function resolveTaskCwd(
   parentCwd: string,
   requestedCwd: string | undefined,
-): RunAgentResolution<string> {
+): GenerationExecutionResolution<string> {
   if (requestedCwd === undefined) return { ok: true, value: parentCwd };
 
   const cwd = path.resolve(parentCwd, requestedCwd);
@@ -291,7 +291,7 @@ export function resolveModel(
   requestedModel: string | undefined,
   parentModel: Model<any> | undefined,
   registry: ModelRegistry,
-): RunAgentResolution<Model<any> | undefined> {
+): GenerationExecutionResolution<Model<any> | undefined> {
   if (requestedModel === undefined) return { ok: true, value: parentModel };
 
   const parts = requestedModel.split("/");
