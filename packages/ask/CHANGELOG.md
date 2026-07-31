@@ -4,6 +4,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-31
+
 ### Changed
 
 - Refine the Ask tool's model-facing schema and prompt guidance, including clearer option tradeoffs, context, deadlines, and consistent preview usage.
@@ -59,7 +61,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 - Add compact question and answer rendering with concise model context for completed exchanges.
 - Add branch-aware answer revisions from the session tree.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.3.2...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.3.3...HEAD
+[0.3.3]: https://github.com/Chase-C/pi9/compare/ask-v0.3.2...ask-v0.3.3
 [0.3.2]: https://github.com/Chase-C/pi9/compare/ask-v0.3.1...ask-v0.3.2
 [0.3.1]: https://github.com/Chase-C/pi9/compare/ask-v0.3.0...ask-v0.3.1
 [0.3.0]: https://github.com/Chase-C/pi9/compare/ask-v0.2.0...ask-v0.3.0
