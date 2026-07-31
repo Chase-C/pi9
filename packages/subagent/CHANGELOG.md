@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-07-31
+
 ### Breaking
 
 - Replace private run records and random `runId` values with append-only, one-based generations scoped to each subagent.
@@ -317,7 +319,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.1...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.2...HEAD
+[0.10.2]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.1...subagent-v0.10.2
 [0.10.1]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.0...subagent-v0.10.1
 [0.10.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.9.2...subagent-v0.10.0
 [0.9.2]: https://github.com/Chase-C/pi9/compare/subagent-v0.9.1...subagent-v0.9.2
