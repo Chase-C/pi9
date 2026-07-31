@@ -35,7 +35,7 @@ describe("AskParamsSchema", () => {
     expect(Check(AskParamsSchema, { question: "Choose", options: [], timeout: 0 })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: -1 })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: 1.5 })).toBe(false);
-    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: 0 })).toBe(true);
+    expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: 0 })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: MAX_TIMEOUT_MS })).toBe(true);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A" }], timeout: MAX_TIMEOUT_MS + 1 })).toBe(false);
     expect(Check(AskParamsSchema, { question: "Choose", options: [{ label: "A", unknown: true }] })).toBe(false);

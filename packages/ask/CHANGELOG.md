@@ -4,6 +4,10 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Refine the Ask tool's model-facing schema and prompt guidance, including clearer option tradeoffs, context, deadlines, and consistent preview usage.
+
 ## [0.3.2] - 2026-07-26
 
 ### Changed

@@ -173,10 +173,11 @@ export default function askExtension(pi: ExtensionAPI) {
     name: "ask",
     label: "Ask",
     description: "Ask the user one focused question with selectable options. Blocks until answered, cancelled, or timed out.",
-    promptSnippet: "Ask the user a focused question with selectable options when input is required",
+    promptSnippet: "Ask the user a focused question with selectable options when user input is required",
     promptGuidelines: [
       "Use ask only when you can offer a short list of useful options; put open-ended questions in your normal response instead.",
       "An ask_response is a completed ask whose tool call was removed from the context; treat its answer as final and do not re-ask.",
+      "Decide up front whether an ask benefits from previews; if so, give every option a complete one — all or none, never partial.",
     ],
     parameters: AskParamsSchema,
     executionMode: "sequential",
