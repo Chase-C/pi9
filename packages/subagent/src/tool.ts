@@ -718,7 +718,6 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
     label: "Subagent",
     description: [
       "Delegate work asynchronously through persistent, context-isolated subagents. Subagents share the working filesystem.",
-      "Result generation, status, and joined fields describe the latest generation.",
       "Actions:",
       "  agents(): List available agent definitions.",
       "  list(statuses?, joined?): List child subagents with descendant summaries.",
