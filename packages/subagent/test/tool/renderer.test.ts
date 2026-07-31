@@ -17,7 +17,7 @@ describe("subagent result renderer", () => {
   ] } }, "Found 1 available agent", "helper.*project"));
 
   it("renders list", () => expectViews({ response: { action: "list", results: [
-    { subagentId: id, agent: "helper", label: "Worker", status: "running", availableActions: [], descendants: [] },
+    { subagentId: id, agent: "helper", label: "Worker", status: "running", actionHints: [], descendants: [] },
   ] } }, "Found 1 subagent", "Worker.*running"));
 
   it("renders spawn", () => expectViews({ response: { action: "spawn", results: [{}] }, view: { tasks: [

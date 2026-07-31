@@ -10,7 +10,8 @@ export interface SubagentIdentity {
 
 interface CanonicalSubagentBase extends SubagentIdentity {
   readonly ok: true;
-  readonly availableActions: readonly SubagentAction[];
+  /** Snapshot-derived suggestions; state changes may invalidate them before the next action. */
+  readonly actionHints: readonly SubagentAction[];
 }
 
 export type CanonicalActiveSubagent = CanonicalSubagentBase & {
@@ -41,6 +42,7 @@ export interface LiveSubagentProjectionSource {
   readonly runStatus: RunViewStatus;
   readonly joined: boolean;
   readonly directlyOwned: boolean;
+  readonly inspectable: boolean;
   readonly resumeAllowed: boolean;
   readonly removableSubtree: boolean;
 }
@@ -58,8 +60,8 @@ export function projectSubagentRunStatus(status: RunStatus): SubagentStatus {
   return status === "aborted" ? "cancelled" : "failed";
 }
 
-export function projectAvailableActions(source: LiveSubagentProjectionSource): SubagentAction[] {
-  if (!source.directlyOwned) return [];
+export function projectActionHints(source: LiveSubagentProjectionSource): SubagentAction[] {
+  if (!source.directlyOwned) return source.inspectable ? ["inspect"] : [];
 
   const status = projectSubagentStatus(source.runStatus);
   const actions: SubagentAction[] = [];
@@ -98,7 +100,7 @@ export function projectLiveSubagent(
   failureMode: FailureProjectionMode = "full",
 ): CanonicalLiveSubagent {
   const status = projectSubagentStatus(source.runStatus);
-  const availableActions = projectAvailableActions(source);
+  const actionHints = projectActionHints(source);
   const base = {
     ok: true as const,
     subagentId: source.subagentId,
@@ -106,14 +108,14 @@ export function projectLiveSubagent(
     agent: source.agent,
   };
   if (status === "queued" || status === "running") {
-    return { ...base, status, joined: false, availableActions };
+    return { ...base, status, joined: false, actionHints };
   }
   if (status === "failed") {
     const failure = projectFailure(source.runStatus, failureMode);
     if (!failure) throw new Error("Failed subagent projection requires a failure message.");
-    return { ...base, status, joined: source.joined, availableActions, failure };
+    return { ...base, status, joined: source.joined, actionHints, failure };
   }
-  return { ...base, status, joined: source.joined, availableActions };
+  return { ...base, status, joined: source.joined, actionHints };
 }
 
 export function isFinishedSubagent(subagent: CanonicalLiveSubagent): subagent is CanonicalFinishedSubagent {

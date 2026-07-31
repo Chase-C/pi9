@@ -27,7 +27,7 @@ function fixture(mode: "auto" | "steer" | "none" = "auto", idle = true, send?: (
         agent: conversation.agent.name,
         status,
         joined: latest.joined,
-        availableActions: ["inspect", "join", "remove"],
+        actionHints: ["inspect", "join", "remove"],
         ...(status === "failed" ? { failure: `Subagent failed: ${latest.status.error ?? "unknown error"}` } : {}),
       };
     },
@@ -84,7 +84,7 @@ test("context reconciliation rebuilds a completion batch from still-unobserved r
   assert.equal(reconciled.length, 1);
   assert.equal(reconciled[0].content, [
     "<subagent-notification>",
-    '  <subagent subagentId="still-forest" status="failed" agent="explorer" label="second &lt;task&gt;" joined="false" availableActions="inspect,join,remove" failure="Subagent failed: unknown error"/>',
+    '  <subagent subagentId="still-forest" status="failed" agent="explorer" label="second &lt;task&gt;" joined="false" actionHints="inspect,join,remove" failure="Subagent failed: unknown error"/>',
     "</subagent-notification>",
   ].join("\n"));
   assert.deepEqual(reconciled[0].details.completions.map((entry: any) => entry.subagentId), ["still-forest"]);

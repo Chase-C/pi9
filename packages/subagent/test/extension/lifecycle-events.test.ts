@@ -43,7 +43,7 @@ test("finished events use the root-relative canonical block", async () => {
         agent: "worker",
         status: "queued",
         joined: false,
-        availableActions: ["cancel", "inspect", "join"],
+        actionHints: ["cancel", "inspect", "join"],
       },
     },
     {
@@ -55,7 +55,7 @@ test("finished events use the root-relative canonical block", async () => {
         agent: "worker",
         status: "running",
         joined: false,
-        availableActions: ["steer", "cancel", "inspect", "join"],
+        actionHints: ["steer", "cancel", "inspect", "join"],
       },
     },
     {
@@ -67,7 +67,7 @@ test("finished events use the root-relative canonical block", async () => {
         agent: "worker",
         status: "completed",
         joined: false,
-        availableActions: ["inspect", "join", "remove"],
+        actionHints: ["inspect", "join", "remove"],
       },
     },
   ]);
@@ -93,7 +93,7 @@ test("failed lifecycle events include the canonical failure text", async () => {
       agent: "worker",
       status: "failed",
       joined: false,
-      availableActions: ["inspect", "join", "remove"],
+      actionHints: ["inspect", "join", "remove"],
       failure: "Subagent failed: provider rejected the request",
     },
   });
@@ -106,7 +106,7 @@ test("non-status changes do not publish public lifecycle events", () => {
   let listener: ((agent: Conversation, kind: any) => void) | undefined;
   const source = {
     onConversationUpdate: (next: typeof listener) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", status: "running" as const, joined: false as const, availableActions: [] }),
+    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", status: "running" as const, joined: false as const, actionHints: [] }),
   };
   const emitted: Array<{ event: string; data: any }> = [];
   registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, source);

@@ -45,7 +45,7 @@ export interface ListedConversationRenderItem {
   label: string;
   status: SubagentStatus;
   joined?: boolean;
-  availableActions: readonly SubagentAction[];
+  actionHints: readonly SubagentAction[];
   failure?: string;
   descendants: ListedDescendantRenderItem[];
 }

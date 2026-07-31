@@ -55,11 +55,13 @@ The body becomes the child system prompt. Every spawn requires `agent`, `prompt`
 | `resume` | Continue a joined subagent that retained a resumable session. |
 | `steer` | Send messages to running direct children. |
 | `cancel` | Settle active direct children as cancelled while retaining context and partial results. |
-| `inspect` | Return bounded current status, configuration, and progress without waiting. |
+| `inspect` | Return bounded current status, configuration, and progress for any descendant without waiting. |
 | `join` | Wait for and collect a direct child's result. It blocks while active and is idempotent after completion. |
 | `remove` | Permanently remove inactive direct-child subtrees. An active descendant rejects removal. |
 
-A subagent can manage only the children it created. Top-level subagents belong to the main Pi session, while recursively delegated work remains under its immediate parent.
+Live-subagent results include `actionHints`: snapshot-derived suggestions that may become stale as the subagent changes state.
+
+A caller can inspect any subagent in its descendant tree, but can mutate only its direct children. Top-level subagents belong to the main Pi session, while recursively delegated work remains under its immediate parent.
 
 ## How subagents work
 

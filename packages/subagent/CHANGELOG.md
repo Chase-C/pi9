@@ -4,6 +4,14 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Rename the snapshot-derived `availableActions` response field to `actionHints` to avoid implying that asynchronous state cannot change before the next action.
+
+### Changed
+
+- Allow callers to inspect any subagent in their descendant tree while keeping resume, steer, cancel, join, and targeted removal restricted to direct children.
+
 ## [0.10.0] - 2026-07-30
 
 ### Breaking

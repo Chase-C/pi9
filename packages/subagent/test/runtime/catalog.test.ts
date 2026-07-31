@@ -120,7 +120,7 @@ test("conversation authorization survives resume and rejects unrelated conversat
 
   expect(manager.inspectSubagents([child.conversationId], resumedOwner)[0].snapshot.runId).toBe(child.runId);
   expect(() => manager.inspectSubagents([unrelated.conversationId], resumedOwner)).toThrow(
-    `Subagent ${unrelated.conversationId} is not directly owned by caller subagent ${owner.conversationId}.`,
+    `Subagent ${unrelated.conversationId} is not a descendant of caller subagent ${owner.conversationId}.`,
   );
 });
 
@@ -452,7 +452,7 @@ test("aborted conversations resume only after abort and execution settle", async
     conversationId: aborted.conversationId,
     error: expect.stringContaining("has active subagents"),
   });
-  expect(manager.projectSubagent(aborted.conversationId).availableActions).not.toContain("resume");
+  expect(manager.projectSubagent(aborted.conversationId).actionHints).not.toContain("resume");
   expect(manager.startRun(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "too-early" }] as any).starts[0])
     .toMatchObject({ ok: false, error: settlingError });
 
@@ -465,9 +465,9 @@ test("aborted conversations resume only after abort and execution settle", async
 
   releaseExecution();
   await Promise.all([start.completion, cancelling]);
-  expect(manager.projectSubagent(aborted.conversationId).availableActions).not.toContain("resume");
+  expect(manager.projectSubagent(aborted.conversationId).actionHints).not.toContain("resume");
   joinLatest(manager, aborted.conversationId);
-  expect(manager.projectSubagent(aborted.conversationId).availableActions).toContain("resume");
+  expect(manager.projectSubagent(aborted.conversationId).actionHints).toContain("resume");
 
   const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: aborted.conversationId, prompt: "continue" }] as any);
   const resumedRun = resumed.starts[0] as any;
@@ -550,7 +550,7 @@ test("joining marks the latest result joined and unlocks resume", async () => {
   join.markJoined();
   expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "blocked" }] as any).starts[0]).toMatchObject({ ok: false });
   join.release();
-  expect(manager.projectSubagent(first.conversationId).availableActions).toContain("resume");
+  expect(manager.projectSubagent(first.conversationId).actionHints).toContain("resume");
 
   const resumed = manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any);
   expect(resumed.starts[0]).toMatchObject({ ok: true, conversationId: first.conversationId });
@@ -752,7 +752,7 @@ test("wedged cancellation resolves unsettled and releases scheduler capacity", a
   await joined.completion;
   joined.markJoined();
   joined.release();
-  expect(manager.projectSubagent(identity.conversationId).availableActions).not.toContain("resume");
+  expect(manager.projectSubagent(identity.conversationId).actionHints).not.toContain("resume");
 
   const replacement = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "replacement", label: "replacement" }]);
   await replacement.completion;
@@ -949,13 +949,13 @@ test("resume remains blocked until every accepted join releases", async () => {
   await Promise.all([firstJoin.completion, secondJoin.completion]);
   firstJoin.markJoined();
 
-  expect(manager.projectSubagent(first.conversationId).availableActions).not.toContain("resume");
+  expect(manager.projectSubagent(first.conversationId).actionHints).not.toContain("resume");
   expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
     .toMatchObject({ ok: false });
   firstJoin.release();
-  expect(manager.projectSubagent(first.conversationId).availableActions).not.toContain("resume");
+  expect(manager.projectSubagent(first.conversationId).actionHints).not.toContain("resume");
   secondJoin.release();
-  expect(manager.projectSubagent(first.conversationId).availableActions).toContain("resume");
+  expect(manager.projectSubagent(first.conversationId).actionHints).toContain("resume");
   expect(manager.startRun(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
     .toMatchObject({ ok: true });
 });
@@ -1176,7 +1176,38 @@ test("inspection is ordered and leaves observation state unchanged", async () =>
   });
 });
 
-test("nested callers may inspect, steer, and cancel descendants only", async () => {
+test("ancestors may inspect indirect descendants without changing lifecycle state", async () => {
+  const manager = new SubagentRuntime(registry, 4, runner);
+  const ownerStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }] as any);
+  const siblingStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "sibling", label: "sibling" }] as any);
+  await Promise.all([ownerStart.completion, siblingStart.completion]);
+  const owner = ownerStart.starts[0] as any;
+  const sibling = siblingStart.starts[0] as any;
+  const childStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }] as any,
+    caller(owner.conversationId, owner.runId));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+  const leafStart = manager.startRun(ctx, [{ kind: "spawn", agent: "worker", prompt: "leaf", label: "leaf" }] as any,
+    caller(child.conversationId, child.runId));
+  await leafStart.completion;
+  const leaf = leafStart.starts[0] as any;
+  const ownerCaller = { conversationId: owner.conversationId, runId: owner.runId };
+  const before = manager.runSnapshot(leaf.runId);
+
+  expect(manager.inspectSubagents([leaf.conversationId], ownerCaller)[0].snapshot.runId).toBe(leaf.runId);
+  expect(manager.inspectSubagents([leaf.conversationId])[0].snapshot.runId).toBe(leaf.runId);
+  expect(manager.projectSubagent(leaf.conversationId, ownerCaller).actionHints).toEqual(["inspect"]);
+  expect(manager.projectSubagent(leaf.conversationId).actionHints).toEqual(["inspect"]);
+  expect(manager.runSnapshot(leaf.runId)).toMatchObject({
+    observerCount: before.observerCount,
+    joined: false,
+  });
+  expect(() => manager.inspectSubagents([sibling.conversationId], ownerCaller)).toThrow(
+    `Subagent ${sibling.conversationId} is not a descendant of caller subagent ${owner.conversationId}.`,
+  );
+});
+
+test("nested callers may inspect, steer, and cancel direct children only", async () => {
   const releases = new Map<string, () => void>();
   const messages: string[] = [];
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -1196,7 +1227,7 @@ test("nested callers may inspect, steer, and cancel descendants only", async () 
   expect(manager.inspectSubagents([child.conversationId], caller)[0].snapshot.runId).toBe(child.runId);
   await expect(manager.steerSubagent(child.conversationId, "redirect", caller)).resolves.toMatchObject({ runId: child.runId });
   expect(messages).toEqual(["redirect"]);
-  expect(() => manager.inspectSubagents([owner.conversationId], caller)).toThrow("not directly owned");
+  expect(() => manager.inspectSubagents([owner.conversationId], caller)).toThrow("not a descendant");
   await expect(manager.steerSubagent(owner.conversationId, "self", caller)).rejects.toThrow("not directly owned");
   await expect(manager.cancelSubagent(owner.conversationId, caller)).rejects.toThrow("not directly owned");
   const cancelling = manager.cancelSubagent(child.conversationId, caller);

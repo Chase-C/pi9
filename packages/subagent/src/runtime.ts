@@ -98,6 +98,7 @@ export class SubagentRuntime {
     const directlyOwned = caller
       ? conversation.parentConversationId === caller.conversationId
       : conversation.parentConversationId === undefined;
+    const inspectable = caller ? this.isDescendant(conversation, caller.conversationId) : true;
     const removableSubtree = this.conversationSubtree(conversation.conversationId)
       .every(item => !item.hasActiveExecution);
     return projectLiveSubagent({
@@ -107,6 +108,7 @@ export class SubagentRuntime {
       runStatus: latest.status,
       joined: latest.joined,
       directlyOwned,
+      inspectable,
       resumeAllowed: conversation.isResumeAllowed,
       removableSubtree,
     }, failureMode);
@@ -237,7 +239,7 @@ export class SubagentRuntime {
   inspectSubagents(subagentIds: readonly SubagentId[], caller?: SubagentCaller): Array<{ readonly conversationId: ConversationId; readonly snapshot: RunSnapshot }> {
     return subagentIds.map(subagentId => {
       const record = this.latestSubagentRecord(subagentId);
-      this.assertDirectOwner(record.agent, caller, "inspect");
+      this.assertDescendant(record.agent, caller, "inspect");
       return { conversationId: record.conversationId, snapshot: this.runSnapshot(record.runId) };
     });
   }
@@ -365,6 +367,25 @@ export class SubagentRuntime {
     if (target.parentConversationId) {
       throw new Error(`Subagent ${target.conversationId} is not directly owned by the root agent.`);
     }
+  }
+
+  private assertDescendant(target: Conversation, caller: SubagentCaller | undefined, action: string): void {
+    if (!caller) return;
+    this.requireCallerRecord(caller, action);
+    if (!this.isDescendant(target, caller.conversationId)) {
+      throw new Error(`Subagent ${target.conversationId} is not a descendant of caller subagent ${caller.conversationId}.`);
+    }
+  }
+
+  private isDescendant(target: Conversation, ancestorId: ConversationId): boolean {
+    const seen = new Set<ConversationId>();
+    let parentId = target.parentConversationId;
+    while (parentId && !seen.has(parentId)) {
+      if (parentId === ancestorId) return true;
+      seen.add(parentId);
+      parentId = this.conversations.get(parentId)?.parentConversationId;
+    }
+    return false;
   }
 
   private latestSubagentRecord(subagentId: SubagentId): RunRecord {

@@ -91,7 +91,7 @@ function formatNotificationContent(entries: readonly CompletionNotification[]): 
       `agent="${escapeXml(entry.agent)}"`,
       `label="${escapeXml(entry.label)}"`,
       `joined="${entry.joined}"`,
-      `availableActions="${escapeXml(entry.availableActions.join(","))}"`,
+      `actionHints="${escapeXml(entry.actionHints.join(","))}"`,
       ...(entry.failure ? [`failure="${escapeXml(entry.failure)}"`] : []),
     ];
     return `  <subagent ${attributes.join(" ")}/>`;
@@ -108,7 +108,7 @@ function escapeXml(value: string): string {
 }
 
 function copyCompletionNotification<T extends CompletionNotification>(entry: T): T {
-  return { ...entry, availableActions: [...entry.availableActions] };
+  return { ...entry, actionHints: [...entry.actionHints] };
 }
 
 function formatCompletionHeader(count: number): string {
@@ -406,7 +406,7 @@ function isCompletionNotification(entry: unknown): entry is CompletionNotificati
     || typeof value.label !== "string"
     || typeof value.agent !== "string"
     || typeof value.joined !== "boolean"
-    || !Array.isArray(value.availableActions)
+    || !Array.isArray(value.actionHints)
     || typeof value.completedAt !== "number"
     || typeof value.elapsedMs !== "number"
   ) return false;
