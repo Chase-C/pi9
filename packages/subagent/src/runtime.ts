@@ -112,6 +112,7 @@ export class SubagentRuntime {
       subagentId: conversation.conversationId,
       label: conversation.label,
       agent: conversation.agentName,
+      generation: latest.generation,
       generationStatus: latest.status,
       joined: latest.joined,
       directlyOwned,
@@ -194,20 +195,20 @@ export class SubagentRuntime {
     }
   }
 
-  async cancelSubagent(subagentId: SubagentId, caller?: SubagentCaller): Promise<GenerationRef & { settled: boolean }> {
+  async cancelSubagent(subagentId: SubagentId, caller?: SubagentCaller): Promise<GenerationRef> {
     const record = this.latestSubagentRecord(subagentId);
     this.assertDirectOwner(record.conversation, caller, "cancel");
     const snapshot = record.conversation.generationSnapshot(record.generation);
     if (snapshot.status.kind === "done") {
       const status = projectSubagentGenerationStatus(snapshot.status.outcome);
-      throw new Error(status === "cancelled" ? `Subagent ${subagentId} is already cancelled.` : `Subagent ${subagentId} is ${status} and cannot be cancelled.`);
+      if (status !== "cancelled") throw new Error(`Subagent ${subagentId} is ${status} and cannot be cancelled.`);
+    } else {
+      const wasQueued = snapshot.status.kind === "queued";
+      void record.conversation.abort("Generation cancelled.");
+      if (wasQueued) this.executionScheduler.cancelQueued(record.generation, record.conversation.generationSnapshot(record.generation));
     }
-    const wasQueued = snapshot.status.kind === "queued";
-    void record.conversation.abort("Generation cancelled.");
-    if (wasQueued) this.executionScheduler.cancelQueued(record.generation, record.conversation.generationSnapshot(record.generation));
-    const settled = await this.waitForCancellationSettlement(record.conversation);
-    if (!settled) this.executionScheduler.abandon(record.generation, record.conversation.forceAbandonCancellation(record.generation));
-    return { conversationId: record.conversation.conversationId, generation: record.generation.number, settled };
+    await this.finishCancellation(record.conversation, record.generation);
+    return { conversationId: record.conversation.conversationId, generation: record.generation.number };
   }
 
   inspectSubagents(subagentIds: readonly SubagentId[], caller?: SubagentCaller): Array<{ readonly conversationId: ConversationId; readonly snapshot: GenerationSnapshot }> {
@@ -430,6 +431,12 @@ export class SubagentRuntime {
     const found = this.conversations.get(id as ConversationId);
     if (!found) throw new SubagentNotFoundError(id);
     return found;
+  }
+  private async finishCancellation(conversation: Conversation, generation: Generation): Promise<void> {
+    const settled = await this.waitForCancellationSettlement(conversation);
+    if (!settled && conversation.isStopping) {
+      this.executionScheduler.abandon(generation, conversation.forceAbandonCancellation(generation));
+    }
   }
   private waitForCancellationSettlement(conversation: Conversation): Promise<boolean> {
     if (!conversation.isStopping) return Promise.resolve(true);

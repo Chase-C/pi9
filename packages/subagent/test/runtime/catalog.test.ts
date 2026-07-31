@@ -763,7 +763,7 @@ test("cancellation waits for in-flight steering and retains its discarded receip
   await started.completion;
 });
 
-test("wedged cancellation resolves unsettled and releases scheduler capacity", async () => {
+test("wedged cancellation releases scheduler capacity", async () => {
   const never = new Promise<void>(() => {});
   const executed: string[] = [];
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
@@ -780,9 +780,12 @@ test("wedged cancellation resolves unsettled and releases scheduler capacity", a
   await expect(manager.cancelSubagent(identity.conversationId)).resolves.toEqual({
     conversationId: identity.conversationId,
     generation: identity.generation,
-    settled: false,
   });
-  expect(manager.projectSubagent(identity.conversationId)).toMatchObject({ status: "cancelled", joined: false });
+  expect(manager.projectSubagent(identity.conversationId)).toMatchObject({ generation: 1, status: "cancelled", joined: false });
+  await expect(manager.cancelSubagent(identity.conversationId)).resolves.toEqual({
+    conversationId: identity.conversationId,
+    generation: identity.generation,
+  });
   const joined = manager.bindSubagentJoin([identity.conversationId]);
   await joined.completion;
   joined.markJoined();
@@ -1075,19 +1078,25 @@ test("terminal action errors use only public lifecycle statuses", async () => {
     await expect(manager.steerSubagent(started.conversationId, "too late")).rejects.toThrow(
       `Subagent ${started.conversationId} is ${publicStatus} and cannot be steered.`,
     );
-    await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(
-      publicStatus === "cancelled"
-        ? `Subagent ${started.conversationId} is already cancelled.`
-        : `Subagent ${started.conversationId} is ${publicStatus} and cannot be cancelled.`,
-    );
+    if (publicStatus === "cancelled") {
+      await expect(manager.cancelSubagent(started.conversationId)).resolves.toEqual({
+        conversationId: started.conversationId,
+        generation: started.generation,
+      });
+    } else {
+      await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(
+        `Subagent ${started.conversationId} is ${publicStatus} and cannot be cancelled.`,
+      );
+    }
   }
 });
 
-test("normal cancellation resolves settled and retains its conversation and exact outcome", async () => {
+test("cancellation is idempotent and retains its conversation and exact outcome", async () => {
   let release!: () => void;
   const gate = new Promise<void>(done => { release = done; });
+  let abortCalls = 0;
   const controlled = async (_ctx: any, agent: any, attempt: any) => {
-    const activeSession = { ...session(), abort: () => gate };
+    const activeSession = { ...session(), abort: () => { abortCalls++; return gate; } };
     agent.bindSession(attempt, activeSession);
     activeSession.messages.push({ role: "assistant", content: [{ type: "text", text: "partial answer" }] });
     await gate;
@@ -1107,17 +1116,18 @@ test("normal cancellation resolves settled and retains its conversation and exac
   await expect(manager.steerSubagent(started.conversationId, "too late")).rejects.toThrow(
     `Subagent ${started.conversationId} is cancelled and cannot be steered.`,
   );
-  await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(
-    `Subagent ${started.conversationId} is already cancelled.`,
-  );
+  const repeated = manager.cancelSubagent(started.conversationId);
+  expect(abortCalls).toBe(1);
   release();
-  await expect(cancelling).resolves.toEqual({
+  const expected = {
     conversationId: started.conversationId,
     generation: started.generation,
-    settled: true,
-  });
+  };
+  await expect(cancelling).resolves.toEqual(expected);
+  await expect(repeated).resolves.toEqual(expected);
   expect(manager.listConversations().map(value => value.conversationId)).toContain(started.conversationId);
-  await expect(manager.cancelSubagent(started.conversationId)).rejects.toThrow(`Subagent ${started.conversationId} is already cancelled.`);
+  await expect(manager.cancelSubagent(started.conversationId)).resolves.toEqual(expected);
+  expect(abortCalls).toBe(1);
 
   const join = manager.bindSubagentJoin([started.conversationId]);
   await join.completion;
@@ -1152,7 +1162,6 @@ test("queued cancellation settles immediately without dispatching the executor",
   await expect(cancelling!).resolves.toEqual({
     conversationId: target.conversationId,
     generation: target.generation,
-    settled: true,
   });
   await expect(queued.completion).resolves.toEqual(queued.starts);
   await join.completion;

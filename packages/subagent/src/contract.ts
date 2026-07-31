@@ -10,6 +10,7 @@ export interface SubagentIdentity {
 
 interface CanonicalSubagentBase extends SubagentIdentity {
   readonly ok: true;
+  readonly generation: number;
   /** Snapshot-derived suggestions; state changes may invalidate them before the next action. */
   readonly actionHints: readonly SubagentAction[];
 }
@@ -39,6 +40,7 @@ export interface LiveSubagentProjectionSource {
   readonly subagentId: ConversationId;
   readonly label: string;
   readonly agent: string;
+  readonly generation: number;
   readonly generationStatus: GenerationViewStatus;
   readonly joined: boolean;
   readonly directlyOwned: boolean;
@@ -106,6 +108,7 @@ export function projectLiveSubagent(
     subagentId: source.subagentId,
     label: source.label,
     agent: source.agent,
+    generation: source.generation,
   };
   if (status === "queued" || status === "running") {
     return { ...base, status, joined: false, actionHints };

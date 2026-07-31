@@ -4,6 +4,12 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Include the current generation in canonical lifecycle results and completion notifications.
+- Make cancellation idempotent while keeping execution-settlement details internal.
+- Represent missing terminal join output explicitly as `null`.
+
 ## [0.10.3] - 2026-07-31
 
 ### Changed

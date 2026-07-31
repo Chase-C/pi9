@@ -54,12 +54,12 @@ The body becomes the child system prompt. Every spawn requires `agent`, `prompt`
 | `spawn` | Start an ordered batch of labelled subagents asynchronously. |
 | `resume` | Continue a joined subagent that retained a resumable session. |
 | `steer` | Send messages to running direct children. |
-| `cancel` | Settle active direct children as cancelled while retaining context and partial results. |
+| `cancel` | Idempotently settle direct children as cancelled while retaining context and partial results. |
 | `inspect` | Return bounded current status, configuration, and progress for any descendant without waiting. |
 | `join` | Wait for and collect a direct child's result. It blocks while active and is idempotent after completion. |
 | `remove` | Permanently remove inactive direct-child subtrees. An active descendant rejects removal. |
 
-Live-subagent results include `actionHints`: snapshot-derived suggestions that may become stale as the subagent changes state.
+Live-subagent results include the latest one-based `generation` and `actionHints`: snapshot-derived suggestions that may become stale as the subagent changes state. `status` and `joined` describe that generation; resuming keeps the same `subagentId`, increments `generation`, and resets `joined` for the new result.
 
 A caller can inspect any subagent in its descendant tree, but can mutate only its direct children. Top-level subagents belong to the main Pi session, while recursively delegated work remains under its immediate parent.
 
@@ -89,7 +89,7 @@ Subagents can delegate work to children of their own. Ownership follows the dele
 
 ### Results and cleanup
 
-Joining collects a finished result and is safe to repeat. Removal is a separate, explicit step that permanently deletes an inactive subagent and all of its descendants. If any work in the subtree is still active, removal is rejected until that work finishes or is cancelled.
+Joining collects a finished result and is safe to repeat. Every final joined result includes `output`, using `null` when the generation produced no text. Removal is a separate, explicit step that permanently deletes an inactive subagent and all of its descendants. If any work in the subtree is still active, removal is rejected until that work finishes or is cancelled.
 
 ## Capacity and UI
 
