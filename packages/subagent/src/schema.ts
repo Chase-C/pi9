@@ -5,10 +5,13 @@ import { isSubagentId, type SubagentId } from "./identifiers.js";
 
 export { isModelThinkingLevel, MODEL_THINKING_LEVELS } from "./agents.js";
 
+export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
+export const SUBAGENT_STATUSES = ["queued", "running", "completed", "failed", "cancelled"] as const;
+
 export const SpawnTaskSchema = Type.Object({
-  agent: Type.String(),
+  agent: Type.String({ description: "Agent definition name." }),
   prompt: Type.String(),
-  label: Type.String(),
+  label: Type.String({ description: "3-5 words describing what, not how." }),
   skills: Type.Optional(Type.Array(Type.String())),
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(StringEnum(MODEL_THINKING_LEVELS)),
@@ -17,7 +20,7 @@ export const SpawnTaskSchema = Type.Object({
 
 export const ResumeTaskSchema = Type.Object({
   subagentId: Type.String(),
-  prompt: Type.String(),
+  prompt: Type.String({ description: "Follow-up instructions; prior context carries over." }),
 }, { additionalProperties: false });
 
 export const SteerMessageSchema = Type.Object({
@@ -25,12 +28,6 @@ export const SteerMessageSchema = Type.Object({
   message: Type.String(),
 }, { additionalProperties: false });
 
-const SPAWN_TASK_KEYS = new Set(Object.keys(SpawnTaskSchema.properties));
-const RESUME_TASK_KEYS = new Set(Object.keys(ResumeTaskSchema.properties));
-const STEER_MESSAGE_KEYS = new Set(Object.keys(SteerMessageSchema.properties));
-
-export const SUBAGENT_ACTIONS = ["agents", "list", "spawn", "resume", "steer", "cancel", "inspect", "join", "remove"] as const;
-export const SUBAGENT_STATUSES = ["queued", "running", "completed", "failed", "cancelled"] as const;
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
   statuses: Type.Optional(Type.Array(StringEnum(SUBAGENT_STATUSES), { minItems: 1 })),
@@ -40,6 +37,10 @@ export const SubagentParams = Type.Object({
   messages: Type.Optional(Type.Array(SteerMessageSchema, { minItems: 1 })),
   subagentIds: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
 }, { additionalProperties: false });
+
+const SPAWN_TASK_KEYS = new Set(Object.keys(SpawnTaskSchema.properties));
+const RESUME_TASK_KEYS = new Set(Object.keys(ResumeTaskSchema.properties));
+const STEER_MESSAGE_KEYS = new Set(Object.keys(SteerMessageSchema.properties));
 
 export type SubagentParams = Static<typeof SubagentParams>;
 export type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
