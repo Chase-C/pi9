@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Improve agent-facing tool ergonomics with more concise lifecycle guidance and schema descriptions for agent names, task labels, and resume prompts.
+
 ## [0.10.2] - 2026-07-31
 
 ### Breaking
