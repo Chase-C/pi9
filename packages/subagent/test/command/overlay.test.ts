@@ -137,10 +137,24 @@ test("agent details scroll instead of truncating long descriptions", () => {
     },
   );
 
-  expect(component.render(100).join("\n")).toContain("description-start");
-  expect(component.render(100).join("\n")).not.toContain("description-end");
+  const initial = component.render(100).join("\n");
+  expect(initial).toContain("description-start");
+  expect(initial).not.toContain("description-end");
+  expect(initial).toContain("▼");
+  expect(initial).not.toContain("▲");
+
+  component.handleInput("\x1b[6~");
+  const middle = component.render(100).join("\n");
+  expect(middle).toContain("description-end");
+  expect(middle).toContain("▲");
+  expect(middle.split("\n")[3]).toContain("▲");
+  expect(middle).toContain("▼");
+
   for (let index = 0; index < 10; index++) component.handleInput("\x1b[6~");
-  expect(component.render(100).join("\n")).toContain("description-end");
+  const bottom = component.render(100).join("\n");
+  expect(bottom).toContain("▲");
+  expect(bottom).not.toContain("▼");
+
   for (let index = 0; index < 10; index++) component.handleInput("\x1b[5~");
   expect(component.render(100).join("\n")).toContain("description-start");
 });
@@ -150,10 +164,16 @@ test("conversation details scroll instead of collapsing the middle", () => {
   const conversation = fakeAgent({ generations: [fakeGeneration({ prompt })] });
   const { component } = overlayFixture(conversation);
 
-  expect(component.render(100).join("\n")).toContain("prompt-start");
-  expect(component.render(100).join("\n")).not.toContain("prompt-end");
+  const initial = component.render(100).join("\n");
+  expect(initial).toContain("prompt-start");
+  expect(initial).not.toContain("prompt-end");
+  expect(initial).toContain("▼");
+
   for (let index = 0; index < 10; index++) component.handleInput("\x1b[6~");
-  expect(component.render(100).join("\n")).toContain("prompt-end");
+  const scrolled = component.render(100).join("\n");
+  expect(scrolled).toContain("prompt-end");
+  expect(scrolled).toContain("▲");
+  expect(scrolled).not.toContain("▼");
 });
 
 test("nested chronology renders the exact child generation and recurses from it", () => {

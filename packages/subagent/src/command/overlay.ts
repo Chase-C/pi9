@@ -200,14 +200,14 @@ export class SubagentOverlayComponent implements Component, Focusable {
         ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight),
         ` ${filter}`,
         this.border("─".repeat(width)),
-        ...fitHeight(this.renderInspectorViewport(inspector, inspectorHeight), inspectorHeight),
+        ...fitHeight(this.renderInspectorViewport(inspector, inspectorHeight, Math.max(1, rightWidth - 2)), inspectorHeight),
       ];
     }
 
     const topPadding = this.bodyHeight > 1 ? 1 : 0;
     const listHeight = Math.max(0, this.bodyHeight - topPadding - 1);
     const left = [...(topPadding ? [""] : []), ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight), filter];
-    const right = fitHeight([...(topPadding ? [""] : []), ...this.renderInspectorViewport(inspector, Math.max(0, this.bodyHeight - topPadding))], this.bodyHeight);
+    const right = fitHeight(this.renderInspectorViewport(inspector, this.bodyHeight, Math.max(1, rightWidth - 2), true), this.bodyHeight);
     return left.map((line, index) => `${pad(` ${line}`, leftWidth)} ${this.border("│")} ${pad(` ${right[index] ?? ""}`, rightWidth)}`);
   }
 
@@ -570,10 +570,24 @@ export class SubagentOverlayComponent implements Component, Focusable {
     this.inspectorScrollOffset = Math.max(0, this.inspectorScrollOffset + direction * pageSize);
     this.requestRender();
   }
-  private renderInspectorViewport(lines: string[], height: number): string[] {
-    const maxOffset = Math.max(0, lines.length - height);
+  private renderInspectorViewport(lines: string[], height: number, width: number, topPadding = false): string[] {
+    const paddedLength = lines.length + (topPadding ? 1 : 0);
+    if (paddedLength <= height || height < 3) {
+      const padded = topPadding ? ["", ...lines] : lines;
+      this.inspectorScrollOffset = clamp(this.inspectorScrollOffset, 0, Math.max(0, padded.length - height));
+      return padded.slice(this.inspectorScrollOffset, this.inspectorScrollOffset + height);
+    }
+
+    const contentHeight = height - 2;
+    const maxOffset = lines.length - contentHeight;
     this.inspectorScrollOffset = clamp(this.inspectorScrollOffset, 0, maxOffset);
-    return lines.slice(this.inspectorScrollOffset, this.inspectorScrollOffset + height);
+    const above = this.inspectorScrollOffset;
+    const below = lines.length - this.inspectorScrollOffset - contentHeight;
+    return [
+      above ? this.muted(center(`▲ ${above} more above`, width)) : "",
+      ...lines.slice(this.inspectorScrollOffset, this.inspectorScrollOffset + contentHeight),
+      below ? this.muted(center(`▼ ${below} more below`, width)) : "",
+    ];
   }
   private requestRender(): void { this.tui.requestRender(); }
   private findConversation(id: string): ConversationSnapshot | undefined { return this.manager.listConversations().find(conversation => conversation.conversationId === id); }
