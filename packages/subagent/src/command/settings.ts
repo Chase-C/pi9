@@ -185,7 +185,11 @@ export class SubagentSettingsComponent implements Component, Focusable {
     const mode = this.value("widgetMode") as WidgetMode;
     if (selectedId === "widgetMaxRowsPerSection" && mode !== "progress") return [this.dim("Only available in progress mode.")];
 
-    const editor = [this.dim("┌─ Editor ───────────────┐"), this.text("│ Ask Pi anything…       │"), this.dim("└────────────────────────┘")];
+    const editor = [
+      this.dim("┌─ Editor ───────────────┐"),
+      `${this.dim("│")} ${this.text("Ask Pi anything…")}       ${this.dim("│")}`,
+      this.dim("└────────────────────────┘"),
+    ];
     if (placement === "off") return [...editor, this.dim("(subagent widget hidden)")];
 
     const widget = mode === "summary"

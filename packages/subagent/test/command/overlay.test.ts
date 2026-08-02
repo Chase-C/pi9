@@ -118,6 +118,44 @@ test("nested chronology scopes generation numbers to their parent conversation",
   expect(rendered).not.toContain("Wrong child");
 });
 
+test("agent details scroll instead of truncating long descriptions", () => {
+  const description = `description-start ${Array(80).fill("detail").join(" ")} description-end`;
+  const component = new SubagentOverlayComponent(
+    { listConversations: () => [], onConversationUpdate: () => () => {} } as any,
+    { requestRender: vi.fn(), terminal: { rows: 20 } } as any,
+    {} as any,
+    {} as any,
+    vi.fn(),
+    {
+      initialPage: "agents",
+      agents: [{ name: "helper", description, systemPrompt: "instructions", source: "project" }],
+      settings: DEFAULT_SUBAGENT_SETTINGS,
+      notify: vi.fn(),
+      onSettingsChange: vi.fn(),
+      onStart: vi.fn(),
+      onResume: vi.fn(),
+    },
+  );
+
+  expect(component.render(100).join("\n")).toContain("description-start");
+  expect(component.render(100).join("\n")).not.toContain("description-end");
+  for (let index = 0; index < 10; index++) component.handleInput("\x1b[6~");
+  expect(component.render(100).join("\n")).toContain("description-end");
+  for (let index = 0; index < 10; index++) component.handleInput("\x1b[5~");
+  expect(component.render(100).join("\n")).toContain("description-start");
+});
+
+test("conversation details scroll instead of collapsing the middle", () => {
+  const prompt = `prompt-start ${Array(300).fill("context").join(" ")} prompt-end`;
+  const conversation = fakeAgent({ generations: [fakeGeneration({ prompt })] });
+  const { component } = overlayFixture(conversation);
+
+  expect(component.render(100).join("\n")).toContain("prompt-start");
+  expect(component.render(100).join("\n")).not.toContain("prompt-end");
+  for (let index = 0; index < 10; index++) component.handleInput("\x1b[6~");
+  expect(component.render(100).join("\n")).toContain("prompt-end");
+});
+
 test("nested chronology renders the exact child generation and recurses from it", () => {
   const root = fakeAgent({
     conversationId: "root",
