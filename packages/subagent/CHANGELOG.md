@@ -4,6 +4,14 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Make agent and conversation details in the `/subagents` overlay scrollable with Page Up and Page Down, including directional overflow markers.
+
+### Fixed
+
+- Render the editor border glyphs in the widget settings preview with the intended dim color.
+
 ## [0.10.4] - 2026-07-31
 
 ### Changed
