@@ -15,7 +15,7 @@ import { effectiveStatus, type ConversationSnapshot, type GenerationSnapshot } f
 import { formatElapsed, formatTokens, generationElapsedMs, statusColor } from "../generation-format.js";
 import type { SubagentRuntime } from "../runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../settings.js";
-import { clamp, isCancelKey, isDownKey, isEnterKey, isShiftTabKey, isUpKey, type SubagentKeybindings } from "./input.js";
+import { clamp, isCancelKey, isDownKey, isEnterKey, isPageDownKey, isPageUpKey, isShiftTabKey, isUpKey, type SubagentKeybindings } from "./input.js";
 import { filterAgents, projectConversations, type ConversationLayoutMode } from "./overlay-model.js";
 import { SubagentSettingsComponent, type SubagentSettingsChange } from "./settings.js";
 
@@ -54,6 +54,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private promptTarget?: PromptTarget;
   private detail?: { conversationId: string; generation?: number };
   private actionError = "";
+  private inspectorScrollOffset = 0;
   private readonly settings: SubagentSettingsComponent;
   private readonly unsubscribe: () => void;
   private readonly bodyHeight: number;
@@ -119,6 +120,8 @@ export class SubagentOverlayComponent implements Component, Focusable {
     if (isShiftTabKey(data)) { this.switchPage(-1); return; }
     if ((this.page === "conversations" || this.page === "agents") && data === "/") { this.setFocus("filter"); return; }
     if (this.page === "settings") { this.settings.handleInput(data); return; }
+    if (isPageUpKey(data, this.keybindings)) { this.scrollInspector(-1); return; }
+    if (isPageDownKey(data, this.keybindings)) { this.scrollInspector(1); return; }
     if (isUpKey(data, this.keybindings)) { this.moveSelection(-1); return; }
     if (isDownKey(data, this.keybindings)) { this.moveSelection(1); return; }
     if (this.page === "agents") this.handleAgentAction(data);
@@ -197,14 +200,14 @@ export class SubagentOverlayComponent implements Component, Focusable {
         ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight),
         ` ${filter}`,
         this.border("─".repeat(width)),
-        ...fitHeight(compactViewport(inspector, inspectorHeight), inspectorHeight),
+        ...fitHeight(this.renderInspectorViewport(inspector, inspectorHeight, Math.max(1, rightWidth - 2)), inspectorHeight),
       ];
     }
 
     const topPadding = this.bodyHeight > 1 ? 1 : 0;
     const listHeight = Math.max(0, this.bodyHeight - topPadding - 1);
     const left = [...(topPadding ? [""] : []), ...fitHeight(this.renderListViewport(list, listHeight, Math.max(1, leftWidth - 2)), listHeight), filter];
-    const right = fitHeight([...(topPadding ? [""] : []), ...compactViewport(inspector, Math.max(0, this.bodyHeight - topPadding))], this.bodyHeight);
+    const right = fitHeight(this.renderInspectorViewport(inspector, this.bodyHeight, Math.max(1, rightWidth - 2), true), this.bodyHeight);
     return left.map((line, index) => `${pad(` ${line}`, leftWidth)} ${this.border("│")} ${pad(` ${right[index] ?? ""}`, rightWidth)}`);
   }
 
@@ -300,7 +303,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const action = this.promptTarget?.kind === "agent"
       ? [`${this.success("→")} ${this.accent(`Start ${agent.name}`)}`, ...this.renderPrompt(width), ...(this.actionError ? [this.error(this.actionError)] : [])]
       : [`${this.success("→")} ${this.accent(`Start ${agent.name}`)} ${this.muted("· enter to compose a task")}`];
-    return pinBottom(lines, action, Math.max(1, this.bodyHeight - 1));
+    return [...lines, "", ...action];
   }
 
   private renderConversationChronology(conversation: ConversationSnapshot, generation: GenerationSnapshot, width: number): string[] {
@@ -442,6 +445,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     this.promptTarget = target;
     this.prompt.setValue("");
     this.actionError = "";
+    this.inspectorScrollOffset = Number.MAX_SAFE_INTEGER;
     this.setFocus("prompt");
   }
 
@@ -500,6 +504,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
 
   private moveSelection(delta: number): void {
+    this.inspectorScrollOffset = 0;
     if (this.page === "agents") {
       const agents = this.filteredAgents;
       const index = clamp(this.selectedAgent(agents) + delta, 0, Math.max(0, agents.length - 1));
@@ -517,10 +522,12 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private switchPage(delta: number): void {
     const index = PAGES.indexOf(this.page);
     this.page = PAGES[(index + delta + PAGES.length) % PAGES.length];
+    this.inspectorScrollOffset = 0;
     this.closePrompt();
   }
 
   private resetSelection(): void {
+    this.inspectorScrollOffset = 0;
     this.selected[this.page] = 0;
     if (this.page === "agents") this.selectedAgentName = undefined;
     if (this.page === "conversations") this.selectedConversationId = undefined;
@@ -558,6 +565,30 @@ export class SubagentOverlayComponent implements Component, Focusable {
     this.prompt.focused = this._focused && this.focusRegion === "prompt";
     this.settings.focused = this._focused && this.focusRegion === "list" && this.page === "settings";
   }
+  private scrollInspector(direction: -1 | 1): void {
+    const pageSize = Math.max(1, this.bodyHeight - 3);
+    this.inspectorScrollOffset = Math.max(0, this.inspectorScrollOffset + direction * pageSize);
+    this.requestRender();
+  }
+  private renderInspectorViewport(lines: string[], height: number, width: number, topPadding = false): string[] {
+    const paddedLength = lines.length + (topPadding ? 1 : 0);
+    if (paddedLength <= height || height < 3) {
+      const padded = topPadding ? ["", ...lines] : lines;
+      this.inspectorScrollOffset = clamp(this.inspectorScrollOffset, 0, Math.max(0, padded.length - height));
+      return padded.slice(this.inspectorScrollOffset, this.inspectorScrollOffset + height);
+    }
+
+    const contentHeight = height - 2;
+    const maxOffset = lines.length - contentHeight;
+    this.inspectorScrollOffset = clamp(this.inspectorScrollOffset, 0, maxOffset);
+    const above = this.inspectorScrollOffset;
+    const below = lines.length - this.inspectorScrollOffset - contentHeight;
+    return [
+      above ? this.muted(center(`▲ ${above} more above`, width)) : "",
+      ...lines.slice(this.inspectorScrollOffset, this.inspectorScrollOffset + contentHeight),
+      below ? this.muted(center(`▼ ${below} more below`, width)) : "",
+    ];
+  }
   private requestRender(): void { this.tui.requestRender(); }
   private findConversation(id: string): ConversationSnapshot | undefined { return this.manager.listConversations().find(conversation => conversation.conversationId === id); }
   private findGeneration(conversation: ConversationSnapshot, generation?: number): GenerationSnapshot | undefined { return generation ? conversation.generations.find(candidate => candidate.generation === generation) : conversation.currentGeneration ?? conversation.generations.at(-1); }
@@ -584,8 +615,8 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private helpText(): string {
     if (this.focusRegion === "prompt") return "enter submit · esc cancel";
     if (this.detail) return "c cancel · g collect · r resume · x remove · esc back";
-    if (this.page === "agents") return "↑↓ select · / filter · enter/s start · tab pages · esc close";
-    if (this.page === "conversations") return "↑↓ select · enter inspect · / filter · t flat/tree · c cancel · g collect · r resume · x remove · tab pages · esc close";
+    if (this.page === "agents") return "↑↓ select · PgUp/PgDn scroll details · / filter · enter/s start · tab pages · esc close";
+    if (this.page === "conversations") return "↑↓ select · PgUp/PgDn scroll details · enter inspect · / filter · t flat/tree · c cancel · g collect · r resume · x remove · tab pages · esc close";
     return this.settings.isEditing ? "type value · enter save · esc cancel" : "↑↓ select · enter/space change · tab pages · esc close";
   }
 }
@@ -628,11 +659,6 @@ function wrapParagraphs(text: string, width: number): string[] {
     ...(index ? [""] : []),
     ...wrapTextWithAnsi(compact(paragraph), Math.max(1, width)),
   ]);
-}
-function pinBottom(content: string[], bottom: string[], height: number): string[] {
-  const available = Math.max(0, height - bottom.length);
-  const visible = content.slice(0, available);
-  return [...visible, ...Array(Math.max(0, available - visible.length)).fill(""), ...bottom];
 }
 function markdownTheme(theme: Theme): MarkdownTheme {
   const color = (name: ThemeColor) => (text: string) => theme.fg?.(name, text) ?? text;
