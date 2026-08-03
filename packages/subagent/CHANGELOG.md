@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-08-03
+
 ### Changed
 
 - Add a package gallery image showing the subagent workflow.
@@ -347,7 +349,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.5...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.6...HEAD
+[0.10.6]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.5...subagent-v0.10.6
 [0.10.5]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.4...subagent-v0.10.5
 [0.10.4]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.3...subagent-v0.10.4
 [0.10.3]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.2...subagent-v0.10.3
