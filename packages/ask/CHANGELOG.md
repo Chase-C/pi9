@@ -4,6 +4,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-03
+
 ### Changed
 
 - Move timeout configuration to `~/.pi/agent/ask/settings.json`, default to a five-minute reset-on-input timeout, and support never-reset and cancel-on-input behavior.
@@ -81,7 +83,8 @@ All notable changes to `@pi9/ask` will be documented in this file.
 - Add compact question and answer rendering with concise model context for completed exchanges.
 - Add branch-aware answer revisions from the session tree.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.4.1...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/ask-v0.4.2...HEAD
+[0.4.2]: https://github.com/Chase-C/pi9/compare/ask-v0.4.1...ask-v0.4.2
 [0.4.1]: https://github.com/Chase-C/pi9/compare/ask-v0.4.0...ask-v0.4.1
 [0.4.0]: https://github.com/Chase-C/pi9/compare/ask-v0.3.3...ask-v0.4.0
 [0.3.3]: https://github.com/Chase-C/pi9/compare/ask-v0.3.2...ask-v0.3.3
