@@ -53,7 +53,7 @@
     ],
     "skills": [],
     "prompts": [],
-    "image": "https://raw.githubusercontent.com/Chase-C/pi9/main/packages/subagent/media/subagent-overview.png"
+    "image": "https://raw.githubusercontent.com/Chase-C/pi9/main/packages/subagent/media/conversations-overlay.png"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

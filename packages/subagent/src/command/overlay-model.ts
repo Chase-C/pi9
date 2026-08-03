@@ -1,8 +1,6 @@
 import type { AgentDefinition } from "../agents.js";
 import { effectiveStatus, type ConversationSnapshot } from "../conversation.js";
 
-export type ConversationLayoutMode = "flat" | "tree";
-
 export interface ConversationRow {
   readonly conversation: ConversationSnapshot;
   readonly depth: number;
@@ -13,15 +11,12 @@ export interface ConversationRow {
 
 export function projectConversations(
   conversations: readonly ConversationSnapshot[],
-  options: { mode?: ConversationLayoutMode; query?: string } = {},
+  options: { query?: string } = {},
 ): ConversationRow[] {
-  const mode = options.mode ?? "tree";
   const insertionOrder = new Map(conversations.map((conversation, index) => [conversation.conversationId, index]));
   const newestFirst = (left: ConversationSnapshot, right: ConversationSnapshot) =>
     right.createdAt - left.createdAt || (insertionOrder.get(right.conversationId) ?? 0) - (insertionOrder.get(left.conversationId) ?? 0);
   const directMatches = conversations.filter(conversation => conversationMatches(conversation, options.query ?? ""));
-  if (mode === "flat") return [...directMatches].sort(newestFirst).map(conversation => ({ conversation, depth: 0 }));
-
   const allById = new Map(conversations.map(conversation => [conversation.conversationId, conversation]));
   const includedIds = new Set(directMatches.map(conversation => conversation.conversationId));
   for (const match of directMatches) {
