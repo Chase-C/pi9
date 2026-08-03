@@ -4,6 +4,12 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Move timeout configuration to `~/.pi/agent/ask/settings.json`, default to a five-minute reset-on-input timeout, and support never-reset and cancel-on-input behavior.
+- Show active timeout countdowns in the question's top border.
+- Refresh the package gallery image with a question workflow and preview-rich architecture example, and include the media directory in the published package.
+
 ## [0.4.1] - 2026-08-03
 
 ### Changed

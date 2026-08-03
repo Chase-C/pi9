@@ -15,6 +15,11 @@ import { CHECKED_BOX, CHECKED_CIRCLE, EMPTY_BOX, EMPTY_CIRCLE } from "./glyphs.j
 import { launchQuestionnaire } from "./questionnaire.js";
 import { askWithRpc } from "./rpc.js";
 import {
+  AskSettingsStore,
+  DEFAULT_ASK_SETTINGS,
+  loadAskSettings,
+} from "./settings.js";
+import {
   ASK_REPLAY_CUSTOM_TYPE,
   buildAskReplayMessage,
   resolveAskReplayTarget,
@@ -89,7 +94,12 @@ function wrapAnsweredRow(prefix: string, text: string, width: number): string[] 
   return wrapped.map((line, index) => `${index === 0 ? prefix : continuation}${line}`);
 }
 
-export default function askExtension(pi: ExtensionAPI) {
+interface AskExtensionDependencies {
+  settingsStore?: Pick<AskSettingsStore, "load">;
+}
+
+export default function askExtension(pi: ExtensionAPI, dependencies: AskExtensionDependencies = {}) {
+  const settingsStore = dependencies.settingsStore ?? new AskSettingsStore();
   let replayState: AskReplayState = { status: "idle" };
   const revisedAnswers = new Map<string, AskAnswer>();
   const rendererStates = new Map<string, AskRendererState>();
@@ -147,9 +157,12 @@ export default function askExtension(pi: ExtensionAPI) {
     }
 
     replayState = { status: "prompting" };
-    const deadline = createDeadlineSignal(undefined, resolution.ask.timeout, process.env);
+    const settings = resolution.ask.timeout === true
+      ? await loadAskSettings(ctx, settingsStore)
+      : DEFAULT_ASK_SETTINGS;
+    const deadline = createDeadlineSignal(undefined, resolution.ask.timeout, settings);
     try {
-      const answer = await launchQuestionnaire(ctx, resolution.ask, deadline.signal);
+      const answer = await launchQuestionnaire(ctx, resolution.ask, deadline);
       if (!answer) return;
       const message = buildAskReplayMessage(resolution.toolCallId, resolution.ask, answer);
       pi.sendMessage(message, { triggerTurn: true, deliverAs: "followUp" });
@@ -178,10 +191,13 @@ export default function askExtension(pi: ExtensionAPI) {
       const params = normalizeAsk(rawParams as AskParams);
       if (!ctx.hasUI) return buildAskResponse(params, { status: "ui_unavailable" });
 
-      const deadline = createDeadlineSignal(signal, params.timeout, process.env);
+      const settings = params.timeout === true
+        ? await loadAskSettings(ctx, settingsStore)
+        : DEFAULT_ASK_SETTINGS;
+      const deadline = createDeadlineSignal(signal, params.timeout, settings);
       try {
         const answer = ctx.mode === "tui"
-          ? await launchQuestionnaire(ctx, params, deadline.signal)
+          ? await launchQuestionnaire(ctx, params, deadline)
           : await askWithRpc(ctx.ui, params, deadline.signal);
         if (answer === null) {
           if (deadline.timedOut) {

@@ -33,6 +33,7 @@ import {
   type FocusRange,
   type ViewportOverflow,
 } from "./viewport.js";
+import type { DeadlineSignal } from "./deadline.js";
 import type { Ask, AskAnswer } from "./domain.js";
 import { CHECKED_BOX, EMPTY_BOX } from "./glyphs.js";
 
@@ -42,6 +43,7 @@ type AskComponentOptions = Ask & {
   tui: TUI;
   theme: Theme;
   keybindings: KeybindingsManager;
+  deadline?: Pick<DeadlineSignal, "deadlineAt" | "handleInput">;
   onSubmit?: (answer: AskAnswer) => void;
   onCancel?: () => void;
 };
@@ -51,6 +53,7 @@ export class AskComponent implements Component, Focusable {
   private readonly keybindings: KeybindingsManager;
   private readonly previewHeightByWidth = new Map<number, number>();
   private questionnaireState: QuestionnaireState;
+  private countdownTimer: ReturnType<typeof setInterval> | undefined;
   private cancelled = false;
   private _focused = false;
 
@@ -77,6 +80,8 @@ export class AskComponent implements Component, Focusable {
       this.finishIfAnswered(next);
       this.requestRender();
     };
+
+    this.syncCountdown();
   }
 
   /** Current questionnaire state, useful to UI integrators. */
@@ -107,8 +112,17 @@ export class AskComponent implements Component, Focusable {
     this.editor.invalidate();
   }
 
+  dispose(): void {
+    this.stopCountdown();
+  }
+
   handleInput(data: string): void {
     if (this.questionnaireState.answer || this.cancelled) return;
+
+    if (this.config.deadline?.handleInput()) {
+      this.syncCountdown();
+      this.requestRender();
+    }
 
     if (this.questionnaireState.editor.kind !== "select") {
       // Escape is intentionally an editor operation: it discards the draft,
@@ -184,7 +198,7 @@ export class AskComponent implements Component, Focusable {
       addWrappedWithPrefix(lines, prefix, styled, renderWidth);
     };
 
-    add(this.config.theme.fg("border", "─".repeat(renderWidth)));
+    add(renderCountdownBorder(renderWidth, this.remainingSeconds(), this.config.theme));
 
     addPrefixed(" ", this.config.theme.bold(this.config.question), "text");
     if (this.config.context) addPrefixed(" ", this.config.context, "muted");
@@ -339,7 +353,9 @@ export class AskComponent implements Component, Focusable {
         this.config.theme.fg("dim", "│"),
       );
     });
-    return framed ? frameDialog(projected, availableWidth, this.config.theme) : projected;
+    return framed
+      ? frameDialog(projected, availableWidth, this.config.theme, this.remainingSeconds())
+      : projected;
   }
 
   /** Submit the current multi-select answer programmatically. */
@@ -356,6 +372,7 @@ export class AskComponent implements Component, Focusable {
     if (this.questionnaireState.answer || this.cancelled) return;
     this.cancelled = true;
     this.editor.focused = false;
+    this.stopCountdown();
     this.config.onCancel?.();
   }
 
@@ -506,7 +523,32 @@ export class AskComponent implements Component, Focusable {
   private finishIfAnswered(state: QuestionnaireState): void {
     if (!state.answer) return;
     this.editor.focused = false;
+    this.stopCountdown();
     this.config.onSubmit?.(state.answer);
+  }
+
+  private remainingSeconds(): number | undefined {
+    const deadlineAt = this.config.deadline?.deadlineAt;
+    if (deadlineAt === undefined) return undefined;
+    return Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000));
+  }
+
+  private syncCountdown(): void {
+    const active = (this.remainingSeconds() ?? 0) > 0;
+    if (active && this.countdownTimer === undefined) {
+      this.countdownTimer = setInterval(() => {
+        this.requestRender();
+        if (this.remainingSeconds() === 0) this.stopCountdown();
+      }, 250);
+    } else if (!active) {
+      this.stopCountdown();
+    }
+  }
+
+  private stopCountdown(): void {
+    if (this.countdownTimer === undefined) return;
+    clearInterval(this.countdownTimer);
+    this.countdownTimer = undefined;
   }
 
   private requestRender(): void {
@@ -574,11 +616,31 @@ function overflowPrefix(overflow: ViewportOverflow | undefined): string {
   return "";
 }
 
-function frameDialog(lines: readonly string[], width: number, theme: Theme): string[] {
+function renderCountdownBorder(width: number, remainingSeconds: number | undefined, theme: Theme): string {
+  if (remainingSeconds === undefined) return theme.fg("border", "─".repeat(width));
+
+  const fullLabel = ` ⏱ ${remainingSeconds}s remaining `;
+  const compactLabel = ` ⏱ ${remainingSeconds}s `;
+  const label = visibleWidth(fullLabel) + 5 <= width ? fullLabel : compactLabel;
+  const labelWidth = visibleWidth(label);
+  if (labelWidth > width) return theme.fg("warning", truncateToWidth(label, width, ""));
+
+  const leftWidth = Math.min(4, width - labelWidth);
+  return theme.fg("border", "─".repeat(leftWidth))
+    + theme.fg("warning", label)
+    + theme.fg("border", "─".repeat(width - leftWidth - labelWidth));
+}
+
+function frameDialog(
+  lines: readonly string[],
+  width: number,
+  theme: Theme,
+  remainingSeconds?: number,
+): string[] {
   const border = (text: string) => theme.fg("border", text);
   const innerWidth = width - 4;
   return lines.map((line, index) => {
-    if (index === 0) return border(`╭${"─".repeat(width - 2)}╮`);
+    if (index === 0) return `${border("╭")}${renderCountdownBorder(width - 2, remainingSeconds, theme)}${border("╮")}`;
     if (index === lines.length - 1) return border(`╰${"─".repeat(width - 2)}╯`);
     const content = fit(line, innerWidth);
     return `${border("│")} ${content}${" ".repeat(innerWidth - visibleWidth(content))} ${border("│")}`;

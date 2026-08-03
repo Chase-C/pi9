@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import askExtension from "../src/index.js";
+import { DEFAULT_ASK_SETTINGS, type AskSettings } from "../src/settings.js";
+
+let configuredSettings: AskSettings = { ...DEFAULT_ASK_SETTINGS };
 
 function register(initialActiveTools: string[] = []) {
   let tool: any;
@@ -10,6 +13,7 @@ function register(initialActiveTools: string[] = []) {
   const sendMessage = vi.fn();
   const getActiveTools = vi.fn(() => activeTools);
   const setActiveTools = vi.fn((tools: string[]) => { activeTools = tools; });
+  const loadSettings = vi.fn(async () => ({ settings: { ...configuredSettings } }));
   askExtension({
     registerTool: (definition: unknown) => { tool = definition; },
     sendMessage,
@@ -17,10 +21,10 @@ function register(initialActiveTools: string[] = []) {
     setActiveTools,
     on: (event: string, handler: unknown) => { handlers.set(event, handler); },
     events: { emit },
-  } as never);
+  } as never, { settingsStore: { load: loadSettings } });
   const contextHandler = handlers.get("context");
   if (!tool || !contextHandler) throw new Error("ask integration was not registered");
-  return { tool, contextHandler, handlers, emit, sendMessage, getActiveTools, setActiveTools };
+  return { tool, contextHandler, handlers, emit, sendMessage, getActiveTools, setActiveTools, loadSettings };
 }
 
 const rpcUi = (answer = "1. Yes") => ({
@@ -28,15 +32,13 @@ const rpcUi = (answer = "1. Yes") => ({
   input: vi.fn().mockResolvedValue(""),
 });
 
-async function withTimeoutEnv<T>(value: string | undefined, action: () => Promise<T>): Promise<T> {
-  const previous = process.env.PI9_ASK_TIMEOUT_MS;
-  if (value === undefined) delete process.env.PI9_ASK_TIMEOUT_MS;
-  else process.env.PI9_ASK_TIMEOUT_MS = value;
+async function withSettings<T>(settings: Partial<AskSettings>, action: () => Promise<T>): Promise<T> {
+  const previous = configuredSettings;
+  configuredSettings = { ...DEFAULT_ASK_SETTINGS, ...settings };
   try {
     return await action();
   } finally {
-    if (previous === undefined) delete process.env.PI9_ASK_TIMEOUT_MS;
-    else process.env.PI9_ASK_TIMEOUT_MS = previous;
+    configuredSettings = previous;
   }
 }
 
@@ -240,7 +242,7 @@ describe("ask extension integration", () => {
   it("returns unanswered when an enabled TUI timeout expires", async () => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv("25", async () => {
+      await withSettings({ timeoutMs: 25 }, async () => {
         const { tool, emit } = register();
         const custom = pendingTui();
         const execution = tool.execute(
@@ -263,10 +265,75 @@ describe("ask extension integration", () => {
     }
   });
 
+  it("resets an enabled TUI timeout after captured input", async () => {
+    vi.useFakeTimers();
+    try {
+      await withSettings({ timeoutMs: 25, timeoutOnInput: "reset" }, async () => {
+        const { tool } = register();
+        let component: any;
+        const custom = vi.fn((factory: any) => new Promise(resolve => {
+          component = factory({ requestRender: vi.fn() }, theme(), keybindings(), resolve);
+        }));
+        const execution = tool.execute(
+          "id",
+          { question: "Continue?", options: [{ label: "Yes" }, { label: "No" }], allowFreeform: false, timeout: true },
+          undefined,
+          undefined,
+          { mode: "tui", hasUI: true, ui: { custom } },
+        );
+        let settled = false;
+        void execution.then(() => { settled = true; });
+        await vi.advanceTimersByTimeAsync(0);
+
+        await vi.advanceTimersByTimeAsync(20);
+        component.handleInput("\x1b[B");
+        await vi.advanceTimersByTimeAsync(20);
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(5);
+        await expect(execution).resolves.toMatchObject({ details: { status: "unanswered" } });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels an enabled TUI timeout after captured input", async () => {
+    vi.useFakeTimers();
+    try {
+      await withSettings({ timeoutMs: 25, timeoutOnInput: "cancel" }, async () => {
+        const { tool } = register();
+        let component: any;
+        const custom = vi.fn((factory: any) => new Promise(resolve => {
+          component = factory({ requestRender: vi.fn() }, theme(), keybindings(), resolve);
+        }));
+        const execution = tool.execute(
+          "id",
+          { question: "Continue?", options: [{ label: "Yes" }, { label: "No" }], allowFreeform: false, timeout: true },
+          undefined,
+          undefined,
+          { mode: "tui", hasUI: true, ui: { custom } },
+        );
+        let settled = false;
+        void execution.then(() => { settled = true; });
+        await vi.advanceTimersByTimeAsync(0);
+
+        component.handleInput("\x1b[B");
+        await vi.advanceTimersByTimeAsync(100);
+        expect(settled).toBe(false);
+
+        component.handleInput("\x1b");
+        await expect(execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["answer", "cancel"])("disposes the complete-path timeout after %s", async action => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv("100", async () => {
+      await withSettings({ timeoutMs: 100 }, async () => {
         const { tool } = register();
         const custom = vi.fn(async (factory: any) => {
           let completed: unknown;
@@ -289,10 +356,10 @@ describe("ask extension integration", () => {
     }
   });
 
-  it("uses the configured environment timeout for RPC dialogs", async () => {
+  it("uses the configured settings timeout for RPC dialogs", async () => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv("40", async () => {
+      await withSettings({ timeoutMs: 40 }, async () => {
         const { tool } = register();
         let inputCalls = 0;
         const input = vi.fn().mockImplementation((_title: string, _placeholder: string | undefined, options?: { signal?: AbortSignal }) => {
@@ -324,7 +391,7 @@ describe("ask extension integration", () => {
   it("does not use the configured timeout when the flag is omitted", async () => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv("10", async () => {
+      await withSettings({ timeoutMs: 10 }, async () => {
         const { tool } = register();
         let finish!: (value: string | undefined) => void;
         const input = vi.fn().mockImplementation(() => new Promise<string | undefined>(resolve => { finish = resolve; }));
@@ -353,7 +420,7 @@ describe("ask extension integration", () => {
   it("uses false to disable the configured timeout", async () => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv("10", async () => {
+      await withSettings({ timeoutMs: 10 }, async () => {
         const { tool } = register();
         let finish!: (value: string | undefined) => void;
         const input = vi.fn().mockImplementation(() => new Promise<string | undefined>(resolve => { finish = resolve; }));
@@ -399,7 +466,7 @@ describe("ask extension integration", () => {
   it("times out RPC comment collection with one shared deadline signal", async () => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv("30", async () => {
+      await withSettings({ timeoutMs: 30 }, async () => {
         const { tool } = register();
         const signals: AbortSignal[] = [];
         let inputCalls = 0;
@@ -439,7 +506,7 @@ describe("ask extension integration", () => {
   it("threads parent cancellation through RPC and clears the complete-path deadline", async () => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv("100", async () => {
+      await withSettings({ timeoutMs: 100 }, async () => {
         const { tool } = register();
         const controller = new AbortController();
         const ui = rpcUi("1. Yes");
@@ -640,7 +707,7 @@ describe("ask extension integration", () => {
   it("applies an enabled configured timeout when re-answering from /tree and disposes it", async () => {
     vi.useFakeTimers();
     try {
-      await withTimeoutEnv("25", async () => {
+      await withSettings({ timeoutMs: 25 }, async () => {
         const { handlers, sendMessage } = register();
         const custom = vi.fn((factory: any) => new Promise(resolve => {
           factory({ requestRender: vi.fn() }, theme(), keybindings(), resolve);

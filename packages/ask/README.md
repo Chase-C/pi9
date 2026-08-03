@@ -88,13 +88,22 @@ Answers and revisions follow the active session branch, so alternate branches ca
 
 ### Timeouts
 
-Set `PI9_ASK_TIMEOUT_MS` to configure the response deadline used by questions with `timeout: true`:
+Timeouts are opt-in for each question; omitted or `false` disables the deadline. Configure their duration and input behavior in `~/.pi/agent/ask/settings.json`:
 
-```bash
-PI9_ASK_TIMEOUT_MS=30000 pi
+```json
+{
+  "timeoutMs": 300000,
+  "timeoutOnInput": "reset"
+}
 ```
 
-Timeouts are opt-in for each question; omitted or `false` disables the deadline. The configured value must be a positive number of milliseconds. The deadline covers the complete interaction, including comments and freeform editing; expiry is reported separately from cancellation.
+The settings file is optional. `timeoutMs` defaults to five minutes and must be a positive whole number of milliseconds. `timeoutOnInput` defaults to `"reset"` and accepts:
+
+- `"never-reset"` — keep the original response deadline regardless of activity.
+- `"reset"` — restart the complete timeout after every input captured by the TUI question.
+- `"cancel"` — remove the timeout after the first input captured by the TUI question.
+
+The active deadline counts down in the question's top border. Expiry is reported separately from cancellation. RPC dialogs use `timeoutMs`, but input behavior applies only to the richer TUI question because RPC does not expose individual keystrokes.
 
 ### RPC mode
 

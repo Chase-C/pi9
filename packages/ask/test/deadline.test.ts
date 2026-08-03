@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_TIMEOUT_MS,
   createDeadlineSignal,
   resolveTimeoutMs,
 } from "../src/deadline.js";
+import type { AskSettings, TimeoutOnInput } from "../src/settings.js";
+
+const settings = (timeoutOnInput: TimeoutOnInput = "never-reset", timeoutMs = 50): AskSettings => ({
+  timeoutMs,
+  timeoutOnInput,
+});
 
 afterEach(() => {
   vi.clearAllTimers();
@@ -12,30 +17,11 @@ afterEach(() => {
 
 describe("resolveTimeoutMs", () => {
   it.each([undefined, false])("disables the configured timeout when the flag is %s", (enabled) => {
-    expect(resolveTimeoutMs(enabled, { PI9_ASK_TIMEOUT_MS: "9000" })).toBeUndefined();
+    expect(resolveTimeoutMs(enabled, settings())).toBeUndefined();
   });
 
-  it.each([
-    ["1", 1],
-    ["2500", 2500],
-    [String(MAX_TIMEOUT_MS), MAX_TIMEOUT_MS],
-  ])("accepts a positive integer decimal environment value %s when enabled", (value, expected) => {
-    expect(resolveTimeoutMs(true, { PI9_ASK_TIMEOUT_MS: value })).toBe(expected);
-  });
-
-  it.each([
-    undefined,
-    "",
-    "0",
-    "-1",
-    "1.5",
-    "1e3",
-    " 1000 ",
-    "abc",
-    "Infinity",
-    String(MAX_TIMEOUT_MS + 1),
-  ])("disables timeout for invalid environment value %s", (value) => {
-    expect(resolveTimeoutMs(true, { PI9_ASK_TIMEOUT_MS: value })).toBeUndefined();
+  it("uses the configured duration when enabled", () => {
+    expect(resolveTimeoutMs(true, settings("never-reset", 2_500))).toBe(2_500);
   });
 });
 
@@ -44,7 +30,9 @@ describe("createDeadlineSignal", () => {
     const deadline = createDeadlineSignal(undefined, undefined);
 
     expect(deadline.signal).toBeUndefined();
+    expect(deadline.deadlineAt).toBeUndefined();
     expect(deadline.timedOut).toBe(false);
+    expect(deadline.handleInput()).toBe(false);
     expect(() => deadline.dispose()).not.toThrow();
   });
 
@@ -54,10 +42,11 @@ describe("createDeadlineSignal", () => {
     parent.abort(reason);
 
     vi.useFakeTimers();
-    const deadline = createDeadlineSignal(parent.signal, true, { PI9_ASK_TIMEOUT_MS: "1000" });
+    const deadline = createDeadlineSignal(parent.signal, true, settings());
 
     expect(deadline.signal?.aborted).toBe(true);
     expect(deadline.signal?.reason).toBe(reason);
+    expect(deadline.deadlineAt).toBeUndefined();
     expect(deadline.timedOut).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
     deadline.dispose();
@@ -81,7 +70,8 @@ describe("createDeadlineSignal", () => {
 
   it("aborts exactly once when a positive timeout expires", () => {
     vi.useFakeTimers();
-    const deadline = createDeadlineSignal(undefined, true, { PI9_ASK_TIMEOUT_MS: "50" });
+    const deadline = createDeadlineSignal(undefined, true, settings());
+    expect(deadline.deadlineAt).toBe(Date.now() + 50);
     const onAbort = vi.fn();
     deadline.signal?.addEventListener("abort", onAbort);
 
@@ -98,12 +88,52 @@ describe("createDeadlineSignal", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("resets the timeout from the latest input", () => {
+    vi.useFakeTimers();
+    const deadline = createDeadlineSignal(undefined, true, settings("reset"));
+
+    vi.advanceTimersByTime(40);
+    expect(deadline.handleInput()).toBe(true);
+    expect(deadline.deadlineAt).toBe(Date.now() + 50);
+
+    vi.advanceTimersByTime(49);
+    expect(deadline.signal?.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(deadline.signal?.aborted).toBe(true);
+    expect(deadline.timedOut).toBe(true);
+  });
+
+  it("cancels only the timeout on the first input", () => {
+    vi.useFakeTimers();
+    const deadline = createDeadlineSignal(undefined, true, settings("cancel"));
+
+    expect(deadline.handleInput()).toBe(true);
+    expect(deadline.deadlineAt).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+
+    vi.advanceTimersByTime(100);
+    expect(deadline.signal?.aborted).toBe(false);
+    expect(deadline.timedOut).toBe(false);
+    expect(deadline.handleInput()).toBe(false);
+  });
+
+  it("does not change a never-reset timeout on input", () => {
+    vi.useFakeTimers();
+    const deadline = createDeadlineSignal(undefined, true, settings("never-reset"));
+    const initialDeadline = deadline.deadlineAt;
+
+    vi.advanceTimersByTime(25);
+    expect(deadline.handleInput()).toBe(false);
+    expect(deadline.deadlineAt).toBe(initialDeadline);
+  });
+
   it.each([undefined, false])("does not create a timer when the flag is %s", (enabled) => {
     vi.useFakeTimers();
     const parent = new AbortController();
-    const deadline = createDeadlineSignal(parent.signal, enabled, { PI9_ASK_TIMEOUT_MS: "50" });
+    const deadline = createDeadlineSignal(parent.signal, enabled, settings());
 
     expect(deadline.signal).toBeDefined();
+    expect(deadline.deadlineAt).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
     deadline.dispose();
   });
@@ -111,7 +141,7 @@ describe("createDeadlineSignal", () => {
   it("disposes the timer and parent listener, preventing later abort", () => {
     vi.useFakeTimers();
     const parent = new AbortController();
-    const deadline = createDeadlineSignal(parent.signal, true, { PI9_ASK_TIMEOUT_MS: "100" });
+    const deadline = createDeadlineSignal(parent.signal, true, settings("reset", 100));
     const onAbort = vi.fn();
     deadline.signal?.addEventListener("abort", onAbort);
 
@@ -123,6 +153,7 @@ describe("createDeadlineSignal", () => {
 
     expect(deadline.signal?.aborted).toBe(false);
     expect(deadline.timedOut).toBe(false);
+    expect(deadline.handleInput()).toBe(false);
     expect(onAbort).not.toHaveBeenCalled();
 
     deadline.dispose();

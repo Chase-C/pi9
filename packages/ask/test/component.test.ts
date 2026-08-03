@@ -460,6 +460,64 @@ describe("AskComponent", () => {
     expect(lines.every(line => visibleWidth(line) <= 100)).toBe(true);
   });
 
+  it("renders and refreshes a deadline countdown in the top border", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const deadline = { deadlineAt: Date.now() + 2_500, handleInput: vi.fn(() => false) };
+    const standard = make({ deadline });
+    const framed = make({
+      deadline,
+      allowFreeform: false,
+      options: [{ label: "Only", preview: "Preview" }],
+    });
+
+    try {
+      expect(standard.component.render(80)[0]).toContain("⏱ 3s remaining");
+      expect(framed.component.render(100)[0]).toContain("⏱ 3s remaining");
+      expect(visibleWidth(framed.component.render(100)[0]!)).toBe(100);
+
+      vi.advanceTimersByTime(1_000);
+
+      expect(standard.tui.requestRender).toHaveBeenCalled();
+      expect(standard.component.render(80)[0]).toContain("⏱ 2s remaining");
+
+      standard.component.cancel();
+      framed.component.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      standard.component.dispose();
+      framed.component.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("forwards captured input to the deadline and removes a cancelled countdown", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    let deadlineAt: number | undefined = Date.now() + 5_000;
+    const deadline = {
+      get deadlineAt() { return deadlineAt; },
+      handleInput: vi.fn(() => {
+        deadlineAt = undefined;
+        return true;
+      }),
+    };
+    const { component, tui } = make({ deadline });
+
+    try {
+      expect(component.render(80)[0]).toContain("⏱ 5s remaining");
+      component.handleInput("unrecognized input");
+
+      expect(deadline.handleInput).toHaveBeenCalledOnce();
+      expect(component.render(80)[0]).not.toContain("⏱");
+      expect(tui.requestRender).toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      component.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the configured submit key in editor help", () => {
     const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
       "tui.input.submit": "ctrl+s",

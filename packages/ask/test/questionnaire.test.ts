@@ -11,6 +11,14 @@ vi.mock("../src/component.js", () => ({
 
 import { launchQuestionnaire } from "../src/questionnaire.js";
 
+const deadline = (signal = new AbortController().signal, deadlineAt?: number) => ({
+  signal,
+  deadlineAt,
+  timedOut: false,
+  handleInput: vi.fn(() => false),
+  dispose: vi.fn(),
+});
+
 const params = {
   question: "Choose",
   context: "Context",
@@ -42,6 +50,15 @@ describe("launchQuestionnaire", () => {
     expect(second.custom).toHaveBeenCalledWith(expect.any(Function));
   });
 
+  it("passes the active deadline to the component", async () => {
+    const { ui } = uiHarness();
+    const activeDeadline = deadline(new AbortController().signal, 12_345);
+
+    await launchQuestionnaire({ ui }, params, activeDeadline);
+
+    expect(components.at(-1)?.options.deadline).toBe(activeDeadline);
+  });
+
   it("returns null when the component cancels", async () => {
     const { ui } = uiHarness("cancel");
     await expect(launchQuestionnaire({ ui }, params)).resolves.toBeNull();
@@ -62,7 +79,7 @@ describe("launchQuestionnaire", () => {
       throw new Error("UI failed");
     });
 
-    const result = launchQuestionnaire({ ui: harness.ui }, params, signal);
+    const result = launchQuestionnaire({ ui: harness.ui }, params, deadline(signal));
     if (outcome === "error") await expect(result).rejects.toThrow("UI failed");
     else await result;
 
@@ -75,7 +92,7 @@ describe("launchQuestionnaire", () => {
     const custom = vi.fn((factory: any) => new Promise<any>(resolve => {
       factory("tui", "theme", "keys", resolve);
     }));
-    const result = launchQuestionnaire({ ui: { custom } }, params, controller.signal);
+    const result = launchQuestionnaire({ ui: { custom } }, params, deadline(controller.signal));
     controller.abort();
     await expect(result).resolves.toBeNull();
     expect(components.at(-1)?.cancel).toHaveBeenCalledOnce();
