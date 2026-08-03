@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-03
+
 ### Changed
 
 - Add a package gallery image showing the context report.
@@ -56,7 +58,8 @@
 - Simplify tool detail lines and remove the report capture-age line.
 - Align development dependencies with Pi 0.80 and remove the unused `typebox` peer.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/context-v0.2.2...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/context-v0.2.3...HEAD
+[0.2.3]: https://github.com/Chase-C/pi9/compare/context-v0.2.2...context-v0.2.3
 [0.2.2]: https://github.com/Chase-C/pi9/compare/context-v0.2.1...context-v0.2.2
 [0.2.1]: https://github.com/Chase-C/pi9/compare/context-v0.2.0...context-v0.2.1
 [0.2.0]: https://github.com/Chase-C/pi9/compare/context-v0.1.0...context-v0.2.0
