@@ -4,6 +4,12 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Separate navigation help from context-sensitive action chips in the `/subagents` overlay, aligning the footer divider with the browser columns.
+- Show only actions available for the selected conversation and guard unavailable cancellation and subtree removal shortcuts.
+- Replace duplicate inspector action prompts with a single agent-aware `delegate to <agent>` footer action.
+
 ## [0.10.6] - 2026-08-03
 
 ### Changed
