@@ -4,6 +4,10 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Add a package gallery image showing an active todo plan.
+
 ## [0.3.6] - 2026-07-26
 
 ### Changed

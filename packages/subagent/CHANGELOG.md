@@ -4,6 +4,10 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Changed
+
+- Add a package gallery image showing the subagent workflow.
+
 ## [0.10.5] - 2026-08-02
 
 ### Changed

@@ -4,6 +4,10 @@ All notable changes to `@pi9/ask` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Add a package gallery image showing the single-select interface.
+
 ## [0.4.0] - 2026-07-31
 
 ### Changed

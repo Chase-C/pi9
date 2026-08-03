@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Add a package gallery image showing the context report.
+
 ## [0.2.2] - 2026-07-28
 
 ### Changed

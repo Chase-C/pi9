@@ -50,7 +50,8 @@
       "./src/index.ts"
     ],
     "skills": [],
-    "prompts": []
+    "prompts": [],
+    "image": "https://raw.githubusercontent.com/Chase-C/pi9/main/packages/context/media/context-report.png"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

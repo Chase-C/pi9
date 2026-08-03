@@ -49,7 +49,8 @@
       "./src/index.ts"
     ],
     "skills": [],
-    "prompts": []
+    "prompts": [],
+    "image": "https://raw.githubusercontent.com/Chase-C/pi9/main/packages/ask/media/single-select.png"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
