@@ -4,6 +4,8 @@ All notable changes to `@pi9/todo` will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-08-03
+
 ### Changed
 
 - Add a package gallery image showing an active todo plan.
@@ -84,7 +86,8 @@ All notable changes to `@pi9/todo` will be documented in this file.
 - Add a persistent configurable widget with focused phase previews, terminal-task summaries, animated activity markers, and flexible placement.
 - Add validated global and trusted-project settings for widget presentation, glyph fallback, and tool-output visibility.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.3.6...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/todo-v0.3.7...HEAD
+[0.3.7]: https://github.com/Chase-C/pi9/compare/todo-v0.3.6...todo-v0.3.7
 [0.3.6]: https://github.com/Chase-C/pi9/compare/todo-v0.3.5...todo-v0.3.6
 [0.3.5]: https://github.com/Chase-C/pi9/compare/todo-v0.3.4...todo-v0.3.5
 [0.3.4]: https://github.com/Chase-C/pi9/compare/todo-v0.3.3...todo-v0.3.4
