@@ -403,7 +403,7 @@ function renderJoinRoot(entry: JoinedGenerationRenderItem, index: number, expand
   const terminal = isTerminal(entry.status);
   const failed = terminal && entry.status !== "completed";
   const label = entry.label || entry.agent || entry.subagentId || `subagent ${index + 1}`;
-  const meta = [entry.agent, entry.kind].filter(Boolean).join(" · ");
+  const meta = entry.agent;
   const lines = [
     `${statusMarker(theme, entry.status)} ${paint(theme, "text", label)}${meta ? ` ${paint(theme, "muted", `· ${meta}`)}` : ""} ${paint(theme, "muted", "·")} ${statusText(theme, entry.status)}${generationStats(entry, theme)}`,
   ];

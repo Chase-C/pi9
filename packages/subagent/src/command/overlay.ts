@@ -16,7 +16,7 @@ import { formatElapsed, formatTokens, generationElapsedMs, statusColor } from ".
 import type { SubagentRuntime } from "../runtime.js";
 import { DEFAULT_SUBAGENT_SETTINGS, type SubagentSettings } from "../settings.js";
 import { clamp, isCancelKey, isDownKey, isEnterKey, isPageDownKey, isPageUpKey, isShiftTabKey, isUpKey, type SubagentKeybindings } from "./input.js";
-import { filterAgents, projectConversations, type ConversationLayoutMode } from "./overlay-model.js";
+import { filterAgents, projectConversations } from "./overlay-model.js";
 import { SubagentSettingsComponent, type SubagentSettingsChange } from "./settings.js";
 
 export type SubagentOverlayPage = "conversations" | "agents" | "settings";
@@ -45,7 +45,6 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private _focused = false;
   private page: SubagentOverlayPage;
   private focusRegion: FocusRegion = "list";
-  private conversationMode: ConversationLayoutMode = "tree";
   private readonly selected: Record<SubagentOverlayPage, number> = { conversations: 0, agents: 0, settings: 0 };
   private selectedConversationId?: string;
   private selectedAgentName?: string;
@@ -403,11 +402,9 @@ export class SubagentOverlayComponent implements Component, Focusable {
 
   private renderFilter(width: number): string {
     const input = this.activeFilter!;
-    const suffix = this.page === "conversations" ? `  View: ${this.conversationMode === "flat" ? "[Flat] Tree" : "Flat [Tree]"}` : "";
-    const available = Math.max(6, width - visibleWidth(suffix) - 3);
-    const rendered = input.render(available)[0] ?? "";
+    const rendered = input.render(Math.max(6, width - 3))[0] ?? "";
     const value = input.getValue() || this.focusRegion === "filter" ? rendered : this.muted("Filter…");
-    return truncateToWidth(`/ ${value}${suffix}`, width, "");
+    return truncateToWidth(`/ ${value}`, width, "");
   }
 
   private renderDetail(width: number, bodyHeight: number): string[] {
@@ -428,7 +425,6 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private handleConversationAction(data: string): void {
     const rows = this.conversationRows;
     const conversation = rows[this.selectedConversation(rows)]?.conversation;
-    if (data.toLowerCase() === "t") { this.conversationMode = this.conversationMode === "flat" ? "tree" : "flat"; this.resetSelection(); this.requestRender(); return; }
     if (!conversation) return;
     if (isEnterKey(data, this.keybindings)) {
       const generation = conversation.currentGeneration ?? conversation.generations.at(-1);
@@ -607,7 +603,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private requestRender(): void { this.tui.requestRender(); }
   private findConversation(id: string): ConversationSnapshot | undefined { return this.manager.listConversations().find(conversation => conversation.conversationId === id); }
   private findGeneration(conversation: ConversationSnapshot, generation?: number): GenerationSnapshot | undefined { return generation ? conversation.generations.find(candidate => candidate.generation === generation) : conversation.currentGeneration ?? conversation.generations.at(-1); }
-  private get conversationRows() { return projectConversations(this.manager.listConversations(), { mode: this.conversationMode, query: this.filters.conversations.getValue() }); }
+  private get conversationRows() { return projectConversations(this.manager.listConversations(), { query: this.filters.conversations.getValue() }); }
   private get filteredAgents() { return filterAgents(this.options.agents, this.filters.agents.getValue()); }
   private get selectedListLine(): number {
     return (this.page === "agents" ? this.selectedAgent(this.filteredAgents) : this.selectedConversation(this.conversationRows)) * 4;
@@ -640,9 +636,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       return [this.muted(this.settings.isEditing ? "type value · enter save · esc cancel" : "↑↓ select · enter/space change · tab pages · esc close")];
     }
 
-    const navigation = this.page === "agents"
-      ? "↑↓ select · PgUp/PgDn scroll details · / filter · tab pages · esc close"
-      : "↑↓ select · PgUp/PgDn scroll details · / filter · t flat/tree · tab pages · esc close";
+    const navigation = "↑↓ select · PgUp/PgDn scroll details · / filter · tab pages · esc close";
     const conversation = this.page === "conversations"
       ? this.conversationRows[this.selectedConversation(this.conversationRows)]?.conversation
       : undefined;
@@ -653,7 +647,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const actions = this.page === "agents"
       ? agent ? this.actionChip("enter/s", `delegate to ${agent.name}`) : ""
       : conversation && generation ? this.conversationActionHelp(conversation, generation) : "";
-    return dividedHelp(this.dim(navigation), actions, width, text => this.border(text));
+    return dividedHelp(this.muted(navigation), actions, width, text => this.border(text));
   }
 
   private conversationActionHelp(conversation: ConversationSnapshot, generation: GenerationSnapshot, includeInspect = true): string {

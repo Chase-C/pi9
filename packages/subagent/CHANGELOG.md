@@ -6,6 +6,8 @@ This changelog starts with version `v0.2.1`.
 
 ### Changed
 
+- Omit spawn/resume markers from join rendering.
+- Always display the `/subagents` conversation browser as a tree.
 - Separate navigation help from context-sensitive action chips in the `/subagents` overlay, aligning the footer divider with the browser columns.
 - Show only actions available for the selected conversation and guard unavailable cancellation and subtree removal shortcuts.
 - Replace duplicate inspector action prompts with a single agent-aware `delegate to <agent>` footer action.

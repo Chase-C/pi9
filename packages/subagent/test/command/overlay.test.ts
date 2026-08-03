@@ -120,6 +120,47 @@ test("nested chronology scopes generation numbers to their parent conversation",
   expect(rendered).not.toContain("Wrong child");
 });
 
+test("conversation browser always renders as a tree", () => {
+  const root = fakeAgent({ conversationId: "root", label: "Root" });
+  const child = fakeAgent({ conversationId: "child", parentConversationId: "root", label: "Child" });
+  const { component } = overlayFixture(root, [child]);
+
+  const initial = component.render(120).join("\n");
+  expect(initial).toContain("╰─ Child");
+  expect(initial).not.toMatch(/View:|flat\/tree/);
+
+  component.handleInput("t");
+  expect(component.render(120).join("\n")).toContain("╰─ Child");
+});
+
+test.each([
+  ["agents", "↑↓ select · PgUp/PgDn scroll details · / filter · tab pages · esc close"],
+  ["conversations", "↑↓ select · PgUp/PgDn scroll details · / filter · tab pages · esc close"],
+  ["settings", "↑↓ select · enter/space change · tab pages · esc close"],
+] as const)("%s navigation help is muted", (initialPage, navigation) => {
+  const fg = vi.fn((_color: string, text: string) => text);
+  const component = new SubagentOverlayComponent(
+    { listConversations: () => [], onConversationUpdate: () => () => {} } as any,
+    { requestRender: vi.fn() },
+    { fg, bold: (text: string) => text } as any,
+    {} as any,
+    vi.fn(),
+    {
+      initialPage,
+      agents: [],
+      settings: DEFAULT_SUBAGENT_SETTINGS,
+      notify: vi.fn(),
+      onSettingsChange: vi.fn(),
+      onStart: vi.fn(),
+      onResume: vi.fn(),
+    },
+  );
+
+  component.render(120);
+  expect(fg).toHaveBeenCalledWith("muted", navigation);
+  expect(fg).not.toHaveBeenCalledWith("dim", navigation);
+});
+
 test("browser help aligns its divider and emphasizes agent actions", () => {
   const fg = vi.fn((_color: string, text: string) => text);
   const component = new SubagentOverlayComponent(

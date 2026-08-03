@@ -38,6 +38,16 @@ describe("subagent result renderer", () => {
     { subagentId: id, agent: "helper", label: "Worker", status: "completed", output: "done" },
   ] } }, "Worker.*completed", "subagent airy-acorn"));
 
+  it("omits generation kind from join rendering", () => {
+    for (const kind of ["spawn", "resume"]) {
+      const details = { response: { action: "join", results: [{}] }, view: { entries: [
+        { subagentId: id, agent: "helper", label: "Worker", kind, status: "completed", output: "done" },
+      ] } };
+      assert.doesNotMatch(output(details), new RegExp(kind));
+      assert.doesNotMatch(output(details, true), new RegExp(kind));
+    }
+  });
+
   it("does not render nullable join output as text", () => {
     const details = {
       response: { action: "join", results: [{ subagentId: id, status: "cancelled", output: null }] },
