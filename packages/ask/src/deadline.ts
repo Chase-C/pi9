@@ -1,57 +1,57 @@
-export const MAX_TIMEOUT_MS = 2_147_483_647;
+import {
+  DEFAULT_ASK_SETTINGS,
+  type AskSettings,
+} from "./settings.js";
 
-type AskEnvironment = Readonly<{
-  PI9_ASK_TIMEOUT_MS?: string;
-}>;
+export { MAX_TIMEOUT_MS } from "./settings.js";
 
 export interface DeadlineSignal {
   signal: AbortSignal | undefined;
+  readonly deadlineAt: number | undefined;
   readonly timedOut: boolean;
+  handleInput(): boolean;
   dispose(): void;
 }
 
 export function resolveTimeoutMs(
   enabled: boolean | undefined,
-  env: AskEnvironment,
+  settings: Pick<AskSettings, "timeoutMs">,
 ): number | undefined {
-  if (enabled !== true) return undefined;
-
-  const envTimeout = env.PI9_ASK_TIMEOUT_MS;
-  if (envTimeout === undefined || !/^\d+$/.test(envTimeout)) return undefined;
-
-  const timeout = Number(envTimeout);
-  return Number.isInteger(timeout) && timeout > 0 && timeout <= MAX_TIMEOUT_MS
-    ? timeout
-    : undefined;
+  return enabled === true ? settings.timeoutMs : undefined;
 }
 
 export function createDeadlineSignal(
   parent: AbortSignal | undefined,
   enabled: boolean | undefined,
-  env: AskEnvironment = {},
+  settings: AskSettings = DEFAULT_ASK_SETTINGS,
 ): DeadlineSignal {
-  const timeoutMs = resolveTimeoutMs(enabled, env);
-  const hasTimeout = timeoutMs !== undefined;
+  const timeoutMs = resolveTimeoutMs(enabled, settings);
 
-  if (parent === undefined && !hasTimeout) {
+  if (parent === undefined && timeoutMs === undefined) {
     return {
       signal: undefined,
+      deadlineAt: undefined,
       timedOut: false,
+      handleInput: () => false,
       dispose() {},
     };
   }
 
   const controller = new AbortController();
+  let deadlineAt: number | undefined;
   let disposed = false;
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let parentListener: (() => void) | undefined;
 
+  const clearDeadline = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    deadlineAt = undefined;
+  };
+
   const cleanup = (): void => {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearDeadline();
     if (parent !== undefined && parentListener !== undefined) {
       parent.removeEventListener("abort", parentListener);
       parentListener = undefined;
@@ -64,11 +64,23 @@ export function createDeadlineSignal(
     controller.abort(reason);
   };
 
+  const scheduleDeadline = (): void => {
+    if (timeoutMs === undefined) return;
+    clearDeadline();
+    deadlineAt = Date.now() + timeoutMs;
+    timer = setTimeout(() => {
+      timedOut = true;
+      abort();
+    }, timeoutMs);
+  };
+
   if (parent?.aborted) {
     abort(parent.reason);
     return {
       signal: controller.signal,
+      deadlineAt: undefined,
       timedOut: false,
+      handleInput: () => false,
       dispose() {},
     };
   }
@@ -78,17 +90,22 @@ export function createDeadlineSignal(
     parent.addEventListener("abort", parentListener, { once: true });
   }
 
-  if (hasTimeout) {
-    timer = setTimeout(() => {
-      timedOut = true;
-      abort();
-    }, timeoutMs);
-  }
+  scheduleDeadline();
 
   return {
     signal: controller.signal,
+    get deadlineAt() {
+      return deadlineAt;
+    },
     get timedOut() {
       return timedOut;
+    },
+    handleInput() {
+      if (disposed || controller.signal.aborted || timer === undefined) return false;
+      if (settings.timeoutOnInput === "reset") scheduleDeadline();
+      else if (settings.timeoutOnInput === "cancel") clearDeadline();
+      else return false;
+      return true;
     },
     dispose() {
       if (disposed) return;

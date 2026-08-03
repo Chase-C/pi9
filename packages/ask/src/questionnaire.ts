@@ -1,6 +1,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 import { AskComponent } from "./component.js";
+import type { DeadlineSignal } from "./deadline.js";
 import type { Ask, AskAnswer } from "./domain.js";
 
 interface QuestionnaireLaunchContext {
@@ -10,7 +11,7 @@ interface QuestionnaireLaunchContext {
 export async function launchQuestionnaire(
   ctx: QuestionnaireLaunchContext,
   params: Ask,
-  signal?: AbortSignal,
+  deadline?: DeadlineSignal,
 ): Promise<AskAnswer | null> {
   let abortListener: (() => void) | undefined;
   try {
@@ -20,18 +21,19 @@ export async function launchQuestionnaire(
         tui,
         theme,
         keybindings,
+        deadline,
         onSubmit: done,
         onCancel: () => done(null),
       });
 
       abortListener = () => component.cancel();
-      if (signal?.aborted) abortListener();
-      else if (signal) signal.addEventListener("abort", abortListener, { once: true });
+      if (deadline?.signal?.aborted) abortListener();
+      else if (deadline?.signal) deadline.signal.addEventListener("abort", abortListener, { once: true });
 
       return component;
     });
     return answer ?? null;
   } finally {
-    if (abortListener) signal?.removeEventListener("abort", abortListener);
+    if (abortListener) deadline?.signal?.removeEventListener("abort", abortListener);
   }
 }
