@@ -10,6 +10,7 @@ import {
   type ConversationUpdateListener,
   type Generation,
   type GenerationBinding,
+  type GenerationInitiator,
   type GenerationRef,
   type GenerationSnapshot,
   type GenerationViewStatus,
@@ -113,6 +114,7 @@ export class SubagentRuntime {
       label: conversation.label,
       agent: conversation.agentName,
       generation: latest.generation,
+      initiatedBy: latest.initiatedBy,
       generationStatus: latest.status,
       joined: latest.joined,
       directlyOwned,
@@ -123,17 +125,18 @@ export class SubagentRuntime {
   }
 
   /** Resolves and reserves the complete batch synchronously; executions never inherit caller cancellation. */
-  startTasks(ctx: ExtensionContext, tasks: readonly (SpawnRequest | ResumeRequest)[], options: { caller?: SubagentCaller } = {}): GenerationHandle {
+  startTasks(ctx: ExtensionContext, tasks: readonly (SpawnRequest | ResumeRequest)[], options: { caller?: SubagentCaller; initiatedBy?: GenerationInitiator } = {}): GenerationHandle {
     const starts: OrderedStartOutcome[] = [];
     const executions: Promise<unknown>[] = [];
     const caller = options.caller;
+    const initiatedBy = options.initiatedBy ?? "model";
     let callerError: string | undefined;
     if (caller) try { this.requireCaller(caller, "start"); } catch (error) { callerError = error instanceof Error ? error.message : String(error); }
     for (let inputIndex = 0; inputIndex < tasks.length; inputIndex++) {
       const task = tasks[inputIndex];
       const reservation: Reservation = callerError ? { error: callerError }
-        : task.kind === "spawn" ? this.reserveSpawn(ctx, task, caller)
-        : this.reserveResume(task, caller);
+        : task.kind === "spawn" ? this.reserveSpawn(ctx, task, caller, initiatedBy)
+        : this.reserveResume(task, caller, initiatedBy);
       if ("error" in reservation) { starts.push({ ok: false, inputIndex, error: reservation.error }); continue; }
       const { conversation, generation } = reservation;
       const execution = this.executionScheduler.schedule(ctx, undefined, conversation, generation).finally(() => conversation.executionSettled(generation));
@@ -144,7 +147,7 @@ export class SubagentRuntime {
     return { starts, completion: Promise.allSettled(executions).then(() => starts) };
   }
 
-  private reserveSpawn(ctx: ExtensionContext, task: SpawnRequest, caller?: SubagentCaller): Reservation {
+  private reserveSpawn(ctx: ExtensionContext, task: SpawnRequest, caller: SubagentCaller | undefined, initiatedBy: GenerationInitiator): Reservation {
     const definition = this.registry.agents.get(task.agent);
     if (!definition) return { error: `Unknown agent: ${task.agent}.` };
     const requested = resolveRequestedConfig(definition, task);
@@ -159,13 +162,14 @@ export class SubagentRuntime {
     if (!conversationId) return { error: "Conversation ID space exhausted." };
     const conversation = new Conversation(conversationId, definition, task, (changed, kind) => this.updated(changed, kind), {
       ...(caller ? { parentConversationId: caller.conversation.conversationId, startedInParentGeneration: caller.generation.number } : {}),
+      initiatedBy,
       resolvedSkillBlocks: skills.value,
     });
     this.conversations.set(conversationId, conversation);
     return { conversation, generation: conversation.latestGeneration };
   }
 
-  private reserveResume(task: ResumeRequest, caller?: SubagentCaller): Reservation {
+  private reserveResume(task: ResumeRequest, caller: SubagentCaller | undefined, initiatedBy: GenerationInitiator): Reservation {
     const conversation = task.subagentId ? this.conversations.get(task.subagentId) : undefined;
     if (!conversation) return { error: new SubagentNotFoundError(String(task.subagentId)).message };
     if (caller && conversation.parentConversationId !== caller.conversation.conversationId) return { error: `Subagent ${conversation.conversationId} is not directly owned by caller subagent ${caller.conversation.conversationId}.` };
@@ -177,14 +181,15 @@ export class SubagentRuntime {
       return { error: `Subagent ${conversation.conversationId} cannot be resumed.` };
     }
     if (!conversation.isResumeAllowed) return { error: this.resumeError(conversation) };
-    return { conversation, generation: conversation.beginResume(task.prompt, caller?.generation.number) };
+    return { conversation, generation: conversation.beginResume(task.prompt, initiatedBy, caller?.generation.number) };
   }
 
-  async steerSubagent(subagentId: SubagentId, prompt: string, caller?: SubagentCaller): Promise<SteerResult> {
+  async steerSubagent(subagentId: SubagentId, prompt: string, caller?: SubagentCaller, initiatedBy: GenerationInitiator = "model"): Promise<SteerResult> {
     const record = this.latestSubagentRecord(subagentId);
     this.assertDirectOwner(record.conversation, caller, "steer");
     try {
-      const steer = await record.conversation.steer(record.generation, prompt);
+      const steer = await record.conversation.steer(record.generation, prompt, initiatedBy);
+      if (initiatedBy === "model") record.generation.subscribeModel();
       return { conversationId: record.conversation.conversationId, generation: record.generation.number, steer };
     } catch (error) {
       if (error instanceof GenerationSteerError) {
@@ -266,6 +271,9 @@ export class SubagentRuntime {
   generationSnapshot(reference: GenerationRef): GenerationSnapshot {
     const { conversation, generation } = this.resolveGeneration(reference);
     return conversation.generationSnapshot(generation);
+  }
+  isModelSubscribed(reference: GenerationRef): boolean {
+    return this.resolveGeneration(reference).generation.isModelSubscribed;
   }
   generationCaller(reference: GenerationRef): SubagentCaller {
     const { conversation, generation } = this.resolveGeneration(reference);

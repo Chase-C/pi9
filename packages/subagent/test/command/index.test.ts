@@ -29,8 +29,37 @@ describe("subagents command registration", () => {
     await handler("settings", ctx);
 
     expect(configure).toHaveBeenLastCalledWith({ maxExecuting: 8, maxConversations: 100 });
+    expect(startTasks).toHaveBeenCalledWith(expect.anything(), [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }], { initiatedBy: "user" });
     expect(configure.mock.invocationCallOrder.at(-1)).toBeLessThan(startTasks.mock.invocationCallOrder[0]);
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ runtime: expect.objectContaining({ maxConcurrentSubagents: 8 }) }));
+  });
+
+  it("marks overlay resumes as user-initiated", async () => {
+    let handler: any;
+    const startTasks = vi.fn(() => ({ starts: [{ ok: true, conversationId: "calm-river", generation: 2 }] }));
+    const manager = {
+      configure: vi.fn(),
+      startTasks,
+      listConversations: () => [fakeAgent({ conversationId: "calm-river", joined: true, resumeAllowed: true })],
+      onConversationUpdate: () => () => {},
+    };
+    registerSubagentsCommand(
+      { registerCommand: (_name: string, registration: any) => { handler = registration.handler; } } as any,
+      manager as any,
+      { load: async () => ({ settings: DEFAULT_SUBAGENT_SETTINGS }), save: async () => {} },
+    );
+
+    await handler("conversations", {
+      hasUI: true,
+      ui: {
+        custom: async (factory: any) => {
+          const component = factory({ requestRender() {} }, {}, undefined, () => {});
+          component.options.onResume("calm-river", "continue");
+        },
+      },
+    });
+
+    expect(startTasks).toHaveBeenCalledWith(expect.anything(), [{ kind: "resume", subagentId: "calm-river", prompt: "continue" }], { initiatedBy: "user" });
   });
 
   it("refreshes the widget when settings open and display settings change", async () => {

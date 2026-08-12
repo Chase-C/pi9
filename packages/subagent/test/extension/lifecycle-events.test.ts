@@ -51,6 +51,7 @@ test("finished events use the root-relative canonical block", async () => {
         label: "work",
         agent: "worker",
         generation: 1,
+        initiatedBy: "model",
         status: "queued",
         joined: false,
         actionHints: ["cancel", "inspect", "join"],
@@ -64,6 +65,7 @@ test("finished events use the root-relative canonical block", async () => {
         label: "work",
         agent: "worker",
         generation: 1,
+        initiatedBy: "model",
         status: "running",
         joined: false,
         actionHints: ["steer", "cancel", "inspect", "join"],
@@ -77,6 +79,7 @@ test("finished events use the root-relative canonical block", async () => {
         label: "work",
         agent: "worker",
         generation: 1,
+        initiatedBy: "model",
         status: "completed",
         joined: false,
         actionHints: ["inspect", "join", "remove"],
@@ -104,6 +107,7 @@ test("failed lifecycle events include the canonical failure text", async () => {
       label: "failed work",
       agent: "worker",
       generation: 1,
+      initiatedBy: "model",
       status: "failed",
       joined: false,
       actionHints: ["inspect", "join", "remove"],
@@ -118,7 +122,7 @@ test("successive generations with equal timestamps publish distinct lifecycle ev
   let listener: ((agent: Conversation, kind: any) => void) | undefined;
   const source = {
     onConversationUpdate: (next: typeof listener) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, status: "completed" as const, joined: false as const, actionHints: [] }),
+    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, initiatedBy: "model" as const, status: "completed" as const, joined: false as const, actionHints: [] }),
   };
   const emitted: Array<{ event: string; data: any }> = [];
   registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, source);
@@ -146,6 +150,7 @@ test("generation metadata uses the generation-native custom entry and projection
     generations: [{
       generation: 2,
       kind: "resume",
+      initiatedBy: "user",
       createdAt: 3,
       status: { kind: "done", outcome: "completed", startedAt: 4, completedAt: 9 },
     }],
@@ -163,6 +168,7 @@ test("generation metadata uses the generation-native custom entry and projection
       agent: "worker",
       label: "delegate",
       kind: "resume",
+      initiatedBy: "user",
       status: "completed",
       startedAt: 4,
       completedAt: 9,
@@ -177,7 +183,7 @@ test("non-status changes do not publish public lifecycle events", () => {
   let listener: ((agent: Conversation, kind: any) => void) | undefined;
   const source = {
     onConversationUpdate: (next: typeof listener) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, status: "running" as const, joined: false as const, actionHints: [] }),
+    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, initiatedBy: "model" as const, status: "running" as const, joined: false as const, actionHints: [] }),
   };
   const emitted: Array<{ event: string; data: any }> = [];
   registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, source);

@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import type { AgentSource, EffectiveExecutionConfig, ExecutionOverrides } from "./agents.js";
-import { GENERATION_STATUSES, type GenerationKind, type GenerationPhase, type GenerationRef, type GenerationStatus, type SteerReceipt } from "./conversation.js";
+import { GENERATION_STATUSES, type GenerationInitiator, type GenerationKind, type GenerationPhase, type GenerationRef, type GenerationStatus, type SteerReceipt } from "./conversation.js";
 import type { ConversationId } from "./identifiers.js";
 import { formatElapsed, formatTokens, statusColor, truncateText } from "./generation-format.js";
 import { SUBAGENT_STATUSES, type DispatchTaskKind, type SubagentAction, type SubagentStatus } from "./schema.js";
@@ -79,6 +79,7 @@ export interface GenerationMetricsRenderItem {
 export interface GenerationHistoryRenderItem extends GenerationMetricsRenderItem {
   generation: number;
   kind: GenerationKind;
+  initiatedBy: GenerationInitiator;
   status: SubagentStatus;
   joined: boolean;
   steers: readonly SteerReceipt[];
@@ -95,6 +96,7 @@ export interface InspectedGenerationRenderItem {
   status: SubagentStatus;
   phase?: GenerationPhase;
   generation: number;
+  initiatedBy: GenerationInitiator;
   metrics: GenerationMetricsRenderItem;
   totalMetrics: GenerationMetricsRenderItem;
   history: readonly GenerationHistoryRenderItem[];

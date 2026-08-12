@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ContextEvent, Theme } from "@earendil-works/pi-coding-agent";
 import { generationKey, parseGenerationKey, type Conversation, type ConversationSnapshot, type GenerationRef, type GenerationSnapshot } from "./conversation.js";
 import type { ConversationUpdateKind } from "./conversation.js";
-import { isFinishedSubagent, type CanonicalFinishedSubagent } from "./contract.js";
+import { isFinishedSubagent, type CanonicalFinishedSubagent, type CanonicalLiveSubagent } from "./contract.js";
 import type { SubagentRuntime } from "./runtime.js";
 import type { SubagentStatus } from "./schema.js";
 import { formatElapsed, generationElapsedMs, statusColor, truncateText } from "./generation-format.js";
@@ -35,6 +35,14 @@ export interface CompletionNotificationMessage {
   details: CompletionNotificationMessageDetails;
 }
 
+type SerializableLiveSubagent<T extends CanonicalLiveSubagent = CanonicalLiveSubagent> =
+  T extends CanonicalLiveSubagent ? Omit<T, "subagentId"> & { readonly subagentId: string } : never;
+type UserActivityNotification = SerializableLiveSubagent & { readonly initiatedBy: "user" };
+interface UserActivityMessageDetails {
+  notificationEpoch?: string;
+  activities: UserActivityNotification[];
+}
+
 const COMPLETION_GRACE_MS = 500;
 const RESULTS_INSTRUCTION = "Use `subagent join` when you need to collect these results.";
 
@@ -59,6 +67,17 @@ export function createCompletionNotificationMessage(
   };
 }
 
+function createUserActivityMessage(
+  entries: readonly UserActivityNotification[],
+  notificationEpoch?: string,
+): { content: string; details: UserActivityMessageDetails } {
+  const activities = entries.map(entry => ({ ...entry, actionHints: [...entry.actionHints] }));
+  return {
+    content: formatActivityContent(activities),
+    details: { ...(notificationEpoch ? { notificationEpoch } : {}), activities },
+  };
+}
+
 export function formatCompletionNotificationMessage(
   details: CompletionNotificationMessageDetails,
   expanded: boolean,
@@ -79,11 +98,22 @@ export function formatCompletionNotificationMessage(
   return [header, ...lines].join("\n");
 }
 
+function formatActivityContent(entries: readonly UserActivityNotification[]): string {
+  const lines = entries.map(entry => `  <subagent subagentId="${escapeXml(entry.subagentId)}" generation="${entry.generation}" initiatedBy="user" status="${escapeXml(entry.status)}" agent="${escapeXml(entry.agent)}" label="${escapeXml(entry.label)}" joined="${entry.joined}"/>`);
+  return [
+    "<subagent-activity>",
+    "  User-initiated shared-workspace activity. Awareness only; do not join or act unless relevant to the current request.",
+    ...lines,
+    "</subagent-activity>",
+  ].join("\n");
+}
+
 function formatNotificationContent(entries: readonly CompletionNotification[]): string {
   const lines = entries.map(entry => {
     const attributes = [
       `subagentId="${escapeXml(entry.subagentId)}"`,
       `generation="${entry.generation}"`,
+      `initiatedBy="${entry.initiatedBy}"`,
       `status="${escapeXml(entry.status)}"`,
       `agent="${escapeXml(entry.agent)}"`,
       `label="${escapeXml(entry.label)}"`,
@@ -149,16 +179,20 @@ export interface CompletionNotifierDeps {
   getMode: () => CompletionNotifyMode;
   scheduleRetry?: (fn: () => void, delayMs: number) => () => void;
 }
+interface ModelNotificationDelivery {
+  completion: Promise<void>;
+}
 const schedule = (fn: () => void, ms: number) => { const handle = setTimeout(fn, ms); return () => clearTimeout(handle); };
 
-/** Delivers batched notifications for finished subagents whose results have not been observed or joined. */
+/** Delivers UI completions, subscribed model completions, and next-turn user activity notices. */
 export class CompletionNotifier {
   private ctx?: NotifierContext;
   private cancelTimer?: () => void;
   private cancelGraceTimer?: () => void;
   private retryToolOpportunity = false;
-  private readonly delivered = new Set<string>();
+  private readonly modelNotified = new Set<string>();
   private readonly uiNotified = new Set<string>();
+  private readonly activityNotified = new Set<string>();
   private readonly observed = new Set<string>();
   private readonly gracePending = new Set<string>();
   private readonly claimsByInvocation = new Map<string, { action: unknown; generationKeys: Set<string> }>();
@@ -178,17 +212,34 @@ export class CompletionNotifier {
   unsubscribe(): void { this.unsubscribeAgent(); this.cancel(); this.cancelGrace(); this.clearClaims(); }
 
   reconcileMessages(messages: readonly AgentMessage[]): AgentMessage[] {
+    const seenActivities = new Set<string>();
     return messages.flatMap(message => {
-      if (message.role !== "custom" || message.customType !== "subagent-completion") return [message];
-      const details = completionDetails(message);
+      if (message.role !== "custom") return [message];
+      if (message.customType === "subagent-completion") {
+        const details = completionDetails(message);
+        if (!details) return [message];
+        if (details.notificationEpoch !== this.notificationEpoch) return [];
+        const visible = details.completions.flatMap(entry => {
+          const current = Number.isSafeInteger(entry.generation) ? this.currentNotificationEntry(entry.subagentId, entry.generation) : undefined;
+          return current ? [current] : [];
+        });
+        if (!visible.length) return [];
+        return [{ ...message, content: formatNotificationContent(visible), details: { notificationEpoch: this.notificationEpoch, completions: visible } } as AgentMessage];
+      }
+      if (message.customType !== "subagent-activity") return [message];
+      const details = activityDetails(message);
       if (!details) return [message];
       if (details.notificationEpoch !== this.notificationEpoch) return [];
-      const visible = details.completions.flatMap(entry => {
-        const current = Number.isSafeInteger(entry.generation) ? this.currentNotificationEntry(entry.subagentId, entry.generation) : undefined;
-        return current ? [current] : [];
+      const visible = details.activities.flatMap(entry => {
+        const key = notificationKey(entry);
+        if (seenActivities.has(key)) return [];
+        const current = this.currentUserActivityEntry(entry.subagentId, entry.generation);
+        if (!current) return [];
+        seenActivities.add(key);
+        return [current];
       });
       if (!visible.length) return [];
-      return [{ ...message, content: formatNotificationContent(visible), details: { notificationEpoch: this.notificationEpoch, completions: visible } }];
+      return [{ ...message, content: formatActivityContent(visible), details: { notificationEpoch: this.notificationEpoch, activities: visible } } as AgentMessage];
     });
   }
 
@@ -197,9 +248,20 @@ export class CompletionNotifier {
       candidate.conversation.conversationId === subagentId
       && candidate.generation.generation === generation);
     if (!value || this.observed.has(generationKey({ conversationId: value.conversation.conversationId, generation: value.generation.generation })) || this.claimCountByGeneration.has(generationKey({ conversationId: value.conversation.conversationId, generation: value.generation.generation }))) return;
-    if (value.generation.joined || value.generation.observerCount > 0) return;
+    if (value.generation.joined || value.generation.observerCount > 0 || !this.deps.manager.isModelSubscribed({ conversationId: value.conversation.conversationId, generation: value.generation.generation })) return;
     const projected = projectCompletionNotification(this.deps.manager, value);
     return projected;
+  }
+
+  private currentUserActivityEntry(subagentId: string, generation: number): UserActivityNotification | undefined {
+    try {
+      const conversation = this.deps.manager.conversation(subagentId);
+      const current = conversation.generations.at(-1);
+      if (!current || current.generation !== generation || current.initiatedBy !== "user") return;
+      const reference = { conversationId: conversation.conversationId, generation };
+      if (this.deps.manager.isModelSubscribed(reference)) return;
+      return projectUserActivity(this.deps.manager, conversation, current);
+    } catch { return; }
   }
 
   beginTool(scope: string, toolCallId: string, params: unknown): void {
@@ -230,7 +292,7 @@ export class CompletionNotifier {
     }
     for (const keyValue of claim.generationKeys) {
       try {
-        if (this.deps.manager.generationSnapshot(parseGenerationKey(keyValue)).joined) this.delivered.add(keyValue);
+        if (this.deps.manager.generationSnapshot(parseGenerationKey(keyValue)).joined) this.modelNotified.add(keyValue);
       } catch {}
     }
     this.releaseToolClaim(key);
@@ -251,7 +313,7 @@ export class CompletionNotifier {
   private onUpdate = (agent: Conversation, kind: ConversationUpdateKind): void => {
     if (kind === "status") {
       const generation = agent.snapshot().generations.at(-1);
-      if (generation?.status.kind === "done" && !this.delivered.has(generationKey({ conversationId: agent.conversationId, generation: generation.generation })) && !this.observed.has(generationKey({ conversationId: agent.conversationId, generation: generation.generation }))) {
+      if (generation?.status.kind === "done" && !this.modelNotified.has(generationKey({ conversationId: agent.conversationId, generation: generation.generation })) && !this.observed.has(generationKey({ conversationId: agent.conversationId, generation: generation.generation }))) {
         this.gracePending.add(generationKey({ conversationId: agent.conversationId, generation: generation.generation }));
         this.armGrace();
       }
@@ -311,14 +373,26 @@ export class CompletionNotifier {
 
   private flush(toolOpportunity = false): void {
     const mode = this.deps.getMode();
-    if (mode === "none") { this.cancel(); return; }
-    const eligible = this.catalog().filter(candidate => { const keyValue = candidateKey(candidate); const generation = candidate.generation; return !this.delivered.has(keyValue) && !this.observed.has(keyValue) && !this.gracePending.has(keyValue) && !this.claimCountByGeneration.has(keyValue) && !generation.joined && generation.observerCount === 0; });
-    if (!eligible.length) return;
     if (!this.ctx) return;
-    if (mode === "auto" && !this.ctx.isIdle()) { this.arm(500); return; }
-    if (mode === "steer" && !toolOpportunity && !this.ctx.isIdle()) return;
+    if (mode === "none") {
+      this.cancel();
+      this.flushUserActivity();
+      return;
+    }
+    this.flushUserActivity();
 
-    // Catalog, observer, and joined state are projected again immediately before send.
+    const eligible = this.catalog().filter(candidate => {
+      const keyValue = candidateKey(candidate);
+      const generation = candidate.generation;
+      return !this.observed.has(keyValue)
+        && !this.gracePending.has(keyValue)
+        && !this.claimCountByGeneration.has(keyValue)
+        && !generation.joined
+        && generation.observerCount === 0;
+    });
+    if (!eligible.length) return;
+
+    // Catalog, observer, and joined state are projected again immediately before delivery.
     const live = new Map(this.catalog().map(value => [candidateKey(value), value]));
     const entries: CompletionNotification[] = [];
     for (const candidate of eligible) {
@@ -327,20 +401,71 @@ export class CompletionNotifier {
       const projected = projectCompletionNotification(this.deps.manager, value);
       if (projected) entries.push(projected);
     }
-    if (!entries.length || !this.deps.pi.sendMessage) return;
-    const message = createCompletionNotificationMessage(entries, this.notificationEpoch);
+    if (!entries.length) return;
+
+    this.notifyUi(entries);
+    const modelEntries = entries.filter(entry => {
+      const reference = notificationRef(entry);
+      return !this.modelNotified.has(notificationKey(entry)) && this.deps.manager.isModelSubscribed(reference);
+    });
+    if (!modelEntries.length) return;
+    if (mode === "auto" && !this.ctx.isIdle()) { this.arm(500); return; }
+    if (mode === "steer" && !toolOpportunity && !this.ctx.isIdle()) return;
+
     const active = !this.ctx.isIdle();
+    const delivery = this.notifyModel(modelEntries, mode === "steer" && active
+      ? { deliverAs: "steer" }
+      : { triggerTurn: true });
+    if (!delivery) {
+      if (this.deps.pi.sendMessage) this.arm(500, mode === "steer" && active);
+      return;
+    }
+
+    for (const entry of modelEntries) this.modelNotified.add(notificationKey(entry));
+    void delivery.completion.catch(() => {
+      for (const entry of modelEntries) this.modelNotified.delete(notificationKey(entry));
+      this.arm(500, mode === "steer" && active);
+    });
+  }
+  private flushUserActivity(): void {
+    const entries = this.deps.manager.listConversations().flatMap(conversation => {
+      const generation = conversation.generations.at(-1);
+      if (!generation || generation.initiatedBy !== "user") return [];
+      const reference = { conversationId: conversation.conversationId, generation: generation.generation };
+      const stageKey = activityStageKey(reference, generation.status.kind === "done" ? "finished" : "active");
+      if (this.activityNotified.has(stageKey) || this.deps.manager.isModelSubscribed(reference)) return [];
+      const projected = projectUserActivity(this.deps.manager, conversation, generation);
+      return projected ? [{ entry: projected, stageKey }] : [];
+    });
+    if (!entries.length || !this.deps.pi.sendMessage) return;
+    const message = createUserActivityMessage(entries.map(value => value.entry), this.notificationEpoch);
     try {
-      const sent = this.deps.pi.sendMessage({ customType: "subagent-completion", display: false, ...message }, mode === "steer" && active ? { deliverAs: "steer" } : { triggerTurn: true });
-      this.notifyUi(entries);
-      for (const entry of entries) this.delivered.add(notificationKey(entry));
+      const sent = this.deps.pi.sendMessage({ customType: "subagent-activity", display: false, ...message }, { deliverAs: "nextTurn" });
+      for (const value of entries) this.activityNotified.add(value.stageKey);
       void Promise.resolve(sent).catch(() => {
-        for (const entry of entries) this.delivered.delete(notificationKey(entry));
-        this.arm(500, mode === "steer" && active);
+        for (const value of entries) this.activityNotified.delete(value.stageKey);
+        this.arm(500);
       });
     } catch {
-      for (const entry of entries) this.delivered.delete(notificationKey(entry));
-      this.arm(500, mode === "steer" && active);
+      this.arm(500);
+    }
+  }
+  private notifyModel(
+    entries: readonly CompletionNotification[],
+    options: { triggerTurn: true } | { deliverAs: "steer" },
+  ): ModelNotificationDelivery | undefined {
+    if (!this.deps.pi.sendMessage) return;
+    const message = createCompletionNotificationMessage(entries, this.notificationEpoch);
+    try {
+      return {
+        completion: Promise.resolve(this.deps.pi.sendMessage({
+          customType: "subagent-completion",
+          display: false,
+          ...message,
+        }, options)),
+      };
+    } catch {
+      return;
     }
   }
   private notifyUi(entries: readonly CompletionNotification[]): void {
@@ -380,11 +505,27 @@ function candidateKey(candidate: CompletionCandidate): string {
   });
 }
 
-function notificationKey(notification: Pick<CompletionNotification, "subagentId" | "generation">): string {
-  return generationKey({
+function notificationRef(notification: Pick<CompletionNotification, "subagentId" | "generation">): GenerationRef {
+  return {
     conversationId: notification.subagentId as GenerationRef["conversationId"],
     generation: notification.generation,
-  });
+  };
+}
+function notificationKey(notification: Pick<CompletionNotification, "subagentId" | "generation">): string {
+  return generationKey(notificationRef(notification));
+}
+function activityStageKey(reference: GenerationRef, stage: "active" | "finished"): string {
+  return `${generationKey(reference)}:${stage}`;
+}
+
+function projectUserActivity(
+  manager: SubagentRuntime,
+  conversation: ConversationSnapshot,
+  generation: GenerationSnapshot,
+): UserActivityNotification | undefined {
+  if (generation.initiatedBy !== "user" || conversation.generations.at(-1)?.generation !== generation.generation) return;
+  const canonical = manager.projectSubagent(conversation.conversationId, undefined, { maxLength: 500 });
+  return canonical.initiatedBy === "user" ? { ...canonical, initiatedBy: "user" } : undefined;
 }
 
 function projectCompletionNotification(manager: SubagentRuntime, value: CompletionCandidate): CompletionNotification | undefined {
@@ -410,6 +551,17 @@ function completionNotificationLevel(entries: readonly CompletionNotification[])
   return "info";
 }
 
+function activityDetails(message: CustomMessage): UserActivityMessageDetails | undefined {
+  const details = message.details;
+  if (!details || typeof details !== "object") return;
+  const notificationEpoch = (details as { notificationEpoch?: unknown }).notificationEpoch;
+  const activities = (details as { activities?: unknown }).activities;
+  if (notificationEpoch !== undefined && typeof notificationEpoch !== "string") return;
+  if (!Array.isArray(activities)) return;
+  const valid = activities.filter(isUserActivityNotification);
+  return { ...(notificationEpoch ? { notificationEpoch } : {}), activities: valid };
+}
+
 function completionDetails(message: CustomMessage): CompletionNotificationMessageDetails | undefined {
   const details = message.details;
   if (!details || typeof details !== "object") return;
@@ -421,6 +573,21 @@ function completionDetails(message: CustomMessage): CompletionNotificationMessag
   return { ...(notificationEpoch ? { notificationEpoch } : {}), completions: valid };
 }
 
+function isUserActivityNotification(entry: unknown): entry is UserActivityNotification {
+  if (!entry || typeof entry !== "object") return false;
+  const value = entry as Record<string, unknown>;
+  return value.ok === true
+    && typeof value.subagentId === "string"
+    && typeof value.label === "string"
+    && typeof value.agent === "string"
+    && Number.isSafeInteger(value.generation)
+    && (value.generation as number) >= 1
+    && value.initiatedBy === "user"
+    && (value.status === "queued" || value.status === "running" || value.status === "completed" || value.status === "failed" || value.status === "cancelled")
+    && typeof value.joined === "boolean"
+    && Array.isArray(value.actionHints);
+}
+
 function isCompletionNotification(entry: unknown): entry is CompletionNotification {
   if (!entry || typeof entry !== "object") return false;
   const value = entry as Record<string, unknown>;
@@ -430,6 +597,7 @@ function isCompletionNotification(entry: unknown): entry is CompletionNotificati
     || typeof value.subagentId !== "string"
     || typeof value.label !== "string"
     || typeof value.agent !== "string"
+    || (value.initiatedBy !== "user" && value.initiatedBy !== "model")
     || typeof value.joined !== "boolean"
     || !Array.isArray(value.actionHints)
     || typeof value.completedAt !== "number"

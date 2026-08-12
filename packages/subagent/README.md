@@ -59,7 +59,7 @@ The body becomes the child system prompt. Every spawn requires `agent`, `prompt`
 | `join` | Wait for and collect a direct child's result. It blocks while active and is idempotent after completion. |
 | `remove` | Permanently remove inactive direct-child subtrees. An active descendant rejects removal. |
 
-Live-subagent results include the latest one-based `generation` and `actionHints`: snapshot-derived suggestions that may become stale as the subagent changes state. `status` and `joined` describe that generation; resuming keeps the same `subagentId`, increments `generation`, and resets `joined` for the new result.
+Live-subagent results include the latest one-based `generation`, its `initiatedBy` actor (`user` or `model`), and `actionHints`: snapshot-derived suggestions that may become stale as the subagent changes state. `status` and `joined` describe that generation; resuming keeps the same `subagentId`, increments `generation`, and resets `joined` for the new result.
 
 A caller can inspect any subagent in its descendant tree, but can mutate only its direct children. Top-level subagents belong to the main Pi session, while recursively delegated work remains under its immediate parent.
 
@@ -101,4 +101,4 @@ The widget defaults to summary mode. Progress mode shows queued/running rows up 
 
 ## Notifications
 
-Pi notifies you when delegated work finishes unless the result has already been observed or collected. Cancelling work also suppresses a redundant completion notification. Listing subagents does not acknowledge their results.
+Pi notifies you when delegated work finishes unless the result has already been observed or collected. Model-initiated generations also report completion directly to the model. Generations started or resumed by the user in `/subagents` do not wake the model; instead, Pi adds a compact shared-workspace activity notice to the model's next natural turn. If the model steers that work, it subscribes to the eventual completion. Listing and inspecting remain read-only and do not subscribe the model. Cancelling work also suppresses a redundant completion notification.
