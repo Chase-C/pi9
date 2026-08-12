@@ -63,7 +63,7 @@ export function registerSubagentsCommand(
               return settings;
             },
             onStart: (agent, prompt) => {
-              const start = runtime.startTasks(ctx, [{ kind: "spawn", agent, prompt, label: prompt }]).starts[0];
+              const start = runtime.startTasks(ctx, [{ kind: "spawn", agent, prompt, label: prompt }], { initiatedBy: "user" }).starts[0];
               if (!start?.ok) {
                 notify(ctx, start?.error ?? "Could not start generation.", "warning");
                 return undefined;
@@ -73,7 +73,7 @@ export function registerSubagentsCommand(
               return start.conversationId;
             },
             onResume: (conversationId, prompt) => {
-              const start = runtime.startTasks(ctx, [{ kind: "resume", subagentId: conversationId as SubagentId, prompt }]).starts[0];
+              const start = runtime.startTasks(ctx, [{ kind: "resume", subagentId: conversationId as SubagentId, prompt }], { initiatedBy: "user" }).starts[0];
               if (!start?.ok) notify(ctx, start?.error ?? `Could not resume conversation ${conversationId}.`, "warning");
               else {
                 updateSubagentWidget(ctx, runtime.listConversations(), settings);

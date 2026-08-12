@@ -2,6 +2,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type {
   ConversationSnapshot,
   GenerationActivitySnapshot,
+  GenerationInitiator,
   GenerationKind,
   GenerationOutcomeStatus,
   GenerationSnapshot,
@@ -44,6 +45,7 @@ export interface FakeGenerationOptions {
   prompt?: string;
   createdAt?: number;
   kind?: GenerationKind;
+  initiatedBy?: GenerationInitiator;
   status?: StatusInput;
   activity?: { phase?: GenerationActivitySnapshot["phase"]; toolHistory?: GenerationToolUse[] };
   message?: string;
@@ -112,6 +114,7 @@ export function fakeGeneration(options: FakeGenerationOptions = {}): GenerationS
   return {
     generation,
     kind: options.kind ?? (generation === 1 ? "spawn" : "resume"),
+    initiatedBy: options.initiatedBy ?? "model",
     ...(options.startedInParentGeneration !== undefined ? { startedInParentGeneration: options.startedInParentGeneration } : {}),
     prompt: options.prompt ?? "Fix issue",
     createdAt: options.createdAt ?? 1,

@@ -13,6 +13,7 @@ import type { ConversationId } from "./identifiers.js";
 import type { SpawnRequest } from "./schema.js";
 
 export type GenerationKind = "spawn" | "resume";
+export type GenerationInitiator = "user" | "model";
 
 export const GENERATION_OUTCOME_STATUSES = ["completed", "error", "aborted", "interrupted", "skipped"] as const;
 export const GENERATION_STATUSES = ["queued", "running", ...GENERATION_OUTCOME_STATUSES] as const;
@@ -47,7 +48,7 @@ export interface SteerReceipt {
   readonly deliveredAt?: number;
   readonly processedAt?: number;
 }
-interface TrackedSteerReceipt extends SteerReceipt { deliveryText: string; state: SteerState; deliveredAt?: number; processedAt?: number }
+interface TrackedSteerReceipt extends SteerReceipt { deliveryText: string; sentBy: GenerationInitiator; state: SteerState; deliveredAt?: number; processedAt?: number }
 
 export type GenerationPhase = "starting" | "thinking" | "processing_steer" | "responding" | "executing_tool" | "settling";
 export interface GenerationToolUse { readonly id: string; readonly name: string; readonly startedAt: number; readonly completedAt?: number; readonly isError?: boolean; readonly inputSummary?: string }
@@ -88,6 +89,7 @@ export interface NestedJoinAttemptSnapshot {
 export interface GenerationSnapshot {
   readonly generation: number;
   readonly kind: GenerationKind;
+  readonly initiatedBy: GenerationInitiator;
   readonly startedInParentGeneration?: number;
   readonly prompt: string;
   readonly createdAt: number;
@@ -130,13 +132,16 @@ export class Generation {
   readonly nestedJoins: Array<{ toolCallId?: string; targets: NestedJoinTargetSnapshot[]; state: NestedJoinAttemptState; startedAt: number; completedAt?: number; error?: string }> = [];
   readonly steers: TrackedSteerReceipt[] = [];
   sessionMessageStart = 0;
+  private modelSubscribed: boolean;
 
   constructor(
     readonly number: number,
     readonly prompt: string,
+    readonly initiatedBy: GenerationInitiator,
     private readonly onChange: GenerationActivityListener,
     readonly startedInParentGeneration?: number,
   ) {
+    this.modelSubscribed = initiatedBy === "model";
     if (!Number.isSafeInteger(number) || number < 1) throw new Error(`Invalid generation number: ${number}.`);
     if (startedInParentGeneration !== undefined && (!Number.isSafeInteger(startedInParentGeneration) || startedInParentGeneration < 1)) {
       throw new Error(`Invalid parent generation number: ${startedInParentGeneration}.`);
@@ -145,6 +150,9 @@ export class Generation {
   }
 
   get kind(): GenerationKind { return this.number === 1 ? "spawn" : "resume"; }
+  get isModelSubscribed(): boolean { return this.modelSubscribed; }
+
+  subscribeModel(): void { this.modelSubscribed = true; }
 
   attach(session: AgentSession): void {
     if (this.state.kind !== "queued") throw new Error(`Cannot attach a session to a generation that is ${this.state.kind}.`);
@@ -152,9 +160,9 @@ export class Generation {
     this.state = { kind: "running", session, startedAt: Date.now() };
   }
 
-  acceptSteer(deliveryText: string): SteerReceipt {
+  acceptSteer(deliveryText: string, sentBy: GenerationInitiator): SteerReceipt {
     const state: SteerState = this.state.kind === "running" ? "queued" : "discarded";
-    const receipt: TrackedSteerReceipt = { id: this.steers.length + 1, state, acceptedAt: Date.now(), deliveryText };
+    const receipt: TrackedSteerReceipt = { id: this.steers.length + 1, state, acceptedAt: Date.now(), deliveryText, sentBy };
     this.steers.push(receipt);
     return projectSteer(receipt);
   }
@@ -256,7 +264,7 @@ export class Conversation {
     readonly definition: AgentDefinition,
     spawn: SpawnRequest,
     readonly listener: ConversationUpdateListener,
-    options: { parentConversationId?: ConversationId; startedInParentGeneration?: number; resolvedSkillBlocks?: readonly string[] } = {},
+    options: { parentConversationId?: ConversationId; startedInParentGeneration?: number; resolvedSkillBlocks?: readonly string[]; initiatedBy?: GenerationInitiator } = {},
   ) {
     this.agentName = spawn.agent;
     this.label = spawn.label;
@@ -267,7 +275,7 @@ export class Conversation {
       ...(spawn.model !== undefined ? { model: spawn.model } : {}),
       ...(spawn.thinking !== undefined ? { thinking: spawn.thinking } : {}),
     });
-    this.generations.push(this.newGeneration(1, spawn.prompt, options.startedInParentGeneration));
+    this.generations.push(this.newGeneration(1, spawn.prompt, options.initiatedBy ?? "model", options.startedInParentGeneration));
   }
 
   get spawnedInGeneration(): number | undefined { return this.generations[0]?.startedInParentGeneration; }
@@ -287,13 +295,13 @@ export class Conversation {
   }
   get isStopping(): boolean { return this.stopping !== undefined; }
 
-  private newGeneration(number: number, prompt: string, startedInParentGeneration?: number): Generation {
-    return new Generation(number, prompt, update => this.listener(this, update), startedInParentGeneration);
+  private newGeneration(number: number, prompt: string, initiatedBy: GenerationInitiator, startedInParentGeneration?: number): Generation {
+    return new Generation(number, prompt, initiatedBy, update => this.listener(this, update), startedInParentGeneration);
   }
 
-  beginResume(prompt: string, startedInParentGeneration?: number): Generation {
+  beginResume(prompt: string, initiatedBy: GenerationInitiator = "model", startedInParentGeneration?: number): Generation {
     if (!this.isResumeAllowed) throw new Error(`Conversation ${this.conversationId} cannot be resumed.`);
-    const generation = this.newGeneration(this.generations.length + 1, prompt, startedInParentGeneration);
+    const generation = this.newGeneration(this.generations.length + 1, prompt, initiatedBy, startedInParentGeneration);
     this.generations.push(generation);
     return generation;
   }
@@ -322,7 +330,7 @@ export class Conversation {
     this.finishStopping(generation);
   }
 
-  steer(generation: Generation, prompt: string): Promise<SteerReceipt> {
+  steer(generation: Generation, prompt: string, sentBy: GenerationInitiator = "model"): Promise<SteerReceipt> {
     const pending = this.steerTail.then(async () => {
       if (this.stopping) throw new GenerationSteerError(generation.number, "stopping");
       this.requireGeneration(generation);
@@ -334,7 +342,7 @@ export class Conversation {
       await session.steer(prompt);
       const deliveryText = session.getSteeringMessages?.().at(-1) ?? prompt;
       if (this.stopping) clearSessionQueue(session);
-      const receipt = generation.acceptSteer(deliveryText);
+      const receipt = generation.acceptSteer(deliveryText, sentBy);
       this.listener(this, "steer");
       return receipt;
     });
@@ -447,6 +455,6 @@ export class Conversation {
       ...(attempt.completedAt !== undefined ? { completedAt: attempt.completedAt } : {}),
       ...(attempt.error !== undefined ? { error: attempt.error } : {}),
     }));
-    return Object.freeze({ generation: generation.number, kind: generation.kind, ...(generation.startedInParentGeneration !== undefined ? { startedInParentGeneration: generation.startedInParentGeneration } : {}), prompt: generation.prompt, createdAt: generation.createdAt, status: Object.freeze(status), activity: Object.freeze(generation.activity.snapshot()), usage: generation.activity.usage, observerCount: generation.observerCount, joined: generation.joined, nestedJoins: Object.freeze(nestedJoins), steers: Object.freeze(generation.steers.map(projectSteer)) });
+    return Object.freeze({ generation: generation.number, kind: generation.kind, initiatedBy: generation.initiatedBy, ...(generation.startedInParentGeneration !== undefined ? { startedInParentGeneration: generation.startedInParentGeneration } : {}), prompt: generation.prompt, createdAt: generation.createdAt, status: Object.freeze(status), activity: Object.freeze(generation.activity.snapshot()), usage: generation.activity.usage, observerCount: generation.observerCount, joined: generation.joined, nestedJoins: Object.freeze(nestedJoins), steers: Object.freeze(generation.steers.map(projectSteer)) });
   }
 }

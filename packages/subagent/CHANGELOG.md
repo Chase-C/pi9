@@ -4,6 +4,15 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Added
+
+- Track whether each generation was initiated by the user or model and expose that provenance in lifecycle and inspection projections.
+
+### Changed
+
+- Keep `/subagents`-initiated work from waking the model, queue compact shared-workspace activity for its next natural turn, and subscribe the model only when it steers that work.
+- Deliver human-facing completion notifications independently from model-facing completion messages.
+
 ## [0.10.7] - 2026-08-03
 
 ### Changed

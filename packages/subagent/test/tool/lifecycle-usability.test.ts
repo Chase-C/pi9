@@ -70,7 +70,7 @@ test("inspect separates current generation metrics from prior generation history
     return completedGeneration(conversation, generation, generation.prompt);
   };
   const runtime = new SubagentRuntime(registry, 1, executor);
-  const initial = runtime.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "first", label: "history" }]);
+  const initial = runtime.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "first", label: "history" }], { initiatedBy: "user" });
   const identity = initial.starts[0] as any;
   await new Promise(done => setImmediate(done));
   await runtime.steerSubagent(identity.conversationId, "redirect");
@@ -93,6 +93,7 @@ test("inspect separates current generation metrics from prior generation history
   expect(JSON.parse(result.content[0].text)).not.toHaveProperty("observedGenerations");
   expect(inspected).toMatchObject({
     generation: 2,
+    initiatedBy: "model",
     metrics: {
       elapsedMs: expect.any(Number),
       turns: 0,
@@ -109,6 +110,7 @@ test("inspect separates current generation metrics from prior generation history
       {
         generation: 1,
         kind: "spawn",
+        initiatedBy: "user",
         status: "completed",
         joined: true,
         elapsedMs: expect.any(Number),
