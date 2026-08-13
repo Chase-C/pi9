@@ -50,16 +50,16 @@ The body becomes the child system prompt. Every spawn requires `agent`, `prompt`
 | Action | Behavior |
 | --- | --- |
 | `agents` | List available agent definitions. |
-| `list` | List direct children, with a minimal read-only descendant tree. Filter direct children with `statuses` and/or `joined`. |
+| `list` | List direct children, with a minimal read-only descendant tree. Filter direct children with `statuses` and/or caller-relative `collected`. |
 | `spawn` | Start an ordered batch of labelled subagents asynchronously. |
-| `resume` | Continue a joined subagent that retained a resumable session. |
+| `resume` | Continue an eligible subagent that retained a resumable session. |
 | `steer` | Send messages to running direct children. |
 | `cancel` | Idempotently settle direct children as cancelled while retaining context and partial results. |
-| `inspect` | Return bounded current status, configuration, and progress for any descendant without waiting. |
-| `join` | Wait for and collect a direct child's result. It blocks while active and is idempotent after completion. |
-| `remove` | Permanently remove inactive direct-child subtrees. An active descendant rejects removal. |
+| `inspect` | Return bounded current status, configuration, and progress for any descendant without waiting or collecting. |
+| `join` | Actively wait for and collect a direct child's model result. It blocks while active and is idempotent after collection. |
+| `remove` | Permanently remove inactive direct-child subtrees, including any uncollected results. An active descendant rejects removal. |
 
-Live-subagent results include the latest one-based `generation`, its `initiatedBy` actor (`user` or `model`), and `actionHints`: snapshot-derived suggestions that may become stale as the subagent changes state. `status` and `joined` describe that generation; resuming keeps the same `subagentId`, increments `generation`, and resets `joined` for the new result.
+Live-subagent results include the latest one-based `generation`, its `initiatedBy` actor (`user` or `model`), and `actionHints`: snapshot-derived suggestions that may become stale as the subagent changes state. `status` and caller-relative `collected` describe that generation; resuming keeps the same `subagentId`, increments `generation`, and starts a new pair of collection receipts.
 
 A caller can inspect any subagent in its descendant tree, but can mutate only its direct children. Top-level subagents belong to the main Pi session, while recursively delegated work remains under its immediate parent.
 
@@ -69,13 +69,13 @@ Subagents are context-isolated Pi conversations created from reusable agent defi
 
 ### Parallel delegation
 
-Delegated work starts asynchronously, allowing Pi to launch several focused tasks and continue working while they run. Each task streams its own progress and recent activity. When a result is needed, Pi joins that specific subagent and waits for its current work to finish.
+Delegated work starts asynchronously, allowing Pi to launch several focused tasks and continue working while they run. Each task streams its own progress and recent activity. When a model result is needed, Pi uses the `join` action to actively wait for that specific subagent and collect its current result.
 
 ![Two parallel subagents](media/live-parallel-subagents.png)
 
 ### Follow-up work
 
-A subagent keeps the same identity and conversation context after finishing. Once its result has been joined, Pi can resume it with a follow-up prompt instead of explaining the task again or creating a replacement. Follow-ups appear as successive generations in the subagent's history.
+A subagent keeps the same identity and conversation context after finishing. Resume becomes eligible when the actor that initiated the generation has collected it; collection by every subscriber is not required, and collection by an arbitrary other actor is not sufficient. After that required receipt, either the user or model may resume the conversation with a follow-up prompt. Follow-ups appear as successive generations in the subagent's history.
 
 ### Live progress and control
 
@@ -87,18 +87,22 @@ Subagents can delegate work to children of their own. Ownership follows the dele
 
 ![Recursive delegation](media/recursive-delegation.png)
 
-### Results and cleanup
+### Results, receipts, and cleanup
 
-Joining collects a finished result and is safe to repeat. Every final joined result includes `output`, using `null` when the generation produced no text. Removal is a separate, explicit step that permanently deletes an inactive subagent and all of its descendants. If any work in the subtree is still active, removal is rejected until that work finishes or is cancelled.
+Each generation has separate user and model collection receipts. The model's `join` action records only the model receipt; selecting a conversation in `/subagents` records only the user receipt, immediately for a terminal generation or when selected active work later becomes terminal. There is no separate **Collect** button. Every final result returned by `join` includes `output`, using `null` when the generation produced no text.
+
+Notification (awareness), inspection (acknowledgement), subscription, active waiting, and collection are distinct states. Being notified, inspecting a conversation, or subscribing to completion does not collect its result. Steering user-initiated work subscribes the model to completion, but does not make the model a required collector for resume.
+
+Removal is a separate, explicit step that permanently deletes an inactive subagent and all of its descendants and may discard uncollected results. If any work in the subtree is still active, removal is rejected until that work finishes or is cancelled. Collection applies to the current generation; historical exact-generation collection is not supported.
 
 ## Capacity and UI
 
-Concurrency is shared across the recursive tree. `maxConversations` defaults to `100`; new spawns are rejected at capacity until subagents are removed. Existing subagents can still be inspected, joined, resumed when eligible, or removed.
+Concurrency is shared across the recursive tree. `maxConversations` defaults to `100`; new spawns are rejected at capacity until subagents are removed. Existing subagents can still be inspected, collected with `join`, resumed when eligible, or removed.
 
-Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. `/subagents` opens the inventory, agent browser, and settings UI. The overlay retains a **Previous generations** section, while `inspect` exposes the same generation-native history with bounded metadata and without outputs.
+Settings are stored at `${PI_AGENT_DIR ?? ~/.pi/agent}/subagent/settings.json`. `/subagents` opens the inventory, agent browser, and settings UI. Selecting a conversation handles the user collection receipt automatically; the UI has no separate **Collect** action. The overlay retains a **Previous generations** section, while `inspect` exposes the same generation-native history with bounded metadata and without outputs.
 
 The widget defaults to summary mode. Progress mode shows queued/running rows up to the configured limit.
 
 ## Notifications
 
-Pi notifies you when delegated work finishes unless the result has already been observed or collected. Model-initiated generations also report completion directly to the model. Generations started or resumed by the user in `/subagents` do not wake the model; instead, Pi adds a compact shared-workspace activity notice to the model's next natural turn. If the model steers that work, it subscribes to the eventual completion. Listing and inspecting remain read-only and do not subscribe the model. Cancelling work also suppresses a redundant completion notification.
+Pi notifies you when delegated work finishes unless you already have awareness of it or have collected it. Model-initiated generations also report completion directly to the model. Generations started or resumed by the user in `/subagents` do not wake the model; instead, Pi adds a compact shared-workspace activity notice to the model's next natural turn. If the model steers that work, it subscribes to the eventual completion without becoming a required collector. Listing remains read-only; inspection acknowledges what was inspected but neither inspection nor notification collects a result or subscribes the model. Cancelling work also suppresses a redundant completion notification.

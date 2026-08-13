@@ -41,7 +41,7 @@ const output = (entry: any) =>
   entry.status.kind === "done" ? entry.status.output : undefined;
 const joinLatest = (manager: SubagentRuntime, subagentId: any, owner?: any) => {
   const binding = manager.bindSubagentJoin([subagentId], owner);
-  binding.markJoined();
+  binding.markCollected("model");
   binding.release();
 };
 
@@ -97,6 +97,14 @@ test("generation initiator follows each start or resume rather than conversation
   expect(manager.isModelSubscribed(started)).toBe(false);
 
   joinLatest(manager, started.conversationId);
+  expect(manager.projectSubagent(started.conversationId)).toMatchObject({ collected: true, actionHints: expect.not.arrayContaining(["resume"]) });
+  expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: started.conversationId, prompt: "too early" }] as any).starts[0])
+    .toMatchObject({ ok: false });
+  expect(manager.collectSubagentForUser(started.conversationId)).toEqual({
+    conversationId: started.conversationId,
+    generation: 1,
+    collected: true,
+  });
   const modelResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: started.conversationId, prompt: "model follow-up" }] as any);
   await modelResume.completion;
   expect(manager.projectSubagent(started.conversationId)).toMatchObject({ generation: 2, initiatedBy: "model" });
@@ -106,6 +114,29 @@ test("generation initiator follows each start or resume rather than conversation
   const userResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: started.conversationId, prompt: "user follow-up" }] as any, { initiatedBy: "user" });
   await userResume.completion;
   expect(manager.conversation(started.conversationId).generations.map(generation => generation.initiatedBy)).toEqual(["user", "model", "user"]);
+});
+
+test("user-initiated terminal generations offer model resume with only the user receipt", async () => {
+  const manager = new SubagentRuntime(registry, 1, executor);
+  const initial = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "user start", label: "shared" }], { initiatedBy: "user" });
+  await initial.completion;
+  const started = initial.starts[0] as any;
+
+  expect(manager.collectSubagentForUser(started.conversationId)).toEqual({
+    conversationId: started.conversationId,
+    generation: started.generation,
+    collected: true,
+  });
+  expect(manager.generationSnapshot(started).receipts).toEqual({ user: true, model: false });
+  expect(manager.projectSubagent(started.conversationId)).toMatchObject({
+    collected: false,
+    actionHints: expect.arrayContaining(["resume"]),
+  });
+
+  const modelResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: started.conversationId, prompt: "model follow-up" }]);
+  expect(modelResume.starts[0]).toMatchObject({ ok: true, conversationId: started.conversationId, generation: 2 });
+  await modelResume.completion;
+  expect(manager.conversation(started.conversationId).generations[0].receipts).toEqual({ user: true, model: false });
 });
 
 test("generation lineage finds resumed children and remains readable for historical owners", async () => {
@@ -120,7 +151,7 @@ test("generation lineage finds resumed children and remains readable for histori
   const child = childStart.starts[0] as any;
   const childJoin = manager.bindSubagentJoin([child.conversationId], ownerCaller);
   await childJoin.completion;
-  childJoin.markJoined();
+  childJoin.markCollected("model");
   childJoin.release();
 
   const childResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: child.conversationId, prompt: "again" }] as any, { caller: ownerCaller });
@@ -128,12 +159,12 @@ test("generation lineage finds resumed children and remains readable for histori
   const resumedChild = childResume.starts[0] as any;
 
   expect(manager.directChildGenerations(owner)).toEqual([child, resumedChild].map(({ conversationId, generation }) => ({ conversationId, generation })));
-  expect(manager.unjoinedDirectChildGenerations(owner)).toEqual([{ conversationId: child.conversationId, generation: 2 }]);
+  expect(manager.uncollectedDirectChildGenerations(owner)).toEqual([{ conversationId: child.conversationId, generation: 2 }]);
 
   joinLatest(manager, owner.conversationId);
   const ownerResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: owner.conversationId, prompt: "owner again" }] as any);
   await ownerResume.completion;
-  expect(manager.unjoinedDirectChildGenerations(owner)).toEqual([{ conversationId: child.conversationId, generation: 2 }]);
+  expect(manager.uncollectedDirectChildGenerations(owner)).toEqual([{ conversationId: child.conversationId, generation: 2 }]);
 });
 
 test("conversation queries return direct children only", async () => {
@@ -592,7 +623,7 @@ test("spawn rejects unknown requested skills before allocating conversations", a
   await batch.completion;
 });
 
-test("joining marks the latest result joined and unlocks resume", async () => {
+test("model collection marks the exact latest result and unlocks model-initiated resume", async () => {
   const manager = new SubagentRuntime(registry, 1, executor);
   const initial = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "old", label: "old" }] as any);
   await initial.completion;
@@ -602,7 +633,12 @@ test("joining marks the latest result joined and unlocks resume", async () => {
   const join = manager.bindSubagentJoin([first.conversationId]);
   await join.completion;
   expect(join.project()[0].status).toMatchObject({ kind: "done", outcome: "completed", output: "old" });
-  join.markJoined();
+  join.markCollected("user");
+  expect(manager.generationSnapshot(first).receipts).toEqual({ user: true, model: false });
+  expect(manager.projectSubagent(first.conversationId).collected).toBe(false);
+  expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "wrong audience" }] as any).starts[0])
+    .toMatchObject({ ok: false });
+  join.markCollected("model");
   expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "blocked" }] as any).starts[0]).toMatchObject({ ok: false });
   join.release();
   expect(manager.projectSubagent(first.conversationId).actionHints).toContain("resume");
@@ -610,6 +646,75 @@ test("joining marks the latest result joined and unlocks resume", async () => {
   const resumed = manager.startTasks(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any);
   expect(resumed.starts[0]).toMatchObject({ ok: true, conversationId: first.conversationId });
   await resumed.completion;
+
+  join.markCollected("user");
+  expect(manager.conversation(first.conversationId).generations.map(generation => generation.receipts)).toEqual([
+    { user: true, model: true },
+    { user: false, model: false },
+  ]);
+});
+
+test("nonblocking user collection is terminal-only, idempotent, and unaffected by model subscription", async () => {
+  let finish!: () => void;
+  const controlled = async (_ctx: any, agent: any, attempt: any) => {
+    agent.bindSession(attempt, session());
+    await new Promise<void>(done => { finish = done; });
+    return completedGeneration(agent, attempt, attempt.prompt);
+  };
+  const manager = new SubagentRuntime(registry, 1, controlled);
+  const started = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "user work", label: "user work" }], { initiatedBy: "user" });
+  const identity = started.starts[0] as any;
+  await new Promise(done => setImmediate(done));
+
+  expect(manager.collectSubagentForUser(identity.conversationId)).toEqual({
+    conversationId: identity.conversationId,
+    generation: identity.generation,
+    collected: false,
+  });
+  expect(manager.generationSnapshot(identity)).toMatchObject({
+    activeCollectionCount: 0,
+    receipts: { user: false, model: false },
+  });
+  await manager.steerSubagent(identity.conversationId, "model subscribed");
+  expect(manager.isModelSubscribed(identity)).toBe(true);
+
+  finish();
+  await started.completion;
+  const modelCollection = manager.bindSubagentJoin([identity.conversationId]);
+  await modelCollection.completion;
+  modelCollection.markCollected("model");
+  modelCollection.release();
+  expect(manager.generationSnapshot(identity).receipts).toEqual({ user: false, model: true });
+  expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: identity.conversationId, prompt: "blocked" }]).starts[0])
+    .toMatchObject({ ok: false });
+
+  const collectionUpdates: string[] = [];
+  const unsubscribe = manager.onConversationUpdate((_conversation, kind) => collectionUpdates.push(kind));
+  const expected = { conversationId: identity.conversationId, generation: identity.generation, collected: true };
+  expect(manager.collectSubagentForUser(identity.conversationId)).toEqual(expected);
+  expect(manager.collectSubagentForUser(identity.conversationId)).toEqual(expected);
+  unsubscribe();
+  expect(collectionUpdates).toEqual(["collection"]);
+  expect(manager.generationSnapshot(identity)).toMatchObject({
+    activeCollectionCount: 0,
+    receipts: { user: true, model: true },
+  });
+  expect(manager.projectSubagent(identity.conversationId)).toMatchObject({ collected: true, actionHints: expect.arrayContaining(["resume"]) });
+});
+
+test("user collection validates root ownership", async () => {
+  const manager = new SubagentRuntime(registry, 2, executor);
+  const ownerStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "owner", label: "owner" }]);
+  await ownerStart.completion;
+  const owner = ownerStart.starts[0] as any;
+  const childStart = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "child", label: "child" }], caller(manager, owner));
+  await childStart.completion;
+  const child = childStart.starts[0] as any;
+
+  expect(() => manager.collectSubagentForUser(child.conversationId)).toThrow(
+    `Subagent ${child.conversationId} is not directly owned by the root agent.`,
+  );
+  expect(manager.generationSnapshot(child).receipts.user).toBe(false);
 });
 
 test("completed removal deletes exact generations, prevents resume, and reclaims capacity", async () => {
@@ -671,7 +776,7 @@ test("removal publishes once while stale join bindings remain silent", async () 
   const unsubscribe = manager.onConversationUpdate((agent, kind) => updates.push(`${agent.conversationId}:${kind}`));
 
   await manager.removeConversation(identity.conversationId);
-  binding.markJoined();
+  binding.markCollected("model");
   binding.release();
 
   expect(updates).toEqual([`${identity.conversationId}:removed`]);
@@ -801,15 +906,15 @@ test("wedged cancellation releases scheduler capacity", async () => {
     conversationId: identity.conversationId,
     generation: identity.generation,
   });
-  expect(manager.projectSubagent(identity.conversationId)).toMatchObject({ generation: 1, status: "cancelled", joined: false });
+  expect(manager.projectSubagent(identity.conversationId)).toMatchObject({ generation: 1, status: "cancelled", collected: false });
   await expect(manager.cancelSubagent(identity.conversationId)).resolves.toEqual({
     conversationId: identity.conversationId,
     generation: identity.generation,
   });
-  const joined = manager.bindSubagentJoin([identity.conversationId]);
-  await joined.completion;
-  joined.markJoined();
-  joined.release();
+  const collection = manager.bindSubagentJoin([identity.conversationId]);
+  await collection.completion;
+  collection.markCollected("model");
+  collection.release();
   expect(manager.projectSubagent(identity.conversationId).actionHints).not.toContain("resume");
 
   const replacement = manager.startTasks(ctx, [{ kind: "spawn", agent: "worker", prompt: "replacement", label: "replacement" }]);
@@ -938,12 +1043,17 @@ test("duplicate concurrent joins each receive the settled result", async () => {
   await binding.completion;
   expect(binding.project()).toHaveLength(2);
   expect(binding.project().map(output)).toEqual(["done", "done"]);
-  binding.markJoined();
+  const finalized = binding.finalizeCollection("model");
+  expect(finalized.map(entry => ({ output: output(entry), canonical: entry.canonical }))).toEqual([
+    { output: "done", canonical: expect.objectContaining({ generation: 1, collected: true, actionHints: expect.arrayContaining(["resume"]) }) },
+    { output: "done", canonical: expect.objectContaining({ generation: 1, collected: true, actionHints: expect.arrayContaining(["resume"]) }) },
+  ]);
   binding.release();
-  expect(manager.projectSubagent(identity.conversationId).joined).toBe(true);
+  expect(manager.generationSnapshot(identity).activeCollectionCount).toBe(0);
+  expect(manager.projectSubagent(identity.conversationId).collected).toBe(true);
 });
 
-test("multi-target join reserves every latest execution before publishing observer updates", async () => {
+test("multi-target join reserves every latest execution before publishing active-collection updates", async () => {
   const manager = new SubagentRuntime(registry, 2, executor);
   const starts = manager.startTasks(ctx, [
     { kind: "spawn", agent: "worker", prompt: "first", label: "first" },
@@ -956,7 +1066,7 @@ test("multi-target join reserves every latest execution before publishing observ
 
   let resume: any;
   const unsubscribe = manager.onConversationUpdate((conversation, kind) => {
-    if (!resume && kind === "observer" && conversation.conversationId === first.conversationId) {
+    if (!resume && kind === "activeCollection" && conversation.conversationId === first.conversationId) {
       resume = manager.startTasks(ctx, [{ kind: "resume", subagentId: second.conversationId, prompt: "raced" }] as any).starts[0];
     }
   });
@@ -968,6 +1078,16 @@ test("multi-target join reserves every latest execution before publishing observ
     { conversationId: first.conversationId, generation: first.generation },
     { conversationId: second.conversationId, generation: second.generation },
   ]);
+
+  let receiptsAtPublication: boolean[] | undefined;
+  const unsubscribeCollection = manager.onConversationUpdate((_conversation, kind) => {
+    if (kind === "collection" && !receiptsAtPublication) {
+      receiptsAtPublication = [first, second].map(target => manager.generationSnapshot(target).receipts.user);
+    }
+  });
+  binding.markCollected("user");
+  unsubscribeCollection();
+  expect(receiptsAtPublication).toEqual([true, true]);
   binding.release();
 });
 
@@ -1011,7 +1131,7 @@ test("resume remains blocked until every accepted join releases", async () => {
   const firstJoin = manager.bindSubagentJoin([first.conversationId]);
   const secondJoin = manager.bindSubagentJoin([first.conversationId]);
   await Promise.all([firstJoin.completion, secondJoin.completion]);
-  firstJoin.markJoined();
+  firstJoin.markCollected("model");
 
   expect(manager.projectSubagent(first.conversationId).actionHints).not.toContain("resume");
   expect(manager.startTasks(ctx, [{ kind: "resume", subagentId: first.conversationId, prompt: "new" }] as any).starts[0])
@@ -1210,7 +1330,7 @@ test("queued cancellation settles immediately without dispatching the executor",
   await expect(queued.completion).resolves.toEqual(queued.starts);
   await join.completion;
   expect(join.project()[0].status).toMatchObject({ kind: "done", outcome: "aborted" });
-  join.markJoined();
+  join.markCollected("model");
   join.release();
   expect(executed).toEqual(["blocker"]);
   const resumed = manager.startTasks(ctx, [{ kind: "resume", subagentId: target.conversationId, prompt: "continue" }]);
@@ -1265,8 +1385,8 @@ test("inspection is ordered and leaves observation state unchanged", async () =>
 
   expect(inspected.map(item => item.snapshot.generation)).toEqual([started.generation, started.generation]);
   expect(manager.generationSnapshot(started)).toMatchObject({
-    observerCount: before.observerCount,
-    joined: before.joined,
+    activeCollectionCount: before.activeCollectionCount,
+    receipts: before.receipts,
   });
 });
 
@@ -1293,8 +1413,8 @@ test("ancestors may inspect indirect descendants without changing lifecycle stat
   expect(manager.projectSubagent(leaf.conversationId, ownerCaller).actionHints).toEqual(["inspect"]);
   expect(manager.projectSubagent(leaf.conversationId).actionHints).toEqual(["inspect"]);
   expect(manager.generationSnapshot(leaf)).toMatchObject({
-    observerCount: before.observerCount,
-    joined: false,
+    activeCollectionCount: before.activeCollectionCount,
+    receipts: { user: false, model: false },
   });
   expect(() => manager.inspectSubagents([sibling.conversationId], ownerCaller)).toThrow(
     `Subagent ${sibling.conversationId} is not a descendant of caller subagent ${owner.conversationId}.`,
@@ -1353,7 +1473,7 @@ test("only a subagent's direct owner may join it by stable ID", async () => {
   expect(() => manager.bindSubagentJoin([child.conversationId])).toThrow("not directly owned");
 
   const leafJoin = manager.bindSubagentJoin([leaf.conversationId], manager.generationCaller(child));
-  leafJoin.markJoined();
+  leafJoin.markCollected("model");
   leafJoin.release();
   const unauthorizedResume = manager.startTasks(ctx, [{ kind: "resume", subagentId: leaf.conversationId, prompt: "again" }],
     parent(manager, root));
@@ -1376,7 +1496,7 @@ test("nested joins validate descendants and preserve ordered attempts without ta
     "tool-1",
   ) as any;
   await nested.completion;
-  nested.markJoined();
+  nested.markCollected("model");
   nested.release();
 
   const snapshot = manager.generationSnapshot(owner);
@@ -1384,10 +1504,10 @@ test("nested joins validate descendants and preserve ordered attempts without ta
   expect(snapshot.nestedJoins?.[0]).toMatchObject({ state: "completed", toolCallId: "tool-1" });
   expect(snapshot.nestedJoins?.[0].targets.map(target => target.generation)).toEqual([child.generation, child.generation]);
   expect(snapshot.nestedJoins?.[0].targets[0]).not.toHaveProperty("output");
-  expect(manager.unjoinedDirectChildGenerations(owner)).toEqual([]);
+  expect(manager.uncollectedDirectChildGenerations(owner)).toEqual([]);
 
   expect(() => manager.bindSubagentJoin([owner.conversationId], manager.generationCaller(owner)))
     .toThrow("not directly owned");
   expect(manager.generationSnapshot(owner).nestedJoins).toHaveLength(1);
-  expect(manager.generationSnapshot(owner).observerCount).toBe(0);
+  expect(manager.generationSnapshot(owner).activeCollectionCount).toBe(0);
 });

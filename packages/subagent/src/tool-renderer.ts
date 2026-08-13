@@ -44,7 +44,7 @@ export interface ListedConversationRenderItem {
   agent: string;
   label: string;
   status: SubagentStatus;
-  joined?: boolean;
+  collected?: boolean;
   actionHints: readonly SubagentAction[];
   failure?: string;
   descendants: ListedDescendantRenderItem[];
@@ -81,7 +81,7 @@ export interface GenerationHistoryRenderItem extends GenerationMetricsRenderItem
   kind: GenerationKind;
   initiatedBy: GenerationInitiator;
   status: SubagentStatus;
-  joined: boolean;
+  collected: boolean;
   steers: readonly SteerReceipt[];
 }
 
@@ -114,7 +114,7 @@ export interface JoinInvocationRenderItem {
   toolCallId?: string;
 }
 
-/** A joined descendant. Deliberately has no output field: descendant answers are not UI data. */
+/** A collected descendant. Deliberately has no output field: descendant answers are not UI data. */
 export interface JoinTargetRenderItem {
   subagentId?: ConversationId;
   agent?: string;
@@ -317,7 +317,7 @@ function expandedLines(details: SubagentResultDetails, theme?: ThemeLike): strin
       if (conversations.length === 0) return [success(theme, "No subagents found")];
       return blocks(conversations, conversation => [
         `${statusMarker(theme, conversation.status)} ${paint(theme, "text", conversationLabel(conversation))} ${paint(theme, "muted", `· ${conversation.agent} · ${statusText(theme, conversation.status)}`)}`,
-        `  ${tag(theme, "subagent", conversation.subagentId)}${conversation.joined !== undefined ? paint(theme, "muted", ` · ${conversation.joined ? "joined" : "not joined"}`) : ""}`,
+        `  ${tag(theme, "subagent", conversation.subagentId)}${conversation.collected !== undefined ? paint(theme, "muted", ` · ${conversation.collected ? "collected" : "not collected"}`) : ""}`,
         ...(conversation.failure ? [`  ${paint(theme, "error", conversation.failure)}`] : []),
         ...renderDescendants(conversation.descendants, "  ", theme),
       ]);
@@ -396,7 +396,7 @@ function removedSubagentIds(items: readonly RemoveRenderItem[]): ConversationId[
 }
 
 function joinLines(entries: readonly JoinedGenerationRenderItem[], expanded: boolean, partial: boolean, theme?: ThemeLike): string[] {
-  if (entries.length === 0) return [success(theme, "No subagents joined")];
+  if (entries.length === 0) return [success(theme, "No subagents collected")];
   const rendered = entries.map((entry, index) => renderJoinRoot(entry, index, expanded, partial, theme));
   return expanded ? joinBlocks(rendered) : rendered.flat();
 }
@@ -493,7 +493,7 @@ function renderTerminalJoin(group: JoinInvocationRenderItem, indent: string, exp
   const labels = group.targets.map(target => target.label || target.agent || target.subagentId || "unknown subagent");
   const summary = failed
     ? `join failed${group.error ? ` · ${group.error}` : ""}`
-    : `joined ${group.targets.length}${labels.length ? ` · ${labels.join(", ")}` : ""}`;
+    : `collected ${group.targets.length}${labels.length ? ` · ${labels.join(", ")}` : ""}`;
   const lines = [`${indent}${statusMarker(theme, group.status)} ${paint(theme, failed ? "error" : "muted", summary)}`];
   if (expanded) lines.push(...renderJoinTargets(group.targets, indent, true, theme));
   return lines;

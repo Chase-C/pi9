@@ -12,7 +12,7 @@ function resumable(messages: any[], prompt: () => Promise<void>, abort = vi.fn()
   const agent = new Conversation("amber-acorn" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
   const session = { messages, subscribe: () => () => {}, prompt, abort } as any;
   agent.bindSession(agent.latestGeneration, session); completedGeneration(agent, agent.latestGeneration, "first");
-  agent.markJoined(agent.latestGeneration);
+  agent.markCollected(agent.latestGeneration, "model");
   const attempt = agent.beginResume("continue");
   return { agent, attempt, session, abort };
 }
@@ -47,7 +47,7 @@ test("child session lifecycle observers span finalized tool execution events", a
   } as any;
   const agent = new Conversation("amber-acorn" as any, config, { kind: "spawn", agent: "worker", prompt: "first", label: "first" }, () => {});
   agent.bindSession(agent.latestGeneration, session); completedGeneration(agent, agent.latestGeneration, "first");
-  agent.markJoined(agent.latestGeneration);
+  agent.markCollected(agent.latestGeneration, "model");
   const attempt = agent.beginResume("continue");
   const observed: any[] = [];
 

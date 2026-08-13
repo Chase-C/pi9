@@ -40,7 +40,7 @@ export type ActionRuntime = Pick<SubagentRuntime,
   | "projectSubagent"
   | "subagentStatus"
   | "generationSnapshot"
-  | "unjoinedDirectChildGenerations"
+  | "uncollectedDirectChildGenerations"
 > & { scheduler: Pick<GenerationScheduler, "suspendConversationSlotDuring"> };
 
 export interface ActionDeps {
@@ -191,7 +191,7 @@ export function listAction(
       descendants: descendants(conversation.conversationId),
     }))
     .filter(conversation => !invocation.statuses || invocation.statuses.includes(conversation.status))
-    .filter(conversation => invocation.joined === undefined || conversation.joined === invocation.joined);
+    .filter(conversation => invocation.collected === undefined || conversation.collected === invocation.collected);
   return resultsResult("list", conversations);
 }
 
@@ -382,17 +382,15 @@ export async function joinAction(
     bindingReleased = true;
     binding.release();
   };
-  const output = (): JoinOutput[] => {
-    const entries = binding.project();
+  const output = (entries = binding.project()): JoinOutput[] => {
     let entryIndex = 0;
     return targets.map(target => typeof target === "string"
       ? projectJoinedEntry(entries[entryIndex++])
       : target);
   };
-  const currentResult = (final = false, pretty = true): ActionResult => {
-    const joined = output();
-    return resultsResult("join", projectJoinResults(joined, deps), {
-      entries: renderJoinedGenerations(joined, deps.runtime, final),
+  const currentResult = (final = false, pretty = true, collectionOutput = output()): ActionResult => {
+    return resultsResult("join", projectJoinResults(collectionOutput, deps), {
+      entries: renderJoinedGenerations(collectionOutput, deps.runtime, final),
     }, pretty);
   };
   const emit = () => onUpdate?.(currentResult(false, false));
@@ -415,9 +413,10 @@ export async function joinAction(
     await (deps.parent
       ? deps.runtime.scheduler.suspendConversationSlotDuring(deps.parent, wait)
       : wait());
-    binding.markJoined();
-    releaseBinding();
-    return currentResult(true);
+    unsubscribe();
+    const finalized = binding.finalizeCollection("model");
+    bindingReleased = true;
+    return currentResult(true, true, output(finalized));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (owner) (binding as NestedJoinBinding).interrupt(message);
@@ -429,7 +428,7 @@ export async function joinAction(
   }
 }
 
-function projectJoinedEntry(entry: ReturnType<JoinBinding["project"]>[number]): JoinedOutput {
+function projectJoinedEntry(entry: ReturnType<JoinBinding["project"]>[number] | ReturnType<JoinBinding["finalizeCollection"]>[number]): JoinedOutput {
   return {
     ok: true,
     conversationId: entry.conversationId,
@@ -437,6 +436,7 @@ function projectJoinedEntry(entry: ReturnType<JoinBinding["project"]>[number]): 
     status: entry.status,
     ...(entry.status.kind === "done" ? { output: entry.status.output ?? null } : {}),
     ...(entry.status.kind === "done" && entry.status.error !== undefined ? { error: entry.status.error } : {}),
+    ...("canonical" in entry ? { canonical: entry.canonical } : {}),
   };
 }
 
@@ -534,7 +534,7 @@ function projectInspection(
     kind: historicalGeneration.kind,
     initiatedBy: historicalGeneration.initiatedBy,
     status: projectSubagentStatus(historicalGeneration.status),
-    joined: historicalGeneration.joined,
+    collected: historicalGeneration.receipts.model,
     ...generationMetrics(historicalGeneration, now),
     steers: historicalGeneration.steers,
   }));
@@ -588,6 +588,7 @@ type JoinedOutput = GenerationRef & {
   readonly status: GenerationViewStatus;
   readonly output?: string | null;
   readonly error?: string;
+  readonly canonical?: CanonicalLiveSubagent;
 };
 type JoinOutput = JoinedOutput | TargetFailure;
 
@@ -598,7 +599,7 @@ function projectJoinResults(
   return output.map(value => {
     if (value.ok) {
       return {
-        ...canonicalSubagent(deps, value.conversationId),
+        ...(value.canonical ?? canonicalSubagent(deps, value.conversationId)),
         generation: value.generation,
         ...(value.output !== undefined ? { output: value.output } : {}),
       };
@@ -631,7 +632,7 @@ function renderJoinedGenerations(
   }));
   const background = (owner: GenerationRef, ownerLabel?: string) => {
     let children: readonly GenerationRef[];
-    try { children = runtime.unjoinedDirectChildGenerations(owner); } catch { return []; }
+    try { children = runtime.uncollectedDirectChildGenerations(owner); } catch { return []; }
     if (!children.length) return [];
     return [{ ...(ownerLabel ? { ownerLabel } : {}), entries: children.map(child => {
       const childGeneration = snapshot(child);
@@ -722,14 +723,14 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Delegate work asynchronously through persistent, context-isolated subagents. Subagents share the working filesystem.",
       "Actions:",
       "  agents(): List available agent definitions.",
-      "  list(statuses?, joined?): List child subagents with descendant summaries.",
+      "  list(statuses?, collected?): List child subagents with descendant summaries, optionally filtered by the model's collection receipt.",
       "  spawn(spawns): Start subagents; each spawn begins a generation.",
-      "  resume(resumes): Start a joined subagent's next generation.",
+      "  resume(resumes): Start a subagent's next generation; requires the prior generation initiator's collection receipt.",
       "  steer(messages): Send messages to running subagents.",
       "  inspect(subagentIds): Check descendant status and progress without waiting.",
-      "  join(subagentIds): Wait for and collect subagent results; blocks while running, idempotent after.",
+      "  join(subagentIds): Wait for completion and collect each result for the model; idempotent after collection.",
       "  cancel(subagentIds): Idempotently cancel generations; retain subagents, context, and results.",
-      "  remove(subagentIds): Permanently discard inactive subagent subtrees, including unjoined results.",
+      "  remove(subagentIds): Permanently discard inactive subagent subtrees, including uncollected results.",
     ].join("\n"),
     promptSnippet: "Delegate bounded work to context-isolated subagents",
     promptGuidelines: [
@@ -737,8 +738,8 @@ export function defineSubagentTool(deps: SubagentToolDeps) {
       "Subagents see only their prompt and the filesystem; include every input, path, and constraint, plus what to report or produce.",
       "Parallelize subagents only when independent and writing disjoint files; otherwise run serially.",
       "While a subagent runs, intervene only with cause: inspect when progress could change your next step, steer to correct or constrain.",
-      "Join a subagent when you depend on its result or are otherwise idle.",
-      "Resume a subagent when its accumulated context helps the follow-up; spawn fresh when it would be irrelevant or misleading.",
+      "Join a subagent when you depend on its result or are otherwise idle; join waits for completion and records the model's collection receipt.",
+      "Resume a subagent only after the prior generation initiator has a collection receipt and when its accumulated context helps; spawn fresh when it would be irrelevant or misleading.",
     ],
     parameters: SubagentParams,
     renderCall(args, theme) {

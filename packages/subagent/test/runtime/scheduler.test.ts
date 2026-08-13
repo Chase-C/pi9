@@ -34,7 +34,7 @@ test("an executor failure resolves the resumed generation snapshot", async () =>
   const conversation = makeAgent("amber-acorn", "first");
   const spawn = conversation.latestGeneration;
   await scheduler.schedule({} as any, undefined, conversation, spawn);
-  conversation.markJoined(spawn);
+  conversation.markCollected(spawn, "model");
   const resume = conversation.beginResume("continue");
 
   await expect(scheduler.schedule({} as any, undefined, conversation, resume)).resolves.toMatchObject({

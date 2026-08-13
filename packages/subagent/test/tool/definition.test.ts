@@ -60,6 +60,19 @@ test("tool prepares settings, applies task limits, and renders simple typed cont
   assert.match(tool.renderCall({ action: "spawn", spawns: [{}, {}] }, {}, {}).render(120).join("\n"), /2 tasks/);
 });
 
+test("tool descriptions define model collection and initiator receipt semantics", () => {
+  const tool: any = defineSubagentTool({
+    runtime,
+    agentRegistry: registry,
+    prepareInvocation: async () => settings,
+  });
+
+  assert.match(tool.description, /list\(statuses\?, collected\?\).*model's collection receipt/);
+  assert.match(tool.description, /resume\(resumes\).*prior generation initiator's collection receipt/);
+  assert.match(tool.description, /join\(subagentIds\).*Wait for completion and collect each result for the model/);
+  assert.doesNotMatch(tool.description, /\b(?:joined|unjoined)\b/);
+});
+
 test("unknown actions return a structured global error envelope marked as an error", async () => {
   const tool: any = defineSubagentTool({
     runtime,

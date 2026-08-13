@@ -25,13 +25,21 @@ test("spawn publishes queued after manager conversation and generation indexes e
   const started = manager.startTasks(context, [{ kind: "spawn", agent: "worker", prompt: "work", label: "work" }] as any);
   const identity = started.starts[0] as any;
   const queued = emitted.find(value => value.event === "subagent:queued")!;
-  expect(queued.data).toMatchObject({ ok: true, subagentId: identity.conversationId, generation: 1, status: "queued" });
+  expect(queued.data).toMatchObject({
+    ok: true,
+    subagentId: identity.conversationId,
+    generation: 1,
+    status: "queued",
+    receipts: { user: false, model: false },
+  });
+  expect(queued.data).not.toHaveProperty("collected");
+  expect(queued.data).not.toHaveProperty("joined");
   expect(manager.conversation(identity.conversationId).generations.some(generation => generation.generation === identity.generation)).toBe(true);
   expect(() => manager.bindSubagentJoin([identity.conversationId])).not.toThrow();
   release(); await started.completion; unsubscribe();
 });
 
-test("finished events use the root-relative canonical block", async () => {
+test("lifecycle events use the audience-neutral canonical block", async () => {
   const manager = new SubagentRuntime(registry, 1, async (_ctx, agent, generation) => {
     agent.bindSession(generation, { messages: [], subscribe: () => () => {}, abort() {} } as any);
     return completedGeneration(agent, generation, "done");
@@ -53,8 +61,8 @@ test("finished events use the root-relative canonical block", async () => {
         generation: 1,
         initiatedBy: "model",
         status: "queued",
-        joined: false,
         actionHints: ["cancel", "inspect", "join"],
+        receipts: { user: false, model: false },
       },
     },
     {
@@ -67,8 +75,8 @@ test("finished events use the root-relative canonical block", async () => {
         generation: 1,
         initiatedBy: "model",
         status: "running",
-        joined: false,
         actionHints: ["steer", "cancel", "inspect", "join"],
+        receipts: { user: false, model: false },
       },
     },
     {
@@ -81,11 +89,21 @@ test("finished events use the root-relative canonical block", async () => {
         generation: 1,
         initiatedBy: "model",
         status: "completed",
-        joined: false,
         actionHints: ["inspect", "join", "remove"],
+        receipts: { user: false, model: false },
       },
     },
   ]);
+  expect(emitted.every(({ data }) => !("collected" in data) && !("joined" in data))).toBe(true);
+
+  const finished = emitted.at(-1)!.data;
+  manager.collectSubagentForUser(subagentId);
+  expect(manager.generationSnapshot({ conversationId: subagentId, generation: 1 }).receipts.user).toBe(true);
+  expect(emitted).toHaveLength(3);
+  expect(finished.receipts).toEqual({ user: false, model: false });
+  expect(Object.isFrozen(finished.receipts)).toBe(true);
+  expect(() => { finished.receipts.user = true; }).toThrow();
+  expect(finished.receipts).toEqual({ user: false, model: false });
   unsubscribe();
 });
 
@@ -109,30 +127,38 @@ test("failed lifecycle events include the canonical failure text", async () => {
       generation: 1,
       initiatedBy: "model",
       status: "failed",
-      joined: false,
       actionHints: ["inspect", "join", "remove"],
       failure: "Subagent failed: provider rejected the request",
+      receipts: { user: false, model: false },
     },
   });
+  expect(emitted.at(-1)!.data).not.toHaveProperty("collected");
+  expect(emitted.at(-1)!.data).not.toHaveProperty("joined");
   unsubscribe();
 });
 
 test("successive generations with equal timestamps publish distinct lifecycle events", () => {
   const conversationId = "calm-otter" as ConversationId;
   let listener: ((agent: Conversation, kind: any) => void) | undefined;
+  let projectedGeneration = 1;
   const source = {
     onConversationUpdate: (next: typeof listener) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, initiatedBy: "model" as const, status: "completed" as const, joined: false as const, actionHints: [] }),
+    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: projectedGeneration, initiatedBy: "model" as const, status: "completed" as const, collected: false, actionHints: [] }),
   };
   const emitted: Array<{ event: string; data: any }> = [];
   registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, source);
-  const snapshot = (generation: number) => ({ generations: [{ generation, status: { kind: "done", outcome: "completed", completedAt: 7 } }] });
+  const snapshot = (generation: number) => ({ generations: [{ generation, receipts: { user: false, model: false }, status: { kind: "done", outcome: "completed", completedAt: 7 } }] });
   const agent = { conversationId, snapshot: () => snapshot(1) } as any;
   listener?.(agent, "status");
+  projectedGeneration = 2;
   agent.snapshot = () => snapshot(2);
   listener?.(agent, "status");
 
-  expect(emitted).toHaveLength(2);
+  expect(emitted.map(({ data }) => data.generation)).toEqual([1, 2]);
+  expect(emitted.map(({ data }) => data.receipts)).toEqual([
+    { user: false, model: false },
+    { user: false, model: false },
+  ]);
 });
 
 test("generation metadata uses the generation-native custom entry and projection", () => {
@@ -183,7 +209,7 @@ test("non-status changes do not publish public lifecycle events", () => {
   let listener: ((agent: Conversation, kind: any) => void) | undefined;
   const source = {
     onConversationUpdate: (next: typeof listener) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, initiatedBy: "model" as const, status: "running" as const, joined: false as const, actionHints: [] }),
+    projectSubagent: () => ({ ok: true as const, subagentId: conversationId, label: "delegate", agent: "worker", generation: 1, initiatedBy: "model" as const, status: "running" as const, collected: false as const, actionHints: [] }),
   };
   const emitted: Array<{ event: string; data: any }> = [];
   registerSubagentLifecycleEvents({ emit: (event, data) => emitted.push({ event, data }) }, source);

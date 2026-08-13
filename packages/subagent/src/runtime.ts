@@ -4,7 +4,7 @@ import {
   Conversation,
   GenerationSteerError,
   effectiveStatus,
-  generationKey,
+  type CollectionAudience,
   type ConversationSnapshot,
   type ConversationUpdateKind,
   type ConversationUpdateListener,
@@ -34,11 +34,14 @@ export type OrderedStartOutcome =
   | { readonly ok: false; readonly inputIndex: number; readonly error: string };
 export interface GenerationHandle { readonly starts: readonly OrderedStartOutcome[]; readonly completion: Promise<readonly OrderedStartOutcome[]> }
 export interface JoinProjection extends GenerationRef { readonly status: GenerationViewStatus }
+export interface FinalizedJoinProjection extends JoinProjection { readonly canonical: CanonicalLiveSubagent }
 export interface JoinBinding {
   readonly targets: readonly GenerationRef[];
   readonly completion: Promise<void>;
   project(): readonly JoinProjection[];
-  markJoined(): void;
+  markCollected(audience: CollectionAudience): void;
+  /** Collects and releases while capturing bound projections before deferred updates are published. */
+  finalizeCollection(audience: CollectionAudience): readonly FinalizedJoinProjection[];
   release(): void;
 }
 export interface NestedJoinBinding extends JoinBinding {
@@ -52,6 +55,7 @@ export type RemoveOutcome =
   | { readonly ok: true; readonly conversationId: ConversationId; readonly label: string; readonly removedIds: readonly ConversationId[] }
   | { readonly ok: false; readonly conversationId: string; readonly error: string };
 export interface SteerResult extends GenerationRef { readonly steer: SteerReceipt }
+export interface UserCollectionOutcome extends GenerationRef { readonly collected: boolean }
 
 interface GenerationRecord { readonly conversation: Conversation; readonly generation: Generation }
 interface BoundRecord { readonly conversationId: ConversationId; readonly binding: GenerationBinding }
@@ -105,23 +109,7 @@ export class SubagentRuntime {
   projectSubagent(conversationId: string, caller?: SubagentCaller, failureMode: FailureProjectionMode = "full"): CanonicalLiveSubagent {
     if (caller) this.requireCaller(caller, "inspect");
     const conversation = this.requireConversation(conversationId);
-    const latest = conversation.generationHistory.at(-1)!;
-    const directlyOwned = caller ? conversation.parentConversationId === caller.conversation.conversationId : conversation.parentConversationId === undefined;
-    const inspectable = caller ? this.isDescendant(conversation, caller.conversation.conversationId) : true;
-    const removableSubtree = this.conversationSubtree(conversation.conversationId).every(item => !item.hasActiveExecution);
-    return projectLiveSubagent({
-      subagentId: conversation.conversationId,
-      label: conversation.label,
-      agent: conversation.agentName,
-      generation: latest.generation,
-      initiatedBy: latest.initiatedBy,
-      generationStatus: latest.status,
-      joined: latest.joined,
-      directlyOwned,
-      inspectable,
-      resumeAllowed: conversation.isResumeAllowed,
-      removableSubtree,
-    }, failureMode);
+    return this.projectRecord({ conversation, generation: conversation.latestGeneration }, caller, failureMode);
   }
 
   /** Resolves and reserves the complete batch synchronously; executions never inherit caller cancellation. */
@@ -225,6 +213,15 @@ export class SubagentRuntime {
   }
   validateSubagentJoin(subagentId: SubagentId, caller?: SubagentCaller): void { this.assertDirectOwner(this.requireConversation(subagentId), caller, "join"); }
 
+  /** Records root-user collection without binding or waiting. Active generations are left unchanged. */
+  collectSubagentForUser(subagentId: SubagentId): UserCollectionOutcome {
+    const record = this.latestSubagentRecord(subagentId);
+    this.assertDirectOwner(record.conversation, undefined, "collect");
+    const terminal = record.generation.state.kind === "done";
+    if (terminal) record.conversation.markCollected(record.generation, "user");
+    return { ...generationRef(record), collected: terminal };
+  }
+
   bindSubagentJoin(subagentIds: readonly SubagentId[], caller?: SubagentCaller, toolCallId?: string): JoinBinding | NestedJoinBinding {
     const records = subagentIds.map(subagentId => this.latestSubagentRecord(subagentId));
     for (const record of records) this.assertDirectOwner(record.conversation, caller, "join");
@@ -241,7 +238,7 @@ export class SubagentRuntime {
         caller.conversation.updateNestedJoin(caller.generation, attemptIndex, { state: "failed", error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
-      const base = this.bindRecords(records);
+      const base = this.bindRecords(records, caller);
       let terminal = false;
       const targets = (): NestedJoinTargetSnapshot[] => base.project().map(value => ({ conversationId: value.conversationId, generation: value.generation, status: effectiveStatus(value.status) }));
       caller.conversation.updateNestedJoin(caller.generation, attemptIndex, { targets: targets() });
@@ -256,7 +253,8 @@ export class SubagentRuntime {
         get targets() { return base.targets; },
         completion: base.completion,
         project: () => base.project(),
-        markJoined: () => base.markJoined(),
+        markCollected: audience => { base.markCollected(audience); },
+        finalizeCollection: audience => base.finalizeCollection(audience),
         release: () => base.release(),
         interrupt: (error = "Nested join interrupted.") => {
           if (terminal) return;
@@ -291,13 +289,11 @@ export class SubagentRuntime {
         .filter(generation => generation.startedInParentGeneration === owner.generation)
         .map(generation => ({ conversationId: conversation.conversationId, generation: generation.generation })));
   }
-  unjoinedDirectChildGenerations(owner: GenerationRef): readonly GenerationRef[] {
-    const ownerSnapshot = this.generationSnapshot(owner);
-    const mentioned = new Set((ownerSnapshot.nestedJoins ?? []).flatMap(attempt => attempt.targets.map(generationKey)));
-    return this.directChildGenerations(owner).filter(child => !mentioned.has(generationKey(child)));
+  uncollectedDirectChildGenerations(owner: GenerationRef): readonly GenerationRef[] {
+    return this.directChildGenerations(owner).filter(child => !this.generationSnapshot(child).receipts.model);
   }
 
-  private bindRecords(records: readonly GenerationRecord[]): JoinBinding {
+  private bindRecords(records: readonly GenerationRecord[], caller?: SubagentCaller): JoinBinding {
     const attached: BoundRecord[] = [];
     try { for (const record of records) attached.push({ conversationId: record.conversation.conversationId, binding: record.conversation.bindGeneration(record.generation) }); }
     catch (error) { for (const item of attached) item.binding.release(); throw error; }
@@ -306,14 +302,48 @@ export class SubagentRuntime {
     const completion = new Promise<void>(done => { resolve = done; });
     const check = () => { if (!released && attached.every(item => item.binding.snapshot().status.kind === "done")) resolve(); };
     const unsubscribe = this.onConversationUpdate(check);
+    const project = (): JoinProjection[] => attached.map(item => ({ conversationId: item.conversationId, generation: item.binding.generation.number, status: item.binding.snapshot().status }));
+    const release = () => { if (released) return; released = true; unsubscribe(); for (const item of attached) item.binding.release(); };
     check();
     return {
       targets: Object.freeze(records.map(generationRef)),
       completion,
-      project: () => attached.map(item => ({ conversationId: item.conversationId, generation: item.binding.generation.number, status: item.binding.snapshot().status })),
-      markJoined: () => { for (const item of attached) if (item.binding.snapshot().status.kind === "done") item.binding.markJoined(); },
-      release: () => { if (released) return; released = true; unsubscribe(); for (const item of attached) item.binding.release(); },
+      project,
+      markCollected: audience => {
+        this.withDeferredUpdates(() => {
+          for (const item of attached) if (item.binding.snapshot().status.kind === "done") item.binding.markCollected(audience);
+        });
+      },
+      finalizeCollection: audience => this.withDeferredUpdates(() => {
+        for (const item of attached) if (item.binding.snapshot().status.kind === "done") item.binding.markCollected(audience);
+        release();
+        return project().map((projection, index) => ({
+          ...projection,
+          canonical: this.projectRecord(records[index], caller),
+        }));
+      }),
+      release,
     };
+  }
+  private projectRecord(record: GenerationRecord, caller?: SubagentCaller, failureMode: FailureProjectionMode = "full"): CanonicalLiveSubagent {
+    const { conversation, generation } = record;
+    const snapshot = conversation.generationSnapshot(generation);
+    const directlyOwned = caller ? conversation.parentConversationId === caller.conversation.conversationId : conversation.parentConversationId === undefined;
+    const inspectable = caller ? this.isDescendant(conversation, caller.conversation.conversationId) : true;
+    const removableSubtree = this.conversationSubtree(conversation.conversationId).every(item => !item.hasActiveExecution);
+    return projectLiveSubagent({
+      subagentId: conversation.conversationId,
+      label: conversation.label,
+      agent: conversation.agentName,
+      generation: snapshot.generation,
+      initiatedBy: snapshot.initiatedBy,
+      generationStatus: snapshot.status,
+      collected: snapshot.receipts.model,
+      directlyOwned,
+      inspectable,
+      resumeAllowed: conversation.isResumeAllowed,
+      removableSubtree,
+    }, failureMode);
   }
   private updateNestedJoin(caller: SubagentCaller, index: number, update: { targets?: readonly NestedJoinTargetSnapshot[]; state?: "running" | "completed" | "failed" | "interrupted"; error?: string }): void {
     if (!this.isCurrentCaller(caller)) return;

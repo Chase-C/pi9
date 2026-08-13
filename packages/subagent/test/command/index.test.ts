@@ -40,8 +40,9 @@ describe("subagents command registration", () => {
     const manager = {
       configure: vi.fn(),
       startTasks,
-      listConversations: () => [fakeAgent({ conversationId: "calm-river", joined: true, resumeAllowed: true })],
+      listConversations: () => [fakeAgent({ conversationId: "calm-river", receipts: { user: true }, resumeAllowed: true })],
       onConversationUpdate: () => () => {},
+      collectSubagentForUser: vi.fn(() => ({ conversationId: "calm-river", generation: 1, collected: true })),
     };
     registerSubagentsCommand(
       { registerCommand: (_name: string, registration: any) => { handler = registration.handler; } } as any,
@@ -125,16 +126,23 @@ describe("subagents command registration", () => {
     expect(saved).toEqual([8, 16]);
   });
 
-  it("collects completed results through a released runtime join binding", async () => {
+  it("automatically uses the synchronous user collector without collection notifications or bindings", async () => {
     let handler: any;
-    const markJoined = vi.fn();
-    const release = vi.fn();
     const notify = vi.fn();
+    let conversation = fakeAgent({ conversationId: "c1", initiatedBy: "user" });
+    const collectSubagentForUser = vi.fn(() => {
+      const latest = conversation.generations.at(-1)!;
+      conversation = {
+        ...conversation,
+        generations: [...conversation.generations.slice(0, -1), { ...latest, receipts: { ...latest.receipts, user: true } }],
+      };
+      return { conversationId: "c1", generation: 1, collected: true };
+    });
     const manager = {
       configure: vi.fn(),
-      listConversations: () => [],
+      listConversations: () => [conversation],
       onConversationUpdate: () => () => {},
-      bindSubagentJoin: vi.fn(() => ({ completion: Promise.resolve(), markJoined, release })),
+      collectSubagentForUser,
     };
     registerSubagentsCommand(
       { registerCommand: (_name: string, registration: any) => { handler = registration.handler; } } as any,
@@ -147,16 +155,18 @@ describe("subagents command registration", () => {
       ui: {
         notify,
         custom: async (factory: any) => {
-          const component = factory({ requestRender() {} }, {}, undefined, () => {});
-          await component.options.onCollect("c1");
+          factory({ requestRender() {} }, {}, undefined, () => {});
         },
       },
     });
 
-    expect(manager.bindSubagentJoin).toHaveBeenCalledWith(["c1"]);
-    expect(markJoined).toHaveBeenCalledOnce();
-    expect(markJoined.mock.invocationCallOrder[0]).toBeLessThan(release.mock.invocationCallOrder[0]);
-    expect(notify).toHaveBeenCalledWith("Collected subagent c1.", "info");
+    expect(collectSubagentForUser).toHaveBeenCalledWith("c1");
+    expect(collectSubagentForUser).toHaveReturnedWith({ conversationId: "c1", generation: 1, collected: true });
+    expect(conversation.generations.at(-1)).toMatchObject({
+      activeCollectionCount: 0,
+      receipts: { user: true, model: false },
+    });
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("Collected"), expect.anything());
   });
 
   it("reports asynchronous settings save failures", async () => {

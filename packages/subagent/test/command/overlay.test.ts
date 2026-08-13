@@ -3,27 +3,38 @@ import { SubagentOverlayComponent } from "../../src/command/overlay.js";
 import { DEFAULT_SUBAGENT_SETTINGS } from "../../src/settings.js";
 import { fakeAgent, fakeGeneration } from "../helpers/fake-agent.js";
 
-function overlayFixture(initial = fakeAgent(), others: ReturnType<typeof fakeAgent>[] = []) {
-  let conversation = {
-    ...initial,
-    resumeAllowed: initial.resumeAllowed ?? initial.generations.at(-1)?.joined === true,
-  };
+function overlayFixture(
+  initial = fakeAgent({ initiatedBy: "user" }),
+  others: ReturnType<typeof fakeAgent>[] = [],
+  initialPage: "conversations" | "agents" | "settings" = "conversations",
+) {
+  let conversations = [initial, ...others];
   let listener = () => {};
   const notify = vi.fn();
-  const onCollect = vi.fn(async () => {
-    const latest = conversation.generations.at(-1)!;
-    conversation = {
-      ...conversation,
-      resumeAllowed: true,
-      generations: [...conversation.generations.slice(0, -1), { ...latest, joined: true }],
-    };
-    listener();
+  const collectSubagentForUser = vi.fn((conversationId: string) => {
+    const index = conversations.findIndex(conversation => conversation.conversationId === conversationId);
+    const conversation = conversations[index];
+    const latest = conversation?.generations.at(-1);
+    const collected = Boolean(conversation && !conversation.parentConversationId && latest?.status.kind === "done");
+    if (conversation && latest && collected && !latest.receipts.user) {
+      const generation = { ...latest, receipts: { ...latest.receipts, user: true } };
+      conversations[index] = {
+        ...conversation,
+        generations: [...conversation.generations.slice(0, -1), generation],
+        resumeAllowed: generation.initiatedBy === "user" || conversation.resumeAllowed,
+      };
+      listener();
+    }
+    return { conversationId, generation: latest?.generation ?? 0, collected };
   });
   const onResume = vi.fn();
   const manager = {
-    listConversations: () => [conversation, ...others],
+    listConversations: () => conversations,
     onConversationUpdate: (next: () => void) => { listener = next; return () => {}; },
-    projectSubagent: () => ({ actionHints: conversation.currentGeneration ? [] : ["remove"] }),
+    collectSubagentForUser,
+    projectSubagent: (conversationId: string) => ({
+      actionHints: conversations.find(conversation => conversation.conversationId === conversationId)?.currentGeneration ? [] : ["remove"],
+    }),
   };
   const component = new SubagentOverlayComponent(
     manager as any,
@@ -32,65 +43,137 @@ function overlayFixture(initial = fakeAgent(), others: ReturnType<typeof fakeAge
     {} as any,
     vi.fn(),
     {
-      initialPage: "conversations",
+      initialPage,
       agents: [],
       settings: DEFAULT_SUBAGENT_SETTINGS,
       notify,
       onSettingsChange: vi.fn(),
       onStart: vi.fn(),
       onResume,
-      onCollect,
     },
   );
-  return { component, notify, onCollect, onResume };
+  return {
+    component,
+    notify,
+    collectSubagentForUser,
+    onResume,
+    conversation: (conversationId: string) => conversations.find(conversation => conversation.conversationId === conversationId)!,
+    updateConversation: (next: ReturnType<typeof fakeAgent>) => {
+      conversations = conversations.map(conversation => conversation.conversationId === next.conversationId ? next : conversation);
+      listener();
+    },
+  };
 }
 
-test("completed results must be collected before the overlay enables resume", async () => {
-  const { component, onCollect, onResume } = overlayFixture();
+test("initial terminal selection is automatically collected and immediately enables snapshot actions", () => {
+  const fixture = overlayFixture();
 
-  expect(component.render(100).join("\n")).toContain("[g] collect");
-  expect(component.render(100).join("\n")).toContain("[x] remove");
-  expect(component.render(100).join("\n")).not.toContain("[r] resume");
+  expect(fixture.collectSubagentForUser).toHaveBeenCalledOnce();
+  expect(fixture.collectSubagentForUser).toHaveBeenCalledWith("c1");
+  expect(fixture.conversation("c1").generations.at(-1)).toMatchObject({
+    activeCollectionCount: 0,
+    receipts: { user: true, model: false },
+  });
+  const rendered = fixture.component.render(100).join("\n");
+  expect(rendered).not.toContain("collect");
+  expect(rendered).not.toContain("[g]");
+  expect(rendered).toContain("[r] resume");
 
-  component.handleInput("g");
-  await vi.waitFor(() => expect(onCollect).toHaveBeenCalledWith("c1"));
+  fixture.component.handleInput("g");
+  expect(fixture.collectSubagentForUser).toHaveBeenCalledOnce();
+});
 
-  expect(component.render(100).join("\n")).not.toContain("[g] collect");
-  expect(component.render(100).join("\n")).toContain("[r] resume");
-  component.handleInput("r");
-  (component as any).submitPrompt("follow up");
-  expect(onResume).toHaveBeenCalledWith("c1", "follow up");
+test("navigation automatically collects only each newly selected terminal conversation", () => {
+  const first = fakeAgent({ conversationId: "first", label: "First", initiatedBy: "user", createdAt: 2 });
+  const second = fakeAgent({ conversationId: "second", label: "Second", initiatedBy: "user", createdAt: 1 });
+  const fixture = overlayFixture(first, [second]);
+
+  expect(fixture.collectSubagentForUser.mock.calls).toEqual([["first"]]);
+  expect(fixture.conversation("second").generations.at(-1)?.receipts.user).toBe(false);
+
+  fixture.component.handleInput("j");
+
+  expect(fixture.collectSubagentForUser.mock.calls).toEqual([["first"], ["second"]]);
+  expect(fixture.conversation("second").generations.at(-1)).toMatchObject({
+    activeCollectionCount: 0,
+    receipts: { user: true, model: false },
+  });
+});
+
+test("filter selection changes and returning to conversations trigger automatic collection", () => {
+  const first = fakeAgent({ conversationId: "first", label: "Alpha", initiatedBy: "user", createdAt: 2 });
+  const second = fakeAgent({ conversationId: "second", label: "Beta", initiatedBy: "user", createdAt: 1 });
+  const filtered = overlayFixture(first, [second]);
+  filtered.component.handleInput("/");
+  filtered.component.handleInput("B");
+  expect(filtered.collectSubagentForUser.mock.calls).toEqual([["first"], ["second"]]);
+
+  const returning = overlayFixture(first, [], "agents");
+  expect(returning.collectSubagentForUser).not.toHaveBeenCalled();
+  returning.component.handleInput("\t");
+  expect(returning.collectSubagentForUser).toHaveBeenCalledWith("first");
+});
+
+test("a selected active generation is collected when a runtime update makes it terminal", () => {
+  const running = fakeAgent({ initiatedBy: "user", status: { kind: "running" } });
+  const fixture = overlayFixture(running);
+  expect(fixture.collectSubagentForUser.mock.calls).toEqual([["c1"]]);
+
+  fixture.updateConversation(fakeAgent({ initiatedBy: "user", status: { kind: "completed" } }));
+
+  expect(fixture.collectSubagentForUser.mock.calls).toEqual([["c1"], ["c1"]]);
+  expect(fixture.conversation("c1").generations.at(-1)).toMatchObject({
+    activeCollectionCount: 0,
+    receipts: { user: true, model: false },
+  });
+});
+
+test("a newly resumed generation can be collected after the previous generation attempt", () => {
+  const first = fakeGeneration({ generation: 1, initiatedBy: "user", receipts: { user: true } });
+  const running = fakeGeneration({ generation: 2, initiatedBy: "user", status: { kind: "running" } });
+  const fixture = overlayFixture(fakeAgent({ generations: [first], resumeAllowed: true }));
+
+  fixture.updateConversation(fakeAgent({ generations: [first, running] }));
+  const completed = fakeGeneration({ generation: 2, initiatedBy: "user", status: { kind: "completed" } });
+  fixture.updateConversation(fakeAgent({ generations: [first, completed] }));
+
+  expect(fixture.collectSubagentForUser.mock.calls).toEqual([["c1"], ["c1"], ["c1"]]);
+  expect(fixture.conversation("c1").generations.at(-1)?.receipts.user).toBe(true);
+});
+
+test("an inactive unselected completion is not collected", () => {
+  const selected = fakeAgent({ conversationId: "selected", status: { kind: "running" }, createdAt: 2 });
+  const inactive = fakeAgent({ conversationId: "inactive", status: { kind: "running" }, createdAt: 1 });
+  const fixture = overlayFixture(selected, [inactive]);
+
+  fixture.updateConversation(fakeAgent({ conversationId: "inactive", status: { kind: "completed" }, createdAt: 1 }));
+
+  expect(fixture.collectSubagentForUser.mock.calls).toEqual([["selected"]]);
+  expect(fixture.conversation("inactive").generations.at(-1)).toMatchObject({
+    activeCollectionCount: 0,
+    receipts: { user: false, model: false },
+  });
+});
+
+test("already collected selection is harmless and does not create active collection state", () => {
+  const fixture = overlayFixture(fakeAgent({ initiatedBy: "user", receipts: { user: true }, resumeAllowed: true }));
+
+  expect(fixture.collectSubagentForUser.mock.calls).toEqual([["c1"]]);
+  expect(fixture.conversation("c1").generations.at(-1)).toMatchObject({
+    activeCollectionCount: 0,
+    receipts: { user: true, model: false },
+  });
+  fixture.component.render(100);
+  fixture.component.render(100);
+  expect(fixture.collectSubagentForUser).toHaveBeenCalledOnce();
 });
 
 test("the overlay trusts the snapshot resume capability", () => {
-  const { component, onResume } = overlayFixture(fakeAgent({ joined: true, resumeAllowed: false }));
+  const { component, onResume } = overlayFixture(fakeAgent({ receipts: { user: true }, resumeAllowed: false }));
 
   expect(component.render(100).join("\n")).not.toContain("enter inspect · r resume · x remove");
   component.handleInput("r");
   expect(onResume).not.toHaveBeenCalled();
-});
-
-test("the overlay does not collect active or already joined results", async () => {
-  for (const conversation of [
-    fakeAgent({ status: { kind: "running" } }),
-    fakeAgent({ joined: true, resumeAllowed: true }),
-  ]) {
-    const { component, onCollect } = overlayFixture(conversation);
-    component.handleInput("g");
-    await Promise.resolve();
-    expect(onCollect).not.toHaveBeenCalled();
-  }
-});
-
-test("collection failures remain unjoined and are reported", async () => {
-  const fixture = overlayFixture();
-  fixture.onCollect.mockRejectedValueOnce(new Error("collect failed"));
-
-  fixture.component.handleInput("g");
-  await vi.waitFor(() => expect(fixture.notify).toHaveBeenCalledWith("collect failed", "warning"));
-
-  expect(fixture.component.render(100).join("\n")).toContain("[g] collect");
-  expect(fixture.component.render(100).join("\n")).not.toContain("[r] resume");
 });
 
 test("generation detail uses one-based chronology instead of opaque identities", () => {
@@ -225,7 +308,7 @@ test("conversation actions render as colored chips separate from navigation", ()
   const fg = vi.fn((_color: string, text: string) => text);
   const conversation = fakeAgent({ status: { kind: "running" } });
   const component = new SubagentOverlayComponent(
-    { listConversations: () => [conversation], onConversationUpdate: () => () => {} } as any,
+    { listConversations: () => [conversation], onConversationUpdate: () => () => {}, collectSubagentForUser: vi.fn() } as any,
     { requestRender: vi.fn() },
     { fg, bold: (text: string) => text } as any,
     {} as any,
@@ -266,7 +349,7 @@ test("conversation actions render as colored chips separate from navigation", ()
 });
 
 test("conversation actions hide unavailable subtree mutations", () => {
-  const root = fakeAgent({ conversationId: "root", joined: true, resumeAllowed: true, createdAt: 2 });
+  const root = fakeAgent({ conversationId: "root", receipts: { model: true }, resumeAllowed: true, createdAt: 2 });
   const child = fakeAgent({
     conversationId: "child",
     parentConversationId: "root",
@@ -277,7 +360,7 @@ test("conversation actions hide unavailable subtree mutations", () => {
   const onCancel = vi.fn();
   const onRemove = vi.fn();
   const component = new SubagentOverlayComponent(
-    { listConversations: () => [root, child], onConversationUpdate: () => () => {} } as any,
+    { listConversations: () => [root, child], onConversationUpdate: () => () => {}, collectSubagentForUser: vi.fn() } as any,
     { requestRender: vi.fn() },
     {} as any,
     {} as any,
