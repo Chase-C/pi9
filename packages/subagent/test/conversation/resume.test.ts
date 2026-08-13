@@ -16,7 +16,7 @@ test("generations are numbered one-based and resume reuses the retained session"
   retained.bindSession(first, retainedSession);
   assert.equal(retained.snapshot().resumeAllowed, false, "running");
   retained.settle(first, "completed", { output: "done" });
-  retained.markJoined(first);
+  retained.markCollected(first, "model");
   assert.equal(retained.snapshot().resumeAllowed, true);
 
   const second = retained.beginResume("continue");
@@ -29,20 +29,26 @@ test("generations are numbered one-based and resume reuses the retained session"
   assert.equal(second.state.kind === "running" ? second.state.session : undefined, retainedSession);
 });
 
-test("resume eligibility requires a retained terminal, joined, unobserved generation", () => {
+test("resume eligibility requires a retained terminal, initiator receipt, and no active collection", () => {
   const unbound = conversation();
   const generation = unbound.latestGeneration;
   unbound.settle(generation, "completed", { output: "done" });
-  unbound.markJoined(generation);
+  unbound.markCollected(generation, "model");
   assert.equal(unbound.isResumeAllowed, false, "no retained session");
 
-  const observed = conversation();
-  const first = observed.latestGeneration;
-  observed.bindSession(first, session());
-  observed.settle(first, "completed");
-  const binding = observed.bindGeneration(first);
-  binding.markJoined();
-  assert.equal(observed.isResumeAllowed, false, "observer attached");
+  const collected = conversation();
+  const first = collected.latestGeneration;
+  collected.bindSession(first, session());
+  collected.settle(first, "completed");
+  collected.markCollected(first, "user");
+  assert.equal(collected.isResumeAllowed, false, "only non-initiator receipt recorded");
+
+  const binding = collected.bindGeneration(first);
+  binding.markCollected("model");
+  assert.deepEqual(binding.snapshot().receipts, { user: true, model: true });
+  assert.equal(binding.snapshot().activeCollectionCount, 1);
+  assert.equal(collected.isResumeAllowed, false, "collection active");
   binding.release();
-  assert.equal(observed.isResumeAllowed, true);
+  assert.equal(collected.snapshot().generations[0]?.activeCollectionCount, 0);
+  assert.equal(collected.isResumeAllowed, true);
 });

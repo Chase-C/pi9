@@ -4,6 +4,18 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+### Breaking
+
+- Rename the public, caller-relative `joined` generation field and `list` filter to `collected`; the `join` tool action keeps its name and actively waits for and collects a model result.
+- Require the generation initiator's collection receipt before resume; collection by all subscribers is unnecessary, collection by another actor alone is insufficient, and either actor may resume after the required receipt exists.
+
+### Changed
+
+- Track separate user and model collection receipts per generation: model `join` records only the model receipt, while selecting a conversation in `/subagents` records only the user receipt, immediately when terminal or upon later settlement for selected active work.
+- Remove the `/subagents` **Collect** button in favor of selection-based user collection.
+- Keep notification (awareness), inspection (acknowledgement), subscription, active waiting, and collection distinct. Steering user work subscribes the model without making it a required collector.
+- Allow removal to discard uncollected results; historical exact-generation collection is not added.
+
 ## [0.11.0] - 2026-08-12
 
 ### Added

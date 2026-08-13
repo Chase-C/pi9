@@ -2,7 +2,8 @@ import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-cod
 import { Text } from "@earendil-works/pi-tui";
 
 import { AgentRegistry } from "./agents.js";
-import { generationKey, type Conversation, type ConversationSnapshot, type ConversationUpdateKind } from "./conversation.js";
+import { generationKey, type CollectionReceipts, type Conversation, type ConversationSnapshot, type ConversationUpdateKind } from "./conversation.js";
+import type { CanonicalFinishedSubagent, CanonicalLiveSubagent, SubagentIdentity } from "./contract.js";
 import { SubagentRuntime } from "./runtime.js";
 import {
   CompletionNotifier,
@@ -16,7 +17,7 @@ import { SubagentSettingsStore, DEFAULT_SUBAGENT_SETTINGS, prepareSubagentRuntim
 import { registerSubagentsCommand } from "./command/index.js";
 import { registerSubagentWidgetLifecycle, updateSubagentWidget } from "./widget.js";
 
-export type { CanonicalFinishedSubagent, CanonicalLiveSubagent, SubagentIdentity } from "./contract.js";
+export type { CanonicalFinishedSubagent, CanonicalLiveSubagent, SubagentIdentity };
 export type { SubagentAction, SubagentStatus } from "./schema.js";
 export type { SubagentBatchSummary, SubagentErrorEnvelope, SubagentResponseEnvelope, SubagentResultsEnvelope } from "./tool-contract.js";
 
@@ -88,6 +89,13 @@ export interface SubagentLifecycleEventSource {
   projectSubagent(conversationId: string): ReturnType<SubagentRuntime["projectSubagent"]>;
 }
 
+type AudienceNeutralLifecycleProjection<T> = T extends CanonicalLiveSubagent
+  ? Omit<T, "collected"> & { readonly receipts: CollectionReceipts }
+  : never;
+
+/** Canonical public lifecycle data with explicit collection state for both audiences. */
+export type SubagentLifecycleEventPayload = AudienceNeutralLifecycleProjection<CanonicalLiveSubagent>;
+
 /** Emits lifecycle events keyed by stable subagent identity. */
 export function registerSubagentLifecycleEvents(events: SubagentEventBus | undefined, source: SubagentLifecycleEventSource): () => void {
   if (!events?.emit || !source.onConversationUpdate) return () => {};
@@ -106,7 +114,12 @@ export function registerSubagentLifecycleEvents(events: SubagentEventBus | undef
     const event = snapshot.status === "queued" ? "subagent:queued"
       : snapshot.status === "running" ? "subagent:started"
       : "subagent:finished";
-    events.emit(event, snapshot);
+    const { collected: _collected, ...canonical } = snapshot;
+    const payload: SubagentLifecycleEventPayload = Object.freeze({
+      ...canonical,
+      receipts: Object.freeze({ ...generation.receipts }),
+    }) as SubagentLifecycleEventPayload;
+    events.emit(event, payload);
   });
 }
 

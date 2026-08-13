@@ -31,7 +31,7 @@ export const SteerMessageSchema = Type.Object({
 export const SubagentParams = Type.Object({
   action: StringEnum(SUBAGENT_ACTIONS),
   statuses: Type.Optional(Type.Array(StringEnum(SUBAGENT_STATUSES), { minItems: 1 })),
-  joined: Type.Optional(Type.Boolean()),
+  collected: Type.Optional(Type.Boolean()),
   spawns: Type.Optional(Type.Array(SpawnTaskSchema, { minItems: 1 })),
   resumes: Type.Optional(Type.Array(ResumeTaskSchema, { minItems: 1 })),
   messages: Type.Optional(Type.Array(SteerMessageSchema, { minItems: 1 })),
@@ -66,7 +66,7 @@ export type ParsedSteerRequest = SteerRequest | { error: string; subagentId?: st
 
 export type SubagentInvocation =
   | { action: "agents" }
-  | { action: "list"; statuses?: SubagentStatus[]; joined?: boolean }
+  | { action: "list"; statuses?: SubagentStatus[]; collected?: boolean }
   | { action: "spawn"; spawns: ParsedSpawnRequest[] }
   | { action: "resume"; resumes: ParsedResumeRequest[] }
   | { action: "steer"; messages: ParsedSteerRequest[] }
@@ -94,7 +94,7 @@ const ACTION_LIST = `${SUBAGENT_ACTIONS.slice(0, -1).map(action => `"${action}"`
 
 const allowedInvocationKeys: Record<SubagentAction, readonly string[]> = {
   agents: ["action"],
-  list: ["action", "statuses", "joined"],
+  list: ["action", "statuses", "collected"],
   spawn: ["action", "spawns"],
   resume: ["action", "resumes"],
   steer: ["action", "messages"],
@@ -152,14 +152,14 @@ export function parseSubagentInvocation(
           action: parsedAction,
         };
       }
-      if (params.joined !== undefined && typeof params.joined !== "boolean") {
-        return { error: "list joined must be a boolean.", action: parsedAction };
+      if (params.collected !== undefined && typeof params.collected !== "boolean") {
+        return { error: "list collected must be a boolean.", action: parsedAction };
       }
 
       return {
         action: parsedAction,
         ...(params.statuses ? { statuses: params.statuses as SubagentStatus[] } : {}),
-        ...(params.joined !== undefined ? { joined: params.joined } : {}),
+        ...(params.collected !== undefined ? { collected: params.collected } : {}),
       };
     }
     case "spawn": {

@@ -16,9 +16,9 @@ describe("subagent result renderer", () => {
     { name: "helper", description: "Helps", source: "project" },
   ] } }, "Found 1 available agent", "helper.*project"));
 
-  it("renders list", () => expectViews({ response: { action: "list", results: [
-    { subagentId: id, agent: "helper", label: "Worker", status: "running", actionHints: [], descendants: [] },
-  ] } }, "Found 1 subagent", "Worker.*running"));
+  it("renders list with model collection state", () => expectViews({ response: { action: "list", results: [
+    { subagentId: id, agent: "helper", label: "Worker", status: "running", collected: false, actionHints: [], descendants: [] },
+  ] } }, "Found 1 subagent", "Worker.*running[\\s\\S]*not collected"));
 
   it("renders spawn", () => expectViews({ response: { action: "spawn", results: [{}] }, view: { tasks: [
     { inputIndex: 0, kind: "spawn", agent: "helper", label: "Worker", prompt: "Do work", subagentId: id },

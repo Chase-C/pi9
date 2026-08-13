@@ -36,7 +36,6 @@ export interface OverlayOptions {
   onSettingsChange(change: SubagentSettingsChange): SubagentSettings | void;
   onStart(agent: string, prompt: string): string | undefined;
   onResume(conversationId: string, prompt: string): void;
-  onCollect?(subagentId: string): Promise<void> | void;
   onCancel?(subagentId: string): void;
   onRemove?(conversationId: string): void;
 }
@@ -57,6 +56,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
   private readonly settings: SubagentSettingsComponent;
   private readonly unsubscribe: () => void;
   private readonly bodyHeight: number;
+  private readonly automaticCollectionAttempts = new Set<string>();
 
   constructor(
     private readonly manager: SubagentRuntime,
@@ -74,7 +74,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       theme,
       keybindings,
       change => options.onSettingsChange(change),
-      () => { this.page = "conversations"; this.requestRender(); },
+      () => { this.page = "conversations"; this.collectSelectedConversation(); this.requestRender(); },
       () => this.requestRender(),
     );
     for (const input of Object.values(this.filters)) {
@@ -83,7 +83,11 @@ export class SubagentOverlayComponent implements Component, Focusable {
     }
     this.prompt.onEscape = () => this.closePrompt();
     this.prompt.onSubmit = value => this.submitPrompt(value);
-    this.unsubscribe = manager.onConversationUpdate(() => this.requestRender());
+    this.unsubscribe = manager.onConversationUpdate(() => {
+      this.collectSelectedConversation();
+      this.requestRender();
+    });
+    this.collectSelectedConversation();
   }
 
   get focused(): boolean { return this._focused; }
@@ -95,7 +99,10 @@ export class SubagentOverlayComponent implements Component, Focusable {
       if (!input) return;
       const before = input.getValue();
       input.handleInput(data);
-      if (before !== input.getValue()) this.resetSelection();
+      if (before !== input.getValue()) {
+        this.resetSelection();
+        this.collectSelectedConversation();
+      }
       this.requestRender();
       return;
     }
@@ -107,7 +114,6 @@ export class SubagentOverlayComponent implements Component, Focusable {
     if (this.detail) {
       if (isCancelKey(data, this.keybindings)) this.detail = undefined;
       else if (data.toLowerCase() === "r") this.openResumePrompt(this.detail.conversationId);
-      else if (data.toLowerCase() === "g") void this.collectResult(this.detail.conversationId);
       else if (data.toLowerCase() === "c") this.cancelGeneration(this.detail.conversationId, this.detail.generation);
       else if (data.toLowerCase() === "x") this.removeConversation(this.detail.conversationId);
       this.requestRender();
@@ -430,7 +436,6 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const generation = conversation.currentGeneration ?? conversation.generations.at(-1);
       this.detail = { conversationId: conversation.conversationId, ...(generation ? { generation: generation.generation } : {}) };
     } else if (data.toLowerCase() === "r") this.openResumePrompt(conversation.conversationId);
-    else if (data.toLowerCase() === "g") void this.collectResult(conversation.conversationId);
     else if (data.toLowerCase() === "c") this.cancelGeneration(conversation.conversationId);
     else if (data.toLowerCase() === "x") this.removeConversation(conversation.conversationId);
     this.requestRender();
@@ -478,19 +483,6 @@ export class SubagentOverlayComponent implements Component, Focusable {
     }
   }
 
-  private async collectResult(conversationId: string): Promise<void> {
-    const conversation = this.findConversation(conversationId);
-    if (!conversation || !this.isCollectAvailable(conversation) || !this.options.onCollect) return;
-    this.actionError = "";
-    try {
-      await this.options.onCollect(conversation.conversationId);
-    } catch (error) {
-      this.actionError = error instanceof Error ? error.message : String(error);
-      this.options.notify(this.actionError, "warning");
-    }
-    this.requestRender();
-  }
-
   private cancelGeneration(conversationId: string, generationNumber?: number): void {
     const conversation = this.findConversation(conversationId);
     if (!conversation || conversation.parentConversationId || conversation.isStopping) return;
@@ -518,6 +510,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
       const index = clamp(this.selectedConversation(rows) + delta, 0, Math.max(0, rows.length - 1));
       this.selected.conversations = index;
       this.selectedConversationId = rows[index]?.conversation.conversationId;
+      this.collectSelectedConversation();
     }
     this.requestRender();
   }
@@ -527,6 +520,7 @@ export class SubagentOverlayComponent implements Component, Focusable {
     this.page = PAGES[(index + delta + PAGES.length) % PAGES.length];
     this.inspectorScrollOffset = 0;
     this.closePrompt();
+    this.collectSelectedConversation();
   }
 
   private resetSelection(): void {
@@ -553,10 +547,21 @@ export class SubagentOverlayComponent implements Component, Focusable {
   }
 
   private renderPrompt(width: number): string[] { return this.prompt.render(Math.max(8, width)); }
-  private isCollectAvailable(conversation: ConversationSnapshot): boolean {
-    const latest = conversation.generations.at(-1);
-    return !conversation.parentConversationId && !conversation.isStopping
-      && latest?.status.kind === "done" && !latest.joined && latest.observerCount === 0;
+  private collectSelectedConversation(): void {
+    if (this.page !== "conversations") return;
+    const rows = this.conversationRows;
+    const conversation = rows[this.selectedConversation(rows)]?.conversation;
+    const generation = conversation?.generations.at(-1);
+    if (!conversation || conversation.parentConversationId || !generation) return;
+
+    const attempt = `${conversation.conversationId}\u0000${generation.generation}\u0000${generation.status.kind}`;
+    if (this.automaticCollectionAttempts.has(attempt)) return;
+    this.automaticCollectionAttempts.add(attempt);
+    try {
+      this.manager.collectSubagentForUser(conversation.conversationId);
+    } catch {
+      this.automaticCollectionAttempts.delete(attempt);
+    }
   }
   private isResumeAvailable(conversation: ConversationSnapshot): boolean {
     return !conversation.parentConversationId && conversation.resumeAllowed;
@@ -654,7 +659,6 @@ export class SubagentOverlayComponent implements Component, Focusable {
     const actions: Array<[string, string]> = [];
     if (includeInspect) actions.push(["enter", "inspect"]);
     if (!conversation.parentConversationId && !conversation.isStopping && (generation.status.kind === "queued" || generation.status.kind === "running")) actions.push(["c", "cancel"]);
-    if (this.isCollectAvailable(conversation)) actions.push(["g", "collect"]);
     if (this.isResumeAvailable(conversation)) actions.push(["r", "resume"]);
     if (this.isRemoveAvailable(conversation)) actions.push(["x", "remove"]);
     return actions.map(([key, label]) => this.actionChip(key, label)).join("  ");

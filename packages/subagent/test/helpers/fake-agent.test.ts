@@ -2,14 +2,14 @@ import { expect, test } from "vitest";
 
 import { fakeAgent, fakeGeneration } from "./fake-agent.js";
 
-test("joined and resume capability are independent fixture state", () => {
+test("collection receipts and resume capability are independent fixture state", () => {
   const resumeCapable = fakeAgent({ resumeAllowed: true });
-  expect(resumeCapable.generations.at(-1)?.joined).toBe(false);
+  expect(resumeCapable.generations.at(-1)?.receipts).toEqual({ user: false, model: false });
   expect(resumeCapable.resumeAllowed).toBe(true);
 
-  const joined = fakeAgent({ joined: true });
-  expect(joined.generations.at(-1)?.joined).toBe(true);
-  expect(joined.resumeAllowed).toBe(false);
+  const collected = fakeAgent({ receipts: { model: true } });
+  expect(collected.generations.at(-1)?.receipts).toEqual({ user: false, model: true });
+  expect(collected.resumeAllowed).toBe(false);
 });
 
 test("active conversations cannot allow resume, including supplied generations", () => {

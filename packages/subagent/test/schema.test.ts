@@ -34,6 +34,15 @@ describe("parseSubagentInvocation", () => {
     assert.match(text(parseSubagentInvocation({ action: "explode" })), /Unknown action/);
   });
 
+  it("parses the collected list filter and rejects the removed joined filter", () => {
+    assert.deepEqual(parseSubagentInvocation({ action: "list", collected: true }), {
+      action: "list",
+      collected: true,
+    });
+    assert.match(text(parseSubagentInvocation({ action: "list", collected: "yes" })), /list collected must be a boolean/);
+    assert.match(text(parseSubagentInvocation({ action: "list", joined: true })), /Property joined is not allowed/);
+  });
+
   it("rejects a spawn task without a label", () => {
     const result = parseSubagentInvocation({ action: "spawn", spawns: [{ agent: "helper", prompt: "work" }] });
     assert.match(text(result), /label must be a non-empty string/);

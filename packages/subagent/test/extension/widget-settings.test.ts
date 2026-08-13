@@ -47,7 +47,7 @@ test("extension reconciles current completion messages at the provider context b
   const subagentId = (started.starts[0] as any).conversationId;
   const binding = runtime.bindSubagentJoin([subagentId]);
   await binding.completion;
-  binding.markJoined();
+  binding.markCollected("model");
   binding.release();
   expect(reconcile?.({ messages: [completion] })).toEqual({ messages: [] });
 
