@@ -1,6 +1,6 @@
 {
   "name": "@pi9/subagent",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Asynchronous, resumable, and recursive subagents for Pi with stable identities and live progress.",
   "license": "MIT",
   "author": "Chase Cummings <chaseecummings@gmail.com>",

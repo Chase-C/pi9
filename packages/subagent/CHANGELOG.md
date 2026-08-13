@@ -4,6 +4,8 @@ This changelog starts with version `v0.2.1`.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-13
+
 ### Breaking
 
 - Rename the public, caller-relative `joined` generation field and `list` filter to `collected`; the `join` tool action keeps its name and actively waits for and collects a model result.
@@ -382,7 +384,8 @@ This changelog starts with version `v0.2.1`.
 - Add coverage for native inherited extension loading, canonical self-exclusion, SDK child tools, and recursive shared-manager behavior.
 - Add coverage for lifecycle events, session metadata persistence, session guards, command completions, background completion rendering, and resume message rendering.
 
-[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.11.0...HEAD
+[Unreleased]: https://github.com/Chase-C/pi9/compare/subagent-v0.12.0...HEAD
+[0.12.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.11.0...subagent-v0.12.0
 [0.11.0]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.7...subagent-v0.11.0
 [0.10.7]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.6...subagent-v0.10.7
 [0.10.6]: https://github.com/Chase-C/pi9/compare/subagent-v0.10.5...subagent-v0.10.6
